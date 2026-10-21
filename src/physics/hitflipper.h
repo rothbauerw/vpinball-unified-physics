@@ -207,3 +207,6 @@ private:
    int m_rumbleContactCount = 0;
    float m_rumblePlayed = 0.f; // sum last played, reset when the window runs empty
 };
+
+// The two-body flipper model is on (unified engine; hitflippermodel.cpp)
+bool FlipperModelEnabled();
