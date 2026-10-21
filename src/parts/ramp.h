@@ -180,6 +180,7 @@ private:
    void CheckJoint(class PhysicsEngine *physics, const HitTriangle *const ph3d1, const HitTriangle *const ph3d2, const bool isUI);
    void AddWallLineSeg(class PhysicsEngine* physics, const Vertex2D &pv1, const Vertex2D &pv2, const bool pv3_exists, const float height1, const float height2, const float wallheight, const bool isUI);
    void SetupHitObject(class PhysicsEngine* physics, HitObject *obj, const bool isUI);
+   void AddHardSurface(class PhysicsEngine* physics, const bool isUI, const Vertex2D* const rgvLocal, const float* const rgheight1, const int cvertex, const float wallheightright, const float wallheightleft, const size_t collidersBefore); // unified engine (ramphardsurface.cpp)
 
    void GenerateVertexBuffer();
    void CreateWire(const int numRings, const int numSegments, const Vertex2D * const midPoints, Vertex3D_NoTex2 * const rgvBuf) const;
