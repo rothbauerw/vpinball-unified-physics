@@ -1,5 +1,7 @@
 # Unified physics for Visual Pinball X (prototype)
 
+> This page is the README of the **unified-physics** fork. The original Visual Pinball X README is [here](../README.md); build instructions for VPX itself are in [make/README.md](../make/README.md).
+
 This branch (`unified-physics`) is a work-in-progress, **opt-in** rebuild of the ball contact physics for [Visual Pinball X](https://github.com/vpinball/vpinball). It sits on top of the official `vpinball/vpinball` master (`da8b594ae`, 2026-10-21, which includes Toxie's physics fixes `8c4cf05d`) and adds new physics in separate files.
 
 **Status: prototype for discussion and review. Not a release, not endorsed by the VPX maintainers, not ready to merge.** It was developed with AI assistance (Claude Code and ChatGPT for testing); it was developed against measurements and the checks listed below, but it has not had independent review yet.
