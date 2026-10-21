@@ -1,0 +1,44 @@
+DEVELOPMENT RULES for the physics work (rubber-contact branch)
+==============================================================
+Set by the project owner. They apply to every change, by a person or an assistant. A change that breaks one of them is reverted, not defended.
+
+1. NO FIX WITHOUT DATA
+   a. A fault is understood when it is REPRODUCED (a deterministic replay in the harness, from the state in the log) or when the log/measurement itself PROVES the mechanism. A plausible story from the
+      code and a few numbers is a hypothesis, not a finding.
+   b. Write down what is MEASURED and what is INFERRED, separately, and say which is which when reporting. Never present an inference as the cause.
+   c. Before touching engine code, test the hypothesis against the data already in hand (the per-cycle timing CSV, the trace, the watchdog log). If the data contradicts it, drop it.
+   d. Engine code is not edited to "try" a theory. Temporary instrumentation is allowed: mark it /* TEMP */, keep it out of the commit, remove it when done.
+   e. Order of work for a reported fault: collect the log -> build the timeline -> check every cheap source -> replay the exact state -> locate the mechanism with instrumentation -> only then fix.
+   f. If a reported fault cannot be reproduced, add always-on, cheap diagnostics (like the fast-ball watchdog) and wait for the next occurrence. Do not "fix" what cannot be seen.
+
+2. NO HACKS
+   A fix names the PHYSICAL LAW behind it. No speed cutoffs, forced stops, position snaps, clamps that hide a symptom, per-scenario constants or special cases per source (bat / band / pair / ...).
+   If a law already exists in the code, find out why it is not acting before adding anything. A safety net (a trip that hands a ball back) is allowed only as a net, never as the fix.
+
+3. GENERAL FIXES, PROVED ON A MATRIX
+   Fix the general rule, grep for every other place with the same special case, and prove it on the scenario matrix (runs/2026-10-09-slow-contact: batch_matrix.ps1, matrix_compare.py) with numeric pass/fail
+   including the cost per cycle. A fix is done when the matrix passes, not the one scene.
+
+4. RUNS
+   Group several changes before a full regression; the user decides when a matrix is run. Timing and event-timing tests run focused (run.ps1 -Focused) and the user is told first so the machine is idle.
+   Always call run.ps1 with explicit full paths and check the ini that was loaded.
+
+5. PERFORMANCE
+   Every model is tuned for speed: measure the cost per cycle (VPX_CONTACT_TIMING), budget 1 ms per cycle, expose knobs. Judge by the worst cycle, not the average.
+
+6. DOCUMENTATION AND HISTORY
+   Every feature, key, script call and environment variable goes into docs/NewPhysicsReference.txt with a dated change-log entry, in the same change. Names follow the physical part (flipper, sling, rubber), never a table.
+   Nothing is committed or pushed until the user says so. Convention differences from stock VPX are stated and documented.
+   Every item the user states goes into the to-do list at once; the to-do list is the single source of open work.
+
+7. WHAT BREAKS, AND WHAT THE DESIGN DOES ABOUT IT (user, 2026-10-13)
+   a. Every new design and every fix includes a step that lists the scenarios it would NOT handle or would break: other sources of the same case, other objects and modes, restart and teardown, extreme values
+      (zero, huge, many balls), order of events, a table without the feature, a second use in the same process.
+   b. Where it is possible, the design handles or prevents those scenarios (an ownership rule, a guard that is a safety net, a test in the matrix). Where it is not, the limit is written down in
+      docs/NewPhysicsReference.txt and the to-do list, with the reason.
+   c. The list is part of the report: say which scenarios were checked, how (measured or only reasoned), and which remain open. A scenario that is only reasoned about is marked INFERRED (rule 1b).
+
+8. UNWANTED OR TRACKED BEHAVIOUR IS SHOWN ON SCREEN (user, 2026-10-13)
+   The user does not read vpinball.log. Whenever the engine detects behaviour that is unwanted or that we track (a leak, a tripped safety net, a hand-back to stock, a budget overrun, a fast ball, an
+   ignored ini key), it raises a notification on the playfield (m_liveUI->PushNotification, text says what, where and what to do) AND writes the same text to the log as WARN. The detector is always on
+   and cheap (rule 5), never silent. A notification is raised once per cause per table start, not every cycle. Behaviour that is only a diagnostic number stays in the log/CSV.

@@ -719,7 +719,8 @@ void Hit3DPoly::Collide(const CollisionEvent& coll)
    {
       const float dot = -(hitnormal.Dot(pball->m_d.m_vel));
 
-      pball->Collide3DWall(m_normal, m_elasticity, m_elasticityFalloff, m_friction, m_scatter);
+      if (!SurfaceRubberHit(pball, coll.m_hitnormal))
+         pball->Collide3DWall(m_normal, m_elasticity, m_elasticityFalloff, m_friction, m_scatter);
 
       if (m_obj && m_fe && dot >= m_threshold)
       {
@@ -931,7 +932,8 @@ void HitTriangle::Collide(const CollisionEvent& coll)
 
    const float dot = -(hitnormal.Dot(pball->m_d.m_vel));
 
-   pball->Collide3DWall(m_normal, m_elasticity, m_elasticityFalloff, m_friction, m_scatter);
+   if (!SurfaceRubberHit(pball, coll.m_hitnormal))
+      pball->Collide3DWall(m_normal, m_elasticity, m_elasticityFalloff, m_friction, m_scatter);
 
    if (m_obj && m_fe && dot >= m_threshold)
    {
@@ -1062,6 +1064,8 @@ void HitPlane::Collide(const CollisionEvent& coll)
    //PLOGD << "Playfield COLLISION - ("
    //      << coll.m_ball->m_d.m_pos.x << ' ' << coll.m_ball->m_d.m_pos.y << ' ' << coll.m_ball->m_d.m_pos.z << ") - ("
    //      << coll.m_ball->m_d.m_vel.x << ' ' << coll.m_ball->m_d.m_vel.y << ' ' << coll.m_ball->m_d.m_vel.z << ')';
+   if (SurfaceRubberHit(coll.m_ball, coll.m_hitnormal))
+      return;   // the playfield's force model carries the ball from here on (no impulse)
    coll.m_ball->Collide3DWall(coll.m_hitnormal, m_elasticity, m_elasticityFalloff, m_friction, m_scatter);
 
 #ifdef C_EMBEDSHOT_PLANE
@@ -1147,7 +1151,8 @@ void HitLine3D::Collide(const CollisionEvent& coll)
 
    const float dot = -(hitnormal.Dot(pball->m_d.m_vel));
 
-   pball->Collide3DWall(hitnormal, m_elasticity, m_elasticityFalloff, m_friction, m_scatter);
+   if (!SurfaceRubberHit(pball, coll.m_hitnormal))
+      pball->Collide3DWall(hitnormal, m_elasticity, m_elasticityFalloff, m_friction, m_scatter);
 
    if (m_obj && m_fe && dot >= m_threshold)
    {

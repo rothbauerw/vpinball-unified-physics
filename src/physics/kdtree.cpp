@@ -624,6 +624,7 @@ void HitKDNode::HitTestXRay(const HitKD* hitoct, const HitBall* const pball, vec
 #endif
       HitObject * const pho = hitoct->GetItemAt(i);
       if ((pball != pho) && // ball cannot hit itself
+         !pho->SurfaceOwns(pball->m_d) &&
          /*fRectIntersect3D(pball->m_hitBBox, pho->m_hitBBox) &&*/ //!! do bbox test before to save alu-instructions? or not to save registers? -> currently not, as just sphere vs sphere
          fRectIntersect3D(pball->m_d.m_pos, rcHitRadiusSqr, pho->m_hitBBox))
       {

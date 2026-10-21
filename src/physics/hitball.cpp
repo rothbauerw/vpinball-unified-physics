@@ -2,6 +2,8 @@
 
 #include "core/stdafx.h"
 #include "hitball.h"
+#include "physics/hitrubber.h"
+#include "physics/hitflipper.h"
 #include "parts/ball.h"
 
 #include "math/matrix.h"
@@ -14,6 +16,7 @@ HitBall::HitBall()
    m_coll.m_ball = this;   // TODO: this needs to move somewhere else
    m_coll.m_obj = nullptr;
    m_d.m_vpVolObjs = new vector<IFireEvents*>;
+   m_d.m_owner = this;   // lets a check with only the ball state find the ball (and its contact) in O(1)
    m_mover.m_pHitBall = this;
    m_angularmomentum.SetZero();
    m_orientation.SetIdentity();
@@ -27,6 +30,10 @@ HitBall::HitBall()
 
 HitBall::~HitBall()
 {
+   if (m_bandOwner != nullptr || m_contact != nullptr)
+      HitRubberBandBallDeleted(this); // first: the contact lets go of this ball's bat (unified: the bat may hold other balls too)
+   if (m_rubberOwner != nullptr)
+      m_rubberOwner->RubberRelease(); // a deleted ball must not stay engaged with a flipper (one ball per bat)
    delete m_d.m_vpVolObjs;
 }
 
@@ -112,7 +119,7 @@ void HitBall::Collide3DWall(const Vertex3Ds& hitNormal, float elasticity, const 
       // friction impulse can't be greater than coefficient of friction times collision impulse (Coulomb friction cone)
       // (a negative friction coefficient means no friction; loading and setters already clamp it at 0)
       const float maxFric = fmaxf(friction, 0.f) * reactionImpulse;
-      const float jt = clamp(-vt / kt, -maxFric, maxFric);
+      const float jt = ContactSettings::Get().LimitSlip(-vt / kt, maxFric); // stock: clamp; unified engine: sliding at the dynamic friction
 
       if (!infNaN(jt))
          ApplySurfaceImpulse(jt * cross, jt * tangent);
@@ -136,6 +143,8 @@ void HitBall::Collide3DWall(const Vertex3Ds& hitNormal, float elasticity, const 
 
 float HitBall::HitTest(const BallS& ball, const float dtime, CollisionEvent& coll) const
 {
+   if (HitRubberContactPairModel(this, ball)) // unified engine: both balls are held by the contact model, which resolves the pair
+      return -1.0f;
    const Vertex3Ds d = m_d.m_pos - ball.m_pos;  // delta position
 
    const Vertex3Ds dv = m_d.m_vel - ball.m_vel; // delta velocity
@@ -268,7 +277,7 @@ void HitBall::Collide(const CollisionEvent& coll)
             edist = C_DISP_LIMIT; // crossing ramps, delta noise
          if (!m_d.m_lockedInKicker)
             edist *= 0.5f; // if the hitten ball is not frozen
-         pball->m_d.m_pos += edist * vnormal; // push along norm, back to free area
+         pball->Shove(edist * vnormal); // push along norm, back to free area (unified engine: not down into a surface the contact model holds)
          // use the norm, but is not correct, but cheaply handled
       }
 
@@ -278,7 +287,7 @@ void HitBall::Collide(const CollisionEvent& coll)
          if (edist > C_DISP_LIMIT)
             edist = C_DISP_LIMIT; // crossing ramps, delta noise
          edist *= 0.5f;
-         m_d.m_pos -= edist * vnormal; // pull along norm, back to free area
+         Shove(-edist * vnormal); // pull along norm, back to free area
       }
    }
 #endif
@@ -291,8 +300,8 @@ void HitBall::Collide(const CollisionEvent& coll)
       const float invMassThis = m_d.m_lockedInKicker ? 0.0f : 1.0f / m_d.m_mass;
       const float invMassOther = 1.0f / pball->m_d.m_mass;
       const float depth = std::min(-coll.m_hitdistance, C_EMBEDDISPLIMIT) / (invMassThis + invMassOther);
-      pball->m_d.m_pos += (depth * invMassOther) * vnormal;
-      m_d.m_pos -= (depth * invMassThis) * vnormal;
+      pball->Shove((depth * invMassOther) * vnormal);
+      Shove(-(depth * invMassThis) * vnormal);
    }
 #endif
 
@@ -410,7 +419,7 @@ void HitBall::HandleStaticContact(const CollisionEvent& coll, const float fricti
       // loop of resting balls). Drain the overlap with a small capped position
       // nudge instead, quiet enough to stay below the collision threshold.
       if (!m_d.m_lockedInKicker && coll.m_hitdistance < 0.f)
-         m_d.m_pos += std::min(-0.5f * coll.m_hitdistance, 0.02f) * coll.m_hitnormal;
+         Shove(std::min(-0.5f * coll.m_hitdistance, 0.02f) * coll.m_hitnormal); // (not down into a surface the contact model holds)
 
 #ifdef C_EMBEDVELLIMIT
       // Embedded: leave the surface within one nominal physics step. The target normal velocity is set, not added,
@@ -492,6 +501,8 @@ void HitBall::ApplyRotationalFriction(const Vertex3Ds& hitnormal, const float fr
 
 void HitBall::ApplyFriction(const Vertex3Ds& hitnormal, const float dtime, const float fricCoeff, const float normalImpulse, const HitBall* const other)
 {
+   if (other == nullptr)
+      ApplyRestingSpinLoss(hitnormal, fricCoeff, m_d.m_mass * normalImpulse); // unified engine (ContactSettings): rolling resistance and twist of a resting contact, before the slip below is measured
    const Vertex3Ds surfP = -m_d.m_radius * hitnormal; // surface contact point relative to center of mass
 
 #ifdef FIX_PHYSICS
@@ -582,7 +593,7 @@ void HitBall::ApplyFriction(const Vertex3Ds& hitnormal, const float dtime, const
 
 #ifdef FIX_PHYSICS
    // Dynamic case: the full slip-removing impulse (legacy: dtime times it, so sliding friction depended on the step length)
-   const float fricImpulse = clamp(numerScale * numer / denom, -maxImpulse, maxImpulse);
+   const float fricImpulse = other ? clamp(numerScale * numer / denom, -maxImpulse, maxImpulse) : ContactSettings::Get().LimitSlip(numerScale * numer / denom, maxImpulse); // unified engine: dynamic friction when sliding
 
    if (!infNaN(fricImpulse))
       ApplySurfaceImpulse(fricImpulse * cp, fricImpulse * slipDir);
@@ -672,6 +683,10 @@ void HitBall::UpdateDisplacements(const float dtime)
 {
    if (!m_d.m_lockedInKicker)
    {
+      if (m_rubberAdvanced)
+         m_rubberAdvanced = false; // position, velocity and spin were advanced by the rubber model (FlipperMoverObject::RubberAdvance)
+      else
+      {
       const Vertex3Ds ds = dtime * m_d.m_vel;
       m_d.m_pos += ds;
 
@@ -680,6 +695,7 @@ void HitBall::UpdateDisplacements(const float dtime)
 #ifdef C_DYNAMIC
       m_drsq = ds.LengthSquared(); // used to determine if static ball
 #endif
+      }
 
       Matrix3 mat3;
       mat3.SkewSymmetric(m_angularmomentum / Inertia());
@@ -711,16 +727,7 @@ void HitBall::UpdateVelocities()
       }
       else
       {
-         // Apply forces (expressed in VPU/VPT) integrated on one physic step (PHYS_FACTOR is one physic step time expressed in VPX time unit)
-         // This is standard Newton physics: A = dV/dt = (1/m).(Sum of F) therefore dV = (1/m).(Sum of F).dt
-         m_d.m_vel += (float)PHYS_FACTOR * m_physics->GetGravity() /* * m_d.m_mass / m_d.m_mass */; // Gravity F = m.G
-
-         // Table velocity due to nudge (fictitious force due to change of reference frame, therefore mass is not applied)
-         const float slope = ANGTORAD(m_pBall->GetPTable()->GetPlayfieldSlope()); // nudge acceleration is in the horizontal cabinet plane, reference frame is the playfield
-         const Vertex2D cabinetAcceleration = m_physics->GetCabinetAcceleration();
-         m_d.m_vel.x -= (float)PHYS_FACTOR * MS2TOVPUVPT2(cabinetAcceleration.x);
-         m_d.m_vel.y -= (float)PHYS_FACTOR * MS2TOVPUVPT2(cabinetAcceleration.y) * cosf(slope);
-         m_d.m_vel.z -= (float)PHYS_FACTOR * MS2TOVPUVPT2(cabinetAcceleration.y) * sinf(slope);
+         m_d.m_vel += ExternalVelocityIncrement(); // gravity, nudge (stock) and the magnets (hitballcontact.cpp)
       }
    }
 

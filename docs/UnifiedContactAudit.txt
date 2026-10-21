@@ -1,0 +1,85 @@
+UNIFIED CONTACT SYSTEM - STEP 0 AUDIT (2026-10-11)
+===================================================
+Question: who outside src/physics reads or writes physics state, and what must the unified engine keep true for them? Plus: how the engine is switched per table.
+
+1. Main finding
+---------------
+Almost every consumer reads/writes ONE structure: Ball::m_hitBall (HitBall: m_d.{m_pos,m_vel,m_radius,m_mass,m_lockedInKicker,m_vpVolObjs,m_visible...}, m_angularmomentum,
+m_orientation, Inertia(), old-position ring for trails). If the unified engine keeps this structure as its PUBLIC state and writes it back at the end of every 1 ms cycle
+(and re-reads it at the start, see 3), the renderer, VR, ball control, script properties and UI need NO change in step 1. A separate Body type can sit behind it later.
+Plugins: only the OnUpdatePhysics broadcast (before the cycle loop) and the lamp/action enums; no plugin touches ball state.
+
+2. Consumers (what each reads/writes)
+-------------------------------------
+Player (core/player.cpp)       m_vball list, CreateBall (sets pos.z, mass, radius, vel, then PhysicSetup), DestroyBall, m_pactiveball (script ActiveBall; set by
+                               the physics at hit time), debug text (velocity, angular velocity).  -> keep; ActiveBall must be set when the DEFERRED event is dispatched.
+Script, Ball (parts/ball.cpp)  ~76 m_hitBall refs: X/Y/Z, VelX/Y/Z, AngMomentum, Orientation, Mass, Radius, Magnetic, Spin, etc. READS are free. WRITES (teleports,
+                               velocity set, Mass/Radius change) happen at any time between cycles  -> Sync step (3) must pick them up; mass/radius change must refresh body constants.
+Script, globals                GetBalls, ActiveBall, CreateBall/DestroyBall  -> unchanged.
+Script, events                 Hit/UnHit/Collide/Spin/Slingshot/Dropped/Raised etc. are fired INSIDE Collide()/Contact() of stock HitObjects (collide.cpp, collideex.cpp,
+                               hitflipper.cpp, hitrubber.cpp) and from kicker/trigger code. PinTable::InvokeBallBallCollisionCallback (OnBallBallCollision) from HitBall.
+                               -> all become queue records dispatched after write-back (decided: up to 1 ms latency). Hit speed must be recorded at the instant (design 5).
+Renderer (Renderer.cpp)        ball draw/shadow/reflection/motion blur: m_d.m_pos, m_vel (blur = pos + 0.5*vel), m_radius, m_lockedInKicker, m_orientation, m_visible,
+                               old-position trail (HitBall::OnPhysicStepProcessed, called once per cycle after the simulate call).  -> only needs the public state per cycle.
+                               VR uses the same renderer path.
+BallControl / InGameUI / Editor UI (BallControl.cpp, BallUIPart, Ball*Property)  drag/throw: SetPosition/SetVelocity on a free ball, ClearDraggedBall; property pages read/write
+                               m_hitBall.m_d.  -> same as script writes (Sync).
+InputManager.cpp:1355          only "any ball exists?" -> unchanged.
+Kicker (parts/kicker.cpp)      CAPTURE: KickerHitCircle::DoCollide sets m_lockedInKicker, keeps m_pHitBall, fires Hit/UnHit. KICK: writes pos/vel/angular momentum/dynamic and
+                               clears the HitBall collision record. Also scans m_vball for balls inside (BallCntOver, Balls in volume, via m_vpVolObjs). Legacy mode
+                               (not physical) is dropped. -> step 5: kicker = sensor + mechanism (hold constraint + eject impulse source). Until then no kicker in unified.
+Trigger (parts/trigger.cpp + collideex.cpp)   volume enter/leave tracking per ball through HitBall::m_vpVolObjs; fires Hit/UnHit; animation. -> step 5: opto = overlap test on
+                               the body list; mechanical switch = spring body. m_vpVolObjs can stay as the "inside" set the sensors maintain.
+Bumper (parts/bumper.cpp, collideex.cpp)  hit circle applies the kick and fires Hit; the part animates from hit position. -> force-model equivalent (step 5).
+Gate / Spinner / Target / Plunger / Ramp / Wall / Primitive / Rubber (Collide/Contact in collideex, hittarget, plunger, hitrubber) each is a stock HitObject with its own
+                               event + response. Gate/Spinner/Plunger are MoverObjects (UpdateVelocities/UpdateDisplacements in m_vmover). -> need Surface or Body equivalents (steps 4, 5).
+PhysicsEngine API used outside  m_plumbHandler (14), GetCurrentTime, SetGravity/GetGravity, UpdatePhysics, Update, StartPhysics, SetStatic/SetDynamic, Remove, RayCast,
+                               GetUIHitObjects, RecordContact, OnBallWallHit (4), IsBallCollisionHandlingSwapped (2), FlipperNear/FlipperClearance/FindFlipperMover, c_* stats,
+                               perf info, OnFinishFrame, ResetPerFrameStats.  -> keep the class; the unified step is another method called from UpdatePhysics.
+Editor picking / RayCast / UI quadtree  use stock HitObjects built with isUI=true (PhysicSetup(physics, true)). THE STOCK HIT-OBJECT BUILD MUST STAY for the UI even when the
+                               engine is unified. Only the ball simulation is replaced.
+Physics property pages (Wall/Primitive/Ramp/Rubber/HitTarget/Table PhysicsProperty, PhysicsOptionsDialog)  edit stock parameters (elasticity, friction, scatter, force...).
+                               -> unified tables get the alternate panel (step 6); stock panels stay for stock tables.
+Per-cycle stock hooks in UpdatePhysics()  nudge, plunger and plumb handlers, Magnets::Step, Turntables::Step, m_vmover UpdateVelocities, guide-tube constraint,
+                               ball trail. These stay; in unified mode m_vmover keeps only non-ball movers until they become bodies.
+
+3. What the unified step needs from its surroundings (interface contract)
+-------------------------------------------------------------------------
+Sync (read) at cycle start: every ball's m_d.{pos,vel,radius,mass}, angular momentum, lockedInKicker, visible; flipper angle/torque inputs; solenoid state; nudge/plumb.
+   Anything the script or UI wrote since the last cycle is therefore honoured, and nothing else has to be notified. A ball "owned" by a kicker (locked) is skipped by the step.
+Write-back at cycle end: pos, vel, angular momentum, orientation (from spin), trail sample, then the event queue is dispatched in order (m_pactiveball set per record).
+New/deleted balls: the step iterates Player::m_vball each cycle (no private ball list to keep in sync); body constants are derived from radius/mass each cycle (cheap).
+
+4. Engine switch at table load (design)
+---------------------------------------
+Today there is no table-level switch. The model is enabled by env var VPX_PHYSICS_MODEL=1, read by a function-static in hitflipper.cpp, and by the ini sections
+(vpx_physics.ini [Features]). Findings:
+ - Six or so places read their own flag (static getenv, ini keys). In unified mode these become one query: PhysicsEngine::IsUnified().
+ - The .vpx reader is BiffReader::AsObject: for file versions > 30 every field carries its byte size and any bytes the reader did not consume are skipped with a log line
+   (BiffReader.cpp:295-309). An unknown 4-character tag is therefore skipped by readers that ignore unknown tags in their switch. VERIFY on the stock 10.8 exe with a test
+   file before relying on it. Answer to the open item "how are new records tagged": add a new, never-used tag (e.g. FID('UNIF')) holding a version number and a length-
+   prefixed blob; plain stock VPX loads the table as an ordinary stock table (physics then differs, so the table should also keep a visible flag in the script or name).
+ - Decision point: PinTable load sets m_unifiedPhysics; Player::Init creates PhysicsEngine with it; UpdatePhysics calls ContactSystem::Step instead of PhysicsSimulateCycle
+   (everything else in the loop is shared). Until the .vpx tag exists (step 6) the flag comes from the ini/env as today, so the existing harness keeps working.
+
+5. Things the audit found that the design doc does not say yet
+--------------------------------------------------------------
+ a. Parity test list vs step order: the step-1 list includes gsw15f (kicker capture) and "sling regressions"; kickers are step 5 and slings step 3. Either those two tests
+    move to the steps that own them, or step 1 gets a minimal sensor/hold for the test table. DECIDED 2026-10-11: gsw15f -> step 5, sling regressions -> step 3.
+ b. Unconverted object types (wall edges, ramps, gates, bumpers, targets...) have no force model until steps 4-5: in unified mode a ball would pass through them. Test tables
+    for steps 1-3 must contain only converted parts. Keep the engine one-way per table, but keep a dev-only fallback ("stock hit search for object types not yet converted")
+    DECIDED 2026-10-11: yes, dev-only fallback; issues from it are ignored until the type is migrated.
+ c. The UI keeps the stock HitObject build (picking, RayCast): "stock stays" is needed for the editor even after all tables are unified.
+ d. Script hit events carry the ball via m_pactiveball and some tables read ball velocity inside Hit: with deferred events the ball has moved up to 1 ms further (and may be
+    in a different state) when the script runs. The queue record should carry speed/normal at the instant; the script's ball reading will be 'after'.
+ e. Dropping the static-ball quench (C_DYNAMIC) removes m_dynamic: kicker.cpp (685) and other writers set it; those lines go with the legacy kicker.
+ f. OnPhysicStepProcessed (trail) and the guide-tube constraint run after the simulate call: keep their position in the loop (after Step, before the event dispatch or after it,
+    but before the render reads).
+
+6. Proposed step-1 skeleton (for review before code)
+----------------------------------------------------
+ - New files src/physics/contactsystem.{h,cpp}: ContactSystem::Step(float dtime_ms). Phase A of the code is a THIN WRAPPER around today's RingAdvanceAll (so parity is
+   guaranteed from the first commit), called from UpdatePhysics when IsUnified(); the stock hit search for balls is skipped in that branch.
+ - Then replace the wrapper's pieces one at a time: islands from union-find (already in RingAdvanceAll), per-island substeps, accumulators, source list (gravity, magnets,
+   turntable), event queue.
+ - Each substitution is checked with the parity list on the same harness against save/pre-unified-contact.

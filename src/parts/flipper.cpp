@@ -601,6 +601,7 @@ void Flipper::Render(const unsigned int renderMask)
    if (m_phitflipper)
    {
       matTrafo = Matrix3D::MatrixRotateZ(m_phitflipper->m_flipperMover.m_angleCur) * matTrafo;
+      matTrafo._41 += m_phitflipper->m_flipperMover.m_hitcircleBase.center.x - m_d.m_Center.x;   // pivot moved by the flipper nudge
    }
    m_renderer->UpdateBasicShaderMatrix(matTrafo);
 

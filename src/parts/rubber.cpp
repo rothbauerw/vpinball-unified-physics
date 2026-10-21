@@ -2,6 +2,9 @@
 
 #include "core/stdafx.h"
 #include "rubber.h"
+#include "parts/primitive.h"
+#include "parts/bumper.h"
+#include "parts/kicker.h"
 
 //#include "forsyth.h"
 #include "core/VPApp.h"
@@ -15,6 +18,7 @@
 #include "renderer/Shader.h"
 #include "renderer/trace.h"
 #include "utils/objloader.h"
+#include "physics/hitrubber.h"
 
 
 Rubber::~Rubber()
@@ -402,6 +406,28 @@ float Rubber::GetSurfaceHeight(float x, float y) const
 #endif
 
 
+bool Rubber::GetStopFootprint(float &x, float &y, float &r) const
+{
+   vector<RenderVertex> vv;
+   GetCentralCurve(vv, 4.0f);
+   if (vv.size() < 3)
+      return false;
+   double sx = 0.0, sy = 0.0;
+   for (const RenderVertex &v : vv)
+   {
+      sx += v.x;
+      sy += v.y;
+   }
+   const double cx = sx / (double)vv.size(), cy = sy / (double)vv.size();
+   double rmax = 0.0;
+   for (const RenderVertex &v : vv)
+      rmax = std::max(rmax, std::hypot((double)v.x - cx, (double)v.y - cy));
+   x = (float)cx;
+   y = (float)cy;
+   r = (float)(rmax + 0.5 * (double)m_d.m_thickness);
+   return true;
+}
+
 #pragma region Physics
 
 // Ported at: VisualPinball.Engine/VPT/Rubber/RubberHitGenerator.cs
@@ -416,6 +442,102 @@ void Rubber::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    if (!isUI)
       GenerateMesh(6, true); //!! adapt hacky code in the function if changing the "6" here
    UpdateRubber(false, m_d.m_hitHeight);
+
+   // rubber force model (vpx_physics.ini): one tube collider along the centreline instead of triangles, edges and points.
+   // The hit mesh has 6 vertices per ring, evenly spread around the centreline, so their mean is the centreline point.
+   if (!isUI)
+   {
+      RubberObjectSettings rs;
+      const std::string name = GetName();
+      const std::filesystem::path ini = HitRubber::IniPathFor(m_ptable->m_filename);
+      if (HitRubber::LoadSettings(rs, ini, name) && rs.contact)
+      {
+         constexpr int segmentsPerRing = 6;
+         std::vector<Vertex3Ds> centre;
+         for (int i = 0; i + segmentsPerRing <= m_numVertices; i += segmentsPerRing)
+         {
+            Vertex3Ds sum(0.f, 0.f, 0.f);
+            for (int j = 0; j < segmentsPerRing; j++)
+               sum += Vertex3Ds(m_vertices[i + j].x, m_vertices[i + j].y, m_vertices[i + j].z);
+            centre.push_back(sum / (float)segmentsPerRing);
+         }
+         if (centre.size() >= 3)
+         {
+            HitRubber *const hr = new HitRubber(this, centre, (float)m_d.m_thickness * 0.5f, rs, ini, name);
+            m_pBand = hr;
+            // band_stops may name a table object instead of giving x,y,r, so a moved post or band cannot leave the ini stale: a rubber (its footprint), a
+            // bumper or a kicker (their radius), or any other part with "Name, r" (its centre, the given radius)
+            hr->SetStopResolver([this](const std::string &nm, bool hasR, double rIn, double &x, double &y, double &r) -> bool {
+               IEditable *const e = m_ptable->GetElementByName(nm.c_str());
+               if (e == nullptr || e == static_cast<IEditable *>(this))
+                  return false;
+               const Vertex2D c = e->GetCenter();
+               x = c.x;
+               y = c.y;
+               if (hasR)
+               {
+                  r = rIn;
+                  return r > 0.0;
+               }
+               switch (e->GetItemType())
+               {
+               case eItemRubber:
+               {
+                  float fx, fy, fr;
+                  if (!static_cast<Rubber *>(e)->GetStopFootprint(fx, fy, fr))
+                     return false;
+                  x = fx;
+                  y = fy;
+                  r = fr;
+                  return true;
+               }
+               case eItemBumper: r = static_cast<Bumper *>(e)->m_d.m_radius; return true;
+               case eItemKicker: r = static_cast<Kicker *>(e)->m_d.m_radius; return true;
+               default: return false;
+               }
+            });
+            auto findPrim = [&](const std::string &nm) -> Primitive * {
+               IEditable *const e = m_ptable->GetElementByName(nm.c_str());
+               if (e == nullptr || e->GetItemType() != eItemPrimitive)
+               {
+                  PLOGW << "Rubber " << name << ": '" << nm << "' is not a primitive of the table";
+                  return nullptr;
+               }
+               return static_cast<Primitive *>(e);
+            };
+            auto primitives = [&](const std::string &list) {
+               std::vector<Primitive *> out;
+               size_t pos = 0;
+               while (pos <= list.size())
+               {
+                  size_t comma = list.find(',', pos);
+                  if (comma == std::string::npos)
+                     comma = list.size();
+                  std::string nm = list.substr(pos, comma - pos);
+                  nm.erase(0, nm.find_first_not_of(" \t"));
+                  nm.erase(nm.find_last_not_of(" \t") + 1);
+                  if (!nm.empty())
+                     if (Primitive *const p = findPrim(nm))
+                        out.push_back(p);
+                  pos = comma + 1;
+               }
+               return out;
+            };
+            if (!rs.slingPlate.empty())
+            {
+               Primitive *const plate = findPrim(rs.slingPlate);
+               if (plate != nullptr)
+                  hr->SlingAttach(plate, primitives(rs.slingSwitches));   // the sling's own blades come first in the switch index
+            }
+            if (!rs.switches.empty() && rs.band)
+               hr->BandSwitchesAttach(primitives(rs.switches));
+            SetupHitObject(physics, hr, isUI);
+            PLOGI << "Rubber " << name << ": force model on (" << centre.size() << " centreline points, radius " << m_d.m_thickness * 0.5f << " U, hitHeight " << m_d.m_hitHeight
+                  << " U, first point (" << centre[0].x << ',' << centre[0].y << ',' << centre[0].z << "), middle point (" << centre[centre.size() / 2].x << ',' << centre[centre.size() / 2].y << "))";
+            return;
+         }
+      }
+   }
 
    // add collision triangles and edges
    for (size_t i = 0; i < m_ringIndices.size(); i += 3)
@@ -450,6 +572,7 @@ void Rubber::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 
 void Rubber::PhysicRelease(PhysicsEngine* physics, const bool isUI)
 {
+   m_pBand = nullptr;
    if (!isUI)
       m_vhoCollidable.clear();
 }
@@ -551,7 +674,15 @@ void Rubber::RenderSetup(Renderer *renderer)
 
    if (m_numIndices == 0) // Degenerate curve: no mesh buffer (buffers can not be empty)
       return;
-   std::shared_ptr<VertexBuffer> dynamicVertexBuffer = std::make_shared<VertexBuffer>(m_renderer->m_renderDevice, m_numVertices, (float *)m_vertices.data(), !m_d.m_staticRendering);
+   // a force-model band (physics ini: contact = 1, band = 1) is animated: its mesh must be dynamic
+   m_bandAnimated = false;
+   {
+      RubberObjectSettings rs;
+      if (HitRubber::LoadSettings(rs, HitRubber::IniPathFor(m_ptable->m_filename), GetName()) && rs.contact && rs.band)
+         m_bandAnimated = true;
+   }
+   m_bandDeformed = false;
+   std::shared_ptr<VertexBuffer> dynamicVertexBuffer = std::make_shared<VertexBuffer>(m_renderer->m_renderDevice, m_numVertices, (float *)m_vertices.data(), !(m_d.m_staticRendering && !m_bandAnimated));
    std::shared_ptr<IndexBuffer> dynamicIndexBuffer = std::make_shared<IndexBuffer>(m_renderer->m_renderDevice, m_ringIndices);
    m_meshBuffer = std::make_shared<MeshBuffer>(GetName(), dynamicVertexBuffer, dynamicIndexBuffer, true);
    UpdateRubber(true, m_d.m_height);
@@ -580,15 +711,19 @@ void Rubber::Render(const unsigned int renderMask)
    const bool isUIPass = renderMask & Renderer::UI_EDGES || renderMask & Renderer::UI_FILL;
    TRACE_FUNCTION();
 
+   const bool staticMesh = m_d.m_staticRendering && !m_bandAnimated;
    if (!m_d.m_visible
    || (isReflectionPass && !m_d.m_reflectionEnabled)
    || m_d.m_thickness == 0
-   || (isDynamicOnly && m_d.m_staticRendering)
-   || (isStaticOnly && !m_d.m_staticRendering)
+   || (isDynamicOnly && staticMesh)
+   || (isStaticOnly && !staticMesh)
    || m_meshBuffer == nullptr) // Degenerate curve
       return;
 
-   if (m_dynamicVertexBufferRegenerate && !m_d.m_staticRendering)
+   // a band is redrawn while its cord moves, and once more when it has come to rest (to put the undeformed mesh back)
+   if (!staticMesh && !isUIPass && m_bandAnimated && m_pBand != nullptr && (m_pBand->BandAnimating() || m_bandDeformed))
+      m_dynamicVertexBufferRegenerate = true;
+   if (m_dynamicVertexBufferRegenerate && !staticMesh)
       UpdateRubber(true, m_d.m_height);
 
    if (isUIPass)
@@ -725,6 +860,77 @@ STDMETHODIMP Rubber::InterfaceSupportsErrorInfo(REFIID riid)
          return S_OK;
 
    return S_FALSE;
+}
+
+
+// ---- band state for scripts (rubber-contact branch) ----
+
+#define BAND_GETTER(NAME, TYPE, EXPR) \
+   STDMETHODIMP Rubber::get_Band##NAME(TYPE *pVal) \
+   { \
+      const BandInfo bi = m_pBand ? m_pBand->GetBandInfo() : BandInfo(); \
+      *pVal = (EXPR); \
+      return S_OK; \
+   }
+
+BAND_GETTER(Active, VARIANT_BOOL, FTOVB(bi.active))
+BAND_GETTER(Span, int, bi.span)
+BAND_GETTER(Deflection, float, bi.deflectionMm)
+BAND_GETTER(PeakDeflection, float, bi.peakMm)
+BAND_GETTER(Position, float, bi.posSpan)
+BAND_GETTER(RubberPosition, float, bi.posRubber)
+BAND_GETTER(NodeX, float, bi.nodeX)
+BAND_GETTER(NodeY, float, bi.nodeY)
+BAND_GETTER(NodeZ, float, bi.nodeZ)
+BAND_GETTER(HitTime, int, bi.hitTimeMs)
+BAND_GETTER(SpeedIn, float, bi.speedIn)
+BAND_GETTER(SpeedOut, float, bi.speedOut)
+BAND_GETTER(HitSpan, int, bi.hitSpan)
+BAND_GETTER(HitPosition, float, bi.hitPosSpan)
+BAND_GETTER(HitRubberPosition, float, bi.hitPosRubber)
+#undef BAND_GETTER
+
+#define SLING_GETTER(NAME, TYPE, EXPR) \
+   STDMETHODIMP Rubber::get_Sling##NAME(TYPE *pVal) \
+   { \
+      const SlingInfo si = m_pBand ? m_pBand->GetSlingInfo() : SlingInfo(); \
+      *pVal = (EXPR); \
+      return S_OK; \
+   }
+
+SLING_GETTER(Enabled, VARIANT_BOOL, FTOVB(si.enabled))
+SLING_GETTER(PlateAngle, float, si.plateAngleDeg)
+SLING_GETTER(SwitchClosed, VARIANT_BOOL, FTOVB(si.switchClosed))
+SLING_GETTER(CoilOn, VARIANT_BOOL, FTOVB(si.coilOn))
+SLING_GETTER(CoilCurrent, float, si.coilCurrentA)
+SLING_GETTER(PulseCount, int, si.pulses)
+SLING_GETTER(FireTime, int, si.fireTimeMs)
+#undef SLING_GETTER
+
+STDMETHODIMP Rubber::get_BandSwitchCount(int *pVal)
+{
+   *pVal = m_pBand ? m_pBand->BandSwitchCount() : 0;
+   return S_OK;
+}
+
+STDMETHODIMP Rubber::get_BandSwitchClosed(int index, VARIANT_BOOL *pVal)
+{
+   *pVal = FTOVB(m_pBand != nullptr && m_pBand->BandSwitchClosedAt(index));
+   return S_OK;
+}
+
+STDMETHODIMP Rubber::put_SlingEnabled(VARIANT_BOOL newVal)
+{
+   if (m_pBand)
+      m_pBand->SetSlingEnabled(VBTOb(newVal));
+   return S_OK;
+}
+
+STDMETHODIMP Rubber::SlingTrigger()
+{
+   if (m_pBand)
+      m_pBand->SlingTrigger();
+   return S_OK;
 }
 
 
@@ -1072,6 +1278,7 @@ void Rubber::GenerateMesh(const int _accuracy, const bool createHitShape) //!! h
    const int numRings = splinePoints - 1;
    const int numSegments = accuracy;
    m_numVertices = numRings*numSegments;
+   m_numSegments = numSegments;
    m_numIndices = 6 * m_numVertices;//m_numVertices*2+2;
 
    m_vertices.resize(m_numVertices);
@@ -1226,7 +1433,66 @@ void Rubber::UpdateRubber(const bool updateVB, const float height)
 
    if (updateVB)
    {
+      if (m_bandAnimated)
+         ApplyBandDeformation(buf);
       m_meshBuffer->m_vb->Unlock();
       m_dynamicVertexBufferRegenerate = false;
    }
+}
+
+// The rings of the mesh follow the deflected band (HitRubber::BandDeformAt): each ring is shifted and turned about its centre, normals turn with it.
+void Rubber::ApplyBandDeformation(Vertex3D_NoTex2 *buf)
+{
+   const int S = m_numSegments;
+   const bool animating = m_pBand != nullptr && m_pBand->BandAnimating();
+   bool any = false;
+   if (S > 0 && animating)
+   {
+      const int rings = m_numVertices / S;
+      for (int ring = 0; ring < rings; ring++)
+      {
+         Vertex3D_NoTex2 *const v = buf + ring * S;
+         Vertex3Ds centre(0.f, 0.f, 0.f);
+         for (int j = 0; j < S; j++)
+            centre += Vertex3Ds(v[j].x, v[j].y, v[j].z);
+         centre /= (float)S;
+         Vertex3Ds shift;
+         float R[9];
+         if (!m_pBand->BandDeformAt(centre, shift, R))
+            continue;
+         any = true;
+         m_bandPeakShift = std::max(m_bandPeakShift, shift.Length());
+         static const char *const meshLog = getenv("VPX_BAND_MESH_LOG");   // diagnostics: the ring centres before and after the deformation (table units)
+         static FILE *const mf = (meshLog && *meshLog) ? fopen(meshLog, "w") : nullptr;
+         if (mf)
+         {
+            fprintf(mf, "%d,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f%c", m_bandFrames, ring, centre.x, centre.y, centre.z, centre.x + shift.x, centre.y + shift.y, centre.z + shift.z, 10);
+            fflush(mf);
+         }
+         for (int j = 0; j < S; j++)
+         {
+            const float px = v[j].x - centre.x, py = v[j].y - centre.y, pz = v[j].z - centre.z;
+            v[j].x = centre.x + shift.x + R[0] * px + R[1] * py + R[2] * pz;
+            v[j].y = centre.y + shift.y + R[3] * px + R[4] * py + R[5] * pz;
+            v[j].z = centre.z + shift.z + R[6] * px + R[7] * py + R[8] * pz;
+            const float nx = v[j].nx, ny = v[j].ny, nz = v[j].nz;
+            v[j].nx = R[0] * nx + R[1] * ny + R[2] * nz;
+            v[j].ny = R[3] * nx + R[4] * ny + R[5] * nz;
+            v[j].nz = R[6] * nx + R[7] * ny + R[8] * nz;
+         }
+      }
+   }
+   if (any)
+      m_bandFrames++;
+   if (any != m_bandDeformed)
+   {
+      if (any)
+      {
+         m_bandPeakShift = 0.f;
+         m_bandFrames = 0;
+      }
+      else
+         PLOGI << "Rubber " << GetName() << ": band mesh animation ended after " << m_bandFrames << " frames, largest ring shift " << m_bandPeakShift * 0.53975f << " mm";
+   }
+   m_bandDeformed = any;
 }

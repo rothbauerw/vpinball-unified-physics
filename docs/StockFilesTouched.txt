@@ -1,0 +1,89 @@
+Stock files touched by the unified physics work (inventory, 2026-10-21)
+=====================================================================
+Measured with git: branch rubber-contact (committed HEAD d9a7bc764) against its merge base with origin/master (b003609ae, 2026-09-18).
+Uncommitted working-tree changes (8 files at the time) are NOT counted. origin here is the review fork (dcbenji/vpinball-physics-review);
+origin/master is 52 commits ahead of the base (fb0531451, 2026-09-21). Toxie's commit 8c4cf05d is not in this repository: drift from it is NOT measured.
+
+Totals: 87 commits; 43 files added (16870 lines, incl. docs and the flipper/ python folder; src/physics new C++ files about 13,000 lines);
+36 stock files modified (+2301 / -226 lines, excluding docs); none deleted.
+
+Modified stock files, by size of change (added / removed lines)
+---------------------------------------------------------------
+Large (more than 200 lines: logic that should move into our own files):
+  src/physics/hitflipper.cpp   +679 -40
+  src/physics/PhysicsEngine.cpp +357 -3   (also changed in master)
+  src/physics/hitball.cpp      +287 -70
+  src/parts/rubber.cpp         +270 -4    (also changed in master)
+Medium (40-100 lines):
+  hitflipper.h +74, ramp.cpp +56 (master), surface.cpp +53 (master), hitball.h +52 -2, gate.cpp +50 -1, ScriptGlobalTable.cpp +50 (master),
+  vpinball.idl +49, primitive.cpp +47 (master), collideex.cpp +41 -95, rubber.h +40 (master)
+Small (under 40 lines: redirects and registration):
+  spinner.cpp +31, collide.cpp +26 -4, ball.cpp +22, CMakeLists_sources.txt +17 (master), PhysicsEngine.h +16 (master), hitplunger.cpp +11 -2,
+  collide.h +11 -1, Renderer.cpp +10 (master), player.cpp +8 (master), spinner.h +7, gate.h +7, ScriptGlobalTable.h +7, dispid.h +6, physconst.h +4 -2,
+  kicker.cpp +3, ball.h +3, player.h +2 -1 (master), Settings_properties.inl +1 -1, quadtree.cpp +1, kdtree.cpp +1, AsyncDynamicQuadTree.cpp +1 (master), flipper.cpp +1
+
+Files we modified that master ALSO changed since the base (13: where merge conflicts are expected):
+  CMakeLists_sources.txt, ScriptGlobalTable.cpp, player.cpp, player.h, primitive.cpp, ramp.cpp, rubber.cpp, rubber.h, surface.cpp,
+  AsyncDynamicQuadTree.cpp, PhysicsEngine.cpp, PhysicsEngine.h, Renderer.cpp
+Conflicts are not tested: this list only says both sides changed the file.
+
+Not measured: which of the large edits are redirects and which are model code that belongs in our own files (needs a read of each diff).
+
+Classification of the four large files (2026-10-21; from the diff hunks and the first lines of each big hunk, NOT a full read of every hunk)
+-------------------------------------------------------------------------------------------------------------------------------------------
+hitflipper.cpp (+679 -40)
+  Model code, can move: one block of 457 lines (the two-body flipper model: plunger, link, return spring, rest stop, wiring) sits in the stock file after
+    FlipperMoverObject::SetMass. It could become its own .cpp. Not checked: how much of it uses private members of FlipperMoverObject / HitFlipper (that decides
+    whether it moves cleanly or needs friend/accessor changes).
+  Redirects, stay: about 200 lines spread over Collide (-26 +~40), Contact (~30), HitTest*, UpdateDisplacements/Velocities, SurfaceVelocity/Acceleration (small hooks).
+  ExtendBoundsAtExtreme (+23) is a separate helper (purpose not checked).
+PhysicsEngine.cpp (+357 -3)
+  Model-like, can move: RayCast hunk +111 (FindFlipperMover and other lookups for scripts; read only the start), AddCabinetBoundingHitShapes +49 (playfield / cabinet shapes).
+  Redirects: constructor, destructor, StartPhysics, UpdatePhysics (+59 largest) and PhysicsSimulateCycle (+30 largest, 10 smaller hunks): hooks into the loop.
+    The two big loop hunks were not read: they may be the contact-system step itself (movable behind one call) or logic woven through the loop (not movable).
+hitball.cpp (+287 -70)
+  Model code, can move: 148 lines at GetOldPosition (an ini-reading helper block: Trim / Lower / settings for the ball's contact friction) -> its own file.
+  Mixed, harder: ApplyFriction has about 13 small hunks (+~55 -~40) edited inside the stock friction routine; HandleStaticContact, Collide3DWall, UpdateVelocities
+    (+20 -8, BallMoverObject) too. These change stock behaviour in place; they can only move by replacing the stock call with a redirect to our routine.
+rubber.cpp (+270 -4)
+  Model code, can move: PhysicSetup +95 (rubber force model setup from the ini) -> a helper in hitrubber.cpp; script getters +61 ("band state for scripts") and
+    mesh deformation +56 + GetSurfaceHeight +21 -> their own file (rubberband.cpp). After that rubber.cpp keeps about 40 lines of hooks.
+
+Rough size of what could move into our own files: at most 998 of the 1,593 added lines in these four files (457 + 111 + 49 + 148 + 95 + 61 + 56 + 21; an upper bound, entanglement not checked).
+At least about 600 lines would stay as in-place hooks, of which ApplyFriction and the loop hunks are the hard part.
+
+Second read: PhysicsEngine.cpp loop hunks and hitball.cpp friction/force edits (2026-10-21; read in full from the diff, NOT run)
+------------------------------------------------------------------------------------------------------------------------------
+PhysicsEngine.cpp, UpdatePhysics
+  Movable behind one call each: fast-ball watchdog (+40, diagnostic, VPX_SPEED_WATCH); the air-core guide-tube constraint (+16, a loop over balls -> Magnets);
+    Magnets::Step / Turntables::Step (+9, already calls); PhysTiming instrumentation (+~12, diagnostic).
+  A change to stock behaviour, not a model: the anti-hang time skip is bypassed when Player::PlayUnfocused() (harness only). It should be a separate, clearly named test option.
+PhysicsEngine.cpp, PhysicsSimulateCycle
+  Real hooks (must stay in the loop, small): ContactSystem::EngageNear before the loop, SurfaceOwns() skip of the playfield hit test, ContactSystem::Step(hittime) and
+    PreUpdateDisplacements before UpdateDisplacements, the playfield Hit event (+7, could be one helper call), LogBallContact (2 lines).
+  Movable (diagnostics, about 70 lines): the VPX_CONTACT_TIMING csv block and the ContactProf::Split block with the split-cause variables (splitCause, splitObj, splitBall, splitStatic).
+  DEFECT FOUND BY READING (not run): the flipper-stop loop has `if (...) hittime = fliphit;` without braces and the two added lines `splitCause = 100; splitObj = nullptr;`
+    sit after it, so they run on every iteration, not only when the flipper stop is the earliest hit. Only the ContactProf diagnostic is affected (cause label), not the physics.
+hitball.cpp: the edits are of THREE kinds, and only one is our model
+  (1) Corrections to stock behaviour, NOT behind the unified switch (they act with unified = 0 too):
+      - ball-ball HitTest: contact position hitPos = ball.m_pos - hittime*dv (was +): rotates the collision normal by up to ~8 deg (ball-ball bug fix)
+      - SurfaceAcceleration: gravity no longer divided by the ball mass (also reaches the flipper contact solve)
+      - HandleStaticContact: gravity enters as an acceleration, not mass*g (a ball with mass != 1 rested wrongly)
+      - ApplyFriction / Collide3DWall friction rewritten: one ApplySlipFriction routine, Coulomb cone on the actual normal impulse, no speed threshold (C_BALL_SPIN_HACK path gone)
+  (2) Our contact model hooks (gated or inert without it): ApplyRestingSpinLoss (rolling resistance + twist, needs ContactSettings enable), HitRubberContactPairModel and
+      HitRubberContactHolds calls (shove lambda), m_rubberAdvanced in UpdateDisplacements, ExternalVelocityIncrement (gravity + nudge + magnets, a refactor of stock code).
+  (3) Helper block of 148 lines (ini reading) -> movable.
+CONSEQUENCE: "stock VPX physics" (no unified = 1) is not the stock engine for ball friction, ball-ball contact position and gravity on the ball: those four changes still act.
+  Stock-versus-new comparisons so far were made with them on both sides. For the shared branch they need their own switch or must be proposed as separate fixes
+  (Niwak's rule: verified ball-ball fixes merge directly; ball-table fixes go behind FIX_PHYSICS). Whether they change play at unified = 0 has NOT been measured.
+
+Newer base found (2026-10-21; remotes added, fetch only, nothing merged)
+-----------------------------------------------------------------------
+Remotes added to this worktree: vb = vbousquet/vpinball, vpx = vpinball/vpinball (official). Toxie's 8c4cf05d3 (2026-10-04, "A bunch of collected physics fixes and tweaks") is in both.
+vpx/master = da8b594ae (2026-10-21), 8 commits ahead of vb/master (907b80c79, 2026-10-20), which is 287 commits ahead of 8c4cf05d. vpx/master is 618 commits past our merge base (b003609ae, 2026-09-18).
+Of our 36 modified stock files, 35 were also changed upstream (the one that was not: Settings_properties.inl). Largest upstream changes in our files: Renderer.cpp +939 -437, hitflipper.cpp +180 -68,
+hitball.cpp +291 -68, PhysicsEngine.cpp +251 -84, surface.cpp +122 -173, player.h +117 -34, ramp.cpp +115 -84, kdtree.cpp +109 -92.
+Stock fixes in hitball.cpp, upstream versus ours (read, not run): SurfaceAcceleration without the mass division is upstream (same fix); the friction cone is upstream in its own form
+(reactionImpulse, ApplyFriction takes normalForce); the ball-ball hit position differs in form (upstream: hitPos = ball.m_pos + hittime*ball.m_vel, hitnormal from the other ball's moved centre), equivalence NOT checked;
+HandleStaticContact gravity: upstream divides by mass in its own way. So the conflicts are in functions where upstream has its own fix: take upstream's version and re-add only our hooks.
+Plunger fix (ours, hitplunger.cpp: collideActs() filter on hits Collide() would ignore): not upstream; hitplunger.cpp changed upstream +58 -39, conflict expected.

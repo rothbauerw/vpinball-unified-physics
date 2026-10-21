@@ -5,6 +5,10 @@
 
 #include "core/VPApp.h"
 #include "math/matrix.h"
+#include "physics/hitrubber.h"
+#include "physics/contactsystem.h"
+#include "physics/contactgate.h"
+#include "physics/contactpartsini.h"
 #include "meshes/gateBracketMesh.h"
 #include "meshes/gateLongPlateMesh.h"
 #include "meshes/gatePlateMesh.h"
@@ -232,6 +236,35 @@ void Gate::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          m_d.m_vCenter + (halflength + (float)PHYS_SKIN) * tangent, m_d.m_vCenter - (halflength + (float)PHYS_SKIN) * tangent
       };
 
+      const std::filesystem::path hingeIni = HitRubber::IniPathFor(m_ptable->m_filename);
+      const bool hinged = !isUI && ContactSystem::Unified() && HitRubber::HingeWanted(hingeIni, "gate", GetName());   // unified engine: the gate is a physical model of the contact system (docs/GateSpinnerDesign.txt)
+      if (hinged)
+      {
+         // the real gate: wire W / rectangle / plate / long plate on its pivot, stops, switch, hold, bending; no stock collider, mover, line segment or bracket circles
+         constexpr double U = ContactSystem::kMetresPerUnit;
+         GateModel::Settings s;
+         s.type = m_d.m_type == GateWireRectangle ? GateModel::Type::WireRectangle : m_d.m_type == GatePlate ? GateModel::Type::Plate : m_d.m_type == GateLongPlate ? GateModel::Type::LongPlate : GateModel::Type::WireW;
+         s.widthMm = (double)m_d.m_length * U * 1e3;
+         s.oneWay = !m_d.m_twoWay;
+         s.openStopDeg = m_d.m_angleMax > ANGTORAD(1.f) ? (double)RADTOANG(m_d.m_angleMax) : 90.0;
+         s.elasticity = m_d.m_elasticity;
+         s.friction = m_d.m_friction;
+         PartsIni::LoadGate(s, hingeIni, GetName());
+         m_partModel = std::make_shared<GateModel::Gate>();
+         const double rot = ANGTORAD(m_d.m_rotation);
+         m_partModel->Build(s, RubberContact::V3((double)m_d.m_vCenter.x * U, (double)m_d.m_vCenter.y * U, (double)height * U), RubberContact::V3(std::sin(rot), -std::cos(rot), 0.0), RubberContact::BallSI());
+         if (!m_partModel->CanPass())
+            PLOGW << "Gate " << GetName() << ": a ball on the surface can never pass (it needs " << m_partModel->PassAngleDeg() << " deg, the open stop is " << s.openStopDeg << " deg): raise pivot_height_mm or open_stop_deg";
+         m_phitgate = new HitGate(this, height);   // (not in the physics: the angle and the open flag the script and the renderer read)
+         m_phitgate->m_twoWay = m_d.m_twoWay;
+         m_phitgate->m_obj = (IFireEvents *)this;
+         m_phitgate->m_enabled = m_d.m_collidable;
+         m_phitgate->m_gateMover.m_angle = (float)m_partModel->body.theta;
+         m_partHost = HitRubber::MakePartHost(this, "gate", GetName(), hingeIni, m_partModel, this, nullptr, &m_phitgate->m_gateMover.m_angle, &m_phitgate->m_gateMover.m_anglespeed, m_d.m_elasticity, m_d.m_friction);
+         m_partHost->m_enabled = m_d.m_collidable;
+         physics->AddCollider(m_partHost, isUI);
+         return;
+      }
       if (!m_d.m_twoWay)
       {
           m_plineseg = new LineSeg(this, rgv[0], rgv[1], height, height + (float)(2.0 * PHYS_SKIN)); //!! = ball diameter
@@ -264,9 +297,13 @@ void Gate::PhysicRelease(PhysicsEngine* physics, const bool isUI)
 {
    if (!isUI)
    {
-      // HitObjects are owned by the physics engine, just clear the reference
+      // HitObjects are owned by the physics engine, just clear the reference (a unified gate's HitGate is not in the physics: the gate owns it)
+      if (m_partModel != nullptr)
+         delete m_phitgate;
       m_phitgate = nullptr;
       m_plineseg = nullptr;
+      m_partModel = nullptr;
+      m_partHost = nullptr;
    }
 }
 
@@ -640,6 +677,12 @@ STDMETHODIMP Gate::get_Open(VARIANT_BOOL *pVal)
 
 STDMETHODIMP Gate::put_Open(VARIANT_BOOL newVal)
 {
+   if (m_partModel != nullptr && m_phitgate != nullptr)   // unified engine: the coil's actuator holds the gate open (a driven stop), gravity closes it
+   {
+      m_phitgate->m_gateMover.m_open = VBTOb(newVal);
+      m_partModel->Hold(VBTOb(newVal));
+      return S_OK;
+   }
    if (m_phitgate)
    {
       m_phitgate->m_gateMover.m_hitDirection = false;
@@ -744,6 +787,12 @@ STDMETHODIMP Gate::get_Collidable(VARIANT_BOOL *pVal)
 
 STDMETHODIMP Gate::put_Collidable(VARIANT_BOOL newVal)
 {
+   if (m_partHost != nullptr && m_phitgate != nullptr)   // unified engine: the balls touch the gate or not (it keeps swinging under gravity and the hold either way)
+   {
+      m_phitgate->m_enabled = VBTOb(newVal);
+      m_partHost->m_enabled = VBTOb(newVal);
+      return S_OK;
+   }
    if (m_phitgate)
    {
       m_phitgate->m_enabled = VBTOb(newVal);

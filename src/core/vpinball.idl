@@ -739,6 +739,13 @@ typedef [uuid(D09B9F0E-C1AE-40dd-84D6-B1F74053AA8E)]
                 [id(23), helpstring("method GetTextFile")] HRESULT GetTextFile(BSTR FileName, [out, retval] BSTR *pContents);
                 [id(25), helpstring("method BeginModal")] HRESULT BeginModal();
                 [id(26), helpstring("method EndModal")] HRESULT EndModal();
+                [id(830), helpstring("method Magnet: sets the supply voltage of a magnet in vpx_physics.ini")] HRESULT Magnet([in] BSTR Name, [in] float Volts);
+                [id(831), helpstring("method MagnetCurrent: coil current of a magnet in amperes")] HRESULT MagnetCurrent([in] BSTR Name, [out, retval] float *pVal);
+                [id(836), helpstring("method MagnetDuty: PWM drive of a magnet coil, duty -1 to 1 of its rated voltage")] HRESULT MagnetDuty([in] BSTR Name, [in] float Duty);
+                [id(832), helpstring("method Turntable: sets the motor voltage of a turntable in vpx_physics.ini")] HRESULT Turntable([in] BSTR Name, [in] float Volts);
+                [id(833), helpstring("method TurntableDuty: PWM drive of a turntable motor, duty -1 to 1 of the rated voltage")] HRESULT TurntableDuty([in] BSTR Name, [in] float Duty);
+                [id(834), helpstring("method TurntableSpeed: speed of a turntable in rpm, positive in its direction")] HRESULT TurntableSpeed([in] BSTR Name, [out, retval] float *pVal);
+                [id(835), helpstring("method TurntableAngle: angle of a turntable in degrees")] HRESULT TurntableAngle([in] BSTR Name, [out, retval] float *pVal);
                 [id(DISPID_Table_Nudge), helpstring("method Nudge")] HRESULT Nudge([in] float Angle, [in] float Force);
                 [id(804), helpstring("method NudgeGetCalibration")] HRESULT NudgeGetCalibration([out] VARIANT *XMax, [out] VARIANT *YMax, [out] VARIANT *XGain, [out] VARIANT *YGain, [out] VARIANT *DeadZone, [out] VARIANT *TiltSensitivty);
                 [id(805), helpstring("method NudgeSetCalibration")] HRESULT NudgeSetCalibration([in] int XMax, [in] int YMax, [in] int XGain, [in] int YGain, [in] int DeadZone, [in] int TiltSensitivty);
@@ -822,6 +829,7 @@ typedef [uuid(D09B9F0E-C1AE-40dd-84D6-B1F74053AA8E)]
                 [id(DISPID_GameEvents_Paused)]  void Paused();
                 [id(DISPID_GameEvents_UnPaused)]  void UnPaused();
                 [id(DISPID_GameEvents_OptionEvent)] void OptionEvent([in] long event);
+                [id(DISPID_HitEvents_Hit)]  void Hit();
         }
 
         //////////////////////////////
@@ -2278,6 +2286,40 @@ typedef [uuid(D09B9F0E-C1AE-40dd-84D6-B1F74053AA8E)]
                 [propget, id(431), helpstring("property ReflectionEnabled")] HRESULT ReflectionEnabled([out, retval] VARIANT_BOOL *pVal);
                 [propput, id(431), helpstring("property ReflectionEnabled")] HRESULT ReflectionEnabled([in] VARIANT_BOOL newVal);
 
+                // Band rubber (rubber-contact branch): the state of a rubber stretched between posts that a ball deflects (rubbers.ini, band = 1).
+                // All read-only; they are 0 / false for a rubber that is not a band. Deflection and node position are of the most deflected node.
+                [propget, id(1710), helpstring("band: a span is deflected or being loaded")] HRESULT BandActive([out, retval] VARIANT_BOOL *pVal);
+                [propget, id(1711), helpstring("band: index of the deflected span, -1 = none")] HRESULT BandSpan([out, retval] int *pVal);
+                [propget, id(1712), helpstring("band: current deflection in mm")] HRESULT BandDeflection([out, retval] float *pVal);
+                [propget, id(1713), helpstring("band: peak deflection of the last hit in mm")] HRESULT BandPeakDeflection([out, retval] float *pVal);
+                [propget, id(1714), helpstring("band: place of the deflection along its span, 0 at the first post, 1 at the second")] HRESULT BandPosition([out, retval] float *pVal);
+                [propget, id(1715), helpstring("band: place of the deflection along the whole rubber, 0..1 from the first point of the centreline")] HRESULT BandRubberPosition([out, retval] float *pVal);
+                [propget, id(1716), helpstring("band: x of the deflected point, table units")] HRESULT BandNodeX([out, retval] float *pVal);
+                [propget, id(1717), helpstring("band: y of the deflected point, table units")] HRESULT BandNodeY([out, retval] float *pVal);
+                [propget, id(1718), helpstring("band: z of the deflected point, table units")] HRESULT BandNodeZ([out, retval] float *pVal);
+                [propget, id(1719), helpstring("band: game time in ms when the last ball left the band")] HRESULT BandHitTime([out, retval] int *pVal);
+                [propget, id(1720), helpstring("band: speed of the last ball when it hit the band, m/s")] HRESULT BandSpeedIn([out, retval] float *pVal);
+                [propget, id(1721), helpstring("band: speed of the last ball when it left the band, m/s")] HRESULT BandSpeedOut([out, retval] float *pVal);
+                [propget, id(1722), helpstring("band: span the last ball loaded")] HRESULT BandHitSpan([out, retval] int *pVal);
+                [propget, id(1723), helpstring("band: where the last ball loaded the band along its span, 0..1")] HRESULT BandHitPosition([out, retval] float *pVal);
+                [propget, id(1724), helpstring("band: where the last ball loaded the band along the whole rubber, 0..1")] HRESULT BandHitRubberPosition([out, retval] float *pVal);
+
+                // Sling (rubber-contact branch): a band with a kicker plate (rubbers.ini, sling_plate = <primitive>). SlingEnabled can be set (false = the coil
+                // does not fire, e.g. tilt or game over); the others are read-only and are 0 / false for a rubber that is not a sling.
+                [propget, id(1730), helpstring("sling: the coil may fire (false = disabled, e.g. tilt)")] HRESULT SlingEnabled([out, retval] VARIANT_BOOL *pVal);
+                [propput, id(1730), helpstring("sling: the coil may fire (false = disabled, e.g. tilt)")] HRESULT SlingEnabled([in] VARIANT_BOOL newVal);
+                [propget, id(1731), helpstring("sling: plate angle from its rest position toward the coil stop, degrees")] HRESULT SlingPlateAngle([out, retval] float *pVal);
+                [propget, id(1732), helpstring("sling: a switch is closed (the band is pushed back far enough at one of them)")] HRESULT SlingSwitchClosed([out, retval] VARIANT_BOOL *pVal);
+                [propget, id(1733), helpstring("sling: the coil is being driven (a pulse is running)")] HRESULT SlingCoilOn([out, retval] VARIANT_BOOL *pVal);
+                [propget, id(1734), helpstring("sling: coil current in amps")] HRESULT SlingCoilCurrent([out, retval] float *pVal);
+                [propget, id(1735), helpstring("sling: number of coil pulses fired")] HRESULT SlingPulseCount([out, retval] int *pVal);
+                [propget, id(1736), helpstring("sling: game time in ms when the last pulse started")] HRESULT SlingFireTime([out, retval] int *pVal);
+                [id(1737), helpstring("sling: fire one coil pulse now (ignored while a pulse runs or SlingEnabled is false)")] HRESULT SlingTrigger();
+
+                // Band switches (rubber-contact branch): blade primitives behind a band (rubbers.ini: switches = <primitive>, ...; a sling's sling_switches come first). Index 0 is the first blade.
+                [propget, id(1740), helpstring("band switches: number of switch blades")] HRESULT BandSwitchCount([out, retval] int *pVal);
+                [propget, id(1741), helpstring("band switches: the blade with this index is closed (the band is pushed back far enough at it)")] HRESULT BandSwitchClosed([in] int index, [out, retval] VARIANT_BOOL *pVal);
+
                 [propget, id(DISPID_Timer_Enabled), helpstring("property TimerEnabled")] HRESULT TimerEnabled([out, retval] VARIANT_BOOL *pVal);
                 [propput, id(DISPID_Timer_Enabled), helpstring("property TimerEnabled")] HRESULT TimerEnabled([in] VARIANT_BOOL newVal);
                 [propget, id(DISPID_Timer_Interval), helpstring("property TimerInterval")] HRESULT TimerInterval([out, retval] long *pVal);
@@ -2358,6 +2400,9 @@ typedef [uuid(D09B9F0E-C1AE-40dd-84D6-B1F74053AA8E)]
                 [propget, id(487), helpstring("property Visible")] HRESULT Visible([out, retval] VARIANT_BOOL *pVal);
                 [propput, id(487), helpstring("property Visible")] HRESULT Visible([in] VARIANT_BOOL newVal);
                 [id(100), helpstring("method DestroyBall")] HRESULT DestroyBall([out, retval] int *pVal);
+                [propget, id(101), helpstring("speed along the surface normal just before the latest impact")] HRESULT HitSpeed([out, retval] float *pVal);
+                [propget, id(102), helpstring("false = non-magnetic ball (ceramic): the magnets do not pull it")] HRESULT Magnetic([out, retval] VARIANT_BOOL *pVal);
+                [propput, id(102), helpstring("false = non-magnetic ball (ceramic): the magnets do not pull it")] HRESULT Magnetic([in] VARIANT_BOOL newVal);
         };
 
         [
@@ -2403,6 +2448,10 @@ typedef [uuid(D09B9F0E-C1AE-40dd-84D6-B1F74053AA8E)]
                 [id(DISPID_GameEvents_Init)]  void Init();
                 [id(DISPID_HitEvents_Hit)]  void Hit();
                 [id(DISPID_TimerEvents_Timer)]  void Timer();
+                [id(DISPID_RubberEvents_BandHit)]  void BandHit( [in] float parm);   // a ball has left a band: parm = peak deflection in mm; the Band* properties describe the hit
+                [id(DISPID_RubberEvents_SlingFire)]  void SlingFire();                // a sling's coil pulse has started (a switch closed)
+                [id(DISPID_RubberEvents_SwitchClosed)]  void SwitchClosed( [in] int index);   // the band has been pushed back far enough at a switch blade (index as in BandSwitchClosed)
+                [id(DISPID_RubberEvents_SwitchOpened)]  void SwitchOpened( [in] int index);   // the band has come back from a switch blade
         }
 
         //////////////////////////////

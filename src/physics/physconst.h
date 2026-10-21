@@ -144,8 +144,10 @@
  #endif
  // Have special cases for balls that are determined static? (C_DYNAMIC is kind of a counter for detection) -> does not work stable enough anymore nowadays
  //#define C_DYNAMIC 2
- // choose only one of these two heuristics:
- #define C_BALL_SPIN_HACK // original ball spin reduction code, based on automatic detection/heuristic of resting balls
+ // Ball spin heuristics, BYPASSED: resting spin and rolling are now handled by the contact friction (ContactSettings: [Contact] of vpx_physics.ini, rolling resistance and twist).
+ // The code is kept; define one of these to bring it back. Choose only one of the two heuristics. (C_BALL_SPIN_HACK once also gated the static-friction band in
+ // HitBall::ApplyFriction, which no longer exists: stick-or-slide is now one continuous rule.)
+ //#define C_BALL_SPIN_HACK // original ball spin reduction code, based on automatic detection/heuristic of resting balls
  //#define C_BALL_SPIN_HACK2 0.1 // dampens ball spin on collision contacts and at the same time very slow moving balls (smaller = less damp)
 #endif
 

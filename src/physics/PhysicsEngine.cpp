@@ -1,6 +1,7 @@
 // license:GPLv3+
 
 #include "core/stdafx.h"
+#include <array>
 
 #include <iomanip>
 
@@ -8,6 +9,8 @@
 
 #include "hitflipper.h"
 #include "hitplunger.h"
+#include "contactsystem.h"
+#include "contactprof.h"
 
 #include "input/PlungerHandler.h"
 #include "physics/cabinet/NudgeHandler.h"
@@ -18,7 +21,14 @@
 
 #include "utils/ushock_output.h"
 
+#include "physics/hitrubber.h"
+#include "physics/physicsini.h"
+#include "physics/magnet.h"
+#include "physics/turntable.h"
 #include "parts/ball.h"
+#include "parts/flipper.h"
+#include "parts/primitive.h"
+static uint64_t s_ctMagUs = 0;   // VPX_CONTACT_TIMING: time of Magnets::Step since the last cost-log row, us
 
 PhysicsEngine::PhysicsEngine(PinTable *const table)
    : m_plumbHandler(table->GetSettings())
@@ -28,8 +38,17 @@ PhysicsEngine::PhysicsEngine(PinTable *const table)
    , m_hitoctree(this)
    , m_hitoctree_dynamic(this)
 {
+   ContactSystem::SetTable(table->m_filename);   // unified or stock for this table: from its physics ini, before any part's PhysicSetup asks
    m_physicsMaxLoops = table->m_PhysicsMaxLoops == 0xFFFFFFFFu ? 0 : table->m_PhysicsMaxLoops * (10000 / PHYSICS_STEPTIME) /*2*/;
    m_contacts.reserve(8);
+
+   // a host the previous table did not release is tested against every ball of this one (slowdown that grows with each restart in one session)
+   m_leftoverHosts = HitRubber::LeftoverHosts();
+   if (!m_leftoverHosts.empty())
+      PLOGW << "Physics: surface hosts left over from the previous table (a leak, the game will slow down with each restart): " << m_leftoverHosts;
+   else
+      PLOGI << "Physics: no surface hosts left over from the previous table";
+   HitRubber::ClearPlayfieldHoles();   // the kickers add theirs in PhysicSetup, below
 
    // Collect all hit objects
    const FRect3D tableBounds = table->GetBoundingBox();
@@ -73,6 +92,9 @@ PhysicsEngine::PhysicsEngine(PinTable *const table)
 PhysicsEngine::~PhysicsEngine()
 {
    delete m_UIQuadTtree;
+   delete m_playfieldHost;
+   for (HitRubber *const h : m_ownedHosts)
+      delete h;
 
    if (m_pendingHitObjects)
       ReleaseVHO(*m_pendingHitObjects, false);
@@ -244,9 +266,13 @@ void PhysicsEngine::RemoveCollider(HitObject * collider, const bool isUI)
    assert(collider->GetType() == eBall); // Ball are the only object owning its HitObject, therefore the only one allowed to call here
    if (!isUI)
    {
-      RemoveFromVectorSingle<MoverObject *>(m_vmover, &static_cast<HitBall *>(collider)->m_mover);
-      RemoveFromVectorSingle(m_vballs, static_cast<HitBall *>(collider));
+      HitBall *const ball = static_cast<HitBall *>(collider);
+      RemoveFromVectorSingle<MoverObject *>(m_vmover, &ball->m_mover);
+      RemoveFromVectorSingle(m_vballs, ball);
       m_hitoctree_dynamic.Remove(collider);
+      // the ball object may outlive its removal (a destroyed ball is freed later, it may still be rendered): a band must let go of it now, not when it is freed
+      if (ball->m_bandOwner != nullptr || ball->m_contact != nullptr)
+         HitRubberBandBallDeleted(ball);
    }
 }
 
@@ -300,12 +326,63 @@ void PhysicsEngine::AddCabinetBoundingHitShapes(PinTable *const table)
    m_hitPlayfield.m_elasticityFalloff = table->m_overridePhysics ? table->m_fOverrideElasticityFalloff : table->m_elasticityFalloff;
    m_hitPlayfield.m_scatter = ANGTORAD(table->m_overridePhysics ? table->m_fOverrideScatterAngle : table->m_scatter);
 
+   // the playfield on the force model (vpx_physics.ini, [Features] playfield_contact = 1, material in [Playfield]): a surface host the plane's collide and contact hand the ball to
+   if (m_playfieldHost == nullptr && g_pplayer != nullptr && g_pplayer->m_implicitPlayfieldMesh != nullptr) // (the engine can run without a player) an explicit playfield primitive is its own host (Primitive::PhysicSetup)
+   {
+      const std::filesystem::path ini = HitRubber::IniPathFor(table->m_filename);
+      RubberObjectSettings ps;
+      if (HitRubber::LoadPlayfieldSettings(ps, ini, (double)m_hitPlayfield.m_friction))
+      {
+         // as far as a ball can fly: stock's plane has no limit, and a ball outside these faces would be engaged and released every cycle with no force and fall through
+         const float x0 = table->m_left - 100000.f, x1 = table->m_right + 100000.f, y0 = table->m_top - 100000.f, y1 = table->m_bottom + 100000.f;
+         auto faces = std::make_shared<RubberSurface>();
+         faces->Add(Vertex3Ds(x0, y0, 0.f), Vertex3Ds(x1, y0, 0.f), Vertex3Ds(x1, y1, 0.f));
+         faces->Add(Vertex3Ds(x0, y0, 0.f), Vertex3Ds(x1, y1, 0.f), Vertex3Ds(x0, y1, 0.f));
+         m_playfieldHost = new HitRubber(table, faces, ps, ini, "playfield", "playfield");
+         m_playfieldHost->m_tableMu = (double)m_hitPlayfield.m_friction;
+         m_playfieldHost->CalcHitBBox();
+         m_hitPlayfield.m_surfaceHost = m_playfieldHost;
+         // the engine steps a ball the host holds through the host's mover (a primitive's host gets it from its hit objects; this one has none, so add it here)
+         if (MoverObject *const pmo = m_playfieldHost->GetMoverObject(); pmo != nullptr && pmo->AddToList())
+            m_vmover.push_back(pmo);
+         PLOGI << "Playfield: force model on (e_mpa " << ps.eMpa << ", alpha " << ps.alphaSPerM << ", tan_delta " << ps.tanDelta << ", mu " << ps.mu << "; UNVERIFIED material)";
+      }
+   }
+   m_hitPlayfield.m_surfaceHost = m_playfieldHost;
+   Turntables::Setup(this, table, m_vmover, m_ownedHosts);   // discs set into the playfield (the holes are read by the playfield host)
+   {
+      const std::filesystem::path ini = HitRubber::IniPathFor(table->m_filename);
+      const PhysicsIni::Features feat = PhysicsIni::Active(ini);
+      m_hitSpeedEvents = feat.hitSpeed;
+      m_hitSpeedMin = std::max(0.f, feat.hitSpeedMin);
+      if (m_hitSpeedEvents)
+         PLOGI << "Physics: hit_speed on (Ball.HitSpeed, playfield Hit event above " << m_hitSpeedMin << ")";
+   }
+
    // glass:
    Vertex3Ds glassNormal(0, table->m_bottom - table->m_top, table->m_glassBottomHeight - table->m_glassTopHeight);
    glassNormal.Normalize();
    m_hitTopGlass = HitPlane(table, Vertex3Ds(0, glassNormal.z, -glassNormal.y), -table->m_glassTopHeight);
    m_hitTopGlass.m_physics = this; // copy assignment above does not preserve it
    m_hitTopGlass.m_elasticity = 0.2f;
+}
+
+// Diagnostics: VPX_CONTACT_LOG=<file> writes one row per collision (C) and per resting contact (T) of the first ball: game time, kind, object type, object name,
+// hit distance (U). Which objects touch the ball while it rests, and which of them fire every step.
+static void LogBallContact(const char kind, const CollisionEvent &ce)
+{
+   static FILE *const f = []() -> FILE * {
+      const char *const p = getenv("VPX_CONTACT_LOG");
+      FILE *const fp = (p != nullptr && *p) ? fopen(p, "w") : nullptr;
+      if (fp != nullptr)
+         fprintf(fp, "t_ms,kind,obj_type,obj_name,hitdist_u,hitnormal_x,hitnormal_y,hitnormal_z,vx,vy,vz,Lx,Ly,Lz\n");
+      return fp;
+   }();
+   if (f == nullptr || ce.m_obj == nullptr || g_pplayer->m_vball.empty() || ce.m_ball != &g_pplayer->m_vball[0]->m_hitBall)
+      return;
+   fprintf(f, "%u,%c,%d,%s,%.5f,%.4f,%.4f,%.4f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f\n", g_pplayer->m_time_msec, kind, (int)ce.m_obj->m_ObjType,
+      ce.m_obj->m_editable != nullptr ? ce.m_obj->m_editable->GetName().c_str() : "-", ce.m_hitdistance, ce.m_hitnormal.x, ce.m_hitnormal.y, ce.m_hitnormal.z,
+      ce.m_ball->m_d.m_vel.x, ce.m_ball->m_d.m_vel.y, ce.m_ball->m_d.m_vel.z, ce.m_ball->m_angularmomentum.x, ce.m_ball->m_angularmomentum.y, ce.m_ball->m_angularmomentum.z);
 }
 
 bool PhysicsEngine::RecordContact(const CollisionEvent& newColl)
@@ -359,6 +436,125 @@ void PhysicsEngine::RayCast(const Vertex3Ds &source, const Vertex3Ds &target, co
 }
 
 
+FlipperMoverObject *PhysicsEngine::FindFlipperMover(const std::string& name) const
+{
+   auto lower = [](std::string t) { for (char& c : t) c = (char)tolower((unsigned char)c); return t; };
+   const std::string want = lower(name);
+   for (HitFlipper *const f : m_vFlippers)
+      if (lower(f->m_flipperMover.m_pflipper->GetName()) == want)
+         return &f->m_flipperMover;
+   return nullptr;
+}
+
+bool PhysicsEngine::FlipperNear(const BallS &ball, const float margin) const
+{
+   for (const HitFlipper *const f : m_vFlippers)
+      if (f->GapToBall(ball) < margin)
+         return true;
+   return false;
+}
+
+// A bat the ball could meet within `horizon` physics steps: the gap to the bat is less than `margin` plus what the nearest bat point and the ball travel in that time.
+// Unlike FlipperNear this ignores a bat that is still or a ball beside the base (which hardly moves), so a rubber next to the base keeps its force model.
+float PhysicsEngine::FlipperClearance(const BallS &ball, const float horizon) const
+{
+   const float ballReach = ball.m_vel.Length() * horizon;
+   float clearance = FLT_MAX;
+   for (const HitFlipper *const f : m_vFlippers)
+      clearance = std::min(clearance, f->GapToBall(ball) - ballReach - f->ReachToBall(ball, horizon));
+   return clearance;
+}
+
+
+// Diagnostics: VPX_PHYS_TIMING=<file> times the 1 ms physics iterations and groups them per RENDERED frame (PhysicsEngine::OnFinishFrame). One row is written for each
+// frame that is slow, plus a summary row every 5 s. A frame is slow when the time since the previous frame exceeds VPX_PHYS_TIMING_GAP_US (default 25000: a dropped frame at
+// 60 Hz), its physics (all iterations together) took longer than VPX_PHYS_TIMING_FRAME_US (default 3000), or any single iteration took longer than VPX_PHYS_TIMING_ITER_US
+// (default 1000). The clock is read only inside real iterations, so measuring does not load the idle physics loop. Columns:
+//   kind          F (slow frame) or S (5 s summary)
+//   t_ms          game time
+//   gap_us        time since the previous rendered frame (S: the longest in the window)
+//   phys_us       time spent in physics iterations during this frame (S: the longest frame)
+//   iters         1 ms iterations run this frame (S: frames in the window)
+//   sim_sum_us / sim_max_us      PhysicsSimulateCycle, the collision physics itself (S: sum over the window / longest single iteration)
+//   other_sum_us / other_max_us  the rest of each iteration: script timers, input, nudge, plunger, mover velocities (S: same)
+//   balls, engaged               balls in play, balls currently driven by a flipper rubber (S: engaged = number of slow frames in the window)
+namespace
+{
+   struct PhysTiming
+   {
+      FILE *f = nullptr;
+      uint32_t frameThrUs = 3000, iterThrUs = 1000, gapThrUs = 25000;
+      uint64_t lastFrameUs = 0;
+      uint32_t nextSummaryMs = 5000;
+      // this frame
+      uint32_t iters = 0;
+      uint64_t simSum = 0, simMax = 0, otherSum = 0, otherMax = 0;
+      // summary window
+      uint32_t frames = 0, slow = 0;
+      uint64_t wGap = 0, wPhys = 0, wSimSum = 0, wSimMax = 0, wOtherSum = 0, wOtherMax = 0;
+
+      PhysTiming()
+      {
+         const char *const p = getenv("VPX_PHYS_TIMING");
+         if (p == nullptr || *p == '\0')
+            return;
+         f = fopen(p, "w");
+         if (f == nullptr)
+            return;
+         auto env = [](const char *name, uint32_t def) { const char *const v = getenv(name); return (v != nullptr && *v) ? (uint32_t)strtoul(v, nullptr, 10) : def; };
+         frameThrUs = env("VPX_PHYS_TIMING_FRAME_US", frameThrUs);
+         iterThrUs = env("VPX_PHYS_TIMING_ITER_US", iterThrUs);
+         gapThrUs = env("VPX_PHYS_TIMING_GAP_US", gapThrUs);
+         fprintf(f, "kind,t_ms,gap_us,phys_us,iters,sim_sum_us,sim_max_us,other_sum_us,other_max_us,balls,engaged\n");
+      }
+      static PhysTiming &Get() { static PhysTiming t; return t; }
+      bool On() const { return f != nullptr; }
+
+      void AddIter(const uint64_t simUs, const uint64_t otherUs)
+      {
+         iters++;
+         simSum += simUs;
+         otherSum += otherUs;
+         simMax = std::max(simMax, simUs);
+         otherMax = std::max(otherMax, otherUs);
+      }
+
+      void EndFrame()
+      {
+         const uint64_t now = usec();
+         const uint64_t gap = lastFrameUs ? now - lastFrameUs : 0;
+         lastFrameUs = now;
+         const uint64_t phys = simSum + otherSum;
+         uint32_t engaged = 0;
+         for (const Ball *const b : g_pplayer->m_vball)
+            engaged += (b->m_hitBall.m_rubberOwner != nullptr) ? 1u : 0u;
+         const bool isSlow = gap > gapThrUs || phys > frameThrUs || simMax > iterThrUs || otherMax > iterThrUs;
+         frames++;
+         slow += isSlow ? 1u : 0u;
+         wGap = std::max(wGap, gap);
+         wPhys = std::max(wPhys, phys);
+         wSimSum += simSum;
+         wOtherSum += otherSum;
+         wSimMax = std::max(wSimMax, simMax);
+         wOtherMax = std::max(wOtherMax, otherMax);
+         if (isSlow)
+            fprintf(f, "F,%u,%llu,%llu,%u,%llu,%llu,%llu,%llu,%u,%u\n", g_pplayer->m_time_msec, (unsigned long long)gap, (unsigned long long)phys, iters, (unsigned long long)simSum,
+               (unsigned long long)simMax, (unsigned long long)otherSum, (unsigned long long)otherMax, (uint32_t)g_pplayer->m_vball.size(), engaged);
+         iters = 0;
+         simSum = simMax = otherSum = otherMax = 0;
+         if (g_pplayer->m_time_msec >= nextSummaryMs)
+         {
+            fprintf(f, "S,%u,%llu,%llu,%u,%llu,%llu,%llu,%llu,%u,%u\n", g_pplayer->m_time_msec, (unsigned long long)wGap, (unsigned long long)wPhys, frames, (unsigned long long)wSimSum,
+               (unsigned long long)wSimMax, (unsigned long long)wOtherSum, (unsigned long long)wOtherMax, (uint32_t)g_pplayer->m_vball.size(), slow);
+            fflush(f);
+            nextSummaryMs = g_pplayer->m_time_msec + 5000;
+            frames = slow = 0;
+            wGap = wPhys = wSimSum = wSimMax = wOtherSum = wOtherMax = 0;
+         }
+      }
+   };
+}
+
 void PhysicsEngine::ResetPerFrameStats()
 {
    // Reset per frame debug counters
@@ -383,6 +579,8 @@ void PhysicsEngine::ResetPerFrameStats()
 void PhysicsEngine::OnFinishFrame()
 {
    m_lastFlipTime = usec();
+   if (PhysTiming::Get().On())
+      PhysTiming::Get().EndFrame();
 }
 
 void PhysicsEngine::StartPhysics()
@@ -415,6 +613,7 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
    if (g_pplayer)
       g_pplayer->m_logicProfiler.EnterProfileSection(FrameProfiler::PROFILE_PHYSICS);
    uint64_t initial_time_usec = targetTimeUs;
+   PhysTiming &pt = PhysTiming::Get();
 
    // DJRobX's crazy latency-reduction code
    uint64_t delta_frame = 0;
@@ -477,6 +676,7 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
 
    while (m_nextPhysicsFrameTime < initial_time_usec) // loop here until physics (=simulated) time catches up to current real time, still staying behind real time by up to one physics emulation step
    {
+      const uint64_t ptIter0 = pt.On() ? usec() : 0;
       m_time_sec = max(m_time_sec, (double)(m_curPhysicsFrameTime - m_startTime_usec) / 1000000.0); // First iteration is done before precise time
       m_time_msec = (uint32_t)((m_curPhysicsFrameTime - m_startTime_usec) / 1000); // Get time in milliseconds for timers
       if (g_pplayer)
@@ -532,7 +732,8 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
             - delta_frame; //!! one could also do this directly in the while loop condition instead (so that the while loop will really match with the current time), but that leads to some stuttering on some heavy frames
 
          // hung in the physics loop over 200 milliseconds or the number of physics iterations to catch up on is high (i.e. very low/unplayable FPS)
-         if ((cur_time_usec - initial_time_usec > 200000) || (m_physicsMaxLoops != 0 && m_phys_iterations > m_physicsMaxLoops))
+         // The test harness (VPX_PLAY_UNFOCUSED) runs slow frames on purpose: it must not skip simulated time, or the physics only runs for a part of the game time.
+         if (!Player::PlayUnfocused() && ((cur_time_usec - initial_time_usec > 200000) || (m_physicsMaxLoops != 0 && m_phys_iterations > m_physicsMaxLoops)))
          { // can not keep up to real time
             m_curPhysicsFrameTime = initial_time_usec; // skip physics forward ... slip-cycles -> 'slowed' down physics
             m_nextPhysicsFrameTime = initial_time_usec + PHYSICS_STEPTIME;
@@ -577,11 +778,82 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
       if (g_pplayer)
          g_pplayer->m_pininput.PlayNudgeRumble(cabinetAcceleration);
 
+      {
+         static const bool ctOn = getenv("VPX_CONTACT_TIMING") != nullptr && *getenv("VPX_CONTACT_TIMING") != 0;
+         const uint64_t m0 = ctOn ? usec() : 0;
+         Magnets::Step();   // coil currents and ball-ball forces: its time goes to the next cost-log row (mag_us)
+         if (ctOn)
+            s_ctMagUs += usec() - m0;
+      }
+      Turntables::Step();
+
       for (size_t i = 0; i < m_vmover.size(); i++)
          m_vmover[i]->UpdateVelocities();      // always on integral physics frame boundary (spinner, gate, flipper, plunger, ball)
 
       //primary physics loop
+      const uint64_t ptSim0 = pt.On() ? usec() : 0;
       PhysicsSimulateCycle(physics_diff_time); // main simulator call
+      const uint64_t ptSim1 = pt.On() ? usec() : 0;
+
+      // Fast-ball watchdog: a ball above VPX_SPEED_WATCH m/s (default 8; 0 = off) is logged once per second with its last 8 cycles (position, velocity, who holds it), so a rare launch
+      // can be traced afterwards. Costs a copy of a few floats per ball per cycle.
+      {
+         static const double watch = []() { const char *const e = getenv("VPX_SPEED_WATCH"); return e != nullptr && *e ? atof(e) : 8.0; }();
+         if (watch > 0.0 && g_pplayer != nullptr)
+         {
+            struct Rec { float x, y, z, vx, vy, vz; unsigned flags; uint32_t t; };
+            static std::vector<std::array<Rec, 8>> hist;
+            static std::vector<uint32_t> lastWarn;
+            static unsigned head = 0;
+            const size_t nb = g_pplayer->m_vball.size();
+            if (hist.size() != nb)
+            {
+               hist.assign(nb, std::array<Rec, 8>());
+               lastWarn.assign(nb, 0);
+            }
+            head = (head + 1) & 7;
+            const float lim = (float)(watch * 18.53);
+            for (size_t i = 0; i < nb; i++)
+            {
+               const HitBall &hb = g_pplayer->m_vball[i]->m_hitBall;
+               const unsigned fl = (hb.m_contact != nullptr ? 1u : 0u) | (hb.m_rubberOwner != nullptr ? 2u : 0u) | (hb.m_bandOwner != nullptr ? 4u : 0u) | (hb.m_d.m_lockedInKicker ? 8u : 0u);
+               hist[i][head] = { hb.m_d.m_pos.x, hb.m_d.m_pos.y, hb.m_d.m_pos.z, hb.m_d.m_vel.x, hb.m_d.m_vel.y, hb.m_d.m_vel.z, fl, g_pplayer->m_time_msec };
+               const Vertex3Ds &v = hb.m_d.m_vel;
+               if (!hb.m_d.m_lockedInKicker && v.x * v.x + v.y * v.y + v.z * v.z > lim * lim && g_pplayer->m_time_msec - lastWarn[i] > 1000)
+               {
+                  lastWarn[i] = g_pplayer->m_time_msec;
+                  PLOGW << "Fast ball " << i << " at t=" << g_pplayer->m_time_msec << " ms: " << sqrt(v.x * v.x + v.y * v.y + v.z * v.z) / 18.53 << " m/s (VPX_SPEED_WATCH " << watch << "), last cycles (t, pos U, vel U/T, flags 1=contact 2=bat 4=band 8=kicker):";
+                  for (unsigned k = 1; k <= 8; k++)
+                  {
+                     const Rec &r = hist[i][(head + k) & 7];
+                     PLOGW << "   t=" << r.t << " pos (" << r.x << ", " << r.y << ", " << r.z << ") vel (" << r.vx << ", " << r.vy << ", " << r.vz << ") flags " << r.flags;
+                  }
+                  for (size_t j = 0; j < nb; j++)
+                     if (j != i)
+                     {
+                        const HitBall &o = g_pplayer->m_vball[j]->m_hitBall;
+                        PLOGW << "   other ball " << j << " pos (" << o.m_d.m_pos.x << ", " << o.m_d.m_pos.y << ", " << o.m_d.m_pos.z << ") vel (" << o.m_d.m_vel.x << ", " << o.m_d.m_vel.y << ", " << o.m_d.m_vel.z << ")";
+                     }
+               }
+            }
+         }
+      }
+
+      if (g_pplayer != nullptr && Magnets::HasGuides()) // air-core guide tube and stop
+         for (const auto ball : g_pplayer->m_vball)
+         {
+            HitBall &hb = ball->m_hitBall;
+            if (hb.m_d.m_lockedInKicker)
+               continue;
+            float p[3] = { hb.m_d.m_pos.x, hb.m_d.m_pos.y, hb.m_d.m_pos.z }, v[3] = { hb.m_d.m_vel.x, hb.m_d.m_vel.y, hb.m_d.m_vel.z };
+            float L[3] = { hb.m_angularmomentum.x, hb.m_angularmomentum.y, hb.m_angularmomentum.z };
+            if (Magnets::ConstrainBall(p, v, L, hb.m_d.m_radius, hb.m_d.m_mass, hb.Inertia()))
+            {
+               hb.m_d.m_pos = Vertex3Ds(p[0], p[1], p[2]);
+               hb.m_d.m_vel = Vertex3Ds(v[0], v[1], v[2]);
+               hb.m_angularmomentum = Vertex3Ds(L[0], L[1], L[2]);
+            }
+         }
 
       // Store new position of balls for ball trails
       for (HitBall *const ball : m_vballs)
@@ -591,6 +863,12 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
 
       m_curPhysicsFrameTime = m_nextPhysicsFrameTime; // new cycle, on physics frame boundary
       m_nextPhysicsFrameTime += PHYSICS_STEPTIME;     // advance physics position
+
+      if (pt.On())
+      {
+         const uint64_t sim = ptSim1 - ptSim0;
+         pt.AddIter(sim, (usec() - ptIter0) - sim);
+      }
    } // end while (m_curPhysicsFrameTime < initial_time_usec)
 
    assert(m_curPhysicsFrameTime < m_nextPhysicsFrameTime);
@@ -616,6 +894,15 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
    // it's okay to have this code outside of the inner loop, as the ball hitrects already include the maximum distance they can travel in that timespan
    m_hitoctree_dynamic.Update();
 
+   static FILE *const ctLog = []() -> FILE * { const char *const p = getenv("VPX_CONTACT_TIMING"); FILE *const f = (p != nullptr && *p) ? fopen(p, "w") : nullptr; if (f != nullptr) fputs("t_ms,step_us,pre_us,near_us,bodies,islands,substeps,bats,band_bodies,rest_bodies,max_steps,items,probes,gather_us,setup_us,substep_us,write_us,rewinds,mag_us\n", f); return f; }();   // cost log: one row per call that did work
+   uint64_t ctNear = 0;
+   if (ContactSystem::Unified())
+   {
+      const uint64_t n0 = ctLog != nullptr ? usec() : 0;
+      ContactSystem::EngageNear(dtime);
+      ctNear = ctLog != nullptr ? usec() - n0 : 0;
+   }
+
    while (dtime > 0.f)
    {
       // first find hits, if any +++++++++++++++++++++ 
@@ -623,6 +910,11 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
          c_timesearch++;
       #endif
       float hittime = dtime; // begin time search from now ...  until delta ends
+      const float hittimeStart = hittime;
+      int splitCause = -1;
+      const HitObject *splitObj = nullptr;
+      const HitBall *splitBall = nullptr;
+      bool splitStatic = false;
 
       // find earliest time where a flipper collides with its stop
       for (size_t i = 0; i < m_vFlippers.size(); ++i)
@@ -631,6 +923,8 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
          //if ((fliphit >= 0.f) && !sign(fliphit) && (fliphit <= hittime))
          if ((fliphit > 0.f) && (fliphit <= hittime)) //!! >= 0.f causes infinite loop
             hittime = fliphit;
+            splitCause = 100;
+            splitObj = nullptr;
       }
 
       m_recordContacts = true;
@@ -671,7 +965,7 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
             #endif
 
             // always check for playfield and top glass
-            if (m_implicitPlayfieldMesh)
+            if (m_implicitPlayfieldMesh && !m_hitPlayfield.SurfaceOwns(pball->m_d)) // a ball the playfield force model holds is not tested
                DoHitTest(pball, &m_hitPlayfield, pball->m_coll);
             DoHitTest(pball, &m_hitTopGlass, pball->m_coll);
 
@@ -702,6 +996,9 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
                if (htz <= hittime)                     // smaller hit time??
                {
                   hittime = htz;                       // record actual event time
+                  splitCause = (int)pball->m_coll.m_obj->m_ObjType;
+                  splitObj = pball->m_coll.m_obj;
+                  splitBall = pball;
 
                   if (hittime < STATICTIME)            // less than static time interval
                   {
@@ -710,6 +1007,7 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
                      {
                         StaticCnts = 0;                // keep from wrapping
                         hittime = STATICTIME;
+                        splitStatic = true;
                      }
                   }
                }
@@ -725,6 +1023,36 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
 
       if (hittime > STATICTIME) StaticCnts = STATICCNTS; // allow more zeros next round
 
+      const uint64_t ctT0 = ctLog != nullptr ? usec() : 0;
+      if (hittime < hittimeStart && ContactProf::On())
+      {
+         std::string what = splitObj != nullptr ? typeid(*splitObj).name() : "flipper stop";
+         if (splitObj != nullptr && splitObj->m_editable != nullptr)
+            what += std::string(" part ") + splitObj->m_editable->GetName();
+         if (splitBall != nullptr)
+            what += splitBall->m_contact != nullptr ? " ballheld" : " ballfree";
+         if (splitBall != nullptr && splitBall->m_contact == nullptr)
+            what += " at " + std::to_string((int)(splitBall->m_d.m_pos.x / 100) * 100) + "," + std::to_string((int)(splitBall->m_d.m_pos.y / 100) * 100) + " z" + std::to_string((int)(splitBall->m_d.m_pos.z / 20) * 20)
+                    + (splitBall->m_d.m_lockedInKicker ? " kickerlocked" : "") + (InPlayfieldHole(splitBall->m_d.m_pos) ? " inhole" : "") + (splitBall->m_bandOwner != nullptr ? " band" : "") + (splitBall->m_rubberOwner != nullptr ? " batowned" : "");
+         ContactProf::Split(splitCause, splitStatic, what.c_str());
+      }
+      ContactSystem::Step(hittime); // contact-held balls: surface contacts and, for touching balls, ball-to-ball contact, stepped together
+      const uint64_t ctT1 = ctLog != nullptr ? usec() : 0;
+      for (size_t i = 0; i < m_vmover.size(); i++)
+         m_vmover[i]->PreUpdateDisplacements(hittime); // flippers with a rubber-engaged ball move bat and ball together here
+      if (ctLog != nullptr)
+      {
+         const uint64_t ctT2 = usec();
+         const ContactSystem::CycleStats &cs = ContactSystem::LastCycle();
+         if (cs.bodies > 0 || ctT2 - ctT1 >= 3 || ctNear >= 3)
+         {
+            static int rows = 0;
+            fprintf(ctLog, "%u,%llu,%llu,%llu,%d,%d,%d,%d,%d,%d,%d,%d,%lld,%d,%d,%d,%d,%d,%llu\n", g_pplayer->m_time_msec, (unsigned long long)(ctT1 - ctT0), (unsigned long long)(ctT2 - ctT1), (unsigned long long)ctNear, cs.bodies, cs.islands, cs.substeps, cs.bats, cs.bandBodies, cs.restBodies, cs.maxSteps, cs.items, cs.probes, cs.gatherUs, cs.setupUs, cs.substepUs, cs.writeUs, cs.rewinds, (unsigned long long)s_ctMagUs);
+            s_ctMagUs = 0;
+            if ((++rows & 255) == 0)
+               fflush(ctLog);
+         }
+      }
       for (size_t i = 0; i < m_vmover.size(); i++)
          m_vmover[i]->UpdateDisplacements(hittime); // step 2: move the objects about according to velocities (spinner, gate, flipper, plunger, ball)
 
@@ -747,7 +1075,14 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
 #ifdef DEBUGPHYSICS
             c_collisioncnt++;
 #endif
+            LogBallContact('C', pball->m_coll);
+            if (m_hitSpeedEvents)
+               pball->m_hitSpeed = std::max(0.f, -pball->m_coll.m_hitnormal.Dot(pball->m_d.m_vel)); // normal speed at the instant before the impact, whichever model resolves it
             pho->Collide(pball->m_coll);                 //!!!!! 3) collision on active ball
+            // The playfield (the plane, the implicit mesh or an explicit playfield primitive) has no hit event of its own: the table gets one, for impacts only (not resting or rolling contact)
+            if (m_hitSpeedEvents && g_pplayer != nullptr && pball->m_hitSpeed >= m_hitSpeedMin && i < g_pplayer->m_vball.size() && g_pplayer->m_vball[i] == pball->m_pBall
+                && (pho == &m_hitPlayfield || (pho->m_ObjType == ePrimitive && pho->m_obj != nullptr && static_cast<Primitive *>(pho->m_obj)->IsPlayfield())))
+               g_pplayer->m_ptable->FireVoidEvent(DISPID_HitEvents_Hit);
             pball->m_coll.m_obj = nullptr;               // remove trial hit object pointer
 
             // Collide may have changed the velocity of the ball, 
@@ -794,6 +1129,8 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
 
       // Maybe a two-phase setup where we first process only contacts, then only collisions
       // could also work.
+      for (const CollisionEvent &ce : m_contacts)
+         LogBallContact('T', ce);
 #ifdef FIX_PHYSICS
       // Ball/ball contacts first: contacts can change a ball's normal velocity on its other supports (the friction stopping the
       // spin of a ball pressed against another ball or a wall pushes it up), which the static contacts resolved after them
@@ -953,4 +1290,14 @@ void PhysicsEngine::PlayPlungerLaunchRumble(const float amplitude) const
 {
    if (g_pplayer)
       g_pplayer->m_pininput.PlayPlungerLaunchRumble(amplitude);
+}
+
+// Diagnostics: one line per flipper with the numbers FlipperClearance uses.
+std::string PhysicsEngine::FlipperDebug(const BallS &ball, const float horizon) const
+{
+   std::ostringstream o;
+   for (const HitFlipper *const f : m_vFlippers)
+      o << " [flipper base " << f->m_flipperMover.m_hitcircleBase.center.x << ',' << f->m_flipperMover.m_hitcircleBase.center.y << " angle " << f->m_flipperMover.m_angleCur
+        << " speed " << f->m_flipperMover.m_angleSpeed << " gap " << f->GapToBall(ball) << " reach " << f->ReachToBall(ball, horizon) << ']';
+   return o.str();
 }

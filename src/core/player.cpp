@@ -575,6 +575,8 @@ void Player::InitTableSession(const bool isInitial)
 
    InitFPS();
    m_liveUI->m_ballControl.LoadSettings(m_ptable->GetSettings());
+   if (!m_physics->LeftoverHosts().empty())
+      m_liveUI->PushNotification("Physics: surface hosts left over from the previous table: " + m_physics->LeftoverHosts() + ". The game slows down with each restart; restart VPX.", 12000);
 
    // Reset per session runtime state
    m_timeUpdateTimeStamp = 0;
@@ -1505,6 +1507,12 @@ bool Player::ShowStats() const
 {
    const InfoMode mode = GetInfoMode();
    return mode == IF_FPS || mode == IF_PROFILING;
+}
+
+bool Player::PlayUnfocused()
+{
+   static const bool on = getenv("VPX_PLAY_UNFOCUSED") != nullptr;
+   return on;
 }
 
 void Player::OnFocusChanged()

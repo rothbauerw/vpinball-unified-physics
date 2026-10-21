@@ -1,0 +1,66 @@
+OPTION A BALL-BALL MAGNET MODEL - ENGINE BUILD PLAN (2026-10-20, s24) - FOR REVIEW, NOTHING BUILT YET
+====================================================================================================
+Source of decisions: to-do list entry "OPTION A BUILD SPEC" (s23). Base code: commit c7921fc7f (src/physics/magnetballs.cpp/.h and its magnet.cpp hooks).
+Speed-ups: runs/2026-10-13-cpp-proto (bench_recipe_opt.cpp, bench_recipe_fast.cpp, lean_fast.h). Offline reference: runs/2026-10-14-mirror (test_magnetballs.cpp, optA_*.py).
+Scope: iron-core magnets (core_model = cells) on the unified engine (VPX_UNIFIED=1). Air-core, core_model = circuit and the legacy engine keep the induced dipoles.
+
+BUILD STEPS (each one ends with a check before the next starts)
+B1. Restore magnetballs.cpp/.h from c7921fc7f, add them to the build, hook them into magnet.cpp UpdateBallInteraction only when ContactSystem::Unified() and the
+    magnet is core_model = cells with ball_interaction on. No ball_model key (the old one stays a notice). Check: build; offline test_magnetballs.cpp reproduces
+    the c7921fc7f forces on its saved cases (same code, same answer).
+B2. Pair fix range (spec 1). Pair operators built for surface gaps 0.1 .. 12 mm (today 0.1 .. 1 mm, 6 gaps; new ~12 gaps, log-spaced), once per process at load,
+    current-independent. The 1 mm TOUCH limit and the 0.1 m REACH go: every pair of gated balls within 12 mm gets the pair fix and order-8 fields; all other gated
+    pairs are in the order-4 global solve only. The saturation tree (cut rule R1) uses the same pairs; its factor is 1 beyond 3 mm by the FEM table, so far pairs
+    change nothing there. Check: build time of the operators logged (0.3 s INFERRED); offline forces vs the Python pair-fix-vs-gap cases (pairfix_gap.json, 0.1-6 mm).
+B3. Magnetisation gate (spec 2, flux metric, user s24), replaces REACH 0.127 m. A ball is gated when (a) the magnets' field at its centre at the PRESENT current is
+    >= 0.665 mT (two touching balls in that field pull ~8 mN, REPORT.md "GATE"), or (b) its surface is within half a ball diameter of a gated ball AND the field at
+    its centre from the magnets plus the gated balls (last cycle's solve) is >= 0.665 mT; (b) is applied until no ball is added. Non-magnetic and kicker-locked
+    balls never join. Check: offline, gate members on the chain and pile cases.
+B4. Magnet's own frame (spec 4). Each magnet's drive is looked up in its own frame (axis = the magnet axis, origin = face centre), rotated to the table frame
+    (Wigner rotation, skipped when the axis is +z) and summed per ball before the solve. The axis_z < 0.999 refusal goes. No rotated-frame test (user s24);
+    requirement instead: EVERY magnet-dependent part works in the magnet's frame - drive lookup, plug pick (offset and gap from the face along the axis), face
+    saturation factor, gate (a), the lone-ball pull, and the re-aim's magnet part (B7). Check: code review of each of these against the frame.
+B5. Iterations and warm start (spec 6). Order-4 global solve: 3 Gauss-Seidel rounds from last cycle's answer (today: up to 100 sweeps to 1e-12, warm only when the
+    ball count is unchanged). Pair feedback: 2 passes from last cycle's corrected coefficients (today: 3 passes from cold). Warm state kept per ball by a stable ball
+    id, not by array position; a ball new to the solve starts from its own response (-beta b). Reset at table start. Check: offline, the warm-pass and GS cases of
+    optA_warm.py / optA_gs.py (errors there: 2.3 % worst at 3 mm/cycle into contact with GS 3, 0.31 % with 2 passes).
+B6. Bench speed-ups (spec 7): partner field reused from the field step; pair force form on the last pass only; rotations as row phases x real small-d; small-d
+    terms precomputed at construction. Each port checked against the step before it on the same cases (bench: results equal to 13 digits). Check: cost of the
+    engine code itself on the 6-ball pile, one core, worst of repeated runs (~300 us INFERRED; budget 200; user accepts, play testing decides).
+B7. Re-aim per substep (spec 3). The solve runs once per 1 ms cycle; its result is split into
+      - per pair: the pair force, stored in the pair's frame (along / across the line of centres) and turned with the CURRENT line of centres at every substep;
+      - per ball: the rest (the change of the ball's own pull from the magnet), stored in the magnet's frame at the ball (radial / round / along the axis) and
+        re-expressed at the ball's current position round the axis at every substep (it follows the drive).
+    The split is exact at the start of the cycle (the parts add up to the solve's answer, saturation included). The contact system applies it in Sources::Add
+    next to the lone-ball pull; balls outside the contact system keep the held per-cycle increment (m_magPair). The substep bound uses the real magnetic
+    acceleration |F| / m instead of the fixed 60 m/s2 (Option A forces reach ~20 N on an 80 g ball). Check: offline, a ball circling its partner at constant gap gets
+    no work from the magnet over many cycles; engine energy test (below).
+B8. Everything behind VPX_UNIFIED (spec 5): DONE as its own step 2026-10-20 (PhysicsIni::Active; unified on by default, 0 = pure stock).
+B9. Diagnostics (rule 8: on-screen notice + WARN, once per cause per table start): cost over budget (worst cycle, with ball count), plug ball off the face centre,
+    ball of another size, more than 6 gated balls, two balls on one face, a ring of touching balls (extra contact ignored by the tree). Timing csv: mag_us exists;
+    add gated balls, pair-fix pairs, GS rounds. Log for the user's captures: VPX_MAG_LOG (per cycle: gated balls, pairs, per-ball force parts, cost), replacing
+    VPX_NET_LOG in "tables\VPX play - magnet log.bat".
+B10. Docs: NewPhysicsReference (MAGNETS section + dated change log), to-do list, this plan's results.
+
+TESTS (each run asked for first; none run by this plan)
+T1 offline accuracy: steps B1-B5 against the saved Python cases (chain, pair fix vs gap, warm, GS).
+T2 offline cost: the engine solver on the 6-ball pile, worst case.
+T3 engine energy: repeated fast in/out impacts on the plug ball (3 m/s extreme, 1 m/s typical): kinetic energy in vs out per impact; orbit at constant gap.
+T4 user's table runs/2026-10-20-net-user/tt4.vpx; user captures with "VPX play - magnet log.bat".
+
+WHAT IT DOES NOT HANDLE OR MAY BREAK (rule 7)
+Already accepted (spec, no discussion needed): plug off-centre, no ball on the face, two balls on one face, rings, core not answering neighbours, tables for one
+  core, repulsion case of the pair fix, several magnets, air-core, other ball sizes, more than 6 balls.
+New from this plan:
+ 1. Gate (b) uses last cycle's force: a ball joins one cycle late (step <= 8 mN by the gate's definition). REASONED.
+ 2. A ball joining the solve starts cold: the 3-round GS error for a cold ball is NOT measured (warm cases only). Handled: it starts from its own response; to measure in T1.
+ 3. Pair entering the 12 mm range: the fix switches on there. Measured fix at 6 mm: 31-41 mN on the plug ball (c19 NI 6200); at 12 mm under 8 mN is INFERRED
+    (extrapolated). To measure in T1 (one case at 12 mm).
+ 4. Balls removed mid-game (drain, kicker lock, script delete) or a second Play in the editor: warm state keyed by ball id and reset at table start. To check in T3/T4.
+ 5. Substep bound change (B7) changes the substep count of every magnetised ball, so the contact-system cost moves too. Measured in T2/T4 timing (mag_us and step_us).
+ 6. A tilted magnet (B4) is checked only against a rotated vertical one; no FEM for a tilted case.
+ 7. The re-aim split (B7) holds the size of each part for the cycle; fast gap changes inside one cycle (1-3 mm per cycle) are only seen at the next solve. The
+    T1 warm cases show the per-cycle error; within the cycle it is NOT measured.
+ 8. Legacy engine and air-core magnets: unchanged (dipoles), so their known errors stay.
+
+ANSWERS (user, s24): Q1 flux gate, (a) or (b) - B3 updated. Q2 B7 as written. Q3 everything behind VPX_UNIFIED, on by default - done (B8).

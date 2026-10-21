@@ -13,11 +13,27 @@ static std::mutex mtx;
 #include "parts/Collection.h"
 #include "parts/hittarget.h"
 #include "physics/PhysicsEngine.h"
+#include "physics/hitrubber.h"
 
 float c_hardScatter = 0.0f;
 
 
-void HitObject::Contact(CollisionEvent& coll, const float dtime) { coll.m_ball->HandleStaticContact(coll, m_friction, dtime); }
+void HitObject::Contact(CollisionEvent& coll, const float dtime)
+{
+   if (m_surfaceHost != nullptr && m_surfaceHost->SlowContact(coll.m_ball))
+      return;   // a flagged wall / primitive: the rubber force model carries the resting or slow touch
+   coll.m_ball->HandleStaticContact(coll, m_friction, dtime);
+}
+
+bool HitObject::SurfaceRubberHit(HitBall *const pball, const Vertex3Ds &n)
+{
+   return m_surfaceHost != nullptr && m_surfaceHost->SurfaceCollide(pball, n);
+}
+
+bool HitObject::SurfaceOwnsSlow(const BallS &ball) const
+{
+   return m_surfaceHost->ContactOwns(ball);
+}
 
 void HitObject::FireHitEvent(HitBall* const pball)
 {
@@ -34,6 +50,8 @@ void HitObject::FireHitEvent(HitBall* const pball)
       }
       pball->m_lastEventSqrDist = 0.f;
       pball->m_lastEventPos = pball->m_d.m_pos; // remember last collision position
+      if (ContactTraceOn())
+         PLOGI << "HitEvent fired t=" << g_pplayer->m_time_msec << " type " << (int)m_ObjType;
       m_obj->FireGroupEvent(DISPID_HitEvents_Hit);
    }
 }
@@ -174,7 +192,8 @@ float LineSeg::HitTest(const BallS& ball, const float dtime, CollisionEvent& col
 void LineSeg::Collide(const CollisionEvent& coll)
 {
    const float dot = coll.m_hitnormal.Dot(coll.m_ball->m_d.m_vel);
-   coll.m_ball->Collide3DWall(coll.m_hitnormal, m_elasticity, m_elasticityFalloff, m_friction, m_scatter);
+   if (!SurfaceRubberHit(coll.m_ball, coll.m_hitnormal))
+      coll.m_ball->Collide3DWall(coll.m_hitnormal, m_elasticity, m_elasticityFalloff, m_friction, m_scatter);
 
    if (dot <= -m_threshold)
       FireHitEvent(coll.m_ball);
@@ -497,7 +516,8 @@ void HitLineZ::CalcHitBBox()
 void HitLineZ::Collide(const CollisionEvent& coll)
 {
    const float dot = coll.m_hitnormal.Dot(coll.m_ball->m_d.m_vel);
-   coll.m_ball->Collide3DWall(coll.m_hitnormal, m_elasticity, m_elasticityFalloff, m_friction, m_scatter);
+   if (!SurfaceRubberHit(coll.m_ball, coll.m_hitnormal))
+      coll.m_ball->Collide3DWall(coll.m_hitnormal, m_elasticity, m_elasticityFalloff, m_friction, m_scatter);
 
    if (dot <= -m_threshold)
       FireHitEvent(coll.m_ball);
@@ -590,7 +610,8 @@ void HitPoint::CalcHitBBox()
 void HitPoint::Collide(const CollisionEvent& coll)
 {
    const float dot = coll.m_hitnormal.Dot(coll.m_ball->m_d.m_vel);
-   coll.m_ball->Collide3DWall(coll.m_hitnormal, m_elasticity, m_elasticityFalloff, m_friction, m_scatter);
+   if (!SurfaceRubberHit(coll.m_ball, coll.m_hitnormal))
+      coll.m_ball->Collide3DWall(coll.m_hitnormal, m_elasticity, m_elasticityFalloff, m_friction, m_scatter);
 
    if (dot <= -m_threshold)
       FireHitEvent(coll.m_ball);
@@ -610,6 +631,7 @@ void HitPoint::DrawUI(std::function<Vertex2D(Vertex3Ds)> project, ImDrawList* dr
 void DoHitTest(const HitBall*const pball, const HitObject *const pho, CollisionEvent& coll)
 {
    if (pho == nullptr || pball == nullptr
+      || pho->SurfaceOwns(pball->m_d)
       || (pho->m_ObjType == eHitTarget && ((HitTarget*)pho->m_obj)->m_d.m_isDropped)) //!! why is this done here and not in corresponding HitTest()?
       return;
 

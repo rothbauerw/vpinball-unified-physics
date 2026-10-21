@@ -13,6 +13,10 @@
 
 class MeshBuffer;
 
+#include <memory>
+namespace SpinnerModel { class Spinner; }
+class HitRubber;
+
 class SpinnerData final : public BaseProperty
 {
 public:
@@ -104,6 +108,9 @@ private:
    float m_posZ;
 
    HitSpinner *m_phitspinner = nullptr;
+   // unified engine: the spinner model (physics/contactspinner.h) and its contact host; m_phitspinner then only holds the script-visible state and is not in the physics
+   std::shared_ptr<SpinnerModel::Spinner> m_partModel;
+   HitRubber *m_partHost = nullptr;
    float m_lastAngle;
 
    float m_vertexBuffer_spinneranimangle = -FLT_MAX;

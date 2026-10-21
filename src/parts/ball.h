@@ -196,6 +196,9 @@ public:
    STDMETHOD(get_ID)(/*[out, retval]*/ int *pVal);
    STDMETHOD(put_ID)(/*[in]*/ int newVal);
    STDMETHOD(DestroyBall)(/*[out, retval]*/ int *pVal);
+   STDMETHOD(get_HitSpeed)(/*[out, retval]*/ float *pVal);
+   STDMETHOD(get_Magnetic)(/*[out, retval]*/ VARIANT_BOOL *pVal);
+   STDMETHOD(put_Magnetic)(/*[in]*/ VARIANT_BOOL newVal);
    STDMETHOD(get_BulbIntensityScale)(/*[out, retval]*/ float *pVal);
    STDMETHOD(put_BulbIntensityScale)(/*[in]*/ float newVal);
    STDMETHOD(get_ReflectionEnabled)(/*[out, retval]*/ VARIANT_BOOL *pVal);

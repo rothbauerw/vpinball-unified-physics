@@ -19,6 +19,7 @@ public:
    ~PhysicsEngine();
 
    void SetGravity(float slopeDeg, float strength);
+   const vector<CollisionEvent>& GetContacts() const { return m_contacts; } // resting contacts found this cycle (valid while collisions are handled)
    const Vertex3Ds& GetGravity() const { return m_gravity; } // Gravity expressed in VP units. Earth gravity 9.81 m.s^-2 is approximately 1.81751 VPU.VPT^-2 (see physconst.h)
 
    // Only supported for UI for the time being
@@ -48,6 +49,12 @@ public:
    bool RecordContact(const CollisionEvent& newColl);
 
    void RayCast(const Vertex3Ds &source, const Vertex3Ds &target, const bool uiCast, vector<HitTestResult> &vhoHit);
+
+
+   // True if any flipper's bat is within `margin` VPX units of the ball surface (a moving bat can reach the ball within a few ms)
+   bool FlipperNear(const BallS &ball, float margin) const;
+   std::string FlipperDebug(const BallS &ball, float horizon) const;
+   float FlipperClearance(const BallS &ball, float horizon) const;   // smallest gap to a bat minus what the ball and the bat point nearest it travel in `horizon` steps (VPX units)
 
    void ResetStats() { m_phys_max = 0; m_phys_max_iterations = 0; m_count = 0; m_phys_total_iterations = 0; }
    void ResetPerFrameStats();
@@ -137,10 +144,19 @@ private:
    vector<class HitPlunger *> m_vPlungers;
 
 public:
+   class FlipperMoverObject *FindFlipperMover(const std::string& name) const; // flipper nudge: the mover of the flipper with this name (case-insensitive), null if none
+   bool HitSpeedEvents() const { return m_hitSpeedEvents; }
+   float HitSpeedMin() const { return m_hitSpeedMin; }
+   const std::string &LeftoverHosts() const { return m_leftoverHosts; } // surface hosts the previous table left registered (empty = none); the player shows it as a notification
    void OnBallWallHit(const class HitBall& ball, const Vertex3Ds& hitNormal, const float impactSpeed); // a ball hitting static geometry, offered to the plungers (shooter lane end)
 
 private:
    HitPlane m_hitPlayfield; // HitPlanes cannot be part of octree (infinite size)
+   float m_hitSpeedMin = 0.5f;    // [Features] hit_speed_min
+   bool m_hitSpeedEvents = false; // [Features] hit_speed = 1 (prototype): Ball.HitSpeed is set before every impact and the playfield fires the table's Hit event
+   class HitRubber *m_playfieldHost = nullptr; // the playfield on the force model (null = the stock plane contact)
+   std::string m_leftoverHosts;                 // see LeftoverHosts()
+   vector<class HitRubber *> m_ownedHosts;      // surface hosts the engine creates itself (turntable discs); deleted with the engine
    HitPlane m_hitTopGlass;
 
    vector<MoverObject *> m_vmover; // moving objects for physics simulation

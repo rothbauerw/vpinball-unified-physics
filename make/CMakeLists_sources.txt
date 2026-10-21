@@ -208,6 +208,26 @@ set(VPX_SOURCES
    src/physics/PhysicsEngine.h
    src/physics/quadtree.cpp
    src/physics/quadtree.h
+   src/physics/magnet.cpp
+   src/physics/magnet.h
+   src/physics/magnetcore.cpp
+   src/physics/magnetcore.h
+   src/physics/magnetballs.cpp
+   src/physics/magnetballs.h
+   src/physics/turntable.cpp
+   src/physics/turntable.h
+   src/physics/contactsystem.cpp
+   src/physics/contactsystem.h
+   src/physics/contactbat.cpp
+   src/physics/contactbat.h
+   src/physics/hitrubber.cpp
+   src/physics/hitrubber.h
+   src/physics/coilmodel.h
+   src/physics/hitsling.cpp
+   src/physics/hitsling.h
+   src/physics/contactsettings.cpp
+   src/physics/contactsettings.h
+   src/physics/hitballcontact.cpp
 
    src/physics/cabinet/CabinetNudgeSensor.cpp
    src/physics/cabinet/CabinetNudgeSensor.h

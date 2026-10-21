@@ -660,6 +660,7 @@ void HitQuadtreeNode::HitTestXRay(const HitQuadtree* const quadTree, const HitBa
 #endif
       HitObject* pho = quadTree->m_vho[i];
       if ((pho != nullptr) && (pball != pho) // ball can not hit itself
+         && !pho->SurfaceOwns(pball->m_d)
          && fRectIntersect3D(pball->m_hitBBox, pho->m_hitBBox)
          && fRectIntersect3D(pball->m_d.m_pos, rcHitRadiusSqr, pho->m_hitBBox))
       {

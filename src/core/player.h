@@ -85,7 +85,8 @@ public:
    string GetPerfInfo();
 
    void SetPlayState(const bool isPlaying, const uint32_t delayBeforePauseMs = 0); // Allow to play/pause during UI interaction or to perform timed simulation steps (still needs the player window to be focused).
-   bool IsPlaying(const bool applyWndFocus = true) const { return (m_playMode == PlayMode::CaptureAttract) || (m_wantsToPlay && (applyWndFocus ? m_playfieldWnd->IsFocused() : true) && !IsEditorMode()); }
+   static bool PlayUnfocused(); // test harness only: VPX_PLAY_UNFOCUSED=1 keeps the game running when the player window has no focus
+   bool IsPlaying(const bool applyWndFocus = true) const { return (m_playMode == PlayMode::CaptureAttract) || (m_wantsToPlay && (applyWndFocus && !PlayUnfocused() ? m_playfieldWnd->IsFocused() : true) && !IsEditorMode()); }
    void OnFocusChanged(); // On focus lost, pause player and show mouse cursor
 
    uint32_t m_pauseTimeTarget = 0;

@@ -12,6 +12,10 @@
 class HitGate;
 class LineSeg;
 
+#include <memory>
+namespace GateModel { class Gate; }
+class HitRubber;
+
 class GateData final : public BaseProperty
 {
 public:
@@ -107,6 +111,9 @@ private:
 
    LineSeg *m_plineseg = nullptr;
    HitGate *m_phitgate = nullptr;
+   // unified engine: the gate model (physics/contactgate.h) and its contact host; m_phitgate then only holds the script-visible state (angle, open) and is not in the physics
+   std::shared_ptr<GateModel::Gate> m_partModel;
+   HitRubber *m_partHost = nullptr;
    float m_lastAngle = FLT_MAX;
 
    float m_vertexbuffer_angle = FLT_MAX;

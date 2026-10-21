@@ -1,0 +1,177 @@
+STOCK VPX PHYSICS CHANGES -- SOURCE REVIEW, 2026-10-21
+====================================================
+
+Scope and evidence
+------------------
+New stock source: unified-physics-branch committed HEAD da8b594aed731d905c09a94ddb76100dbd4ebedb,
+2026-10-21. The working directory also contains uncommitted unified-model changes;
+those were EXCLUDED by inspecting git objects, not by diffing working files.
+Previous unified-model stock base: b003609ae7304fa8d7f4781dfec08672a5894ed6,
+2026-09-18 (also the current vpinball checkout).
+September audit/review baseline: master-src fb0531451, 2026-09-21.
+The main solver changes below are after the September 21 baseline. Between
+September 18 and 21 there were also nudge sensor defaults/settings fixes,
+including default sensor cabinet mass changing from 1 kg to 113 kg.
+
+This is a source/history analysis. Runtime effects below are INFERRED from the
+equations and control flow, not newly measured gameplay results. No build,
+timing run, regression matrix, engine edit, commit or push was performed.
+Commit messages describing prior test results are historical evidence only.
+
+Main conclusion
+---------------
+Stock is materially different from the September engine. Many earlier audit
+issues now have upstream changes. It is still the impulse/contact engine,
+not the project's compliant unified contact model.
+
+In stock src/physics/physconst.h, FIX_PHYSICS is defined and NEW_PHYSICS is
+commented out. These are compile-time choices, not a table-facing model switch.
+The active fixes are not gated here by table-file version. Some further fixes
+are unconditional and remain even if FIX_PHYSICS is undefined.
+
+Active changes and likely effects
+--------------------------------
+1. WALL/SURFACE CONTACT FRICTION
+   49add616c (Oct 1): limits the old low-normal-speed static-friction shortcut
+   to support-like normals (z > 0.5). Sliding on vertical walls now reaches
+   slip-directed dynamic friction.
+   3904ce93b (Oct 1): contact friction is bounded by the normal impulse actually
+   applied in that step, rather than only gravity projected onto the surface.
+   8c4cf05d3 (Oct 4): dynamic sliding asks for the full slip-removing impulse,
+   bounded by Coulomb friction, rather than multiplying it by time again.
+   Same friction values can therefore produce different wall riding, spin
+   and sliding. The support-normal shortcut itself has not been removed.
+   Sources: hitball.cpp, HandleStaticContact and ApplyFriction.
+
+2. CONTACT DETECTION ON WALLS, POLYGONS AND PLAYFIELD
+   61ed4a5ad (Oct 2): slow shallow touches now report immediate contact instead
+   of artificial hit times that could lie outside the simulation step.
+   8c4cf05d3: slow balls too deeply embedded in the playfield take the collision
+   path rather than being ignored. Polygon contact handling is active under FIX.
+   Likely affects settling, slow wall touches and playfield penetration.
+   Sources: collide.cpp LineSeg::HitTestBasic; collideex.cpp Hit3DPoly/HitPlane.
+
+3. BALL MASS
+   93953469f (Oct 1): corrects mass handling in support/contact response and
+   removes division by mass from gravity acceleration at the ball surface.
+   Non-unit-mass balls should no longer gain different gravity acceleration
+   or be incorrectly lifted by their resting support.
+   Source: hitball.cpp HandleStaticContact and SurfaceAcceleration.
+
+4. BALL-TO-BALL CONTACT AND STACKS
+   70ff6c6be (Sep 26): evaluates the collision normal using both balls advanced
+   to the hit time. This corrects the sign/time construction of the normal.
+   eb9ae26c3 (Oct 2): enables ball-ball contacts; the old BALL_CONTACTS switch
+   is removed. Slow touching pairs report immediate events.
+   f4d8b8cd7 (Oct 2): stabilizes resting stacks. Shallow resting-scale impacts
+   skip the large positional correction; small overlap gets a capped position
+   correction. Ball-ball restitution is now 0 below the low-impact threshold
+   and remains 0.8 above it, instead of always being 0.8.
+   8c4cf05d3: contact slip uses relative surface velocity of the two balls;
+   the contact friction coefficient becomes 0.1 instead of inherited 0.3.
+   Ball-ball contacts run before other contacts; later supports compensate
+   earlier contact changes. The cancellation is limited so a fresh impact can
+   reach the next ball rather than disappearing into a resting contact.
+   Likely affects ball locks, packed troughs, stacked balls and cradle-like
+   ball chains. This is a sequential contact solve, not a coupled island solver.
+   Sources: hitball.cpp HitTest/Collide/Contact/HandleStaticContact/ApplyFriction;
+   PhysicsEngine.cpp contact passes.
+
+5. FLIPPER INERTIA AND CONTACT
+   887d368b8 (Sep 26): corrects the sign of the flipper inertia contribution
+   in the static-friction denominator.
+   a75d4da2d (Oct 2): replaces rod inertia with shape-based inertia under FIX.
+   The shape is a uniform-density convex hull of the base and end circles.
+   m_backwards_compatibility is hardcoded true; torque and torque ramp rate
+   are rescaled to preserve free-swing acceleration. This does NOT preserve
+   collision response: dead bounces, held-bat response and ball launch can change.
+   8c4cf05d3: tests contact-gap acceleration using the ball center, removing
+   the spin-induced centripetal term that could incorrectly remove support.
+   Also preserves angular speed when updating inertia and guards degenerate
+   inertia results. 6594db978 (Oct 5) preserves fractional rubber dimensions
+   when loading packs, so the loaded geometry can differ from older builds.
+   Sources: hitflipper.cpp UpdateInertia/Contact; parts/flipper.cpp Load.
+
+6. RAMPS AND WALL GEOMETRY
+   dd0b67829 (Sep 30): removes a duplicate ramp entrance joint.
+   4cd61d6ba (Oct 14): safer zero-length/degenerate ramp handling and resets
+   triangle adjacency across degenerate triangles.
+   4c0cea03c (Oct 14): clockwise/reversed walls collide on both sides and
+   keep their slingshot animation.
+   These change collision construction, not the general material model.
+   Sources: parts/ramp.cpp PhysicSetup/CheckJoint; parts/surface.cpp.
+
+7. COLLISION SEARCH RELIABILITY
+   543518a3a (Oct 1): KD leaf scan stays within the node's item range.
+   8c4cf05d3 and ce1feb440: SSE lane-mask changes avoid duplicate hit tests
+   and contacts; async tree/threading fixes address construction races.
+   af0c4a5b4 (Sep 24) introduces lazy hit-quadtree updates; later pool fixes
+   provide fallback work when a queue is full. These matter when evaluating
+   contact counts and runtime geometry, even without a new force law.
+
+8. NUDGE
+   d75ba2dd4 (Sep 24): cabinet oscillator X/Y frequencies change from
+   9.3/5.8 Hz to 4.5/4.3 Hz; X damping changes from 0.052 to 0.04,
+   Y stays 0.055. Displacement multipliers 3.5/2.0 are removed.
+   Later changes use a shared strong-nudge acceleration of 0.7 g instead
+   of the prior 0.5 g scale for the cabinet-model keyboard/gamepad paths.
+   There are initialization and sensor-type scale-conversion fixes too.
+   These are specific input/model paths; do not apply them to every nudge mode.
+   Sources: physics/cabinet; shared constant in cabinet/NudgeHandler.h.
+
+9. PLUNGER, INPUT AND ENGINE LIFECYCLE
+   89e4310d2/5dbcc0351 (Sep 25-26): plunger unit corrections and a mechanical
+   release path that drives the simulated tip at estimated launch speed,
+   avoiding missed/weak launches with low Mech Strength.
+   d7c565580 (Oct 7): guards degenerate plunger-tip normals.
+   Engine refactoring lets the real solver run without the global player
+   for integration tests; c4078b887 prevents simulation before engine start.
+   Haptic changes alter rumble aggregation/dispatch, not the collision law.
+
+Present but disabled in the stock source
+---------------------------------------
+NEW_PHYSICS contains contact-patch spin friction, rolling resistance, friction
+and spin exchange during ball-ball IMPACTS, revised embedded-ball push-out and
+separation, and broader embedded-contact handling. Its constants are explicitly
+described as uncalibrated.
+
+687df4f61/43dbc3ff9 (Oct 10/12) are important compatibility follow-ups:
+Collide3DWall keeps the legacy PRE-restitution friction bound in default stock.
+The larger post-restitution bound is confined to NEW_PHYSICS. Do not read
+3904ce93b alone and conclude all wall bounce friction uses the larger bound.
+
+Still present / not resolved by these changes
+--------------------------------------------
+- The legacy resting-ball spin hack and embedding/displacement workarounds
+  remain enabled because NEW_PHYSICS is off.
+- The parked-flipper stop/recoil heuristic remains, including the 0.5 response
+  scaling. Shape inertia is not the earlier proposed stop fix.
+- Ramp sidewalls still use 2D segments with a single lower/upper height per
+  segment. AddWallLineSeg still documents extension below/above the ramp.
+  The ramp entrance-joint fix is not the earlier ramp sidewall fix.
+- Gates/spinners retain their kinematic collision shortcut; source comments
+  explicitly discuss keeping the energy-exchanging upgrade opt-in.
+- Slingshot force is not rebuilt; elasticity dependence remains a known test.
+- Static contact compensation intentionally leaves other static NORMAL
+  impulses independent (wire ramps/corners); it is not a full simultaneous solve.
+
+Tests and limits
+----------------
+Stock now includes a PhysicsEngine integration harness and physics defect,
+spin, collision, quadtree, cabinet and related tests. The Oct 4 commit reports
+75/75 physics tests for that revision. That is not a fresh result for Oct 21.
+Several tests explicitly use doctest::should_fail(), including vertical polygon
+hits, embedded resting balls, slingshot elasticity dependence, non-legacy kicker
+entry and flipper end-cap support. Passing the suite does not establish that
+these known defects are fixed. No tests were run in this source review.
+
+Implication for the unified branch (INFERRED)
+-------------------------------------------
+Use da8b594ae as the new stock reference when judging fallback/disabled-model
+behavior. Old results against b003609ae/fb0531451 are historical comparisons,
+not measurements of today's fallback. The highest-priority overlap checks
+are stock ApplyFriction, static contact handling, ball-pair handling, flipper
+inertia/torque scaling and contact ordering. Confirm which path owns each
+response before retaining older local fixes; otherwise upstream and local
+corrections can overlap. No conclusion about actual double application in
+the current uncommitted port is made here; that requires a separate port audit.

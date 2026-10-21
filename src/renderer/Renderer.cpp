@@ -1,6 +1,8 @@
 // license:GPLv3+
 
 #include "core/stdafx.h"
+#include "physics/magnet.h"
+#include "physics/turntable.h"
 #include "Renderer.h"
 
 #include "core/VPApp.h"
@@ -384,6 +386,8 @@ void Renderer::SetTable(PinTable *const table)
 Renderer::~Renderer()
 {
    m_gpu_profiler.Shutdown();
+   Magnets::ReleaseRender();
+   Turntables::ReleaseRender();
    m_ballMeshBuffer = nullptr;
    #ifdef DEBUG_BALL_SPIN
    m_ballDebugPoints = nullptr;
@@ -1764,6 +1768,12 @@ void Renderer::DrawDynamics(bool onlyBalls)
          if (isBackdropEdit && !renderable->m_desktopBackdrop)
             continue;
          RenderItem(renderable, isNoBackdrop);
+      }
+      if ((m_render_mask & Renderer::REFLECTION_PASS) == 0)
+      {
+         SetSpaceReference(PartGroupData::SpaceReference::SR_PLAYFIELD, false);
+         Magnets::RenderGuides(this);   // translucent guide tubes of the air-core magnets (tube_visible = 1)
+         Turntables::Render(this);      // turntable discs (visible = 1)
       }
    }
    else if (!isBackdropEdit)

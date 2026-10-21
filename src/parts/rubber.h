@@ -107,6 +107,10 @@ public:
 
    void AddPoint(const Vertex2D &v, const bool smooth);
 
+   // The footprint of this rubber as a circle (centre of its centreline, distance to the farthest centreline point plus the tube radius), VPX units. Used by
+   // another rubber's band_stops entry that names this rubber (a ring around a post).
+   bool GetStopFootprint(float &x, float &y, float &r) const;
+
 #if 0
    float GetSurfaceHeight(float x, float y) const final;
 #endif
@@ -141,6 +145,13 @@ private:
    int m_numIndices;
 
    vector<HitObject*> m_vhoCollidable; // Objects to that may be collide selectable
+   bool m_bandAnimated = false;        // a force-model band: its mesh follows the deflected cord, so it is drawn as a dynamic mesh whatever EnableStaticRendering says
+   bool m_bandDeformed = false;        // the mesh in the vertex buffer is currently deformed
+   int m_numSegments = 0;              // vertices per ring of the render mesh
+   float m_bandPeakShift = 0.f;        // largest shift of a ring during the current animation, for the log
+   int m_bandFrames = 0;
+   void ApplyBandDeformation(Vertex3D_NoTex2 *buf);   // after UpdateRubber has transformed the vertices: move the rings of a deflected band
+   class HitRubber *m_pBand = nullptr; // the force-model collider while playing (null when this rubber is not a force-model rubber)
    vector<Vertex3D_NoTex2> m_vertices;
    vector<WORD> m_ringIndices;
 
@@ -195,5 +206,34 @@ public:
    STDMETHOD(get_PhysicsMaterial)(/*[out, retval]*/ BSTR *pVal);
    STDMETHOD(put_PhysicsMaterial)(/*[in]*/ BSTR newVal);
    STDMETHOD(get_OverwritePhysics)(/*[out, retval]*/ VARIANT_BOOL *pVal);
+
+   // band state, read from the physics (see HitRubber::GetBandInfo)
+   STDMETHOD(get_BandActive)(/*[out, retval]*/ VARIANT_BOOL *pVal);
+   STDMETHOD(get_BandSpan)(/*[out, retval]*/ int *pVal);
+   STDMETHOD(get_BandDeflection)(/*[out, retval]*/ float *pVal);
+   STDMETHOD(get_BandPeakDeflection)(/*[out, retval]*/ float *pVal);
+   STDMETHOD(get_BandPosition)(/*[out, retval]*/ float *pVal);
+   STDMETHOD(get_BandRubberPosition)(/*[out, retval]*/ float *pVal);
+   STDMETHOD(get_BandNodeX)(/*[out, retval]*/ float *pVal);
+   STDMETHOD(get_BandNodeY)(/*[out, retval]*/ float *pVal);
+   STDMETHOD(get_BandNodeZ)(/*[out, retval]*/ float *pVal);
+   STDMETHOD(get_BandHitTime)(/*[out, retval]*/ int *pVal);
+   STDMETHOD(get_BandSpeedIn)(/*[out, retval]*/ float *pVal);
+   STDMETHOD(get_BandSpeedOut)(/*[out, retval]*/ float *pVal);
+   STDMETHOD(get_BandHitSpan)(/*[out, retval]*/ int *pVal);
+   STDMETHOD(get_BandHitPosition)(/*[out, retval]*/ float *pVal);
+   STDMETHOD(get_BandHitRubberPosition)(/*[out, retval]*/ float *pVal);
+   // sling state and enable, see HitRubber::GetSlingInfo
+   STDMETHOD(get_SlingEnabled)(/*[out, retval]*/ VARIANT_BOOL *pVal);
+   STDMETHOD(put_SlingEnabled)(/*[in]*/ VARIANT_BOOL newVal);
+   STDMETHOD(SlingTrigger)();
+   STDMETHOD(get_SlingPlateAngle)(/*[out, retval]*/ float *pVal);
+   STDMETHOD(get_SlingSwitchClosed)(/*[out, retval]*/ VARIANT_BOOL *pVal);
+   STDMETHOD(get_SlingCoilOn)(/*[out, retval]*/ VARIANT_BOOL *pVal);
+   STDMETHOD(get_SlingCoilCurrent)(/*[out, retval]*/ float *pVal);
+   STDMETHOD(get_SlingPulseCount)(/*[out, retval]*/ int *pVal);
+   STDMETHOD(get_SlingFireTime)(/*[out, retval]*/ int *pVal);
+   STDMETHOD(get_BandSwitchCount)(/*[out, retval]*/ int *pVal);
+   STDMETHOD(get_BandSwitchClosed)(/*[in]*/ int index, /*[out, retval]*/ VARIANT_BOOL *pVal);
    STDMETHOD(put_OverwritePhysics)(/*[in]*/ VARIANT_BOOL newVal);
 };

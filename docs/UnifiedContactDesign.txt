@@ -1,0 +1,108 @@
+UNIFIED CONTACT SYSTEM - DESIGN (draft 2026-10-11, for review before code)
+==========================================================================
+
+Save point: branch save/pre-unified-contact (commit 4216f7e34, local only). The old stepping stays on disk until the new system has parity.
+
+1. Goal
+-------
+One contact system owns every ball. Stock VPX does not handle any ball: no hit-time search, no impulse collisions, no position pushes, no static-contact pass.
+Each physics cycle every body gets ALL the forces acting on it summed before anything moves, so forces balance at every instant:
+ball-surface, ball-ball, ball-flipper, ball-band, ball-disc, magnets, gravity, nudge, coils, springs, motors.
+
+2. Model: bodies, interactions, islands
+---------------------------------------
+Body        anything with state that moves: Ball (3D, spin), Bat (one rotation about the pivot, coil + spring + stops), BandNode, Disc (one rotation),
+            SlingPlate, Plunger, later targets and gates. SI units inside. Holds mass or inertia, state, a force/torque accumulator, and a pointer to the VPX object
+            it writes back to. Static geometry is not a body: it is a Surface.
+Surface     static geometry that bodies touch (playfield mesh or plane, post and wall rubbers, wall and primitive meshes, ramps). Provides Probe(body) -> nearest
+            point, normal, curvature, material. Replaces the HitRubber "host" role (the playfield and the turntable are not rubbers).
+Interaction a pair (body, body) or (body, surface) that can exert force: a ContactLaw instance plus its persistent state (shear spring, pair state).
+Source      anything that is not a pair: gravity, nudge, magnets, coil torque, spring, motor. Adds to one body's accumulator.
+Island      connected component of the interaction graph (union-find each cycle, like the ball clusters). An island is stepped on its own substep.
+
+3. The step (replaces PhysicsSimulateCycle once stock is removed)
+-----------------------------------------------------------------
+ContactSystem::Step(cycle):
+  1. Sync: read state of every VPX object that owns a Body into the Body (position, velocity, spin, flipper angle, ...).
+  2. Broadphase: persistent candidate lists (Verlet lists): per body, the surfaces and bodies within reach + margin; rebuilt only when a body has moved more than
+     margin/2 since the last build (not every cycle, not every sub-interval).
+  3. Islands: union-find over interactions that can touch this cycle (gap < reach + 2 * vrel * cycle).
+  4. Per island: h = f(stiffest contact omega, fastest approach, speed cap so no body moves more than a fraction of its radius per substep); n = ceil(cycle / h).
+     for each substep:
+        clear accumulators
+        every Interaction: evaluate the law on the CURRENT states, add +F to one body and -F to the other (Newton's third law by construction)
+        every Source: add its force
+        integrate every body in the island (semi-implicit Euler)
+  5. Write back to the VPX objects; fire events (see 5).
+There is exactly one call per 1 ms cycle: no splitting at hit times, no per-owner passes, no ownership flags (m_bandOwner, m_rubberOwner, m_rubberAdvanced go away).
+
+4. Contact law interface (force or constraint)
+----------------------------------------------
+Every law implements   Evaluate(const View &a, const View &b, double h, State &st, Out &out)
+Out is either
+   Force      {F on a, point, torque on a, torque on b}        (compliant: Hertz + damping + Mindlin + twist + rolling resistance, today's ContactCore)
+   Constraint {rows: normal and friction Jacobians, bias, impulse bounds}   (rigid; NOT implemented in phase 1; the interface only reserves it)
+Phase 1 uses Force for everything: the validated model. A rigid solve for the stiff pairs (steel-steel, steel-wood) is added later only if measurements show the
+stiff contacts need it (cost or stability), as impulses in the same island step after the compliant forces have been summed into the predicted velocity.
+The alternative for the stiff pairs, an implicit (soft-constraint) integration of the same spring, also fits behind the same interface.
+
+5. Events, sensors and mechanisms
+----------------------------------
+Events (script Hit/UnHit, hit speed, ball-ball callback, rumble, EOS/BOS, switch changes) are DEFERRED: during the substeps a contact-state change appends a record
+(type, object, speed, time inside the cycle); after write-back the queue is dispatched in order. Scripts never run inside the step (they may move or delete balls, kick,
+change solenoids). Cost: up to 1 ms latency between a hit and the script's reaction (decided 2026-10-11: acceptable).
+What an object is:
+   Opto / pure sensor   overlap test, event, no force (an optical switch)
+   Mechanical switch    a Body with a spring (micro-switch, wire trigger, rollover): the ball deflects it with real force; the switch closes at a deflection threshold;
+                        the event comes from the body's state. Not every trigger has force and not every one is a sensor: both kinds exist and are chosen per object.
+   Kicker               sensor + mechanism: capture (a hold constraint) and eject (impulse source)
+   Spinner, gate        Bodies with one rotational DOF (like the disc)
+   Drop target          Body (solenoid reset); stand-up target: Surface + switch (a mechanical switch behind it)
+Rendering, the editor UI, VR, ball control and the script properties read only the public VPX state, which is written back at the end of every cycle (audit of all
+consumers of physics state is step 0).
+
+6. Naming (code follows what it models)
+---------------------------------------
+RingAdvanceAll -> ContactSystem::Step      RingBall -> (disappears: every ball is in the system)      HitRubber host surfaces -> ContactSurface
+m_bandOwner/m_rubberOwner/m_rubberAdvanced -> removed                  ContactCore -> HertzMindlinLaw (file rubbercontact.h keeps the law)
+New files: src/physics/contactsystem.{h,cpp}, contactbody.h, contactsurface.h. The old files stay until their function has moved.
+
+7. Engine selection and migration
+---------------------------------
+Stock physics stays in the repository and stays selectable; old tables keep working unchanged. The engine is chosen PER TABLE, stored in the .vpx (decided 2026-10-11),
+at table load. Unified tables are one-way: "Convert to Unified" in the editor (alternate UI that manages all unified features: materials, flippers, rubbers, bands, slings,
+magnets, turntables, ...) writes the unified configuration INTO the .vpx and keeps a backup of the original file. All unified settings live in the .vpx, not in an ini
+(the ini was a convenience for building the features without touching .vpx files; it is retired for unified tables). Open: how the new records are tagged in the .vpx
+(older VPX versions must ignore them) and the editor panel layout.
+The unified engine takes geometry from the table parts through a new interface (each part supplies its contact surfaces / bodies) instead of the stock HitObjects.
+Decided simplifications inside the unified engine: no hit-plane playfield (the implicit mesh playfield is the only playfield; a plane is a degenerate mesh); no stock hit
+search, impulses, position pushes or static-contact pass. More to drop as we find them (flag each when found).
+DEV FALLBACK (decided 2026-10-11): until an object type is converted, the unified engine still runs the stock hit search for it; problems from that mix are ignored
+until that type's migration step. The fallback is removed after step 5.
+Steps (each compared with the save point in the same harness):
+  0. Audit of every consumer of physics state (renderer, VR, ball control, kicker/bumper/trigger parts, script properties, plugins); engine switch at table load.
+  1. Bodies + islands + step loop with balls only: playfield mesh, rubber posts and walls, the disc, ball-ball, magnets. Parity with the save point on: tt14_m28_d0,
+     cradle3, rest_flat, drop, slow4, pinch. (gsw15f, the kicker-capture test, moves to step 5; the sling regressions move to step 3.)
+  2. Flipper as a Bat body (coil, spring, stops, rubber contact, nudge).
+  3. Band nodes and sling plates as bodies.
+  4. Generic mesh contact for walls, primitives and ramps; part-to-surface interface.
+  5. Kickers, targets, mechanical switches, plunger, gates, spinners.
+  6. Alternate editor UI and .vpx persistence (can start earlier for the keys that exist); stock stays available for old tables.
+
+8. Performance rules
+--------------------
+Persistent candidate lists; one probe per interaction per substep; islands at rest run at the stiffness-limited step or sleep (no force change, no motion for N cycles);
+no allocation in the step (reused buffers); measure the per-cycle maximum, not only the average (p99 histogram is on the parking lot).
+
+9. Known risks / unknowns
+-------------------------
+* Stiff steel contacts need 2-6 us steps in compliant form (cost); mitigation as in 4, decided by measurement.
+* Mass ratio ball : bat in one island (bat driven by coil): explicit integration of the bat with a stiff rubber contact needs the same small step as the ball.
+* Fast balls (plunger shot, 10+ m/s): the speed cap on the substep is the only tunnelling protection; verify against thin posts and walls.
+* Every stock object type needs a force-model equivalent before step 6; until then the flag stays.
+
+10. Units (decided 2026-10-11)
+------------------------------
+Real-world units at every boundary (files, UI, new script properties): metric canonical (mm, m/s, N, g, degrees, us), imperial only as a display setting of the editor UI.
+VPX units exist only in the sync/write-back adapter and for legacy script properties (kept as they are; real-unit properties are added beside them). Ball mass in grams.
+Names carry physics only (no machine names).

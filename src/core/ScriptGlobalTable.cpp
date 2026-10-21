@@ -11,6 +11,8 @@
 #include "parts/ball.h"
 #include "physics/cabinet/NudgeHandler.h"
 #include "pole/pole.h"
+#include "physics/magnet.h"
+#include "physics/turntable.h"
 #include "renderer/Renderer.h"
 #include "ui/live/LiveUI.h"
 #include "utils/color.h"
@@ -44,6 +46,54 @@ STDMETHODIMP ScriptGlobalTable::EndModal()
    if (g_pplayer && g_pplayer->m_scriptInterpreter)
       g_pplayer->m_scriptInterpreter->ExitScriptModal();
 
+   return S_OK;
+}
+
+STDMETHODIMP ScriptGlobalTable::Magnet(BSTR Name, float Volts)
+{
+   Magnets::SetVoltage(MakeString(Name).c_str(), Volts);
+   return S_OK;
+}
+
+STDMETHODIMP ScriptGlobalTable::MagnetDuty(BSTR Name, float Duty)
+{
+   Magnets::SetDuty(MakeString(Name).c_str(), Duty);
+   return S_OK;
+}
+
+STDMETHODIMP ScriptGlobalTable::Turntable(BSTR Name, float Volts)
+{
+   Turntables::SetVoltage(MakeString(Name).c_str(), Volts);
+   return S_OK;
+}
+
+STDMETHODIMP ScriptGlobalTable::TurntableDuty(BSTR Name, float Duty)
+{
+   Turntables::SetDuty(MakeString(Name).c_str(), Duty);
+   return S_OK;
+}
+
+STDMETHODIMP ScriptGlobalTable::TurntableSpeed(BSTR Name, float *pVal)
+{
+   float v = 0.f;
+   Turntables::GetSpeedRpm(MakeString(Name).c_str(), v);
+   *pVal = v;
+   return S_OK;
+}
+
+STDMETHODIMP ScriptGlobalTable::TurntableAngle(BSTR Name, float *pVal)
+{
+   float v = 0.f;
+   Turntables::GetAngleDeg(MakeString(Name).c_str(), v);
+   *pVal = v;
+   return S_OK;
+}
+
+STDMETHODIMP ScriptGlobalTable::MagnetCurrent(BSTR Name, float *pVal)
+{
+   float a = 0.f;
+   Magnets::GetCurrent(MakeString(Name).c_str(), a);
+   *pVal = a;
    return S_OK;
 }
 

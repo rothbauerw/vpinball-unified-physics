@@ -13,6 +13,8 @@
 #include "renderer/RenderCommand.h"
 #include "renderer/Shader.h"
 #include "renderer/trace.h"
+#include "physics/hitrubber.h"
+#include "physics/contactsystem.h"
 #include "utils/objloader.h"
 #include "utils/color.h"
 
@@ -192,6 +194,22 @@ void Primitive::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    TransformVertices(); //!! could also only do this for the optional reduced variant!
    m_physicMatrix = m_fullMatrix; // Cache transform to avoid rebuilding everything if not needed
 
+   // rubber force model (vpx_physics.ini, [Primitive:<name>] rubber = 1): the stock colliders below still detect the ball, but a host steps the contact on these faces
+   std::shared_ptr<RubberSurface> rubberFaces;
+   RubberObjectSettings rubberSettings;
+   const std::filesystem::path rubberIni = HitRubber::IniPathFor(m_ptable->m_filename);
+   // the playfield primitive takes the [Playfield] material ([Features] playfield_contact = 1), any other primitive its own [Primitive:<name>] rubber = 1
+   const bool playfieldModel = !isUI && m_useAsPlayfield && HitRubber::LoadPlayfieldSettings(rubberSettings, rubberIni, m_ptable->m_overridePhysics ? m_ptable->m_fOverrideContactFriction : m_ptable->m_friction);
+   bool hardSurface = false;   // unified engine: a primitive without the rubber flag is a hard surface of the contact model
+   if (playfieldModel || (!isUI && !m_useAsPlayfield && HitRubber::LoadSurfaceSettings(rubberSettings, rubberIni, "primitive", GetName())))
+      rubberFaces = std::make_shared<RubberSurface>();
+   else if (!isUI && !m_useAsPlayfield && ContactSystem::Unified() && HitRubber::HardSurfaceWanted(rubberIni, "primitive", GetName()))
+   {
+      rubberFaces = std::make_shared<RubberSurface>();
+      hardSurface = true;
+   }
+   const size_t collidersBefore = m_vhoCollidable.size();
+
    //
 
    // TODO limit vertex count for UI
@@ -260,7 +278,11 @@ void Primitive::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          if (ht->IsDegenerate())
             delete ht;
          else
+         {
+            if (rubberFaces)
+               rubberFaces->Add(rgv3D[0], rgv3D[1], rgv3D[2]);
             SetupHitObject(physics, ht, isUI);
+         }
 
          AddHitEdge(physics, addedEdges, i0, i1, rgv3D[0], rgv3D[2], isUI);
          AddHitEdge(physics, addedEdges, i1, i2, rgv3D[2], rgv3D[1], isUI);
@@ -294,7 +316,11 @@ void Primitive::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          if (ht->IsDegenerate())
             delete ht;
          else
+         {
+            if (rubberFaces)
+               rubberFaces->Add(rgv3D[0], rgv3D[1], rgv3D[2]);
             SetupHitObject(physics, ht, isUI);
+         }
 
          AddHitEdge(physics, addedEdges, i0, i1, rgv3D[0], rgv3D[2], isUI);
          AddHitEdge(physics, addedEdges, i1, i2, rgv3D[2], rgv3D[1], isUI);
@@ -305,6 +331,27 @@ void Primitive::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       if (!isUI)
          for (size_t i = 0; i < m_mesh.NumVertices(); ++i)
             SetupHitObject(physics, new HitPoint(this, m_vertices[i]), isUI);
+   }
+
+   if (rubberFaces && !rubberFaces->tris.empty())
+   {
+      if (hardSurface)
+      {
+         const HitObject *const first = collidersBefore < m_vhoCollidable.size() ? m_vhoCollidable[collidersBefore] : nullptr;
+         HitRubber::LoadHardSurfaceSettings(rubberSettings, rubberIni, "primitive", GetName(), HitRubber::HardSurfaceE(first), first != nullptr ? first->m_friction : 0.3);
+      }
+      HitRubber *const host = new HitRubber(this, rubberFaces, rubberSettings, rubberIni, GetName(), playfieldModel ? "playfield" : "primitive");
+      if (hardSurface && collidersBefore < m_vhoCollidable.size())
+         host->SetHardSurface(HitRubber::HardSurfaceE(m_vhoCollidable[collidersBefore]), m_vhoCollidable[collidersBefore]->m_friction);
+      if (playfieldModel)
+         host->m_tableMu = m_ptable->m_overridePhysics ? m_ptable->m_fOverrideContactFriction : m_ptable->m_friction;
+      if (collidersBefore < m_vhoCollidable.size())
+         host->SetEventCarrier(m_vhoCollidable[collidersBefore]);
+      for (size_t i = collidersBefore; i < m_vhoCollidable.size(); i++)
+         m_vhoCollidable[i]->m_surfaceHost = host;   // the object's own colliders hand a hit to the host
+      SetupHitObject(physics, host, isUI);           // the host is enabled and disabled with them (Collidable)
+      PLOGI << "Primitive " << GetName() << ": rubber force model on (" << rubberFaces->tris.size() << " faces, layer "
+            << (rubberSettings.layerMm > 0.0 ? rubberSettings.layerMm : rubberSettings.surfaceLayerMm) << " mm, edge radius " << rubberSettings.edgeRadiusMm << " mm, box x " << rubberFaces->lo[0] << ".." << rubberFaces->hi[0] << " y " << rubberFaces->lo[1] << ".." << rubberFaces->hi[1] << " z " << rubberFaces->lo[2] << ".." << rubberFaces->hi[2] << ")";
    }
 }
 

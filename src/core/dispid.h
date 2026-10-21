@@ -148,4 +148,10 @@
 #define DISPID_OBJROT_Y                                 31
 #define DISPID_OBJROT_Z                                 32
 
+// band rubber (rubber-contact branch)
+#define DISPID_RubberEvents_BandHit                     1700
+#define DISPID_RubberEvents_SlingFire                   1701
+#define DISPID_RubberEvents_SwitchClosed                1702
+#define DISPID_RubberEvents_SwitchOpened                1703
+
 // Must have a carriage return at end of file for correct resource file parsing

@@ -650,9 +650,18 @@ float HitPlunger::HitTest(const BallS& ball, const float dtime, CollisionEvent& 
    // apply the momentum transfer ratio
    const float impulse = impulseSpeed * xferRatio;
 
+   // A hit on the moving bits is only worth reporting if Collide() will act on it. Collide() measures the closing speed against the tip's hit
+   // velocity (plunger speed scaled by momentum transfer / ball mass), while the test above uses the full plunger speed. For a heavy ball the
+   // two disagree: the tip looks like it is closing, Collide() sees a receding ball and returns, and the same zero-time hit is found again on
+   // every iteration. That no-op hit then wins the tie against the playfield, whose collision never runs, and the ball sinks through it.
+   const auto collideActs = [&](const CollisionEvent& c) {
+      const float dot = (ball.m_vel.x - 0.f) * c.m_hitnormal.x + (ball.m_vel.y - impulse) * c.m_hitnormal.y;
+      return dot < -C_LOWNORMVEL || (dot <= C_LOWNORMVEL && c.m_hitdistance < -C_EMBEDDED);
+   };
+
    // check the moving bits
    newtime = m_plungerMover.m_linesegEnd.HitTest(ball_tmp, hittime, ce);
-   if (newtime >= 0.f && newtime <= hittime)
+   if (newtime >= 0.f && newtime <= hittime && collideActs(ce))
    {
       hit = true;
       hittime = newtime;
@@ -664,7 +673,7 @@ float HitPlunger::HitTest(const BallS& ball, const float dtime, CollisionEvent& 
    for (int i = 0; i < 2; i++)
    {
       newtime = m_plungerMover.m_jointEnd[i].HitTest(ball_tmp, hittime, ce);
-      if (newtime >= 0.f && newtime <= hittime)
+      if (newtime >= 0.f && newtime <= hittime && collideActs(ce))
       {
          hit = true;
          hittime = newtime;

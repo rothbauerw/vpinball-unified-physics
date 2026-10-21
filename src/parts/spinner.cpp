@@ -5,6 +5,10 @@
 
 #include "core/VPApp.h"
 #include "math/matrix.h"
+#include "physics/hitrubber.h"
+#include "physics/contactsystem.h"
+#include "physics/contactspinner.h"
+#include "physics/contactpartsini.h"
 #include "meshes/spinnerBracketMesh.h"
 #include "meshes/spinnerPlateMesh.h"
 #include "parts/Collection.h"
@@ -178,6 +182,29 @@ void Spinner::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 
       m_phitspinner = new HitSpinner(this, height);
 
+      const std::filesystem::path hingeIni = HitRubber::IniPathFor(m_ptable->m_filename);
+      if (!isUI && ContactSystem::Unified() && HitRubber::HingeWanted(hingeIni, "spinner", GetName()))   // unified engine: the spinner is a physical model of the contact system (docs/GateSpinnerDesign.txt)
+      {
+         // the real spinner: steel blade on an offset shaft, pin friction, the Damping as a viscous loss, opto / leaf / micro switch; no stock collider, mover or bracket circles
+         constexpr double U = ContactSystem::kMetresPerUnit;
+         SpinnerModel::Settings s;
+         s.widthMm = (double)m_d.m_length * U * 1e3;
+         s.damping = m_d.m_damping;
+         if (m_d.m_angleMin != m_d.m_angleMax)
+         {
+            s.angleMinDeg = m_d.m_angleMin;
+            s.angleMaxDeg = m_d.m_angleMax;
+         }
+         s.elasticity = m_d.m_elasticity;
+         PartsIni::LoadSpinner(s, hingeIni, GetName());
+         m_partModel = std::make_shared<SpinnerModel::Spinner>();
+         const double rot = ANGTORAD(m_d.m_rotation);
+         m_partModel->Build(s, RubberContact::V3((double)m_d.m_vCenter.x * U, (double)m_d.m_vCenter.y * U, (double)height * U), RubberContact::V3(std::sin(rot), -std::cos(rot), 0.0), RubberContact::BallSI());
+         m_phitspinner->m_spinnerMover.m_angle = (float)m_partModel->body.theta;   // (not in the physics: the angle the script and the renderer read)
+         m_partHost = HitRubber::MakePartHost(this, "spinner", GetName(), hingeIni, m_partModel, nullptr, this, &m_phitspinner->m_spinnerMover.m_angle, &m_phitspinner->m_spinnerMover.m_anglespeed, m_d.m_elasticity, s.friction);
+         physics->AddCollider(m_partHost, isUI);
+         return;
+      }
       physics->AddCollider(m_phitspinner, isUI);
 
       if (m_d.m_showBracket)
@@ -202,7 +229,11 @@ void Spinner::PhysicRelease(PhysicsEngine* physics, const bool isUI)
 {
    if (!isUI)
    {
+      if (m_partModel != nullptr)   // a unified spinner's HitSpinner is not in the physics: the spinner owns it
+         delete m_phitspinner;
       m_phitspinner = nullptr;
+      m_partModel = nullptr;
+      m_partHost = nullptr;
    }
 }
 

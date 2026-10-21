@@ -1,0 +1,199 @@
+BALL MAGNET LAW IN THE CONTACT SUBSTEPS - DESIGN, REV 2 (2026-10-13)
+=====================================================================
+Status: DESIGN ONLY. No engine code is changed. Rev 1 (segment-wise force with refreshed multipole evaluations) is REPLACED: it could not meet the cost criterion (see 2).
+Rules: docs/DevelopmentRules.txt. The multipole law (runs/2026-10-13-cpp-proto/ballmag.h) stays the REFERENCE and the generator of the correction table; it does not run in the engine.
+
+1. DESIGN CRITERIA (agreed with the user 2026-10-13; [u] = stated by the user, [i] = inferred by the assistant, to be confirmed)
+ 1 [u] Measure before fixing; measured and inferred reported separately (rule 1).      2 [u] No hacks: every term names a physical law; no cutoffs, caps, per-source cases (rule 2).
+ 3 [u] General, proved on a scenario matrix with numeric pass/fail, cost included (rule 3).   4 [u] The WHOLE engine fits in 1 ms per cycle; judged by the worst cycle; knobs exposed (rule 5).
+ 5 [u] Works for all scenarios (no "works for 2-3 balls"; no fallback that stops being the feature).   6 [u] Lists what breaks and handles it in the design where possible (rule 7).
+ 7 [u] Unwanted behaviour is shown on screen (rule 8).   8 [u] Physical models, not curve patches.   9 [u] Documented in NewPhysicsReference with a change log; no commit until told.
+10 [u] Switchable by an ini key; names follow the physical part.   11 [i] Key off = identical to today.   12 [i] Conservative (no energy gain from the law).
+13 [i] Reproducible runs (no wall-clock or thread-order dependence).   14 [i] Accuracy against the multipole reference: tolerance NOT yet given by the user (section 9).
+Scope decisions (user): the SIMPLE engine model is kept (assembly-specific physics is computed offline, 5.3); ONE global ball material (chi, Ms); unequal ball radii on one surface are out of scope.
+
+2. WHAT IS MEASURED (and what is not)
+-------------------------------------
+M1. Pair force against gap, multipole closure, L=10, chi 100, Ms 1e6 A/m, uniform field (runs/2026-10-13-substep-design/table.txt):
+      gap mm   0     0.1    0.25   0.5    1      2      4      10
+      0.1 T   44.1   41.4   37.5   31.7   23.2   14.3   7.5    2.5   N (pair along the field, attraction). Smooth and finite through contact, slope <= 27 N/mm.
+    Side by side (across the field) the pair REPELS: 1.79 N at gap 0, 1.67 at 1 mm, 1.31 at 4 mm (0.1 T).
+M2. Cost of one warm multipole evaluation, L=8: 112 / 204 / 303 / 537 us for N = 2 / 3 / 4 / 6 (forces are half of it). Cold two-ball solve 0.9 ms (L=8), 2.0 ms (L=10).
+    With the balls moving, one evaluation per cycle is the least the multipole law could cost, and an approach needs 3-4 per cycle: 0.8 ms (N=3), 1.2 ms (N=4) before anything else runs. REJECTED for the engine.
+M3. Toy test (runs/2026-10-13-substep-design/toy*.py): a force frozen for a 1 ms cycle gives a 10 % low impact speed and a touch 0.25 ms late; linear-in-time with a correction is no better, because the force
+    triples inside one cycle during a 2 m/s approach. A force that is evaluated in every substep (the reference) is needed; this is why the engine-side law must be cheap enough to run per substep.
+M4. ERROR OF THE POINT-DIPOLE LAW (the engine's ball-ball law, simple version with mutual induction, against M1, 0.1 T):
+      axial pair, gap 0 / 0.25 / 1 / 2 / 4 / 10 mm: dipole/multipole = 0.27 / 0.31 / 0.42 / 0.56 / 0.75 / 0.95 (73 % low at contact);
+      side-by-side pair, gap 0 / 1 / 4 mm: 1.50 / 1.43 / 1.28 (too repulsive).
+    From the earlier FEM/BEM work (runs/2026-10-13-fem/FINDINGS.md): touching balls attract CENTRALLY with ~0 tangential restoring force; the dipole law has a strong one toward the top, so its stack is stable and
+    the real one is not; outer-ball pull to the centre ball 5.3-6.6 N (FEM/BEM) against 2.8 N (dipole estimate). The tangential force is NOT in the M1 table (axis only).
+M5. Multi-body (runs/2026-10-13-substep-design/addtest.py, remedy.py; gap 0.25 mm, uniform field, multipole N-body against the sum of its own two-body results):
+      3-chain along the field, end ball: pair sum -30 % (linear, 0.05 and 0.1 T), -24.5 % / -13.2 % (closure, 0.05 / 0.1 T);   centre + 3 outer in a plane (vertical field): -5.6 %.
+      Pair sum evaluated in the field including the third ball's DIPOLE field: -9.5 % (linear), -6.3 % / -3.0 % (closure, 0.05 / 0.1 T) for the 3-chain end ball.
+    NOT measured: chains of 4+, rings, tilted fields (the real disc scene), the dressed model itself, the remedy with the neighbour's corrected moment, interpolation error of a table.
+M6. Engine facts (read from the code): ball pairs: one velocity increment per cycle (m_magPair); coil pull: per substep (183 ns); aBound in NextStep assumes 60 m/s2 for a magnet (a literal); the surface rule's resting
+    depth (dRest) takes gravity only; Ball.Magnetic is a bool; Ms is read from the FIRST magnet only (g_magnets.front()); the coil's pole strength Bc = N I / reluctance / A uses the gap of the ball being evaluated
+    (floor 0.5 mm): every ball sees the pole as if it were alone; the force is taken at that Bc (the extra pull from the flux rising with the gap is not in it: INFERRED from the code); the core is iron (diameter,
+    length, b_sat), the return path by return_fraction or return poles; there are NO inputs for a disc, bushing or bracket material.
+M7. Stiffness: the magnetic dF/dx is <= 2.7e4 N/m (M1); the Hertz stiffness of a pair pressed by 44 N is ~5e6 N/m (INFERRED from the formula). The magnet does not limit the stability step; it adds a LOAD (44 N against
+    0.8 N weight): the surface rule's dRest must include the sustained load or a ball held on the pole is stepped 4x finer than needed (INFERRED from the code).
+
+3.1 CHECK 2026-10-13 (runs/2026-10-13-substep-design/uform.py): the exact quadratic form gives, at 0.1 T uniform, B(contact) = -0.146 J and a tangential RESTORING force of the pair alone of 0.19 N per degree of
+    displacement around the neighbour (gravity: 0.014 N per degree): a pair in a uniform field is stable. The BEM result ("almost no tangential restoring force") is the NET force on the top ball in the real structure's
+    NON-uniform field, where the coil's pull on the top ball has a tangential component toward the equator that cancels the pair's restoring force. Consistent in principle; NOT verified. An earlier sentence of this
+    document ("the tangential force must come out near zero in the table") was wrong and is removed: the criterion is the NET force (V4).
+3. THE DESIGN: A DRESSED DIPOLE
+-------------------------------
+Standard approach for magnetised particles: point dipoles plus a short-range two-body correction from the exact two-sphere solution. Three layers, all evaluated in every contact substep (like the coil force and the Hertz pair force):
+ L1 MOMENTS. Every magnetic ball (Ball.Magnetic, not kicker-locked) is an induced dipole in its TOTAL local field: the coil field plus the other balls' fields. 3N unknowns, solved by a few sweeps, once per cycle (the
+    moments change slowly); saturation by the same secant permeability as the multipole closure, mu(H) = 1 + Ms / (H + Ms/chi), M = 3 (mu-1)/(mu+2) H0, scalar fixed point per ball. The coil's field on an ISOLATED
+    ball is thereby the same law as the cluster's (no jump when a ball joins a cluster).
+ L2 TWO-BODY CORRECTION ENERGY. For linear spheres the interaction energy of a pair in a uniform field H is EXACTLY quadratic in H: U = -1/2 H.T(r).H with T = a(g) I + b(g) rhat rhat (the pair has rotational symmetry
+    about its axis). So U(g, theta) = A(g) + B(g) cos^2(theta), theta = angle between the pair axis and the local field: TWO ONE-DIMENSIONAL CURVES of the gap g/R (dimensionless: any common radius works). The correction
+    curves are those of the multipole law (L=10) minus those of the dipole law; they follow from two multipole runs per gap (axial and side by side): A' = -F_side-by-side, A'+B' = -F_axial, integrated inward from far away.
+    The force on ball i is -grad_i of the summed pair energies, which includes the angular part (the tangential force, B(g)/r sin 2theta) and is conservative by construction (criterion 12).
+    SATURATION is NOT in the table (start simple, user 2026-10-13): it enters through the moments of L1 (M <= Ms, secant mu); a saturation factor is added only if V2 shows the 10 % criterion is missed. The disc scene
+    stays near-linear (mu 130-165, ~5 % effect), a pair at 0.05-0.15 T and gap <= 0.25 mm does not (linear overstates 1.2-5x: the notes of the closure work).
+    The field used for each pair is the local field INCLUDING the other balls' contributions (M5: this cuts the 3-chain error from 13-30 % to 3-10 %). Planned remedy if the acceptance test needs it: use the neighbours'
+    CORRECTED moments there (untested).
+ L3 COIL ON A BALL. As today: the isolated-ball gradient force at the pole strength of the coil (5.3), per substep, with the L1 moment law.
+Where it runs: the pair force joins PairForces of the contact system (lockstep, next to the Hertz force); L3 stays in Sources::Add. Balls of one magnetic pair that are not in the same island: the pair is within reach of
+the island gather (GatherFree) when closer than the gap at which the correction is under the tolerance (4.2); beyond that the pure dipole force from the other ball's cycle-start position is used (smooth; the lag is
+v dt over a distance of several mm). Balls the contact system does not own keep one force per cycle (as today; documented limit).
+Cost (rule 5), MEASURED 2026-10-13 (runs/2026-10-13-dressed/bench.cpp; MSVC /O2 /arch:AVX2 /fp:fast, one core, SYNTHETIC curves - the cost does not depend on their values; compact cluster, all pairs within 3 R of gap):
+      N                          2     3     4     6     8     12    16
+      pair lookup, per substep   0.04  0.12  0.22  0.50  0.79  1.43  2.05  us
+      L1 (field + moments)/cycle 0.2   0.3   0.4   0.6   0.9   1.4   2.1   us   (warm start 1 sweep; cold start 5-7 sweeps = a few us)
+      cycle, 20 substeps         1.0   2.6   4.8   10.5  16.7  30.0  43.1  us
+      cycle, 100 substeps        4.3   12.0  22.6  50.3  79.9  144   207   us
+    Against the multipole law (112 / 204 / 303 / 537 us at N = 2 / 3 / 4 / 6 per EVALUATION): 20-100 times cheaper, and it runs in every substep. NOT in these numbers: the coil force per ball per substep (existing, 183 ns:
+    ~15 us for 4 balls x 20 substeps), the engine integration (island gather, pair bookkeeping), the real number of substeps (the contact rules give it; 100 at rest contact), the real curves (no accuracy yet).
+Step rules: aBound uses |F_mag| / m from the last substep (not the literal 60 m/s2); dRest includes the sustained magnet load along the contact normal (the Hertz depth the load presses to; the same law as gravity).
+
+4. THE TABLE
+------------
+4.1 Two curves A(g), B(g) on gap/R (log spaced, from 0 up to where the correction is < 0.5 % of the dipole energy); no angle axis (exactly cos^2 theta in the linear regime), no field-level axis (linear, B^2 divided out).
+    Overlap (Hertz depth, microns): extended with the slope at gap 0 (continuous; error < 1 % of 44 N over 13 um, ESTIMATE from M1).
+4.2 Generation: ~20-40 multipole evaluations (axial and side by side at each gap, linear mu = 1 + chi); the energy by integrating the forces inward from far away (conservative by construction). Cost: tens of ms.
+4.3 Distribution (user decision): the curves for the DEFAULT material are generated offline and SHIPPED with the engine (a small text table). They are rebuilt at table load, in memory (ESTIMATE tens of ms, no longer a
+    concern), only if the ini sets a different chi/Ms; no cache file. The shipped file carries material and table version; a mismatch with the code triggers the rebuild and a playfield notification (rule 8).
+4.4 Inherited accuracy: the multipole law is within ~5 % of FEM for pairs, 19 % mean / 38 % worst for the saturating held-out cases. The table can be no better. Its own interpolation error is to be shown <= 2 % against
+    direct evaluations at random points.
+4.5 One global ball material: [Ball] chi, ms_a_per_m in the unified ini replace the per-magnet ball_ms_a_per_m (which is read from the first magnet only); a key on another magnet raises the ignored-key notification.
+
+5. WHAT COMES FROM OUTSIDE THE BALL LAW
+---------------------------------------
+5.1 Ball.Magnetic stays a per-ball switch (ceramic = off). Different ball radii on one surface are out of scope (user); a pair whose radii differ by more than a tolerance raises a notification and uses the dipole law.
+5.2 Multi-body: see M5. The design is exact for isolated balls and for pairs, and approximate for a ball with several touching neighbours. Acceptance test decides whether the corrected-moment remedy is built.
+5.3 DEFERRED (user 2026-10-13: "see how the simple model performs before we add more complexity"): the coil source stays as it is today (per-ball pole strength, existing plug coupling). Kept here as the plan for later:
+    The coil's reaction to the balls (user decision: keep the engine's source SIMPLE). The engine keeps its few coil inputs. The assembly-specific physics (which parts are iron, brass or aluminium: bushing, sleeve,
+    brackets, disc) is computed OFFLINE with the axisymmetric FEM of runs/2026-10-13-fem for the user's assembly, and gives (a) the pole strength against the centre ball's gap, (b) the field map for the outer balls.
+    These replace the per-ball reluctance term and the x1.4 centre-ball coupling of the offline calibration (not in the engine). Pole strength becomes ONE value per coil per cycle from the permeances of all balls in reach,
+    and the force follows from the energy with the coil current constant (adds the missing term of M6). Inputs still needed from the user: which of bushing / brackets / disc are magnetic (a magnet test), and the
+    dimensions from the drawing. NO measurements of the plug exist; the video gives a cross-check only: the outer balls need an inward pull of ~1.5 N at 250 rpm and ~2.5 N at 325 rpm. Results stay marked UNVERIFIED
+    against hardware. The FEM is axisymmetric: exact for the centre ball on the plug, the outer balls only feel the field. A plug smaller than the ball (15-20 mm against 27 mm) is not a flat plane: no half-space image shortcut.
+
+6. SCENARIOS THIS DESIGN WOULD NOT HANDLE OR WOULD BREAK (rule 7); [m] = measured, [r] = reasoned only (INFERRED)
+ #  scenario                                                         status
+ 1  Chain along the field (stack)                                    M5: pair sum 13-30 % low, with local field 3-10 % low [m, one geometry]. Remedy planned; acceptance test.
+ 2  Tilted field (the real disc scene), rings, chains of 4+          not measured: acceptance test. [r]
+ 3  Deep saturation                                                  closure accuracy (38 % worst); inherited. Documented limit.
+ 4  Ball joins/leaves a cluster, created/destroyed, script teleport  moments are re-solved each cycle from the current positions; no history is kept except the pair shear state of the contact system. [r]
+ 5  Balls the contact system does not own                            one force per cycle, as today; documented. [r]
+ 6  Table restart in one process, teardown                           the table and the moments live in the engine object / are cleared at table start; no function statics (the turntable-host leak is the example). Test: 6 restarts.
+ 7  Coil switching / PWM inside a cycle                              the current is stepped once per cycle (as today). Documented.
+ 8  Rewind / trip / hand-back inside a cycle                         the force is a function of the substep state only (no segment state): a rewind needs nothing extra. [r]
+ 9  Many balls (6-8) near a magnet                                   O(N^2) pair terms; cost to be measured (micro-benchmark), cluster solve of 3N unknowns.
+10  Force continuity at the table edges (far range, gap 0, h top)    far end zero below 0.5 % of the dipole energy (named tolerance, error stated); the others extended continuously. Test with a fine sweep.
+11  Another material in the ini                                      rebuild at load (0.5-4 s ESTIMATE) with a notification; ini key on a second magnet ignored with a notification.
+12  Unequal radii                                                    out of scope; notification + dipole law.
+13  Key off / table without magnet                                   identical to today [r]; test.
+14  Flipper, band, disc balls near a magnet                          the force goes through the same substeps; moving-surface islands still use uniform steps (stage 3). Test with the disc scene.
+15  Table version mismatch                                           rebuild + notification (4.3).
+16  Plug smaller than the ball, assembly not described by the simple coil   5.3: from the offline FEM; unverified against hardware.
+17  Energy: dissipation                                              none from the law (hysteresis parked); the contact's only.
+
+7. VALIDATION (rule 3). The multipole law is the reference.
+ V1 Table: interpolation error against direct evaluations (random points), curl test (energy), continuity at the edges, tangential force near zero at contact (M4).
+ V2 Force on every ball against the multipole law: 2-ball pairs (axial, transverse, tilted), 3/4/6-chains, a ring, the centre + 3 outer on the tilted-field disc scene, at 0.05/0.1/0.3 T. Tolerance: section 9.
+ V3 Approach: a pair closing at 0 / 0.1 / 0.3 / 1.0 m/s from 6 mm (the M3 toy in the engine): closing speed and first-touch time against a per-substep reference.
+ V4 Stack of 2 and 3 balls on the pole: the NET tangential force (pair + coil) of the top ball against the BEM numbers of FINDINGS.md (-0.013..+0.007 N at 10 deg, -0.047..+0.021 N at 30 deg), the top ball must roll off (the dipole law fails this); resting depths; substep counts (dRest with the load).
+ V5 The disc scene (turntable test 3) with 6 restarts; outer pull toward the centre ball against the offline numbers (6.6 / 15.6 / 21.8 N at gaps 1 / 0.25 / 0.1 mm).
+ V6 Cost: micro-benchmark first; then VPX_CONTACT_TIMING for N = 2, 3, 4, 6, worst cycle; the whole scene, not the magnet alone.
+ V7 Matrix: batch_matrix.ps1 with the key on (scenes without magnets identical) and off (identical bytes where deterministic). Items 1-17 of section 6 that say "test".
+
+8. ORDER OF WORK (the user decides when a matrix runs)
+ 1 Micro-benchmark of the dressed law (L1 + L2 lookups) in the prototype dir: cost per pair and per cycle for N = 2..8 (replaces the ESTIMATES above).
+ 2 Table generator + the offline table for the default steel (parallel), with V1.   3 Offline comparison V2 (multipole as reference) -> decide the corrected-moment remedy.
+ 4 Ini keys ([Ball] material, ball_law), docs (NewPhysicsReference + change log).   5 Engine: L1-L3 in PairForces / Sources::Add; aBound and dRest; notifications.   6 V3-V7.
+ 7 (deferred) Coil side (5.3).
+
+9. STILL OPEN FROM THE USER
+ a Accuracy against the multipole law: 10 % on the force on each ball (user 2026-10-13). The NET tangential force on a ball displaced around its neighbour is checked against the BEM numbers (FINDINGS.md: -0.013..+0.007 N at 10 deg
+   in the real structure's field); the pair part alone is NOT near zero (see 3.1), only the sum with the coil's pull is.
+ b The part of the 1 ms the magnet may take in the worst case (the estimate in 3 is 20-100 us for 4 balls).
+ c (dropped for now with 5.3)
+
+10. FIRST COMPARISON AGAINST THE MULTIPOLE LAW (2026-10-13; runs/2026-10-13-dressed: curves.py, dressed.py, compare_uniform.py, compare_disc.py, diag_single.py; cmp_uniform.txt, cmp_disc.txt). RESULT: THE DESIGN AS WRITTEN (3) DOES NOT MEET 10 %.
+ Curves: a(g), b(g) built from the multipole law (linear, chi 200 and 199, L=10, 48 knots, g/R 0..4), integrated inward from g = 54 mm (correction there 0.16 % of the dipole force).
+ UNIFORM FIELD [measured] (40 cases: pairs at 0.1-10 mm and 0/30/60/90 deg; chains of 3/4/6; centre + 3 / + 6 planar; fields 0 and 45 deg; 0.01 and 0.05 T):
+   linear dressed vs linear multipole: pairs 0.0-0.4 % at every gap and angle (the exact cos^2 form works; plain dipole 7-94 %); chains 0.4-4.1 % worst ball (up to 10 % on the strongest-force balls of 4-6 chains);
+     centre + 3 / + 6 with a vertical field 2-5 %. FAILS: planar clusters in a field with an in-plane component: centre + 3 16-23 %, centre + 6 (outer balls touching each other) 79-113 % (dressed 12.0 N on a ball
+     where the multipole gives 5.2 N: the pair sum counts every contact fully; a ball with several non-collinear touching neighbours shares its flux: not additive, and not captured by the dipole-level neighbour field).
+   saturating moments vs multipole + closure at 0.05 T: pairs 2-6 % (17 % for the weak side-by-side force and 12 % at 4 mm), chains 6-10 % worst ball (14-21 % on the strongest-force balls), planar clusters as above.
+   Not yet run: 0.1-0.3 T, chains over 6.
+ REAL DISC FIELD [measured] (bare field of the structure, centre ball on the plug, lam 1.0, multipole L=10 as reference): FAILS.
+   (a) ISOLATED BALL: the point-dipole force on ONE ball is 0.58 of the multipole force on the plug (Fz -22.1 N against -38.3 N), 0.64 at +2 mm, 0.67 at +6 mm, 0.77 at +15 mm, 0.87 at +30 mm (diag_single.py). The field varies on the scale
+       of the ball near the pole, so the dipole (L=1) is not enough. The ENGINE's coil force today is this dipole force [read from the code]: the same deficiency. [The x1.4 centre-ball factor is NOT in the engine (grep of magnet.cpp and turntable.cpp: none): it was an
+       offline calibration of the BEM against the FEM for the ball's coupling to the iron plug (FINDINGS.md, 'lam'). An earlier version of this document wrongly guessed that it compensates the dipole deficiency in the engine.]
+   (b) PAIR in a non-uniform field [INFERRED mechanism, not tested separately]: the two-curve form is exact only when both balls see the SAME uniform field. At the plug the centre ball sees 80 000 A/m and an outer ball 27 000 A/m.
+       Outer ball (gap 1 mm): multipole -5.26 N, dressed -1.93 N (37 %), plain dipole -1.23 N; at 0.25 mm -11.3 against -3.2 N. Centre ball with 1-3 outer balls: 44 % low (that is (a)).
+   (c) STACK [measured]: net tangential force on a top ball displaced by 10 / 30 / 60 deg: multipole +0.008 / +0.021 / +0.072 N (BEM -0.011 / -0.037 / -0.092 N: ~0, the ball rolls off), plain dipole -0.08 / -0.22 / -0.23 N,
+       DRESSED -0.19 / -0.50 / -0.58 N: the dressed model holds the stack MORE firmly than the plain dipole, the opposite of the video. Radial force at 0 deg: dressed -10.4 N, multipole -5.7 N (overshoot).
+ WHAT THIS CHANGES (proposed, not built):
+   R1 Replace the dipole force on a lone ball by the FINITE-SIZE force: an offline table of the isolated-ball force from the multipole law over the coil's field map (one table per coil, bilinear lookup, same cost class as
+      today's call). Fixes (a), and the engine's coil force even without balls interacting.
+   R2 Make L2 bilinear: for a pair in fields H_i and H_j the energy is U = self terms (each ball in its own field, modified by the partner) + a cross term H_i.T.H_j: three scalar curve pairs (6 curves) instead of one,
+      all from the multipole law (the field applied to one ball at a time is available in multipole.py through ext(centre)). Cost: the same lookups three times. Fixes (b); exact in the linear regime for any two fields.
+   R3 Multi-contact clusters (a ball with three or more non-collinear touching neighbours) stay OPEN: re-measure after R1 and R2 in the real field before deciding; if still over 10 %, a correction for the number of contacts is needed.
+   R4 The acceptance test is the real disc field, not the uniform field: the uniform-field result alone would have passed the design.
+
+11. R1 PROTOTYPE (2026-10-13; runs/2026-10-13-dressed/r1.cpp, output in r1_out.txt): FINITE-SIZE FACTOR OF THE ENGINE'S OWN COIL FIELD. R1 must work for ANY coil (user): the table is therefore built AT TABLE LOAD from each magnet's
+ own field, never shipped. Form: rho(r, z) = F_multipole / F_dipole, ball in the field of the magnet's point charges (24 on the pole face + the far-pole charge, as magnet.cpp), linear mu; the engine keeps its own coil
+ field, circuit term and ball saturation and multiplies its dipole force by rho (rho depends on the SHAPE of the field and on R/a, not on its strength, while the ball is unsaturated).
+ MEASURED for the disc magnet (core 19 mm, far pole 40 mm behind the face, ball R 13.49 mm, mu 200, L=10): rho_z on the axis 2.41 (ball on the face), 2.21 (+2 mm), 1.86 (+6 mm), 1.54 (+11.5 mm), 1.38 (+16.5 mm), 1.21
+ (+26.5 mm), 1.09 (+46.5 mm); off-axis (r 5-15 mm, on the face) rho_z 2.6-2.9 and rho_r 1.9-2.3; at r 27 mm 1.5; at r 50 mm 1.15. The engine's coil pull on a ball on the plug is 2.4-2.9x too weak against a finite-size ball in the SAME field.
+ CONVERGENCE [measured]: for a ball 2 mm or more above the face the ratio is converged in L (L=6, 10, 14, 18 agree to 3 digits). With the ball ON the face (z = R) a charge sits on the ball's surface, the multipole series
+ does not converge (rho_z 2.39 / 2.41 / 2.45 / 2.59 at L = 6 / 10 / 14 / 18): the ratio there is ill-defined in the charge model. Proposal: tabulate from a gap of 0.5 mm (the engine's own gap floor in the circuit term) and
+ hold the gap-0.5 mm row below it (continuous).
+ NOT HANDLED YET (rule 7): (1) flanged return poles (returnDistMm > 0) break the axisymmetry: a 3-D table or a coarser per-axis scheme; (2) air-core coils use a |B|^2 table of current loops, not charges: the field expansion about
+ the ball must come from the loops (numerical quadrature of the same multipole law), cost to be measured; (3) ball radius: the table is for the table's ball radius (equal balls); (4) a magnet with a tilted axis: the table is in
+ the magnet's own (r, z) frame, rotate the force; (5) ball saturation inside the pole field (B > 0.57 T): rho from the linear law applies up to there, the engine's min(.., Ms) stays; (6) build cost at load (grid ~40 x 40 = 1600 single-ball
+ evaluations; not yet timed in the engine); (7) the circuit effect of the ball on the pole strength is NOT in rho (deferred).
+
+12. R2 RESULT (2026-10-13; runs/2026-10-13-dressed: ballmag_r2.h, r2gen.cpp, r2curves.py, curves4_chi*_L10.txt, compare_disc2.py, diag_stack.py, extorder.cpp, extorder_out.txt): R2 DOES NOT SOLVE THE REAL-FIELD CASE.
+ Built [measured]: four correction curves s0, s1, x0, x1 (self and cross terms of the bilinear pair energy) from the multipole law (field applied to ONE ball by a per-ball field in a copy of the prototype); they sum back to the two-curve version to 1e-9;
+   in a uniform field R2 == the two-curve model exactly.
+ In the real disc field (interaction part = cluster force minus the ball alone; total with an IDEAL R1):
+   outer ball (gap 1 mm): interaction multipole -3.04 N, two-curve -0.34, R2 -1.01 (error 37 % of the largest interaction, two-curve 50 %); centre + 3 outer: 12 % (outer), 57 % (centre ball, z) of the largest interaction;
+   gap 0.25 mm: centre + 1 outer 53 %; STACK: top ball F_r -10.7 N against -5.7 N (multipole), net tangential -0.18 / -0.48 / -0.50 N at 10 / 30 / 60 deg against +0.008 / +0.021 / +0.072: unchanged by R2.
+ DIAGNOSIS [measured, diag_stack.py]: top ball of the stack: plain dipole law -3.2 N, multipole -5.7 N (needs -2.5 N more), R2 adds -7.4 N (3x too much). The corrections were extracted with a UNIFORM field on each ball; the centre ball sits where the field
+   falls from 80 000 to 12 000 A/m across the pair, so it is polarised toward the pole, away from its neighbour: its self term is much weaker than the uniform-field value. It is the assumption (local uniform field), not a bug.
+ HOW MANY ORDERS OF THE APPLIED FIELD DOES THE PAIR NEED [measured, extorder.cpp: exact pair response L=10, the applied field of each ball truncated at order Le, engine's coil field, error against Le=10 as % of the largest force]:
+   Le 1 (uniform, what R2 uses): stack 65-80 %, outer 58 %, centre + 3 outer 57 %;  Le 2: 17-25 %;  Le 3: 5-17 %;  Le 4: 1.3-4.4 %;  Le 6: < 1 %.   => the drive needs order 4 (24 coefficients per ball) to reach the 5 % level.
+ CONSEQUENCE: the cheap dressed dipole (drive order 1) cannot represent the pole region; it is valid where the applied field is uniform over a ball (pairs far from the magnet, chains in a uniform field).
+ OPTIONS (to decide with the user; nothing built): (A) reduced pair operators with drive order 4: the full-order response of each pair is eliminated offline (per gap, in the pair frame) into 24x24 operators; per pair evaluation ~ 3 matrix-vector
+   products of 24x24 plus rotations (ESTIMATE 3-5 us per pair, 20-30 us for 4 balls: NOT measured), the per-ball applied-field coefficients from the magnet's field once per cycle. Cheap enough to refresh several times per cycle (the segment scheme of rev 1
+   with an evaluation of ~30 us instead of ~300 us). Pair-additive: the multi-contact error of section 10 is not addressed. (B) the full multipole law with the segment scheme (rev 1): 303 us per evaluation for 4 balls (L=8).
+   (C) a smaller step: multipole only for the ball-pole region... rejected earlier as a hack unless it follows from a physical criterion (field non-uniformity over the ball).
+
+13. SUCCESS DEFINITION AND BUDGET (agreed with the user 2026-10-13, after the R2 failure). The model is the FULL MULTIPOLE LAW (it explains the video: no sideways restoring force between touching balls, central contact attraction); the task is an EFFICIENT
+ multipole implementation. The dressed-dipole / R1 / R2 route is closed: valid only where the applied field is uniform over a ball (section 12).
+ SUCCESS: (1) reproduces the behaviours of the video (ball on the plug held; outer balls held and driven by the centre ball; a ball on top rolls off); (2) forces within 10 % of the multipole law (reference) in the disc scene;
+ (3) COST: LESS THAN 200 us in the WORST cycle at maximum load with 6 balls (user), preferably lower. The whole-engine rule of 1 ms stays.
+ Against the measured numbers [bench.exe, L=8, warm start, one core]: ONE evaluation for 6 balls is 537 us (prepare 103, solve 209, forces 224): 2.7x over the budget by itself, and a refresh policy with several evaluations in an approach cycle is out of reach.
+ Consequence: an evaluation of 6 balls must be (a) made much cheaper (reuse of the pair translations of touching balls: saves the prepare share; lower order for far pairs; reduced-order operators), (b) spread over cycles (time slicing) or
+ (c) moved off the critical path (worker thread joined at the cycle boundary: reproducible), and used with the force extrapolation of rev 1. None of these is measured yet except the shares above.
+ REVISION 2026-10-15 (user): 10 % vs the FEM stays the goal, but the 200 us budget (6 balls) and a SIMPLE model come first; some cases outside 10 % are accepted
+ if the behaviour is right. Added requirement: a chain plug ball - ball 2 - ball 3 (radially outward) holds at 325 rpm (needs >= 5.1 N at the ball 2 - ball 3
+ contact and >= 7.6 N at the plug ball - ball 2 contact; inferred from m w^2 r, 80.6 g balls).

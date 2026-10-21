@@ -2,6 +2,7 @@
 
 #include "core/stdafx.h"
 #include "kicker.h"
+#include "physics/hitrubber.h"
 
 #include "core/VPApp.h"
 #include "math/matrix.h"
@@ -109,6 +110,8 @@ void Kicker::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    else
    {
       KickerHitCircle *const phitcircle = new KickerHitCircle(this, m_d.m_vCenter, radius, height, height + m_d.m_hit_height); // height of kicker hit cylinder
+      if (!m_d.m_legacyMode)
+         HitRubber::AddPlayfieldHole(m_d.m_vCenter.x, m_d.m_vCenter.y, m_d.m_radius);   // a non-legacy kicker is a hole in the playfield (a playfield on the force model has no floor in it)
       if (!m_d.m_legacyMode)
       {
          const float rad = phitcircle->radius * 0.8f;

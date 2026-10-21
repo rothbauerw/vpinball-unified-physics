@@ -94,6 +94,13 @@ public:
    STDMETHOD(FireKnocker)(/*[in]*/ int Count);
    STDMETHOD(QuitPlayer)(/*[in]*/ int CloseType);
 
+   STDMETHOD(Magnet)(BSTR Name, float Volts);
+   STDMETHOD(MagnetCurrent)(BSTR Name, float *pVal);
+   STDMETHOD(MagnetDuty)(BSTR Name, float Duty);
+   STDMETHOD(Turntable)(BSTR Name, float Volts);
+   STDMETHOD(TurntableDuty)(BSTR Name, float Duty);
+   STDMETHOD(TurntableSpeed)(BSTR Name, float *pVal);
+   STDMETHOD(TurntableAngle)(BSTR Name, float *pVal);
    STDMETHOD(Nudge)(float Angle, float Force);
    STDMETHOD(NudgeGetCalibration)(VARIANT *XMax, VARIANT *YMax, VARIANT *XGain, VARIANT *YGain, VARIANT *DeadZone, VARIANT *TiltSensitivity);
    STDMETHOD(NudgeSetCalibration)(int XMax, int YMax, int XGain, int YGain, int DeadZone, int TiltSensitivity);

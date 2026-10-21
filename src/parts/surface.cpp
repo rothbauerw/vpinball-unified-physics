@@ -13,6 +13,8 @@
 #include "renderer/Renderer.h"
 #include "renderer/Shader.h"
 #include "renderer/trace.h"
+#include "physics/hitrubber.h"
+#include "physics/contactsystem.h"
 #include "renderer/VertexBuffer.h"
 #include "utils/objloader.h"
 
@@ -183,6 +185,20 @@ void Surface::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    const float bottom = m_d.m_heightbottom;
    const float top = m_d.m_heighttop;
 
+   // rubber force model (vpx_physics.ini, [Wall:<name>] rubber = 1): the stock colliders below still detect the ball, but a host steps the contact on the wall's faces
+   std::shared_ptr<RubberSurface> rubberFaces;
+   RubberObjectSettings rubberSettings;
+   const std::filesystem::path rubberIni = HitRubber::IniPathFor(m_ptable->m_filename);
+   bool hardSurface = false;   // unified engine: a wall without the rubber flag is a hard surface of the contact model
+   if (!isUI && HitRubber::LoadSurfaceSettings(rubberSettings, rubberIni, "wall", GetName()))
+      rubberFaces = std::make_shared<RubberSurface>();
+   else if (!isUI && ContactSystem::Unified() && HitRubber::HardSurfaceWanted(rubberIni, "wall", GetName()))
+   {
+      rubberFaces = std::make_shared<RubberSurface>();
+      hardSurface = true;
+   }
+   const size_t collidersBefore = m_vhoCollidable.size();
+
    for (int i = 0; i < count; ++i)
    {
       const RenderVertex * const pv1 = &vvertex[i];
@@ -211,6 +227,43 @@ void Surface::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    {
       Hit3DPoly *const ph3dpolyb = new Hit3DPoly(this, rgv3Db, count);
       SetupHitObject(physics, ph3dpolyb, isUI);
+   }
+
+   if (rubberFaces)
+   {
+      // the faces: a quad per side segment (a wall's outline may be curved: its segments are the polyline of the curve) and the top, triangulated
+      for (int i = 0; i < count; ++i)
+      {
+         const RenderVertex &a = vvertex[i], &b = vvertex[(i + 1) % count];
+         const Vertex3Ds a0(a.x, a.y, bottom), a1(a.x, a.y, top), b0(b.x, b.y, bottom), b1(b.x, b.y, top);
+         rubberFaces->Add(a0, b0, b1);
+         rubberFaces->Add(a0, b1, a1);
+      }
+      vector<unsigned int> poly(count), tri;
+      for (int i = 0; i < count; ++i)
+         poly[i] = i;
+      PolygonToTriangles(vvertex, poly, tri, false);
+      for (size_t i = 0; i + 2 < tri.size(); i += 3)
+         rubberFaces->Add(rgv3Dt[tri[i]], rgv3Dt[tri[i + 1]], rgv3Dt[tri[i + 2]]);
+      if (m_d.m_isBottomSolid)
+         for (size_t i = 0; i + 2 < tri.size(); i += 3)
+            rubberFaces->Add(Vertex3Ds(rgv3Dt[tri[i]].x, rgv3Dt[tri[i]].y, bottom), Vertex3Ds(rgv3Dt[tri[i + 2]].x, rgv3Dt[tri[i + 2]].y, bottom),
+                             Vertex3Ds(rgv3Dt[tri[i + 1]].x, rgv3Dt[tri[i + 1]].y, bottom));
+      if (hardSurface)   // the settings need the elasticity and friction the colliders were given (the material, the table override)
+      {
+         const HitObject *const first = collidersBefore < m_vhoCollidable.size() ? m_vhoCollidable[collidersBefore] : nullptr;
+         HitRubber::LoadHardSurfaceSettings(rubberSettings, rubberIni, "wall", GetName(), HitRubber::HardSurfaceE(first), first != nullptr ? first->m_friction : 0.3);
+      }
+      HitRubber *const host = new HitRubber(this, rubberFaces, rubberSettings, rubberIni, GetName(), "wall");
+      if (hardSurface && collidersBefore < m_vhoCollidable.size())
+         host->SetHardSurface(HitRubber::HardSurfaceE(m_vhoCollidable[collidersBefore]), m_vhoCollidable[collidersBefore]->m_friction);
+      if (collidersBefore < m_vhoCollidable.size())
+         host->SetEventCarrier(m_vhoCollidable[collidersBefore]);
+      for (size_t i = collidersBefore; i < m_vhoCollidable.size(); i++)
+         m_vhoCollidable[i]->m_surfaceHost = host;   // the wall's own colliders hand a hit to the host
+      SetupHitObject(physics, host, isUI);           // the host is enabled and disabled with them (Collidable)
+      PLOGI << "Wall " << GetName() << ": rubber force model on (" << rubberFaces->tris.size() << " faces, layer "
+            << (rubberSettings.layerMm > 0.0 ? rubberSettings.layerMm : rubberSettings.surfaceLayerMm) << " mm, edge radius " << rubberSettings.edgeRadiusMm << " mm, box x " << rubberFaces->lo[0] << ".." << rubberFaces->hi[0] << " y " << rubberFaces->lo[1] << ".." << rubberFaces->hi[1] << " z " << rubberFaces->lo[2] << ".." << rubberFaces->hi[2] << ")";
    }
 }
 
