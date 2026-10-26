@@ -1769,12 +1769,6 @@ void Renderer::DrawDynamics(bool onlyBalls)
             continue;
          RenderItem(renderable, isNoBackdrop);
       }
-      if ((m_render_mask & Renderer::REFLECTION_PASS) == 0)
-      {
-         SetSpaceReference(PartGroupData::SpaceReference::SR_PLAYFIELD, false);
-         Magnets::RenderGuides(this);   // translucent guide tubes of the air-core magnets (tube_visible = 1)
-         Turntables::Render(this);      // turntable discs (visible = 1)
-      }
    }
    else if (!isBackdropEdit)
    {
@@ -2161,6 +2155,14 @@ void Renderer::RenderDynamics()
       if (isBackdropEdit && !renderable->m_desktopBackdrop)
          continue;
       RenderItem(renderable, m_noBackdrop);
+   }
+
+   if (!isBackdropEdit)
+   {
+      // These procedural playfield meshes belong to the main scene, not the reflection probe helper.
+      SetSpaceReference(PartGroupData::SpaceReference::SR_PLAYFIELD, true);
+      Magnets::RenderGuides(this);
+      Turntables::Render(this);
    }
 
    m_renderDevice->m_basicShader->SetTextureNull(ShaderUniform::tex_base_transmission); // need to reset the bulb light texture, as its used as render target for bloom again
