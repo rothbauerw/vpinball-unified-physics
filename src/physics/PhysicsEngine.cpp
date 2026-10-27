@@ -28,6 +28,7 @@
 #include "parts/ball.h"
 #include "parts/flipper.h"
 #include "parts/primitive.h"
+static unsigned s_ctReplays = 0, s_ctReplayUs = 0;   // VPX_CONTACT_TIMING: overlap replays and their time since the last cost-log row
 static uint64_t s_ctMagUs = 0;   // VPX_CONTACT_TIMING: time of Magnets::Step since the last cost-log row, us
 
 PhysicsEngine::PhysicsEngine(PinTable *const table)
@@ -894,7 +895,7 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
    // it's okay to have this code outside of the inner loop, as the ball hitrects already include the maximum distance they can travel in that timespan
    m_hitoctree_dynamic.Update();
 
-   static FILE *const ctLog = []() -> FILE * { const char *const p = getenv("VPX_CONTACT_TIMING"); FILE *const f = (p != nullptr && *p) ? fopen(p, "w") : nullptr; if (f != nullptr) fputs("t_ms,step_us,pre_us,near_us,bodies,islands,substeps,bats,band_bodies,rest_bodies,max_steps,items,probes,gather_us,setup_us,substep_us,write_us,rewinds,mag_us\n", f); return f; }();   // cost log: one row per call that did work
+   static FILE *const ctLog = []() -> FILE * { const char *const p = getenv("VPX_CONTACT_TIMING"); FILE *const f = (p != nullptr && *p) ? fopen(p, "w") : nullptr; if (f != nullptr) fputs("t_ms,step_us,pre_us,near_us,bodies,islands,substeps,bats,band_bodies,rest_bodies,max_steps,items,probes,gather_us,setup_us,substep_us,write_us,rewinds,mag_us,snap_us,replays,replay_us\n", f); return f; }();   // cost log: one row per call that did work
    uint64_t ctNear = 0;
    if (ContactSystem::Unified())
    {
@@ -1023,6 +1024,8 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
 
       if (hittime > STATICTIME) StaticCnts = STATICCNTS; // allow more zeros next round
 
+      if (ContactSystem::Unified())
+         ContactSystem::SaveStart();   // the state of the start of this sub-interval, for a replay (docs/UnifiedContactDesign.txt 11, point 2)
       const uint64_t ctT0 = ctLog != nullptr ? usec() : 0;
       if (hittime < hittimeStart && ContactProf::On())
       {
@@ -1037,6 +1040,8 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
          ContactProf::Split(splitCause, splitStatic, what.c_str());
       }
       ContactSystem::Step(hittime); // contact-held balls: surface contacts and, for touching balls, ball-to-ball contact, stepped together
+      if (ContactSystem::Unified() && ContactSystem::SnapshotTestOn())
+         ContactSystem::SnapshotTest(hittime);   // test mode: the same step again from the snapshot must give the same result
       const uint64_t ctT1 = ctLog != nullptr ? usec() : 0;
       for (size_t i = 0; i < m_vmover.size(); i++)
          m_vmover[i]->PreUpdateDisplacements(hittime); // flippers with a rubber-engaged ball move bat and ball together here
@@ -1044,10 +1049,11 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
       {
          const uint64_t ctT2 = usec();
          const ContactSystem::CycleStats &cs = ContactSystem::LastCycle();
-         if (cs.bodies > 0 || ctT2 - ctT1 >= 3 || ctNear >= 3)
+         if (cs.bodies > 0 || ctT2 - ctT1 >= 3 || ctNear >= 3 || ContactSystem::LastSaveUs() >= 3)
          {
             static int rows = 0;
-            fprintf(ctLog, "%u,%llu,%llu,%llu,%d,%d,%d,%d,%d,%d,%d,%d,%lld,%d,%d,%d,%d,%d,%llu\n", g_pplayer->m_time_msec, (unsigned long long)(ctT1 - ctT0), (unsigned long long)(ctT2 - ctT1), (unsigned long long)ctNear, cs.bodies, cs.islands, cs.substeps, cs.bats, cs.bandBodies, cs.restBodies, cs.maxSteps, cs.items, cs.probes, cs.gatherUs, cs.setupUs, cs.substepUs, cs.writeUs, cs.rewinds, (unsigned long long)s_ctMagUs);
+            fprintf(ctLog, "%u,%llu,%llu,%llu,%d,%d,%d,%d,%d,%d,%d,%d,%lld,%d,%d,%d,%d,%d,%llu,%u,%u,%u\n", g_pplayer->m_time_msec, (unsigned long long)(ctT1 - ctT0), (unsigned long long)(ctT2 - ctT1), (unsigned long long)ctNear, cs.bodies, cs.islands, cs.substeps, cs.bats, cs.bandBodies, cs.restBodies, cs.maxSteps, cs.items, cs.probes, cs.gatherUs, cs.setupUs, cs.substepUs, cs.writeUs, cs.rewinds, (unsigned long long)s_ctMagUs, ContactSystem::LastSaveUs(), s_ctReplays, s_ctReplayUs);
+            s_ctReplays = s_ctReplayUs = 0;
             s_ctMagUs = 0;
             if ((++rows & 255) == 0)
                fflush(ctLog);
@@ -1055,6 +1061,18 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
       }
       for (size_t i = 0; i < m_vmover.size(); i++)
          m_vmover[i]->UpdateDisplacements(hittime); // step 2: move the objects about according to velocities (spinner, gate, flipper, plunger, ball)
+
+      if (ContactSystem::Unified())
+      {
+         ContactSystem::CheckOverlaps(hittime);   // a free ball found inside a moving part: the sub-interval is replayed with the ball engaged at its first contact (docs/UnifiedContactDesign.txt 11, point 2)
+         unsigned nRep = 0, usRep = 0;
+         ContactSystem::TakeReplayStats(nRep, usRep);
+         s_ctReplays += nRep;
+         s_ctReplayUs += usRep;
+      }
+
+      // the events the contact step and the parts queued in this sub-interval: after the free balls have moved, as stock fires its collision events (docs/UnifiedContactDesign.txt 11, point 2)
+      ContactSystem::Dispatch();
 
       // find balls that need to be collided and script'ed (generally there will be one, but more are possible)
 

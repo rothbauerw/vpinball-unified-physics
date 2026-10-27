@@ -106,3 +106,63 @@ no allocation in the step (reused buffers); measure the per-cycle maximum, not o
 Real-world units at every boundary (files, UI, new script properties): metric canonical (mm, m/s, N, g, degrees, us), imperial only as a display setting of the editor UI.
 VPX units exist only in the sync/write-back adapter and for legacy script properties (kept as they are; real-unit properties are added beside them). Ball mass in grams.
 Names carry physics only (no machine names).
+
+11. Overlap at first sight: the standard for every model   (AGREED with the user 2026-10-26, point by point; point 1 built, the rest not built)
+-----------------------------------------------------------------------------------------------------------------------------------------
+Why. A ball found inside a surface the first time the contact system looks is not a contact with a history: its compression is an artefact of how late it was found. A force law applied to that
+depth gives a force the real contact never had (Hertz on steel: 169 um is 37 kN). Measured in the user's session of 2026-10-26 (Rubber Test 2, 35 bumper engagements): 33 started with no overlap
+(out speed <= 1 m/s, force <= 1.5 kN); the two that started overlapped (70 and 169 um) left at 1.8 and 4.5 m/s with 7 and 68 kN, from approaches of 0.29 and 0.33 m/s. In the 169 um case the engage seat
+(ball moved back along its own velocity, surface not moved) made the overlap grow on each of 3 passes (55, 68, 169 um) against the slanted steel ring. Unified solutions never use stock (user rule):
+every case below is resolved inside the contact system.
+
+1. PREVENT (agreed, BUILT 2026-10-26). Engagement uses the closing speed relative to the surface: ball closing speed + the surface's bound; engage when gap < closing x 2 x cycle + release gap; the host-box
+   prefilter and the face refresh widen by 2 x bound x cycle. Every part answers ContactMovingPart::SurfaceSpeedBound(cycle) (pure virtual): its present speed plus what its own drive and springs can add in a
+   cycle. Hinge parts: (|omega| + (gravity torque + cams + springs) / I x cycle) x reach + a driven stop's rate x reach. Bumper: ring = |v| + (coil force at full current, plunger closed + return spring) / m x
+   cycle, skirt rim likewise; a sleeping bumper counts the ring's acceleration (Solenoid can start it). Static surfaces answer 0. A held ball keeps its engagement while gap < release gap + bound x cycle
+   (the 2 mm 'moving away' clause grows by the same). Arrival-time steps (BallStep) use the same bound. Not covered: the turntable disc's rim speed; a surface faster than its stated bound (the report shows it).
+
+2. REWIND THE ISLAND (agreed, not built). An overlap found at engagement was born inside the last sub-interval. Find the time t* in it when the gap was zero with BOTH the ball and the part where they really
+   were (the part evaluated in a scratch copy of its saved state), restore the whole island to t* (the part, every ball touching it, anything coupled), and step it forward with the new ball in it. The contact
+   starts at zero depth with the real velocities and the force law does the rest. Nothing is seated; no velocity is edited. A second ball is handled the same way: the island is rewound, not the ball alone.
+   * Order inside a sub-interval (agreed): Step (held balls, parts) -> UpdateDisplacements (free balls) -> engagement / overlap check with the rewind -> dispatch of ALL queued events (the step's queue and the
+     part events now fired inside PartAdvance). Nothing has run when a rewind happens, so there is nothing to undo, and no latency is added. This is the order of stock VPX.
+   * Save / restore (agreed): ContactMovingPart::SaveState / RestoreState, dynamic values only, no allocation. Parts first (bumper, gate, spinner). An island with a bat, band or disc keeps the ball-only
+     rewind until that type implements it (reported, never stock).
+   * Cost (agreed): save every sub-interval if the measured cost is low (snapshot_us column in VPX_CONTACT_TIMING, judged by the worst cycle); otherwise only when a free ball is within reach of a part (part
+     box + ball radius + (ball speed + bound) x 2 cycles). A sleeping part saves its flag only.
+   * Stock (agreed): stock collision impulses are applied at the END of the sub-interval, after the check, so none falls inside the rewound span.
+   * Chained replays (agreed): rewind to the EARLIEST first contact among the pending overlaps (progress is guaranteed); bisect on the gap, part in a scratch copy, to arrival_depth_um (2 um); the new body joins
+     the island and the existing arrival-time stepping handles later contacts in the replay; a further boundary replay only for yet another free body found overlapping (cap = free balls and parts near + 1).
+     Not covered: a ball through a thin rim and out again inside one sub-interval (point 1 prevents it).
+
+3. VELOCITY (retired): point 2 edits no velocity.
+
+4. (withdrawn: no stock hand-back, no stock safety net.)
+
+5. REPORT (agreed, rule 8). Always on, each a WARN in the log and a playfield notification once per cause per table start: (a) every replay (log at most once per 500 ms: part, ball, t*, depth, count;
+   notification when more than two replays happen in one sub-interval); (b) an island that cannot be fully rewound yet (a bat, band or disc in it): the skip; (c) the force detector (a contact force far above what the
+   relative closing speed of ball and surface explains, with the part's state), built; (d) every no-past seat (point 6).
+
+6. A BALL WITH NO PAST (agreed, not built): a ball created inside a part, teleported into one by a script, or inside a part when Collidable turns True (gap already negative at the start of the sub-interval).
+   Minimum translation, for this case only: move the ball along the normal of the deepest overlap to touching distance, repeated over every surface it overlaps, up to 8 passes; velocities unchanged; no
+   stock; the playfield is just another surface of the loop (the 'seat would put the ball under the playfield' refusal goes away). If the ball is squeezed and does not fit, the remaining overlap is real and the
+   force law carries it. Leaves open: ball control that drags a ball into a part is pushed out every cycle like a hard wall; a ball past the far side of a thin sheet is seated through to the wrong side.
+
+What it would break (rule 7): walls and rubbers that use the ball-only rewind seat (results change slightly: re-run the matrix); the order of events within a sub-interval (parts' Hit/Switch after the stock collisions
+of the same sub-interval is not the case: they move to after UpdateDisplacements, as stock); tables whose scripts depend on part events firing before the free balls move.
+
+Build order (each step checked against the same harness): (1) point 1: done. (2) the dispatch reorder: DONE 2026-10-26 (ContactSystem::Finish split into FinishState (releases, band publish; in Step) and DispatchEvents
+(ball-ball callbacks, part hits, the queue) run by ContactSystem::Dispatch(), called by PhysicsSimulateCycle right after UpdateDisplacements; the parts' own events (bumper Hit / Switch, gate and spinner events) are queued with
+DeferEvent instead of fired in PartAdvance). Checked: gs8 event lines identical to the baseline (13 shots), bumper3 hits per shot identical to before. NOT checked: the ball-ball callback and rumble through the new
+position, cost. Band and sling switch events still fire inside the band step (not queued): bands are not in the rewind until they implement SaveState. (3) SaveState / RestoreState
+for the bumper, gate, spinner: DONE 2026-10-26 (ContactMovingPart::State = 2048 plain bytes, no allocation; HingeBody::Body::Dyn, Bumper::Dyn; offline test runs/2026-10-26-bumper/test_state.cpp: 11 parts, restored into the
+same object and into a fresh one, bit-identical traces, plus an unrestored control that differs; bumper 297 bytes, gate 746, spinner 754; gs8 and bumper3 events unchanged). (4) snapshot at each sub-interval + snapshot_us in the cost log: DONE 2026-10-26. ContactSystem::SaveStart() (before Step) / RestoreStart(): every ball's position, velocity, spin; the engaged balls' contacts (whole entries
+copy-assigned in place); the ball pairs; the saved state of every moving part; the event-queue size. The engaged list and the pair list now change only in ApplyReleases (releases and the pair clean-up moved from the end
+of Step to the dispatch, after the free balls have moved), so a snapshot of their contents is complete. Self-test (VPX_SNAPSHOT_TEST=1: after every Step, restore and step again, compare balls / contacts / pairs / parts): gate and
+spinner run 14,000+ steps, bumper run 6,000+ steps, 0 different; negative control (=2, parts left out of the restore): about 2,000 and 320 differences. Cost (focused, per sub-interval, VPX_CONTACT_TIMING snap_us):
+bumper run mean 2.5 us, p99 7, max 99; gate run mean 1.8, p99 6, max 214 (23 and 27 rows of 7,098 and 13,568 at 10 us or more, with 0 or 1 engaged balls: not tied to the work, cause not found: OS jitter or a
+rare allocation). Judged by the worst cycle the extra is up to 0.2 ms of the 1 ms; the mean is under 3 us. Bats and bands are not saved: their islands are not self-tested. (5) overlap check after UpdateDisplacements with the
+time-of-impact bisect and the island replay. (6) no-past seat and the reports. (7) scenario matrix with pass / fail and cost: a free ball put 3 mm from a moving ring, two balls on one bumper, a ball between
+two bumpers, Collidable toggled with a ball inside, a ball teleported into a gate, two balls on one gate or spinner.
+Step 5 (replay) check, 2026-10-26: Bumper1 forced-overlap scenario (runs/2026-10-09-slow-contact/bump_late1.vbs, 9 shots, VPX_PREVENT=0): 4 replays, 590-750 us each (unfocused run, so a rough cost), ball engaged at overlap 0. First run gave 24.8 kN / 2.16 m/s: the idle ring was not advanced to the engagement time (see change log); fixed, then no force warning and 0.60-0.96 m/s. NOT checked: two balls on one bumper, ball between two bumpers, Collidable toggled with a ball inside, gates/spinners, focused timing, snapshot self-test after the fix.
+Step 6 (no-past seat and reports) DONE 2026-10-27: EngageImpl 'no past' mode (CheckOverlaps balls with no clean start, and 'near' engagements that find the ball inside a moving part): minimum translation, 8 passes, report WARN + notification (point 5d). Check: Bumper1 9 shots (runs/2026-10-09-slow-contact/bump_nopast.vbs): all seated, ball speeds 0.14-0.75 m/s (before 4-11.6 m/s); gs8 events identical, self-test 0 differences. Open: a ball in a wedge between two faces keeps 9-42 um after 8 passes (a force of about 3-4 kN on Bumper1 while it rolls out); a ball inside a STATIC surface at a 'near' engagement still uses the velocity seat; ball control dragging a ball into a part; ball past a thin sheet.

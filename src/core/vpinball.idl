@@ -1321,6 +1321,11 @@ typedef [uuid(D09B9F0E-C1AE-40dd-84D6-B1F74053AA8E)]
                 [propput, id(822), helpstring("property EnableSkirtAnimation")] HRESULT EnableSkirtAnimation([in] VARIANT_BOOL newVal);
                 [propget, id(827), helpstring("property RotX")] HRESULT RotX([out, retval] float *pVal);
                 [propget, id(828), helpstring("property RotY")] HRESULT RotY([out, retval] float *pVal);
+                [propget, id(1761), helpstring("physical bumper: height of the skirt (centre of its flat bottom) above the playfield, VPX units")] HRESULT SkirtZ([out, retval] float *pVal);
+                [propget, id(1762), helpstring("physical bumper: how far the spoon switch is pushed down, VPX units (the switch closes at SwitchCloseMm)")] HRESULT SpoonZ([out, retval] float *pVal);
+                [propget, id(1763), helpstring("physical bumper: the skirt switch is closed")] HRESULT SwitchClosed([out, retval] VARIANT_BOOL *pVal);
+                [propget, id(1764), helpstring("physical bumper: coil current in amperes")] HRESULT CoilCurrent([out, retval] float *pVal);
+                [id(1760), helpstring("physical bumper: Solenoid enabled[, volts[, duty]]. External drive: coil on or off. Pulse drive: True fires one pulse. Held drive: ignored")] HRESULT Solenoid([in] VARIANT_BOOL enabled, [in, optional] VARIANT volts, [in, optional] VARIANT duty);
                 [id(999), helpstring("method PlayHit")] HRESULT PlayHit();
         };
 
@@ -1335,6 +1340,7 @@ typedef [uuid(D09B9F0E-C1AE-40dd-84D6-B1F74053AA8E)]
                 [id(DISPID_TimerEvents_Timer)]  void Timer();
                 [id(DISPID_HitEvents_Hit)]  void Hit();
                 [id(DISPID_AnimateEvents_Animate)]  void Animate();
+                [id(DISPID_BumperEvents_Switch)]  void Switch( [in] int state);   // physical bumper: the skirt switch closed (1) or opened (0); Hit fires at the same instant on closing
         }
 
         //////////////////////////////

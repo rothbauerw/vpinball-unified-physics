@@ -18,6 +18,10 @@
 #include "physics/hitflipper.h"
 #include "physics/physicsini.h"
 #include "physics/contacthingepart.h"
+#include "physics/contactbumperpart.h"
+#include "physics/contactpartsini.h"
+#include "parts/bumper.h"
+#include "ui/live/LiveUI.h"
 #include "physics/cabinet/NudgeHandler.h"
 #include "parts/gate.h"
 #include "parts/spinner.h"
@@ -332,16 +336,59 @@ HitRubber *HitRubber::MakePartHost(IEditable *part, const char *kind, const std:
    faces->hi[1] = (float)((A.y + r) / U);
    faces->hi[2] = (float)((A.z + r) / U);
    HitRubber *const host = new HitRubber(part, faces, s, ini, name, kind);
-   host->m_part = std::move(model);
+   host->m_part = model;
    host->m_partGate = gate;
    host->m_partSpinner = spinner;
    host->m_partAngle = angle;
    host->m_partSpeed = angleSpeed;
    host->SetHardSurface(elasticity, friction);
    // (the gravity it feels is set at every advance: the physics engine is still being built here)
-   PLOGI << (gate != nullptr ? "Gate " : "Spinner ") << name << ": unified part (mass " << host->m_part->body.mp.m * 1e3 << " g, inertia " << host->m_part->body.mp.I << " kg m^2, centre of mass "
-         << host->m_part->body.PendulumArm() * 1e3 << " mm from the axis, reach " << r * 1e3 << " mm)";
+   PLOGI << (gate != nullptr ? "Gate " : "Spinner ") << name << ": unified part (mass " << model->body.mp.m * 1e3 << " g, inertia " << model->body.mp.I << " kg m^2, centre of mass "
+         << model->body.PendulumArm() * 1e3 << " mm from the axis, reach " << r * 1e3 << " mm)";
    return host;
+}
+
+HitRubber *HitRubber::MakeBumperHost(IEditable *part, const std::string &name, const std::filesystem::path &ini, std::shared_ptr<ContactMovingPart> model, Bumper *bumper, const float lo[3], const float hi[3])
+{
+   RubberObjectSettings s;   // (the host's own step and rest settings are not used: a moving part sets its own step, ContactMovingPart::BallStep)
+   s.surfaceRubber = true;
+   s.contact = true;
+   auto faces = std::make_shared<RubberSurface>();
+   for (int i = 0; i < 3; i++)
+   {
+      faces->lo[i] = lo[i];
+      faces->hi[i] = hi[i];
+   }
+   HitRubber *const host = new HitRubber(part, faces, s, ini, name, "bumper");
+   host->m_bumperModel = static_cast<JetBumper::EnginePart *>(model.get());
+   host->m_part = model;
+   host->m_partBumper = bumper;
+   host->SetHardSurface(0.5, 0.3);
+   const JetBumper::Bumper &b = host->m_bumperModel->model;
+   PLOGI << "Bumper " << name << ": unified part (skirt " << b.p.skirtMass * 1e3 << " g, ring assembly " << b.p.ringMass * 1e3 << " g, spoon " << b.p.spoonMass * 1e3 << " g, switch closes at "
+         << b.p.switchCloseMm << " mm, drive " << (b.p.mode == JetBumper::DriveMode::Held ? "held" : b.p.mode == JetBumper::DriveMode::External ? "external" : "pulse") << ", supply " << b.p.coil.vSupply << " V)";
+   return host;
+}
+
+bool HitRubber::BumperWanted(const std::filesystem::path &file, const std::string &name)
+{
+   static const bool envOn = []() { const char *const e = getenv("VPX_BUMPERS"); return !(e != nullptr && atoi(e) == 0); }();
+   if (!envOn)
+      return false;
+   if (!PhysicsIni::Active(file).bumpers)   // no file: on with the defaults
+      return false;
+   bool physical = true;   // [Bumper:<name>] physical = 0 keeps the stock bumper for this one
+   if (!file.empty())
+      PartsIni::ReadSections(file, "", "bumper:" + name, [&](const std::string &k, double v, const std::string &) {
+         if (k == "physical")
+            physical = v != 0.0;
+      });
+   return physical;
+}
+
+double HitRubber::SurfaceSpeedBoundMS(const double cycleS) const
+{
+   return m_part != nullptr ? m_part->SurfaceSpeedBound(cycleS) : 0.0;
 }
 
 RubberContact::ContactResult HitRubber::EvaluateOwn(SurfaceContact &it, const RubberContact::BallSI &bs, const RubberContact::V3 &c, const RubberContact::V3 &v, const RubberContact::V3 &w, const double h) const
@@ -349,7 +396,7 @@ RubberContact::ContactResult HitRubber::EvaluateOwn(SurfaceContact &it, const Ru
    if (m_part == nullptr)
       return RubberContact::ContactResult();
    m_part->SetBall(bs);
-   return m_part->Contact(0, it.st, it.partTouching, c, v, w, h);
+   return m_part->ContactItem(0, it, c, v, w, h);
 }
 
 RubberContact::V3 HitRubber::PartGravitySI()
@@ -378,21 +425,84 @@ void HitRubber::PartAdvance(const float dtime)
       m_partLogged = true;
       PLOGI << "Part " << m_name << ": gravity felt " << g.x << ' ' << g.y << ' ' << g.z << " m/s^2 (|g| " << g.Length() << ")";
    }
-   m_part->body.SetGravity(g);   // (a nudge wakes a sleeping part)
-   if (m_part->steppedThisCycle)
-      m_part->steppedThisCycle = false;   // the contact system stepped it with its balls
-   else
-      m_part->AdvanceAlone((double)dtime * DEFAULT_STEPTIME_S);
+   m_part->SetGravity(g);   // (a nudge wakes a sleeping part)
+   {
+      // the contact system stepped it with its balls for steppedS; the rest of the interval it moves alone
+      const double rest = (double)dtime * DEFAULT_STEPTIME_S - m_part->steppedS;
+      if (rest > 1e-9)
+         m_part->AdvanceAlone(rest);
+      m_part->steppedS = 0.0;
+      m_part->steppedThisCycle = false;
+   }
+   if (m_partBumper != nullptr && m_bumperModel != nullptr)
+   {
+      // a jet bumper: the pose for the script and the renderer, then its events in the order they happened (outside the contact step: a script may move or delete balls)
+      const JetBumper::Bumper &b = m_bumperModel->model;
+      constexpr double U = ContactSystem::kMetresPerUnit;
+      m_partBumper->SetPhysicalPose((float)b.RotXDeg(), (float)b.RotYDeg(), (float)(-b.dr / U), (float)((b.zc - b.zRest) / U), (float)(b.zc / U), (float)(b.ds / U), b.switchClosed, (float)b.iCoil);
+      std::vector<HingePart::Event> bq;
+      bq.swap(m_part->events);
+      if (!bq.empty())   // queued: the engine fires them after the free balls have moved (ContactSystem::Dispatch)
+         ContactSystem::DeferEvent([this, bq]() {
+            for (const HingePart::Event &e : bq)
+            {
+               switch (e.kind)
+               {
+               case HingePart::Event::Hit:   // the switch closed (no speed threshold; Threshold is ignored)
+                  if (m_partBumper->m_d.m_hitEvent)
+                  {
+                     g_pplayer->m_pininput.PlayBumperRumble();
+                     m_partBumper->FireGroupEvent(DISPID_HitEvents_Hit);
+                  }
+                  break;
+               case HingePart::Event::SwitchClosed:
+                  m_partBumper->FireVoidEventParm(DISPID_BumperEvents_Switch, 1);
+                  break;
+               case HingePart::Event::SwitchOpened:
+                  m_partBumper->FireVoidEventParm(DISPID_BumperEvents_Switch, 0);
+                  break;
+               default:
+                  break;
+               }
+            }
+         });
+      // detector (rule 8): a contact force far above what the part's hits give (a ball found deep inside it)
+      if (!m_bumperModel->spikeNote.empty())
+      {
+         const std::string msg = "Bumper " + m_name + ": " + m_bumperModel->spikeNote;
+         PLOGW << msg;
+         if (!m_bumperSpikeShown && g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+         {
+            m_bumperSpikeShown = true;
+            g_pplayer->m_liveUI->PushNotification("Bumper " + m_name + ": a ball met it with a contact force of kilonewtons (see vpinball.log, 'Bumper " + m_name + "')", 8000);
+         }
+         m_bumperModel->spikeNote.clear();
+      }
+      // detector (rule 8): the coil energised for a long time (a skirt held down?)
+      if (!m_bumperWarned && b.coilOnMaxS * 1000.0 > 500.0)
+      {
+         m_bumperWarned = true;
+         const std::string msg = "Bumper " + m_name + ": coil energised for " + std::to_string((int)(b.coilOnMaxS * 1000.0)) + " ms (the skirt held down by a ball? a held drive burns the coil)";
+         PLOGW << msg;
+         if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+            g_pplayer->m_liveUI->PushNotification(msg, 8000);
+      }
+      return;
+   }
    // the stock sign of the part's state: the stock renderer turns a two-way gate's mesh by +angle and a one-way gate's by -angle (Gate::Render), so a two-way
    // gate's angle is written with the opposite sign of the body's (which is the same for both: positive swings toward the front)
    const double sign = (m_partGate != nullptr && m_partGate->m_d.m_twoWay) ? -1.0 : 1.0;
+   HingePart::Part *const hinge = static_cast<HingePart::Part *>(m_part.get());   // (a gate or spinner from here on: the bumper returned above)
    if (m_partAngle != nullptr)
-      *m_partAngle = (float)(sign * m_part->body.theta);
+      *m_partAngle = (float)(sign * hinge->body.theta);
    if (m_partSpeed != nullptr)
-      *m_partSpeed = (float)(sign * m_part->body.omega * DEFAULT_STEPTIME_S);   // rad per VPT
+      *m_partSpeed = (float)(sign * hinge->body.omega * DEFAULT_STEPTIME_S);   // rad per VPT
    // the part's events, in the order they happened (outside the contact step: a script may move or delete balls)
    std::vector<HingePart::Event> q;
    q.swap(m_part->events);
+   if (q.empty())
+      return;
+   ContactSystem::DeferEvent([this, q]() {   // queued: the engine fires them after the free balls have moved (ContactSystem::Dispatch)
    for (const HingePart::Event &e : q)
    {
       IFireEvents *const fe = m_partGate != nullptr ? (IFireEvents *)m_partGate : (IFireEvents *)m_partSpinner;
@@ -427,6 +537,7 @@ void HitRubber::PartAdvance(const float dtime)
          break;
       }
    }
+   });
 }
 
 bool HitRubber::HingeWanted(const std::filesystem::path &file, const char *kind, const std::string &name)
@@ -1901,8 +2012,7 @@ void HitRubber::VelocityAt(const RubberContact::TubeProbe &pr, RubberContact::V3
 {
    if (m_part != nullptr)
    {
-      v = m_part->body.VelocityAt(pr.point);
-      w = m_part->body.E * m_part->body.omega;
+      m_part->SurfaceVelocity(pr.point, v, w);
       return;
    }
    if (m_turntable < 0)

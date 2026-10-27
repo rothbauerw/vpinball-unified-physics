@@ -13,6 +13,8 @@
 
 class BumperHitCircle;
 class MeshBuffer;
+class HitRubber;
+namespace JetBumper { class EnginePart; }
 
 class BumperData final : public BaseProperty
 {
@@ -144,6 +146,14 @@ public:
    STDMETHOD(get_RotX)(/*[out, retval]*/ float *pVal);
    STDMETHOD(get_RotY)(/*[out, retval]*/ float *pVal);
    STDMETHOD(PlayHit)();
+   // physical bumper (unified engine, docs/JetBumperDesign.txt)
+   STDMETHOD(get_SkirtZ)(/*[out, retval]*/ float *pVal);
+   STDMETHOD(get_SpoonZ)(/*[out, retval]*/ float *pVal);
+   STDMETHOD(get_SwitchClosed)(/*[out, retval]*/ VARIANT_BOOL *pVal);
+   STDMETHOD(get_CoilCurrent)(/*[out, retval]*/ float *pVal);
+   STDMETHOD(Solenoid)(/*[in]*/ VARIANT_BOOL enabled, /*[in, optional]*/ VARIANT volts, /*[in, optional]*/ VARIANT duty);
+   // the pose of the physical model, written by the host every physics cycle (degrees, VPX units)
+   void SetPhysicalPose(float rotX, float rotY, float ringOffsetU, float skirtDropU, float skirtZU, float spoonDropU, bool switchClosed, float coilA);
 
    BumperData m_d;
 
@@ -180,6 +190,21 @@ private:
    bool    m_ringAnimate = false;
 
    BumperHitCircle *m_pbumperhitcircle = nullptr;
+
+   // physical model (null host = the stock bumper)
+   HitRubber *m_partHost = nullptr;
+   std::shared_ptr<JetBumper::EnginePart> m_bumperModel;
+   float m_physRotX = 0.0f, m_physRotY = 0.0f, m_physRing = 0.0f, m_physSkirtDrop = 0.0f, m_physSkirtZ = 0.0f, m_physSpoon = 0.0f, m_physCoil = 0.0f;
+   bool m_physSwitch = false;
+   float m_drawRotX = 1e9f, m_drawRotY = 1e9f, m_drawRing = 1e9f, m_drawSkirtDrop = 1e9f;   // the pose the meshes were last built for
+   bool m_physRender = false;                  // the meshes are drawn at the physical size and animated from the model
+   float m_renderRadius = 0.0f, m_renderHeight = 0.0f, m_skirtRestU = 5.0f, m_skirtKzU = 0.0f, m_ringMidU = 0.0f, m_ringKzU = 0.0f;
+   void BuildSkirt(float rotX, float rotY, float dzU);
+   float RingOffsetNow() const;
+   float RenderRadius() const { return m_physRender ? m_renderRadius : m_d.m_radius; }
+   float RenderHeight() const { return m_physRender ? m_renderHeight : m_d.m_heightScale; }
+   void UpdateAnimationPhysical();
+   void UpdateSkirtPhysical();
 
    float   m_rotx = 0.0f; // only for reading through script
    float   m_roty = 0.0f;

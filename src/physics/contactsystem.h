@@ -35,8 +35,29 @@ namespace ContactSystem
    // The table runs on the unified engine: only with  unified = 1  in the table's physics ini; no ini or no key = stock VPX physics.
    bool Unified();
 
-   // One cycle's step of every ball the contact system holds (dtime in the engine's step units).
+   // One cycle's step of every ball the contact system holds (dtime in the engine's step units). Its events (ball-ball callbacks, part hits, the parts' own events) are only queued here.
    void Step(float dtime);
+
+   // The state of everything an overlap replay would have to put back (docs/UnifiedContactDesign.txt section 11, point 2), taken at the start of a sub-interval, before Step: every ball's position,
+   // velocity and spin, the engaged balls' contacts (shear springs, touching flags, counters), the ball pairs, the saved state of every moving part, the size of the event queue. No allocation after the
+   // first few calls. RestoreStart puts it all back and discards the events queued since. LastSaveUs: what SaveStart cost, for the cost log.
+   void SaveStart();
+   void RestoreStart();
+   unsigned LastSaveUs();
+   // Test mode (env VPX_SNAPSHOT_TEST=1; =2 is the negative control that leaves the parts out of the restore): after every Step the snapshot is restored and the step is taken again; any difference in the result is logged. Islands with a bat or a band are skipped
+   // (their state is not saved yet).
+   bool SnapshotTestOn();
+   void SnapshotTest(float dtime);
+
+   // The overlap check and the replay of the sub-interval (UnifiedContactDesign.txt section 11, point 2): after UpdateDisplacements, before Dispatch. A free ball found inside a moving part is engaged at
+   // the time its gap was zero, with the part where it really was, and the sub-interval is stepped again from there. VPX_OVERLAP_REPLAY=0 switches it off (test). TakeReplayStats: the replays and their cost
+   // since the last call, for the cost log.
+   void CheckOverlaps(float hittime);
+   void TakeReplayStats(unsigned &count, unsigned &us);
+
+   // Fires the events queued by Step and by the parts, in the order they happened. Called by the engine after the free balls have moved (UpdateDisplacements), the order of stock VPX: displacements,
+   // then collisions and script events (docs/UnifiedContactDesign.txt section 11, point 2). Nothing has reached a script when a late engagement has to rewind the interval.
+   void Dispatch();
 
    // What the last Step did (for the cost log, VPX_CONTACT_TIMING): bodies stepped, islands, substeps summed over the islands, bats stepped
    struct CycleStats

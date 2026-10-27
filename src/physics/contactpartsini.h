@@ -12,6 +12,7 @@
 #include "physics/physicsini.h"
 #include "physics/contactgate.h"
 #include "physics/contactspinner.h"
+#include "physics/contactbumper.h"
 
 namespace PartsIni
 {
@@ -84,6 +85,69 @@ namespace PartsIni
          else if (k == "hit_window_deg") s.hitWindowDeg = v;
          else if (k == "rubber") {}   // the opt-out key (HitRubber::HingeWanted)
          else PLOGW << "Gate " << name << ": unknown key '" << k << "' ignored";
+      });
+   }
+
+   // Jet bumper settings over `p` (docs/JetBumperDesign.txt section 5): [Bumpers] for all, then [Bumper:<name>]. Lengths in mm, masses in g, spring rates in N/mm unless the key says otherwise.
+   inline void LoadBumper(JetBumper::Params &p, const std::filesystem::path &file, const std::string &name)
+   {
+      using JetBumper::DriveMode;
+      ReadSections(file, "bumpers", "bumper:" + name, [&](const std::string &k, double v, const std::string &lv) {
+         if (k == "body_dia_mm") p.bodyDiaMm = v;
+         else if (k == "body_height_mm") p.bodyTopMm = v;
+         else if (k == "skirt_dia_mm") p.skirtOdMm = v;
+         else if (k == "skirt_inner_dia_mm") p.skirtInnerDiaMm = v;
+         else if (k == "skirt_t_inner_mm") p.skirtTInnerMm = v;
+         else if (k == "skirt_t_edge_mm") p.skirtTEdgeMm = v;
+         else if (k == "skirt_clearance_mm") p.skirtClearanceMm = v;
+         else if (k == "lip_dia_mm") p.lipDiaMm = v;
+         else if (k == "stem_length_mm") p.stemLenMm = v;
+         else if (k == "stem_dia_mm") p.stemDiaMm = v;
+         else if (k == "stem_tip_radius_mm") p.tipRadiusMm = v;
+         else if (k == "spoon_cone_radius_mm") p.coneRadiusMm = v;
+         else if (k == "spoon_cone_depth_mm") p.coneDepthMm = v;
+         else if (k == "ring_od_mm") p.ringOdMm = v;
+         else if (k == "ring_id_mm") p.ringIdMm = v;
+         else if (k == "ring_thickness_mm") p.ringSheetMm = v;
+         else if (k == "ring_rise_mm") p.ringRiseMm = v;
+         else if (k == "ring_mid_rest_mm") p.ringMidRestMm = v;
+         else if (k == "ring_stroke_mm") p.ringStrokeMm = v;
+         else if (k == "skirt_mass_g") p.skirtMass = v * 1e-3;
+         else if (k == "ring_assembly_mass_g") p.ringMass = v * 1e-3;
+         else if (k == "spoon_mass_g") p.spoonMass = v * 1e-3;
+         else if (k == "skirt_spring_n_per_mm") p.skirtKNPerM = v * 1e3;
+         else if (k == "skirt_spring_preload_n") p.skirtPreloadN = v;
+         else if (k == "skirt_spring_radius_mm") p.springRadiusMm = v;
+         else if (k == "skirt_damping_zeta") p.skirtZeta = v;
+         else if (k == "spoon_spring_n_per_mm") p.spoonKNPerM = v * 1e3;
+         else if (k == "spoon_spring_preload_n") p.spoonPreloadN = v;
+         else if (k == "spoon_damping_zeta") p.spoonZeta = v;
+         else if (k == "spoon_travel_mm") p.spoonTravelMm = v;
+         else if (k == "return_spring_n_per_mm") p.returnKNPerM = v * 1e3;
+         else if (k == "return_spring_preload_n") p.returnPreloadN = v;
+         else if (k == "ring_friction_ns_per_m") p.ringViscousNsPerM = v;
+         else if (k == "ring_rest_stop_e") p.ringRestE = v;
+         else if (k == "ring_coil_stop_e") p.ringCoilE = v;
+         else if (k == "ring_rest_stop_e_mpa") p.ringRestEMpa = v;
+         else if (k == "switch_close_mm") p.switchCloseMm = v;
+         else if (k == "switch_hyst_mm") p.switchHystMm = v;
+         else if (k == "coil_drive") p.mode = lv == "held" ? DriveMode::Held : lv == "external" ? DriveMode::External : DriveMode::Pulse;
+         else if (k == "pulse_ms") p.pulseMs = v;
+         else if (k == "coil") { if (lv != "ae-23-800") PLOGW << "Bumper " << name << ": coil '" << lv << "' is not in the table (only AE-23-800); set coil_r_ohm, coil_l_air_mh, coil_l_arm_mh, coil_bobbin_mm, coil_x0 instead"; }
+         else if (k == "coil_v_supply") p.coil.vSupply = v;
+         else if (k == "coil_r_ohm") p.coil.rOhm = v;
+         else if (k == "coil_l_air_mh") p.coil.lAirMH = v;
+         else if (k == "coil_l_arm_mh") p.coil.lArmMH = v;
+         else if (k == "coil_bobbin_mm") p.coil.bobbinMm = v;
+         else if (k == "coil_x0") p.coil.x0 = v;
+         else if (k == "coil_plunger_closed_frac") p.plungerClosedFrac = v;
+         else if (k == "plastic_e_mpa") p.plasticEMpa = v;
+         else if (k == "plastic_restitution") p.plasticE = v;
+         else if (k == "plastic_mu") p.plasticMu = v;
+         else if (k == "steel_restitution") p.steelRingE = v;
+         else if (k == "steel_mu") p.steelMu = v;
+         else if (k == "physical") {}   // physical = 0 keeps the stock bumper (HitRubber::BumperWanted)
+         else PLOGW << "Bumper " << name << ": unknown key '" << k << "' ignored";
       });
    }
 

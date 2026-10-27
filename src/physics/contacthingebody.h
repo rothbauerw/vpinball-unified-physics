@@ -174,6 +174,39 @@ namespace HingeBody
       // velocity of a body point (world, relative to A) and the angular velocity vector
       V3 VelocityAt(const V3 &worldPoint) const { return (E * omega).Cross(worldPoint - A); }
 
+      // ---- the dynamic state, for rewinding an island (ContactMovingPart::State): everything that changes while the body runs ----
+      static constexpr int kMaxStops = 8, kMaxSprings = 4, kMaxCams = 4;
+      struct Dyn
+      {
+         double theta = 0.0, omega = 0.0;
+         bool stuck = false, asleep = false, hadExternal = false;
+         double extTau = 0.0;
+         V3 extF, g;
+         int nStops = 0, nSprings = 0, nCams = 0;
+         Stop stops[kMaxStops];
+         bool springOn[kMaxSprings] = {};
+         bool camOn[kMaxCams] = {};
+      };
+      void SaveDyn(Dyn &d) const
+      {
+         assert((int)stops.size() <= kMaxStops && (int)springs.size() <= kMaxSprings && (int)cams.size() <= kMaxCams);
+         d.theta = theta; d.omega = omega; d.stuck = stuck; d.asleep = asleep; d.hadExternal = m_hadExternal;
+         d.extTau = m_extTau; d.extF = m_extF; d.g = m_g;
+         d.nStops = (int)stops.size(); d.nSprings = (int)springs.size(); d.nCams = (int)cams.size();
+         for (int i = 0; i < d.nStops; i++) d.stops[i] = stops[i];
+         for (int i = 0; i < d.nSprings; i++) d.springOn[i] = springs[i].enabled;
+         for (int i = 0; i < d.nCams; i++) d.camOn[i] = cams[i].enabled;
+      }
+      void LoadDyn(const Dyn &d)
+      {
+         theta = d.theta; omega = d.omega; stuck = d.stuck; asleep = d.asleep; m_hadExternal = d.hadExternal;
+         m_extTau = d.extTau; m_extF = d.extF; m_g = d.g;
+         stops.assign(d.stops, d.stops + d.nStops);
+         for (int i = 0; i < d.nSprings && i < (int)springs.size(); i++) springs[i].enabled = d.springOn[i];
+         for (int i = 0; i < d.nCams && i < (int)cams.size(); i++) cams[i].enabled = d.camOn[i];
+         events.clear();
+      }
+
       // ---- per-substep input from the contact system ----
       void AddExternal(double torqueAboutE, const V3 &force)
       {
@@ -396,6 +429,22 @@ namespace HingeBody
                e += cm.F0 * d + 0.5 * cm.k * d * d;
          }
          return e;
+      }
+      // The fastest a point of the body at distance r from the axis can move within the next cycle (m/s): the present angular speed plus what gravity, the switch cams and the springs can add
+      // in the cycle, times r, plus the speed of a driven stop (a hold actuator pushes the body at its rate). Balls are not counted.
+      double SurfaceSpeedBound(double cycleS, double r) const
+      {
+         double tau = mp.m * std::sqrt(m_g.Dot(m_g)) * PendulumArm();
+         for (const Cam &cm : cams)
+            if (cm.enabled)
+               tau += (cm.F0 + cm.k * cm.r) * cm.r;
+         for (const Spring &sp : springs)
+            if (sp.enabled)
+               tau += sp.k * 0.5;
+         double drive = 0.0;
+         for (const Stop &s : stops)
+            drive = std::max(drive, DrivenSpeed(s));
+         return (std::abs(omega) + tau / mp.I * cycleS + drive) * r;
       }
       // distance of the centre of mass from the axis (m)
       double PendulumArm() const

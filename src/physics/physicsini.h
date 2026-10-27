@@ -38,6 +38,7 @@ namespace PhysicsIni
       bool hardSurfaces = true;   // unified engine: every other wall and primitive is a hard surface of the contact model (material from the part's elasticity and friction, [Surfaces] and [Wall:<name>] / [Primitive:<name>] override); off = stock collisions
       bool proximityEngage = true; // unified engine: a free ball is taken into the contact model when it is about to touch a surface (reach 2 v dt + the release gap), before the stock hit search can find it; the part hit events come from the contact
       bool hinges = true;         // unified engine: gates and spinners are hinged plates of the contact model (mass, torque from the balls touching them); off = the stock kick of the plate by the ball
+      bool bumpers = true;        // unified engine: jet bumpers are the physical model (skirt, spoon switch, ring, coil; docs/JetBumperDesign.txt); off = the stock bumper
       bool bands = true;          // band model (rubber stretched between posts); off = stock collisions
       bool slings = true;         // slings (plate, coil, switches) on bands; off = a plain band
       bool contact = true;        // resting-contact friction; off = plain Coulomb friction with the object's friction
@@ -81,8 +82,8 @@ namespace PhysicsIni
    // A section header nothing reads (a misspelt kind such as [Primitve:Post1]) is reported once.
    inline void WarnUnknownSection(const std::string &lowerName)
    {
-      static const char *const plain[] = { "features", "contact", "flippers", "rubbers", "slings", "playfield", "surfaces", "gates", "spinners" };
-      static const char *const kinds[] = { "flipper:", "rubber:", "sling:", "wall:", "primitive:", "magnet:", "turntable:", "gate:", "spinner:", "ramp:" };
+      static const char *const plain[] = { "features", "contact", "flippers", "rubbers", "slings", "playfield", "surfaces", "gates", "spinners", "bumpers" };
+      static const char *const kinds[] = { "flipper:", "rubber:", "sling:", "wall:", "primitive:", "magnet:", "turntable:", "gate:", "spinner:", "ramp:", "bumper:" };
       for (const char *p : plain)
          if (lowerName == p)
             return;
@@ -142,6 +143,8 @@ namespace PhysicsIni
             f.proximityEngage = on;
          else if (key == "hinges")
             f.hinges = on;
+         else if (key == "bumpers")
+            f.bumpers = on;
          else if (key == "bands")
             f.bands = on;
          else if (key == "slings")
@@ -170,7 +173,7 @@ namespace PhysicsIni
       if (!ContactSystem::Unified())
       {
          f.flippers = f.flipperRubber = f.rubbers = f.playfieldContact = f.surfaceRubbers = f.hardSurfaces = f.proximityEngage = f.hinges = false;
-         f.bands = f.slings = f.contact = f.magnets = f.turntables = f.hitSpeed = false;
+         f.bands = f.slings = f.contact = f.magnets = f.turntables = f.hitSpeed = f.bumpers = false;
          return f;
       }
       if (!file.empty())

@@ -11,6 +11,11 @@
 #include "meshes/bumperSocketMesh.h"
 #include "physics/collideex.h"
 #include "physics/PhysicsEngine.h"
+#include "physics/hitrubber.h"
+#include "physics/contactbumperpart.h"
+#include "physics/contactpartsini.h"
+#include "physics/contactsystem.h"
+#include "ui/live/LiveUI.h"
 #include "renderer/IndexBuffer.h"
 #include "renderer/RenderDevice.h"
 #include "renderer/Renderer.h"
@@ -109,6 +114,33 @@ void Bumper::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       return;
 
    const float height = m_ptable->GetSurfaceHeight(m_d.m_szSurface, m_d.m_vCenter.x, m_d.m_vCenter.y);
+   const std::filesystem::path ini = HitRubber::IniPathFor(m_ptable->m_filename);
+   if (!isUI && ContactSystem::Unified() && HitRubber::BumperWanted(ini, GetName()))
+   {
+      // the physical bumper (docs/JetBumperDesign.txt): no stock collider, no stock ring or skirt animation
+      constexpr double U = ContactSystem::kMetresPerUnit;
+      JetBumper::Params prm;
+      PartsIni::LoadBumper(prm, ini, GetName());
+      m_bumperModel = std::make_shared<JetBumper::EnginePart>();
+      m_bumperModel->Build(prm, RubberContact::V3((double)m_d.m_vCenter.x * U, (double)m_d.m_vCenter.y * U, (double)height * U));
+      m_bumperModel->model.SetCollidable(m_d.m_collidable);
+      const float r = (float)(m_bumperModel->Reach() / U);
+      const float lo[3] = { m_d.m_vCenter.x - r, m_d.m_vCenter.y - r, height };
+      const float hi[3] = { m_d.m_vCenter.x + r, m_d.m_vCenter.y + r, height + (float)(0.06 / U) };
+      m_partHost = HitRubber::MakeBumperHost(this, GetName(), ini, m_bumperModel, this, lo, hi);
+      m_partHost->m_enabled = m_d.m_collidable;
+      physics->AddCollider(m_partHost, isUI);
+      static const void *s_noticeTable = nullptr;   // one notice per table start
+      if (s_noticeTable != (const void *)m_ptable)
+      {
+         s_noticeTable = (const void *)m_ptable;
+         const std::string msg = "Physical bumpers are on: the bumper properties Radius, Force, Threshold, Scatter, HeightScale, RingSpeed and RingDropOffset are ignored (see [Bumpers] in vpx_physics.ini; [Features] bumpers = 0 restores the stock bumper).";
+         PLOGW << msg;
+         if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+            g_pplayer->m_liveUI->PushNotification(msg, 10000);
+      }
+      return;
+   }
    if (isUI)
    {
       HitCircle *const pcircle = new HitCircle(this, m_d.m_vCenter, m_d.m_radius, height, height + m_d.m_heightScale);
@@ -128,7 +160,11 @@ void Bumper::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 void Bumper::PhysicRelease(PhysicsEngine* physics, const bool isUI)
 {
    if (!isUI)
+   {
       m_pbumperhitcircle = nullptr;
+      m_partHost = nullptr;   // (owned by the physics engine)
+      m_bumperModel = nullptr;
+   }
 }
 
 #pragma endregion
@@ -142,6 +178,30 @@ void Bumper::RenderSetup(Renderer *renderer)
    m_renderer = renderer;
 
    m_baseHeight = m_ptable->GetSurfaceHeight(m_d.m_szSurface, m_d.m_vCenter.x, m_d.m_vCenter.y);
+
+   // The physical bumper draws the stock meshes at the size the model has: the skirt and ring meshes have their outer radius at 1.2445 of the unit, which is the OD of the model; the
+   // skirt's height is scaled so its flat top is skirt_t_inner_mm thick (the mesh's flat top is 0.0566 high); the ring's so that its sloped face rises ring_rise_mm (the mesh's face rises
+   // 0.119) with the middle of the face at ring_mid_rest_mm at rest. The base and the cap keep the stock proportions (height scale twice the radius). Ring and skirt then follow the model.
+   m_physRender = false;
+   m_skirtRestU = 5.0f;
+   m_skirtKzU = m_ringMidU = m_ringKzU = 0.0f;
+   m_drawRotX = m_drawRotY = m_drawRing = m_drawSkirtDrop = 1e9f;
+   {
+      const std::filesystem::path ini = HitRubber::IniPathFor(m_ptable->m_filename);
+      if (ContactSystem::Unified() && HitRubber::BumperWanted(ini, GetName()))
+      {
+         constexpr double U = ContactSystem::kMetresPerUnit;
+         JetBumper::Params prm;
+         PartsIni::LoadBumper(prm, ini, GetName());
+         m_physRender = true;
+         m_renderRadius = (float)(0.5 * prm.skirtOdMm * 1e-3 / 1.2445 / U);
+         m_renderHeight = 2.0f * m_renderRadius;
+         m_skirtRestU = (float)(prm.skirtClearanceMm * 1e-3 / U);
+         m_skirtKzU = (float)(prm.skirtTInnerMm * 1e-3 / 0.0566 / U);
+         m_ringMidU = (float)(prm.ringMidRestMm * 1e-3 / U);
+         m_ringKzU = (float)(prm.ringRiseMm * 1e-3 / 0.119 / U);
+      }
+   }
 
    m_fullMatrix = Matrix3D::MatrixRotateZ(ANGTORAD(m_d.m_orientation));
    // We always create all render data to support live editor
@@ -301,7 +361,7 @@ void Bumper::Render(const unsigned int renderMask)
 
    if (m_d.m_ringVisible && !isStaticOnly)
    {
-      Vertex3Ds pos(m_d.m_vCenter.x, m_d.m_vCenter.y, m_baseHeight + m_pbumperhitcircle->m_bumperanim_ringAnimOffset);
+      Vertex3Ds pos(m_d.m_vCenter.x, m_d.m_vCenter.y, m_baseHeight + RingOffsetNow());
       if (isUIPass)
       {
          if (renderMask & Renderer::UI_FILL)
@@ -330,7 +390,7 @@ void Bumper::Render(const unsigned int renderMask)
 
    if (m_d.m_skirtVisible && !isStaticOnly)
    {
-      Vertex3Ds pos(m_d.m_vCenter.x, m_d.m_vCenter.y, m_baseHeight + 5.0f);
+      Vertex3Ds pos(m_d.m_vCenter.x, m_d.m_vCenter.y, m_baseHeight + m_skirtRestU);
       if (isUIPass)
       {
          if (renderMask & Renderer::UI_FILL)
@@ -357,7 +417,6 @@ void Bumper::UpdateSkirt(const bool doCalculation)
 
    constexpr float SKIRT_TILT = 5.0f;
 
-   const float scalexy = m_d.m_radius;
    m_rotx = 0.0f;
    m_roty = 0.0f;
 
@@ -378,18 +437,38 @@ void Bumper::UpdateSkirt(const bool doCalculation)
          m_roty = -m_roty;
    }
 
+   BuildSkirt(m_rotx, m_roty, 0.0f);
+}
+
+// the skirt mesh tilted by rotX / rotY degrees (about the world axes, after the orientation) and moved down by dzU
+void Bumper::BuildSkirt(const float rotX, const float rotY, const float dzU)
+{
+   if (m_socketMeshBuffer == nullptr)
+      return;
+   const float scalexy = RenderRadius();
    const Matrix3D rMatrix = (Matrix3D::MatrixRotateZ(ANGTORAD(m_d.m_orientation))
-                           * Matrix3D::MatrixRotateY(ANGTORAD(m_roty)))
-                           * Matrix3D::MatrixRotateX(ANGTORAD(m_rotx));
+                           * Matrix3D::MatrixRotateY(ANGTORAD(rotY)))
+                           * Matrix3D::MatrixRotateX(ANGTORAD(rotX));
 
    Vertex3D_NoTex2 *buf;
    m_socketMeshBuffer->m_vb->Lock(buf);
    for (unsigned int i = 0; i < bumperSocketNumVertices; i++)
    {
-      Vertex3Ds vert = rMatrix * Vertex3Ds{bumperSocket[i].x, bumperSocket[i].y, bumperSocket[i].z};
-      buf[i].x = vert.x*scalexy + m_d.m_vCenter.x;
-      buf[i].y = vert.y*scalexy + m_d.m_vCenter.y;
-      buf[i].z = vert.z*m_d.m_heightScale + (m_baseHeight+5.0f);
+      Vertex3Ds vert;
+      if (m_physRender)   // the model's size first, then the tilt about the centre of the flat bottom
+      {
+         vert = rMatrix * Vertex3Ds{bumperSocket[i].x*scalexy, bumperSocket[i].y*scalexy, bumperSocket[i].z*m_skirtKzU};
+         buf[i].x = vert.x + m_d.m_vCenter.x;
+         buf[i].y = vert.y + m_d.m_vCenter.y;
+         buf[i].z = vert.z + (m_baseHeight+m_skirtRestU) + dzU;
+      }
+      else
+      {
+         vert = rMatrix * Vertex3Ds{bumperSocket[i].x, bumperSocket[i].y, bumperSocket[i].z};
+         buf[i].x = vert.x*scalexy + m_d.m_vCenter.x;
+         buf[i].y = vert.y*scalexy + m_d.m_vCenter.y;
+         buf[i].z = vert.z*RenderHeight() + (m_baseHeight+m_skirtRestU) + dzU;
+      }
 
       vert = rMatrix.MultiplyVectorNoTranslate(Vertex3Ds{bumperSocket[i].nx, bumperSocket[i].ny, bumperSocket[i].nz});
       buf[i].nx = vert.x;
@@ -471,13 +550,13 @@ void Bumper::ExportMesh(ObjLoader& loader)
 
 void Bumper::GenerateBaseMesh(Vertex3D_NoTex2 *buf) const
 {
-   const float scalexy = m_d.m_radius;
+   const float scalexy = RenderRadius();
    for (unsigned int i = 0; i < bumperBaseNumVertices; i++)
    {
       Vertex3Ds vert = m_fullMatrix * Vertex3Ds{bumperBase[i].x, bumperBase[i].y, bumperBase[i].z};
       buf[i].x = vert.x*scalexy + m_d.m_vCenter.x;
       buf[i].y = vert.y*scalexy + m_d.m_vCenter.y;
-      buf[i].z = vert.z*m_d.m_heightScale + m_baseHeight;
+      buf[i].z = vert.z*RenderHeight() + m_baseHeight;
 
       vert = Vertex3Ds(bumperBase[i].nx, bumperBase[i].ny, bumperBase[i].nz);
       vert = m_fullMatrix.MultiplyVectorNoTranslate(vert);
@@ -491,14 +570,14 @@ void Bumper::GenerateBaseMesh(Vertex3D_NoTex2 *buf) const
 
 void Bumper::GenerateSocketMesh(Vertex3D_NoTex2 *buf) const
 {
-   const float scalexy = m_d.m_radius;
+   const float scalexy = RenderRadius();
 
    for (unsigned int i = 0; i < bumperSocketNumVertices; i++)
    {
       Vertex3Ds vert = m_fullMatrix * Vertex3Ds{bumperSocket[i].x, bumperSocket[i].y, bumperSocket[i].z};
       buf[i].x = vert.x*scalexy + m_d.m_vCenter.x;
       buf[i].y = vert.y*scalexy + m_d.m_vCenter.y;
-      buf[i].z = vert.z*m_d.m_heightScale + (m_baseHeight+5.0f);
+      buf[i].z = vert.z*(m_physRender ? m_skirtKzU : RenderHeight()) + (m_baseHeight+m_skirtRestU);
 
       vert = Vertex3Ds(bumperSocket[i].nx, bumperSocket[i].ny, bumperSocket[i].nz);
       vert = m_fullMatrix.MultiplyVectorNoTranslate(vert);
@@ -512,14 +591,14 @@ void Bumper::GenerateSocketMesh(Vertex3D_NoTex2 *buf) const
 
 void Bumper::GenerateRingMesh(Vertex3D_NoTex2 *buf) const
 {
-   const float scalexy = m_d.m_radius;
+   const float scalexy = RenderRadius();
 
    for (unsigned int i = 0; i < bumperRingNumVertices; i++)
    {
       Vertex3Ds vert = m_fullMatrix * Vertex3Ds{bumperRing[i].x, bumperRing[i].y, bumperRing[i].z};
       buf[i].x = vert.x*scalexy + m_d.m_vCenter.x;
       buf[i].y = vert.y*scalexy + m_d.m_vCenter.y;
-      buf[i].z = vert.z*m_d.m_heightScale + m_baseHeight;
+      buf[i].z = m_physRender ? m_baseHeight + m_ringMidU + (vert.z - 0.6855f)*m_ringKzU : vert.z*RenderHeight() + m_baseHeight;   // physical: the middle of the sloped face (mesh z 0.6855) at ring_mid_rest_mm
 
       vert = Vertex3Ds(bumperRing[i].nx, bumperRing[i].ny, bumperRing[i].nz);
       vert = m_fullMatrix.MultiplyVectorNoTranslate(vert);
@@ -533,14 +612,14 @@ void Bumper::GenerateRingMesh(Vertex3D_NoTex2 *buf) const
 
 void Bumper::GenerateCapMesh(Vertex3D_NoTex2 *buf) const
 {
-   const float scalexy = m_d.m_radius*2.0f;
+   const float scalexy = RenderRadius()*2.0f;
 
    for (unsigned int i = 0; i < bumperCapNumVertices; i++)
    {
       Vertex3Ds vert = m_fullMatrix * Vertex3Ds{bumperCap[i].x, bumperCap[i].y, bumperCap[i].z};
       buf[i].x = vert.x*scalexy + m_d.m_vCenter.x;
       buf[i].y = vert.y*scalexy + m_d.m_vCenter.y;
-      buf[i].z = vert.z*m_d.m_heightScale + (m_d.m_heightScale + m_baseHeight);
+      buf[i].z = vert.z*RenderHeight() + (RenderHeight() + m_baseHeight);
 
       vert = Vertex3Ds(bumperCap[i].nx, bumperCap[i].ny, bumperCap[i].nz);
       vert = m_fullMatrix.MultiplyVectorNoTranslate(vert);
@@ -552,8 +631,65 @@ void Bumper::GenerateCapMesh(Vertex3D_NoTex2 *buf) const
    }
 }
 
+float Bumper::RingOffsetNow() const
+{
+   if (m_partHost != nullptr)
+      return m_physRing;
+   return m_pbumperhitcircle != nullptr ? m_pbumperhitcircle->m_bumperanim_ringAnimOffset : 0.0f;
+}
+
+void Bumper::SetPhysicalPose(const float rotX, const float rotY, const float ringOffsetU, const float skirtDropU, const float skirtZU, const float spoonDropU, const bool switchClosed, const float coilA)
+{
+   m_physRotX = rotX;
+   m_physRotY = rotY;
+   m_physRing = ringOffsetU;
+   m_physSkirtDrop = skirtDropU;
+   m_physSkirtZ = skirtZU;
+   m_physSpoon = spoonDropU;
+   m_physSwitch = switchClosed;
+   m_physCoil = coilA;
+}
+
+// the physical bumper's meshes follow the model: the ring (vertices moved), the skirt (tilted and lowered)
+void Bumper::UpdateAnimationPhysical()
+{
+   bool changed = false;
+   const float ring = m_physRing;
+   if (m_ringMeshBuffer && m_ringVertices != nullptr && ring != m_drawRing)
+   {
+      m_drawRing = ring;
+      Vertex3D_NoTex2 *buf;
+      m_ringMeshBuffer->m_vb->Lock(buf);
+      for (unsigned int i = 0; i < bumperRingNumVertices; i++)
+      {
+         buf[i] = m_ringVertices[i];
+         buf[i].z = m_ringVertices[i].z + ring;
+      }
+      m_ringMeshBuffer->m_vb->Unlock();
+      changed = true;
+   }
+   const float rx = m_enableSkirtAnimation ? m_physRotX : 0.0f, ry = m_enableSkirtAnimation ? m_physRotY : 0.0f, dz = m_enableSkirtAnimation ? m_physSkirtDrop : 0.0f;
+   if (m_socketMeshBuffer && (rx != m_drawRotX || ry != m_drawRotY || dz != m_drawSkirtDrop))
+   {
+      m_drawRotX = rx;
+      m_drawRotY = ry;
+      m_drawSkirtDrop = dz;
+      m_rotx = m_physRotX;
+      m_roty = m_physRotY;
+      BuildSkirt(rx, ry, dz);
+      changed = true;
+   }
+   if (changed)
+      FireGroupEvent(DISPID_AnimateEvents_Animate);
+}
+
 void Bumper::UpdateAnimation(const float diff_time_msec)
 {
+   if (m_partHost != nullptr)
+   {
+      UpdateAnimationPhysical();
+      return;
+   }
    if (m_pbumperhitcircle->m_bumperanim_hitEvent)
       g_pplayer->m_pininput.PlayBumperRumble();
 
@@ -829,7 +965,7 @@ STDMETHODIMP Bumper::put_RingDropOffset(float newVal)
 
 STDMETHODIMP Bumper::get_CurrentRingOffset(float *pVal)
 {
-   *pVal = m_pbumperhitcircle->m_bumperanim_ringAnimOffset;
+   *pVal = m_partHost != nullptr ? m_physRing : (m_pbumperhitcircle != nullptr ? m_pbumperhitcircle->m_bumperanim_ringAnimOffset : 0.0f);
    return S_OK;
 }
 
@@ -964,6 +1100,12 @@ STDMETHODIMP Bumper::put_Collidable(VARIANT_BOOL newVal)
    m_d.m_collidable = VBTOb(newVal);
    if (m_pbumperhitcircle)
       m_pbumperhitcircle->m_enabled = m_d.m_collidable;
+   if (m_partHost != nullptr)
+   {
+      // the physical bumper is not there at all: no contact, no switch, no coil, no events, the parts back at rest
+      m_partHost->m_enabled = m_d.m_collidable;
+      m_bumperModel->model.SetCollidable(m_d.m_collidable);
+   }
 
    return S_OK;
 }
@@ -1049,20 +1191,88 @@ STDMETHODIMP Bumper::put_EnableSkirtAnimation(VARIANT_BOOL newVal)
 
 STDMETHODIMP Bumper::PlayHit()
 {
+   if (m_partHost != nullptr)
+      return S_OK;   // the physical bumper's ring and skirt move by themselves
    if ( m_pbumperhitcircle )
       m_pbumperhitcircle->m_bumperanim_hitEvent = true;
 
    return S_OK;
 }
 
+STDMETHODIMP Bumper::get_SkirtZ(float *pVal)
+{
+   *pVal = m_physSkirtZ;
+   return S_OK;
+}
+
+STDMETHODIMP Bumper::get_SpoonZ(float *pVal)
+{
+   *pVal = m_physSpoon;
+   return S_OK;
+}
+
+STDMETHODIMP Bumper::get_SwitchClosed(VARIANT_BOOL *pVal)
+{
+   *pVal = FTOVB(m_physSwitch);
+   return S_OK;
+}
+
+STDMETHODIMP Bumper::get_CoilCurrent(float *pVal)
+{
+   *pVal = m_physCoil;
+   return S_OK;
+}
+
+// an optional numeric script argument (a missing one arrives as an error or empty variant)
+static bool OptionalNumber(const VARIANT &v, double &out)
+{
+   const VARIANT *p = &v;
+   if (V_VT(p) == (VT_VARIANT | VT_BYREF))
+      p = V_VARIANTREF(p);
+   const VARTYPE t = V_VT(p) & ~VT_BYREF;
+   const bool byref = (V_VT(p) & VT_BYREF) != 0;
+   switch (t)
+   {
+   case VT_R4: out = byref ? *V_R4REF(p) : V_R4(p); return true;
+   case VT_R8: out = byref ? *V_R8REF(p) : V_R8(p); return true;
+   case VT_I2: out = byref ? *V_I2REF(p) : V_I2(p); return true;
+   case VT_I4: out = byref ? *V_I4REF(p) : V_I4(p); return true;
+   default: return false;
+   }
+}
+
+STDMETHODIMP Bumper::Solenoid(VARIANT_BOOL enabled, VARIANT volts, VARIANT duty)
+{
+   if (m_partHost == nullptr || m_bumperModel == nullptr)
+      return S_OK;   // the stock bumper has no coil to drive
+   double v = -1.0, d = 1.0;
+   OptionalNumber(volts, v);
+   if (OptionalNumber(duty, d))
+      d = std::min(1.0, std::max(0.0, d));
+   JetBumper::Bumper &model = m_bumperModel->model;
+   if (!model.Solenoid(VBTOb(enabled), v, d) && model.collidable)
+   {
+      static bool warned = false;   // held drive: the call is ignored, once per run
+      if (!warned)
+      {
+         warned = true;
+         const std::string msg = "Bumper " + GetName() + ": Solenoid is ignored with coil_drive = held";
+         PLOGW << msg;
+         if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+            g_pplayer->m_liveUI->PushNotification(msg, 8000);
+      }
+   }
+   return S_OK;
+}
+
 STDMETHODIMP Bumper::get_RotX(float *pVal)
 {
-   *pVal = m_rotx;
+   *pVal = m_partHost != nullptr ? m_physRotX : m_rotx;
    return S_OK;
 }
 
 STDMETHODIMP Bumper::get_RotY(float *pVal)
 {
-   *pVal = m_roty;
+   *pVal = m_partHost != nullptr ? m_physRotY : m_roty;
    return S_OK;
 }

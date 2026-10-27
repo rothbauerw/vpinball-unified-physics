@@ -1,0 +1,262 @@
+JET BUMPER DESIGN (unified-physics branch)
+===========================================
+Status: DESIGN, written 2026-10-26, revision 2 the same day (user review), awaiting user review. Nothing is built. Rules: docs/DevelopmentRules.txt (2 no hacks, 5 cost, 7 what
+breaks, 8 detectors). The design is not built around anything stock: stock properties and values are used only where they fit the model, otherwise ignored with a warning.
+Source of the data: the user, 2026-10-26 (memory project_jet_bumper_data_2026-10-26). Every number below is marked  [user]  (stated by the user),  [derived]  (computed
+from user numbers) or  [guess]  (mine, unverified, to be measured or tuned by feel). Nothing marked [guess] is a finding.
+
+0. Goal
+-------
+Model the real mechanism, so that the kick, the sensitivity and the timing come out of the parts:
+
+  ball -> skirt (tilts, stem pushes the spoon down) -> leaf switch closes -> coil energised -> plunger, yoke, rods and ring drop -> the ring's dished underside
+  strikes the ball and drives it outward.
+
+No kick number is added to the ball anywhere. The kick speed is the result of the coil, the moving mass and the contact.
+Approach criterion (user): a ball that rolls up the skirt slows down by the time it reaches the bumper body. The slope alone cannot do this: a 2.5 mm rise costs
+v^2 = 2 g h = 0.049 m^2/s^2 (a 1 m/s ball arrives at 0.97 m/s; a rolling ball 0.98) [derived]. The slowing must come from pressing the skirt down against its spring
+(and the switch/spoon), i.e. from the skirt spring rate, which is tuned by feel. Test in 11: speed at first body contact vs approach speed, coil disabled and enabled.
+
+1. The parts (cross-section through the axis; z up from the playfield top)
+--------------------------------------------------------------------------
+        cap / centre body (fixed, 38 mm [user, "typically"])
+          |   rods (2, #6-32, 1.25 in centre to centre = +-15.9 mm from the axis [user]) run inside the body, down to the yoke
+   ring (dish) .  /\       solid = rest, half way up the sloped face at the TOP of the ball (z = 27 mm) [user]
+        /  \  \  / skirt top slopes down to the edge (2.27 mm -> 0.5 mm rim, FLAT bottom) [skirt.obj]
+   ____/ ____\__\/_________ skirt edge floats 1/8 - 3/16 in (3.2 - 4.8 mm) above the playfield [user]
+   playfield ====[ hole ]====
+                   | stem (rounded tip) rests in the spoon dip
+                  (  )  spoon switch -> leaf contacts
+        rods ----------- yoke ----- plunger -- coil AE-23-800 (below, pulls the plunger DOWN)
+
+Bodies and surfaces (all owned by the engine, none from stock):
+  A. Centre body   : fixed surface of revolution (cylinder r = 19 mm, cap on top). Hard surface host, like a wall.
+  B. Skirt         : rigid body, 3 degrees of freedom (centre height z_s, tilt about x and y). Surface of revolution about its own axis: top slope + edge (0.5 mm
+                     thick rim, rounded) + flat bottom. Carries the stem (rigid, below the centre).
+  C. Spoon         : one degree of freedom, vertical (d_s = downward displacement from rest), spring-returned, with a stop. Its upper face is the spoon dip (a concave
+                     dish, radius R_dip). The stem tip (sphere, radius r_tip) bears on it.
+  D. Ring assembly : ring + 2 rods + yoke + plunger, ONE rigid body, one vertical degree of freedom (drop d_r, positive down), travel limited by a rest stop (up) and the
+                     coil stop (down). Ring surface = dish: outer edge HIGH, inner edge LOW [user: confirmed], 45-50 deg [user], steel sheet 1 mm thick [user, rev 2], OD 63.5 [user], ID 45 [user]. Heights and stroke: see 2.6.
+  E. Coil          : AE-23-800, single winding, force on the plunger from the existing coil model (FlipperModel in coilmodel.h, as the sling plate uses it).
+  F. Switch        : leaf switch closed when the spoon's downward displacement reaches switch_close_mm (the sensitivity setting, 3).
+  G. Playfield     : the existing playfield surface. The skirt's flat bottom can touch it (a stop, not a cutoff).
+
+2. The mechanism, step by step (what the equations are)
+-------------------------------------------------------
+2.1 Ball on the skirt. The ball touches the sloped top or the rim. Law: the existing Hertz + Hunt-Crossley + Mindlin friction contact (plastic on steel, material values
+    [guess]). The surface velocity at the contact comes from the skirt's motion (v + omega x r), the reaction goes to the skirt as force and torque.
+2.2 Skirt. Rigid body, mass m_s [guess ~7 g from the volume: wafer + stem], inertia from the same geometry. Forces: gravity; the conical spring under the centre (rate
+    k_s, preload so the lip sits snug against the base rim [user]); contact with the centre-body rim (upper stop); contact with the playfield (lower stop); the stem tip
+    on the spoon (2.3). The stem has enough clearance in the playfield hole to tilt freely [user]: no hole-wall contact is modelled (the hole is a stated assumption,
+    section 8 item 19). The skirt is "pressed down on one side" simply because the ball's contact force acts off
+    axis: torque tilts it, the centre moves down. No scripted animation.
+2.2a How the tilt is modelled (rev 3, answering the user's question). Nothing is animated or scripted; the tilt is the motion of a rigid body under contact forces.
+    State: skirt height z_s of the centre and two tilt angles (about x and y), plus their rates: 3 degrees of freedom. Lateral motion of the skirt is held (assumption,
+    INFERRED, see 8 item 23): a sideways force on the skirt goes into the fixed base through the lip contact, as into a wall. The tilt angles are kept exactly (rotation,
+    not a small-angle formula); at most about 5 deg is reached (4 mm of edge travel at the 50 mm lever below).
+    Forces and torques on the skirt:
+      a) Ball contact at a point on the top slope or the rim: force along the contact normal, torque = lever x force. A ball on one side pushes that side down.
+      b) Lip contact with the centre-body's bottom rim (circle of radius r_lip = 19 mm): a one-sided contact (it can push the skirt down, never pull). The lip on the side
+         AWAY from the ball stays pressed against the base rim and acts as the pivot (fulcrum); the lip on the ball's side lifts away. So the skirt rocks about the far lip.
+      c) Conical spring: modelled as n = 8 equal springs on a circle of radius a_s [guess 8 mm] under the skirt, total rate k_s with preload. That gives the axial rate k_s
+         and a tilt stiffness k_s a_s^2 / 2 from one set of numbers; no separate tilt spring is invented. Tuned by feel [user].
+      d) Playfield (lower stop): the flat bottom meets the playfield, one-sided contact, same law. Gravity on the skirt mass.
+      e) Stem tip on the spoon (2.3): a force through the tip point; this is how the tilt reaches the switch.
+    Result (derived, not measured): ball pushing down on +x; the pivot is the far lip at -x. The centre drops by about r_lip * theta, and the stem tip, a length L below the
+    centre, moves down by about r_lip * theta AND sideways toward -x by about L * theta. So the stem "tilts, moves down and slides in the spoon", as the user described, from
+    the geometry alone. The tilt readout is theta_x, theta_y of this body.
+2.3 Stem on spoon. Sphere (tip) in a CONE carried by the spoon [user, rev 3: about 1/2 in across the opening, about 1/4 in deep, "more a cone than concave"]: opening radius
+    6.35 mm, depth 6.35 mm, so the cone wall is 45 deg from horizontal [derived]. Same contact law (steel/plastic, friction mu_stem). The tip rests on the cone wall (self-centring
+    at the apex axis). Because the wall is inclined, the tip pushes the spoon DOWN whenever the stem moves down or sideways away from the axis. Sideways room: the tip may move
+    6.35 - 2.38 = about 4 mm before it reaches the rim; the 5 deg tilt of 2.2a gives about 3.9 mm, so the margin is thin: a detector (9.4) reports a tip leaving the cone [user: "the stem tilts and moves down, slides inside the spoon and displaces it
+    downward"]. The spoon is a mass on a spring: m_sp d_s'' = F_stem,z - k_sp d_s - c_sp d_s' (+ stop).
+2.4 Switch. Closed when d_s >= switch_close_mm; opens when d_s <= switch_close_mm - switch_hyst_mm. switch_close_mm default 1/16 in = 1.59 mm [user: typical],
+    range to 1/8 in = 3.18 mm [user: less sensitive]. The force to reach it is not set: it comes from k_sp and the contact.
+2.5 Coil drive, three modes (key coil_drive) [user]:
+      held     the coil is on only while the switch is closed (a hardwired driver; a dragging skirt keeps it energised and burns it out [user]).
+      pulse    a timed pulse of pulse_ms once per closure (edge triggered; the switch must reopen and the pulse end before it can fire again, as the sling).
+               THIS MODEL STARTS WITH pulse, pulse_ms = 15 [user].
+      external the model has no driver: the coil is on while a script/ROM signal says so (for ROM-based games); the switch only reports. Script call in 6.
+    The coil model (current, back-EMF, force) is the same in all three; only the on/off command differs. Supply v_supply = 28 V default [user], configurable.
+2.6 Coil and ring. Current from  di/dt = (V - R i - i dL/dx v)/L  with the AE-23-800 data (R 3.769 ohm, L air 5.26 mH, L arm 15.77 mH, bobbin 35.3 mm, from the sling
+    code; 28 V as the sling rig [guess for the bumper]). Force on the plunger = existing  strength * g(x0, position) * i^2. The ring assembly moves down with
+    m_ring d_r'' = F_coil - k_return (d_r + preload) - c d_r' + contact reactions + weight. Stops: rest stop (up, rubber), coil stop (down, stiff contact).
+    Ring heights and stroke (rev 2). User: at rest the HALF WAY POINT OF THE SLOPED FACE is at the top of the ball (27 mm); fired, the same point is at 2/3 - 3/4 of the ball
+    height (18 - 20 mm); fully down there is about 1/4 in (6.35 mm) between the ring and the skirt.
+    REV 4 (2026-10-26): the geometry now comes from the MESHES (user: "more accurate than my assumptions"). Ring: OD 63.5, ID 45, sloped-face rise 7.7 mm, slope 43 deg,
+    sheet 1.9 mm vertical (stock ring mesh scaled xy to OD 63.5, z kept 2x xy as the stock Radius 45 / HeightScale 90). Skirt (references/pinball-parts-main/Bumpers/skirt.obj
+    scaled to OD 63.5): flat disc 2.27 mm thick out to dia 44.9 mm, then a linear taper to a knife edge (a 0.5 mm rim is used), flat bottom, sloped top. The earlier numbers
+    (3 mm skirt, 1 mm sheet, 47 deg, 9.9 mm rise, 8.4 mm and 14 mm strokes) are WITHDRAWN.
+    [derived, user's rule kept: mid-face at the ball top, 27 mm, at rest] inner underside at rest 27 - 3.85 - 1.9 = 21.25 mm; outer top edge 30.85 mm.
+    Skirt top at the ring's inner radius: 2.27 mm + the skirt clearance (3.18 mm for 1/8 in = 5.45 mm skirt up; 2.27 mm skirt pressed flat).
+    Gap ring to skirt when the ring is fully down = 21.25 - stroke - skirt top:  pressed skirt 18.98 - stroke (6.35 mm = 1/4 in at stroke 12.6 mm); skirt up (1/8 in) 15.8 - stroke
+    (3.8 mm at 12 mm, 2.8 mm at 13 mm). With stroke 12.7 mm (1/2 in): outer top edge ends at 18.15 mm = 0.67 of the ball height; mid-face 14.3 mm = 0.53.
+    STROKE = 10 mm [user, 2026-10-26, chosen as the compromise]. At 10 mm [derived]: gap ring to skirt 5.8 mm with the skirt up at 1/8 in (0.23 in; 1/4 in would need 9.45 mm),
+    9.0 mm with the skirt pressed; mid-face ends at 17.0 mm = 0.63 of the ball height, outer top edge at 20.85 mm = 0.77 (the user's 2/3 - 3/4 is between them).
+    Keys: ring_stroke_mm 10 (sets the drop), ring_clearance_down_mm 6.35 as a reference for the table-start check (notification if the skirt-up gap is below it by more than
+    1 mm); the outer-top-edge/mid-face fractions are reported, not enforced.
+2.7 Ring on ball. The ring is a moving surface of revolution; its underside faces OUTWARD and DOWN, so the ball, which sits beside the body partly over the skirt rim
+    and under the dish, is pushed outward (and into the skirt) as the ring comes down. Contact law as 2.1, steel on steel. The impulse the ball receives is
+    whatever the ring's mass, speed and the contact stiffness give.
+    Pinch (user, rev 3): a ball caught between the ring and the skirt/playfield must squirt OUT, never stay stuck. The mechanism is the wedge, not a rule: the ring's
+    underside normal is 47 deg from vertical (outward component sin 47 = 0.73 of the contact force), the skirt top's normal is outward too (about 11 deg). A wedge does not
+    self-lock when the friction angle is smaller than the wedge angle: steel on steel mu 0.3 - 0.5 gives atan(mu) = 17 - 27 deg < 47 deg, so the net force on the ball is
+    outward and it is expelled [derived; materials are guesses]. It has to be SHOWN on the model (test in 11, rule 1); if a ball sticks, the cause is found from data and the law
+    corrected, not patched. Detector 9.6 reports a ball still inside the ring/skirt gap after the ring has stopped.
+2.8 Return. Coil off: the return spring lifts the assembly to the rest stop; the skirt spring lifts the skirt. Both are physical; the skirt may be held down by a ball
+    resting on it (then the switch stays closed and, with the held drive, the coil stays on: that is the real hazard, detector 9.2).
+
+3. Contact surfaces
+-------------------
+Surfaces of revolution (centre body, skirt top/rim, ring dish) are described by a profile polyline (r, z) in the body frame. Preferred: ANALYTIC closest point on the profile
+(6 - 10 segments, exact normals, no facets). The facet problem of triangle meshes (faceted-cylinder effective radius, parked) is avoided. If the ContactSurface interface cannot
+take an analytic revolve for a TILTING body, the skirt falls back to a triangle fan through the existing probe path (cost and facet noise to be measured). [DECISION in the build:
+check the interface first.] The rim is a torus of radius t_edge/2 = 0.25 mm; contact stiffness there is very high, so the substep rule 6.3 of GateSpinnerDesign (reduced mass of
+ball and the light body) applies.
+
+4. What the engine takes from the part, and what it does not
+-------------------------------------------------------------
+The bumper part supplies position (X, Y), Surface, Collidable, materials, images and visibility. It adds NO stock collider (no hit circle) and no stock ring/skirt animation.
+Collidable is read live. The engine writes the physical ring drop and skirt tilt back to the part each cycle (6). A table on the stock engine is unchanged.
+Rendering: the physical geometry is drawn (revolved profiles for skirt, ring, body, cap), Materials/Images from the part. HeightScale, RingSpeed, RingDropOffset have no meaning
+in the model (IGNORED, warning once). Radius is IGNORED [user]: the skirt diameter is skirt_dia_mm (some dimensions are ini-configurable).
+
+5. Settings (ini until .vpx records exist; [Bumper:<name>], defaults in [Bumpers])
+-----------------------------------------------------------------------------------
+Geometry  : body_dia_mm 38 [user, varies], body_height_mm 40 [guess], skirt_dia_mm 63.5 [user], skirt_inner_dia_mm 44.9 [skirt.obj at OD 63.5], skirt_t_inner_mm 2.27 [skirt.obj], skirt_t_edge_mm 0.5
+            [user, finite rim], skirt_clearance_mm 3.18 [user: 1/8 in "for now", 2026-10-26; configurable, sensible range 3.2 - 4.8 mm = 1/8 - 3/16 in], stem_dia_mm 4.76 [user: 3/16 in], stem_length_mm 45 [user: below the skirt], stem_tip_radius_mm 2.38 [assumed: full round of the stem, the user said "rounded tip"], spoon_cone_radius_mm 6.35 and spoon_cone_depth_mm 6.35 [user: 1/2 in across, 1/4 in deep, a cone],
+            ring_od_mm 63.5, ring_id_mm 45, ring_thickness_mm 1.9 [stock ring mesh], ring_rise_mm 7.7 and slope 43 deg [stock ring mesh], ring_rest_mid_height = ball diameter
+            [user: half way point of the sloped face at the ball top], ring_stroke_mm 10 [user], ring_clearance_down_mm 6.35 [user: 1/4 in, reference], rod_spacing_mm 31.75 [user].
+            Meshes (drawing and profile source): skirt = references/.../Bumpers/skirt.obj; ring and base = the stock BumperRing / BumperBase primitives scaled as above.
+Masses    : skirt_mass_g 7, ring_assembly_mass_g 105 (ring 18 from 1 mm steel + rods 9 + yoke 30 + plunger 48), spoon_mass_g 1. ALL ESTIMATES by me, accepted by the user
+            2026-10-26 ("I don't have numbers"); UNVERIFIED. The ring assembly mass is the one that sets the kick (coil force / mass), so it is a tuning knob.
+Springs   : skirt_spring_n_per_mm, skirt_spring_preload_n, spoon_spring_n_per_mm, return_spring_n_per_mm [guess; measure or tune by feel].
+Switch    : switch_close_mm 1.59 [user], switch_hyst_mm 0.1 [guess], coil_drive held|pulse|external (default pulse), pulse_ms 15 [user].
+Coil      : coil = AE-23-800 (table of R, L air, L arm, bobbin; more rows added as the user gives other coils), v_supply 28 [user], configurable, x0 0.3 [user accepted 2026-10-26 as the starting value; the sling's stand-in].
+Contact   : materials per pair (skirt/plastic on ball, ring/steel on ball, stem on spoon), mu_stem, stop restitution [guess].
+Every key goes into NewPhysicsReference.txt with a change-log entry when built (rule 6). Unknown keys: notification at table start (rule 8).
+
+6. Script API and convention differences (to document)
+-------------------------------------------------------
+Hit             : fires at the instant the switch closes, FIRST (before the coil's first step), with no speed threshold [user, rev 3]. Not a ball-touch event. The
+                  Switch event (1 closed / 0 open) follows at the same instant on closure and fires on opening; Hit is the one scripts use to score.
+READ (user): skirt rotation about x and y (so a primitive skirt can be animated), skirt height z, ring z displacement (drop), spoon displacement, switch state, coil
+                  current. All read-only, updated every cycle (RotX/RotY/CurrentRingOffset keep their names and read these values).
+SOLENOID (user, 2026-10-26): Bumper1.Solenoid enabled [, volts [, duty]]  -- the ROM-style on/off call (PinMAME SolCallback passes True/False).
+                  False = coil off (volts and duty ignored). True with no volts = the bumper's configured supply (v_supply, 28 V default). A volts value applies to that
+                  on-state only; the next plain True returns to the default. duty (0..1) is a mean-voltage approximation, mean voltage = duty x volts, as MagnetDuty; valid when
+                  the PWM period is much shorter than the coil time constant (1.4 - 4.2 ms for the AE-23-800: a kilohertz PWM is fine, a slow one would ripple and is not modelled).
+                  In coil_drive = external it sets the coil on/off. In coil_drive = pulse, Solenoid True fires ONE pulse of pulse_ms [user 2026-10-26] (False is ignored);
+                  in held mode the call is IGNORED with a warning once.
+                  The coil current is integrated from the circuit equation (it ramps with L/R and the back-EMF; off = decay through R, freewheel diode across the coil ASSUMED [user 2026-10-26], as the sling).
+                  Typical stock-table scripts only report Hit to the ROM as a switch (e.g. Gorgar LeftJet_Hit: vpmTimer.PulseSwitch 37; Fish Tales Bumper1_Hit: PulseSw 51); they
+                  keep working unchanged in pulse mode.
+Force, Scatter, HeightScale, RingSpeed, RingDropOffset : no physical meaning, IGNORED (warning once). Force is the one tables tune most: see 9.5 and item 1 of section 8.
+Threshold       : IGNORED (the switch decides, not a speed); warning once if set.
+CurrentRingOffset, RotX, RotY : physical values (ring drop, skirt tilts).
+New (names agreed 2026-10-26): Switch(state) event, 1 = closed, 0 = open (the user's single-event decision of 2026-10-15 for gates, spinners, slings, bands); read-only:
+                  RotX, RotY (skirt tilt, degrees, stock names kept), CurrentRingOffset (ring drop, VPX units, stock name kept), SkirtZ and SpoonZ (VPX units), SwitchClosed,
+                  CoilCurrent (amps); method Solenoid (above). No Trigger() method [user 2026-10-26: Solenoid is that method]. Later the sling's SlingTrigger is to change to the same Solenoid form for consistency [user].
+Collidable false: the parts still move (the coil can fire), balls pass through.
+
+7. Stepping and cost
+--------------------
+- The bumper at rest costs nothing (sleeping) until a ball is within reach of the skirt/ring volume, the script changes Collidable/enable, or the cabinet acceleration changes (nudge
+  must not trip the switch: item 10 of section 8).
+- Fired: the ring assembly is stiff (rest/coil stops, ball contact). Substep from stiffness with the reduced-mass rule (GateSpinnerDesign 6.3); coil circuit L/R ~ 4 ms is slow.
+- Budget (rule 5, worst cycle) to agree: ball on the skirt < 20 us per cycle, firing cycle < 60 us, sleeping 0. Measure with VPX_CONTACT_TIMING. One ball near the bumper is the measured case.
+
+8. What breaks, and what the design does about it (rule 7)
+----------------------------------------------------------
+ 1. Tables tuned with Force/Scatter on the part: ignored, feel changes. Handled: ignored-key warning; the coil/mass values are the tuning knobs. REASONED.
+ 2. Table geometry laid out around the part's Radius (inserts, lights, guides): Radius is ignored, the physical 63.5 mm skirt is used; a table may need its surroundings
+    moved. Documented convention difference [user decision]. REASONED.
+ 3. Two balls touching one bumper at once, and one ball touching two bumpers at once: MUST WORK (user 2026-10-26: every physical item handles more than one ball). The engine already puts all balls
+    that touch a part into one island and the bumper sums their reactions before it moves; NOT TESTED yet: matrix cases two balls on one skirt / ring, a ball between two bumpers, a ball on the ring
+    while another fires the switch.                                                                                                                                                       OPEN (test).
+ 4. (merged into 3)
+ 5. Ball resting on the skirt (switch held closed): held mode: the coil stays on until it burns (physical); pulse mode: one pulse, then the switch must reopen. Detector 9.2.  REASONED.
+ 6. Very fast ball (> 20 m/s) onto the thin 0.5 mm rim: the rim contact is stiff; reduced-mass step keeps it resolved; may tunnel without the arrival-time step. Matrix.      OPEN (test).
+ 7. Ball dropped from above onto the ring/cap/skirt: contacts with the surfaces of revolution, no special case. Matrix.                                                  OPEN (test).
+ 8. Ball pinched between ring and skirt/playfield: must be expelled outward (2.7, wedge). Test at several radii with the coil held on; detector 9.6. A ball that stays
+    is a defect found from data, not accepted.                                                                                                                              OPEN (test).
+ 9. Coil on with no ball (script forces a fire): ring drops and returns; no energy leak. Test.                                                                              OPEN (test).
+10. Skirt switch must NOT close on a nudge or tilt [user]. The cabinet acceleration acts on the skirt and spoon masses like gravity (as gates). It does not close the switch if
+    the spring preload holds the skirt against the base rim (preload > m_skirt * a_nudge, with margin) and the spoon spring holds the spoon at rest. This is a SPRING-TUNING
+    criterion, tested: nudge at the maximum force (script Nudge and keyboard) in 8 directions, switch stays open, while a ball on the skirt edge still closes it.  OPEN (test).
+23. Skirt lateral motion is held (assumption in 2.2a): a real skirt may have a little lateral play; not modelled. INFERRED, ask when the hardware is measured.            OPEN.
+11. Bumper on a ramp / upper playfield (Surface property): playfield frame from that surface, gravity in its slope frame; the underside space for the coil is the user's
+    business. OPEN (test).
+12. Ball enters the space under the dish while the ring is DOWN (just after a fire): the ring sits low, ball cannot get under it; returns as the ring lifts. Test.
+13. Restart and teardown: bodies/surfaces owned by the engine (m_ownedHosts), leak detector covers them. REASONED.
+14. A table without the feature (stock engine): stock bumper unchanged. REASONED.
+15. Editor mode: no bodies; stock mesh at the rest pose, or the physical geometry at rest if cheap. REASONED.
+16. Scripts that call Bumper.Force / read CurrentRingOffset expecting the stock ramp: values are physical now; documented.                                                  REASONED.
+17. Unknown spring/mass/geometry values ([guess]): results are only as good as those; the knobs are exposed and listed in NewPhysicsReference as UNVERIFIED.            OPEN until measured.
+18. Magnet or other force source acting on a ball sitting on the skirt: the island includes all sources (as elsewhere).                                                  REASONED.
+19. Skirt hole in the playfield: stem and spring pass through with enough clearance for any tilt [user]; a playfield with no hole under the bumper is fine, the playfield
+    is only a lower stop. If a real hole were tight, the tilt would be limited: not modelled.                                                                          REASONED.
+21. External-drive mode with no script driving it: the coil never fires (the switch still reports). Documented; a notification at table start if no script sets the drive
+    within a few seconds is NOT planned (it is a legitimate state).                                                                                                      REASONED.
+22. Pulse mode with the skirt held down by a resting ball: one pulse only, no re-fire until the switch reopens (edge triggered); the resting ball keeps the switch closed.   REASONED.
+20. Per-source special cases: none. The same contact law, the same body/stop/spring machinery as gates, spinners and sling plates.
+
+9. Detectors (rule 8)
+---------------------
+9.1 Energy audit per ball-bumper contact episode (ball + skirt + ring + springs + coil work as input): growth beyond 1 % + 1 uJ of the allowed input -> WARN + notification.
+9.2 Coil on longer than coil_on_warn_ms (default 500 ms, [guess]) -> notification "bumper <name> coil energised for N ms (skirt held down?)", once per bumper per table start.
+9.3 Ball speed after a kick above a plausible bound (e.g. 15 m/s) -> fast-ball watchdog already exists; confirm it names the bumper.
+9.6 Ball still inside the ring/skirt gap (centre within the skirt radius, ring down) longer than 100 ms [guess] after the ring has stopped, or the switch closed with no ball
+    on the skirt for longer than 500 ms -> WARN + playfield notification naming the bumper, once per table start (a stuck ball or a mis-tuned skirt spring).
+9.4 Out-of-range geometry (the stem tip leaves the spoon cone;ring stroke below zero, skirt thicker at the edge than inside, ID larger than OD) -> notification at table start.
+9.5 Unified table with Force or Radius set on the part: one notification explaining that they are ignored.
+
+10. Open questions for the user
+-------------------------------
+Closed by the user 2026-10-26: coil drive (three modes, pulse 15 ms to start), stem clearance (free tilt), springs (by feel), supply 28 V (configurable), stock Radius (ignored),
+read-outs (skirt rotation x/y, skirt z, ring z).
+Still open:
+Q2  Stem answered 2026-10-26: 45 mm below the skirt, 3/16 in diameter, rounded tip (radius taken as 2.38 mm). Spoon answered 2026-10-26: a cone, 1/2 in across, 1/4 in deep (2.3).
+Q3  Masses answered 2026-10-26: use my estimates (section 5), unverified. Springs are tuned by feel [user].
+Q4  AE-23-800 as fitted: x0 and the plunger stroke (the sling values are a stand-in). The ring drop (8.4 mm) is the stroke the model assumes.
+Q6  Script names: answered 2026-10-26 (section 6: Switch, RotX/RotY, CurrentRingOffset, SkirtZ, SpoonZ, SwitchClosed, CoilCurrent, Solenoid enabled[, volts[, duty]]). The user
+    agreed to the names in section 6 and the Solenoid form; no Trigger() (Solenoid replaces it). Solenoid True in pulse mode fires one pulse [user].
+
+11. Build order and tests
+-------------------------
+ 1. Offline body tests (runs/2026-10-26-bumper): skirt 3-DOF body with spring, stops and tilt; spoon + stem contact; switch threshold vs displacement (1.59 / 3.18 mm);
+    ring assembly + coil: stroke time, speed at the end of the stroke, energy balance.
+ 2. Surfaces of revolution (analytic) with moving bodies; ball on skirt, ball on ring, ball on body; energy check.
+ 3. Wire into the engine: islands, sleeping, reduced-mass step; remove stock objects for unified tables.
+ 4. Rendering of the physical geometry; script API; detectors.
+ 5. Docs (NewPhysicsReference keys, conventions, change log) in the same change.
+ Tests (matrix additions, numeric pass/fail incl. worst-cycle cost): ball at 0.3 / 1 / 3 m/s onto the skirt edge at 0 / 45 / 90 deg incidence (fires or not vs switch_close_mm,
+ kick speed and direction); ball resting on the skirt; ball rolling slowly along the skirt (fires or not by the switch only); one ball passing between three bumpers in a triangle; ball pinched between ring and skirt/playfield at
+ several radii with the coil held on (must leave); nudge at maximum force in 8 directions (switch stays open); scripted fire without a ball; Collidable toggle; nudge; restart leak check; energy audit zero in all.
+ Added in rev 2: all three coil modes (held, pulse 15 ms, external) fire and release correctly; ball rolling up the skirt at 0.3 / 1 / 3 m/s with the coil disabled: speed at first
+ body contact vs approach speed (user criterion: it slows down); ring ends 8.4 mm down and its mid-face at 0.667 - 0.75 of the ball height; 1/4 in clearance to the skirt when down.
+
+12. Build log
+-------------
+(2026-10-26: design written, revision 2 after user review (unified branch, three coil modes, ring geometry, read-outs). Nothing built.)
+2026-10-26 STEP 1 BUILT (offline, uncommitted): src/physics/contactbumper.h, runs/2026-10-26-bumper (test_bumper.cpp, build.bat, out_mech.txt, out_ball.txt, out_t7.txt). Fixed step 1 us. Ring stops use Hertz + Kuwabara-Kono (the first linear spring-damper version was replaced: it threw away stored energy when its damper clipped the force).
+  Ring geometry now keeps ID and OD exactly (centreline = top face moved down by half the vertical sheet): ring-to-skirt gap with the ring fully down is 5.8 mm (skirt up), as in 2.6.
+  NOT done from section 11: energy audit with a ball, 3-bumper triangle, Collidable toggle, restart/leak, cost (offline step is fixed 1 us; the engine step comes from the contact stiffness), pinch test with a ball that actually lodges (T8 as first written started the ball overlapping the rim and was dropped).
+2026-10-26 (later) Coil: contactbumper.h now calls the shared CoilModel in coilmodel.h (T4 output identical to the inline version). Sling and flipper still have the law inline: switching them is a separate step, to be proven byte-identical.
+  Collidable (user 2026-10-26): false = the bumper is not there at all: no contact, no switch, no coil, no events, parts at rest, Solenoid refused (replaces the earlier 'parts still move' line in section 6). Built + tested (T10). Open: ball overlapping the geometry at the moment Collidable becomes true (not handled).
+  Sensitivity sweep T9 (out_t9.txt), coil off, ball rolling in along a line, skirt k 0.2 N/mm + 0.8 N preload, spoon 0.1 N/mm + 0.3 N [guesses]: lowest firing speed 0.25 m/s head-on (close 1.59 mm), 0.30 at 20 mm offset, 0.40 at 30 mm; close 3.18 mm: 0.50, 0.50, 1.00 m/s.
+2026-10-26 (later) STEPS 3-4 BUILT, uncommitted: engine wiring (docs/NewPhysicsReference.txt section 14). The bumper is an engine part behind the gate/spinner hooks (HingePart::Part made virtual where needed),
+  one host with three surfaces (SurfaceContact::stExtra holds the extra shear states), sleeping at rest (StepHeld/AtRest), own step 4 us free / 1 us near a ring stop (offline: 4 us vs 1 us changes the
+  ring maximum by 3 % and the energy residual 0.8 % -> 3.6 % of the coil work), island step from the reduced-mass rule (EnginePart::BallStep), stock meshes drawn at the physical size and animated from the model.
+  Smoke test in VPX (run_bump1): events, readouts and Solenoid work; ring drop about 9 mm; a 3 m/s ball is thrown back at about 0.55 m/s (little kick, as offline).
+  WHAT THE WIRING BREAKS (rule 7): (1) tables that use Force / Threshold / Radius / Scatter / HeightScale / RingSpeed / RingDropOffset: ignored, one notification [shown]; (2) scripts that animate a primitive
+  skirt from RotX / RotY (stock: 5 deg max) get the physical tilt (about 3.6 deg at the floor) and CurrentRingOffset is -18.5 U at full stroke [REASONED]; (3) ROM-driven bumper coils need coil_drive = external and a
+  SolCallback calling Solenoid; nothing is mapped automatically [REASONED]; (4) a table that counts Hit per ball touch gets one Hit per switch closure [REASONED]; (5) Collidable toggled in play: offline test T10 only,
+  not run live; a ball overlapping at re-enable is not handled [OPEN]; (6) stock path with [Features] bumpers = 0 or VPX_BUMPERS=0: only guarded by a null host, not re-run [REASONED]; (7) restart/teardown: the host is
+  owned by the physics engine like a gate's [REASONED, not run twice in one process]; (8) cost in the engine: not measured [OPEN, needs a focused run]; (9) drawn base and cap vs the collision body [OPEN, visual check]; ring animation not seen by the user in play [OPEN, cause not found: the draw path runs and the pose reaches it, logged in run_bump2];
+  (10) bumper on a ramp / upper playfield, 2+ balls, ball mass other than 80 g: untested [OPEN / stated limit].
+2026-10-26 (later) ContactMovingPart extracted (contactmovingpart.h); [Bumper:<name>] physical = 0 replaces rubber = 0; skirt and ring drawn from the model's dimensions (the earlier common height scale was wrong for both). Checked: gs8 events identical before/after (13 shots), bump1 events identical.
+2026-10-26 (later) First play test (user): skirt tilts, Hit fires, ring animates for a free ball, not seen with ball control; bumpers not sensitive enough; free-rolling balls launched into the air. Pulse default 20 ms (user). Sensitivity: offline T11 (out_t11.txt): ball from rest 1 in up the 6 deg slope did NOT fire at 0.8 / 0.3 N preloads (spoon 1.05 - 1.43 mm), fires with 0.4 / 0.15 N (all 6 cases). Ball control, offline T12: with the lighter springs a ball held by a 100 / 300 N/m spring fires it and the ring still drops 9.1 / 6.7 mm (so the held ball does not fully block the ring in the model; what the user sees is not explained). Launch: offline T13 (out_t13.txt) does NOT reproduce it: free-rolling balls from 1, 2 and 4 in, 3 offsets, all fire, ring 10 mm, ball peak height 0.1 - 0.6 mm above the playfield, peak speed 0.51 - 0.83 m/s. The engine run (bump2.vbs, free balls released above Bumper1) is the next step: needs the exe rebuilt with the new defaults, blocked while the user's VPX is open.
+2026-10-26 (later) User's session log (tables/logs/vpinball_NEW_20261026_182420.log): 2 of 35 bumper engagements started with the ball overlapping (70 and 169 um) and launched it (1.78 and 4.47 m/s, 7 and 68 kN) from 0.3 m/s approaches; the 33 others were gentle. ContactSeat: Bumper4 normal (0.29,-0.57,-0.77) = ring underside, overlap grew 55 -> 68 -> 169 um over the seat passes; Bumper2 normal (-0.14,-0.52,0.84) = skirt rim, 69 um. By geometry the ring was about 1.8 mm down (firing) at the Bumper4 engage [INFERRED]. Fix = the overlap standard (UnifiedContactDesign.txt section 11), awaiting approval. Clean engine repro with balls released from rest above Bumper3 (bump3.vbs): 9 of 9 fire, no launch.
+2026-10-26 (later) After point 1: user's session 19:14 log: 8 bumper engagements, all delta0 0, no kN spikes except one legitimate 2.1 kN ring hit on a ball under the dish (ring 0.31 m/s down). The one high launch (+16.5 mm) was a ball already airborne at the engage (playfield hit 1.37 m/s at t=27061, left the playfield at 27072 at 1.08 m/s, engaged Bumper1 at 0.99 m/s at t=27101, 5 ms contact): not a bumper launch. The engage trace line now has the ball position. Seat (point 2) on hold.
+2026-10-26 (later) Hop after a hit: offline T15 (out_t15.txt), ball rolling in at 0.3 - 1.5 m/s, 5 offsets, default settings: the ball rises 0.13 - 0.68 mm. The user's last session shows balls leaving the bumper 4.5 - 6 mm up (landing 0.3 m/s) after hits at 0.5 - 1.0 m/s; the height of the ball when it ENGAGED is not in that log (the engage line gets the position from this build on), so it is not known whether the bumper lifted it or it arrived hopping. User: ball control was not active; a ball must be on the playfield to press the skirt. OPEN until a log with the engage position exists.

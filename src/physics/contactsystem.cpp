@@ -17,9 +17,11 @@
 #include "turntable.h"
 #include "contactprof.h"
 #include "contacthingepart.h"
+#include "contactmovingpart.h"
 #include <map>
 #include <unordered_map>
 #include "physicsini.h"
+#include "ui/live/LiveUI.h"
 #include "PhysicsEngine.h"
 #include "input/InputManager.h"
 
@@ -196,7 +198,7 @@ struct ContactSystemImpl
       std::vector<HitRubber *> bands;    // bands begun this cycle
       std::vector<HitRubber *> islandBands;   // the current island's bands
       std::vector<std::pair<int, int>> links;
-      std::vector<HingePart::Part *> islandParts;   // the gates and spinners the current island steps (contacthingepart.h)
+      std::vector<ContactMovingPart *> islandParts;   // the moving parts (gates, spinners, bumpers) the current island steps (contactmovingpart.h)
       std::vector<std::pair<HitBall *, const char *>> bandReleases;   // balls the band lets go of (after the write-back: the release can fire the script)
       // the current island's Option A parts, resolved to its bodies once (MagnetPartForces): ia / ib = body index, -1 = a ball outside the island (held where it began)
       struct MagPartRT { int body = -1, ia = -1, ib = -1; double scale = 0; MagnetBalls::V3 F, u0, n, o, r0, pa0, pb0; bool pair = false; };
@@ -515,7 +517,7 @@ struct ContactSystemImpl
       for (int i = 0; i < nw; i++)   // balls touching the same gate or spinner are one island: the part takes all their reactions
          if (cy.bodies[i].e != nullptr)
             for (const SurfaceContact &it : cy.bodies[i].e->items)
-               if (HingePart::Part *const hg = it.r->MovingPart())
+               if (ContactMovingPart *const hg = it.r->MovingPart())
                {
                   for (int j = 0; j < i; j++)
                      if (cy.bodies[j].e != nullptr && std::any_of(cy.bodies[j].e->items.begin(), cy.bodies[j].e->items.end(), [hg](const SurfaceContact &o) { return o.r->MovingPart() == hg; }))
@@ -614,12 +616,12 @@ struct ContactSystemImpl
       for (const int i : isl.members)
          if (cy.bodies[i].e != nullptr)
             for (const SurfaceContact &it : cy.bodies[i].e->items)
-               if (HingePart::Part *const hg = it.r->MovingPart())
+               if (ContactMovingPart *const hg = it.r->MovingPart())
                {
                   if (std::find(cy.islandParts.begin(), cy.islandParts.end(), hg) == cy.islandParts.end())
                   {
                      cy.islandParts.push_back(hg);
-                     hg->body.SetGravity(HitRubber::PartGravitySI());   // (its own forces are resolved in its own substeps: Part::StepInIsland)
+                     hg->SetGravity(HitRubber::PartGravitySI());   // (its own forces are resolved in its own substeps: Part::StepInIsland)
                   }
                   const Body &w = cy.bodies[i];
                   hg->SetBall(w.bs);
@@ -1511,7 +1513,7 @@ struct ContactSystemImpl
             BandForces(cy.bodies[i]);
          PairForces(cy, isl, h, s);
          tripped = Integrate(cy, isl, h, s);
-         for (HingePart::Part *const hg : cy.islandParts)   // the part moves with the reactions of all its balls summed, in its own substeps within h
+         for (ContactMovingPart *const hg : cy.islandParts)   // the part moves with the reactions of all its balls summed, in its own substeps within h
             hg->StepInIsland(h);
          for (HitRubber *const b : cy.islandBands)   // the nodes step after the forces on them were summed
             tripped = b->BandSubstepEnd() || tripped;
@@ -1523,7 +1525,7 @@ struct ContactSystemImpl
       for (; s < cy.steps; s++)
       {
          StepBats(cy, isl, h, false);
-         for (HingePart::Part *const hg : cy.islandParts)
+         for (ContactMovingPart *const hg : cy.islandParts)
             hg->StepInIsland(h);
       }
       for (HitRubber *const b : cy.islandBands)   // idle nodes merged away; a band that left the model's range is reset and its balls let go
@@ -1623,7 +1625,8 @@ struct ContactSystemImpl
          for (const SurfaceContact &it : e.items)
          {
             const TubeProbe pr = it.r->Probe(w.bs, it, w.c);
-            const double releaseGap = it.r->ReleaseGapM();
+            const double bound = PreventOn() ? it.r->SurfaceSpeedBoundMS(dt) * dt : 0.0;   // what the surface itself can cover in a cycle: a ball it can reach stays engaged
+            const double releaseGap = it.r->ReleaseGapM() + bound;
             if (pr.overlap && pr.delta > 0.0)
             {
                free = false;
@@ -1634,7 +1637,7 @@ struct ContactSystemImpl
                const double gap = pr.dist - (w.bs.R + pr.rho);
                if (gap <= releaseGap)
                   closeBy = true;
-               if (gap <= releaseGap || !(w.v.Dot(pr.normal) > 0.0 || gap > 0.002))
+               if (gap <= releaseGap || !(w.v.Dot(pr.normal) > 0.0 || gap > 0.002 + bound))
                   free = false;
             }
          }
@@ -1668,21 +1671,36 @@ struct ContactSystemImpl
    }
 
    // Releases, forgetting the pairs that no longer touch, and the deferred events (the script never runs inside the step)
-   static void Finish(Cycle &cy)
+   // The end of a step: the band's published state. The membership of the engaged list and of the pair list does not change inside a step (ApplyReleases, later in the sub-interval), so a snapshot
+   // taken at its start can be put back. No script runs here (DispatchEvents, later in the sub-interval).
+   static void FinishState(Cycle &cy)
    {
       CPROF(Finish);
+      for (HitRubber *const b : cy.bands)
+         b->BandPublish();
+   }
+
+   // Releases and the pair clean-up of the step, after the free balls have moved and the overlap check has passed
+   static void ApplyReleases(Cycle &cy)
+   {
       for (const auto &r : cy.releases)
          Release(r.first, r.second);
       for (const auto &r : cy.bandReleases)
          if (r.first->m_bandOwner != nullptr)
             r.first->m_bandOwner->BandRelease(r.first, r.second);
-      for (HitRubber *const b : cy.bands)
-         b->BandPublish();
+      cy.releases.clear();
+      cy.bandReleases.clear();
       for (size_t i = 0; i < g_ballPairs.size();)
          if (!g_ballPairs[i].used)
             g_ballPairs.erase(g_ballPairs.begin() + (long)i);
          else
             i++;
+   }
+
+   // The events of the step, then those the parts queued, in the order they happened (a script may move or delete balls: the queue is taken first)
+   static void DispatchEvents(Cycle &cy)
+   {
+      CPROF(Finish);
       for (const BallHit &hv : cy.hitEvents)
       {
          g_pplayer->m_ptable->InvokeBallBallCollisionCallback(hv.a, hv.b, hv.speed);
@@ -1714,7 +1732,13 @@ struct ContactSystemImpl
             ho->FireHitEvent(ph.pb);
          }
       }
-      if (!g_deferred.empty())   // events raised inside the step, in the order they happened (a script may run another step's worth of code: the queue is taken first)
+      cy.hitEvents.clear();
+      cy.partHits.clear();
+      DrainDeferred();
+   }
+   static void DrainDeferred()
+   {
+      if (!g_deferred.empty())
       {
          std::vector<std::function<void()>> q;
          q.swap(g_deferred);
@@ -1722,12 +1746,37 @@ struct ContactSystemImpl
             f();
       }
    }
+   static Cycle *s_pendingCy;   // the step whose events have not been dispatched yet
+   static std::vector<HitRubber *> &Hosts() { return HitRubber::Registry(); }   // (for the snapshot, outside the struct)
+   static bool s_append;   // StepBalls: do not flush or clear the queued events: the steps of one replayed sub-interval chain
+   static bool PreventOn()   // point 1 of the overlap standard; VPX_PREVENT=0 switches it off (test only)
+   {
+      static const bool on = []() { const char *const e = getenv("VPX_PREVENT"); return !(e != nullptr && atoi(e) == 0); }();
+      return on;
+   }
+   static void CheckOverlaps(float hittime);
+   static void DispatchPending()
+   {
+      if (s_pendingCy != nullptr)
+      {
+         Cycle &cy = *s_pendingCy;
+         s_pendingCy = nullptr;
+         ApplyReleases(cy);
+         DispatchEvents(cy);
+      }
+      else
+         DrainDeferred();
+   }
 };
+ContactSystemImpl::Cycle *ContactSystemImpl::s_pendingCy = nullptr;
+bool ContactSystemImpl::s_append = false;
 
 void ContactProfCensus(const ContactSurface *s, bool empty, size_t cand);
 
 void ContactSystemImpl::StepBalls(const float dtime)
 {
+   if (!s_append)
+      DispatchPending();   // (the engine dispatches after every step; this keeps a step that was not followed by one from losing its events)
    g_last = ContactSystem::CycleStats();
    if (g_engaged.empty() && !(ContactSettings::Get().ballContact && g_pplayer->m_vball.size() >= 2))   // (two free balls are solved here too)
       return;
@@ -1738,13 +1787,17 @@ void ContactSystemImpl::StepBalls(const float dtime)
    cy.dt = dt;
    cy.cs = &ContactSettings::Get();
    cy.bodies.clear();
-   cy.releases.clear();
-   cy.hitEvents.clear();
-   cy.partHits.clear();
+   if (!s_append)   // (the steps of a replayed sub-interval add to the queue)
+   {
+      cy.releases.clear();
+      cy.hitEvents.clear();
+      cy.partHits.clear();
+   }
    cy.hitFloor = std::min(0.5f, g_pplayer->m_physics->HitSpeedMin());
    cy.dtimeF = dtime;
    cy.bands.clear();
-   cy.bandReleases.clear();
+   if (!s_append)
+      cy.bandReleases.clear();
    for (BallPairState &p : g_ballPairs)
       p.used = false;
    cy.rpBall = RubberParams();
@@ -1800,7 +1853,8 @@ void ContactSystemImpl::StepBalls(const float dtime)
          WriteBack(cy, isl);
       lap(g_last.writeUs);
    }
-   Finish(cy);
+   FinishState(cy);
+   s_pendingCy = &cy;   // its events are dispatched by ContactSystem::Dispatch, after the free balls have moved
    lap(g_last.writeUs);
    if (ContactProf::On())
    {
@@ -1873,12 +1927,14 @@ void ContactSystemImpl::EngageNear(const float dtime)
       {
          if (!o->m_enabled || !o->m_set.contact || o->m_set.band || g_pplayer->m_time_msec < o->m_contactCooldownUntilMs)
             continue;
+         const double vb = PreventOn() ? o->SurfaceSpeedBoundMS(dt) : 0.0;   // the surface's own closing-speed bound (a moving part; 0 for a static surface)
+         const float reachHost = reachU + (float)(2.0 * vb * dt / U);
          const FRect3D &bb = o->m_hitBBox;
          {
             const float dx = std::max({ bb.left - pos.x, 0.f, pos.x - bb.right }), dy = std::max({ bb.top - pos.y, 0.f, pos.y - bb.bottom }), dz = std::max({ bb.zlow - pos.z, 0.f, pos.z - bb.zhigh });
             minBoxGapU = std::min(minBoxGapU, std::sqrt(dx * dx + dy * dy + dz * dz) - pb->m_d.m_radius);
          }
-         if (pos.x < bb.left - reachU || pos.x > bb.right + reachU || pos.y < bb.top - reachU || pos.y > bb.bottom + reachU || pos.z < bb.zlow - reachU || pos.z > bb.zhigh + reachU)
+         if (pos.x < bb.left - reachHost || pos.x > bb.right + reachHost || pos.y < bb.top - reachHost || pos.y > bb.bottom + reachHost || pos.z < bb.zlow - reachHost || pos.z > bb.zhigh + reachHost)
             continue;
          if (o->m_surfaceKind == "playfield" && InPlayfieldHole(pos))
             continue;   // the kicker's
@@ -1892,13 +1948,13 @@ void ContactSystemImpl::EngageNear(const float dtime)
          }
          ce->seenMs = nowMs;
          SurfaceContact &it = ce->it;
-         o->Refresh(it, bs.R, travelM + 0.005, c);
+         o->Refresh(it, bs.R, travelM + 2.0 * vb * dt + 0.005, c);
          const TubeProbe pr = o->Probe(bs, it, c);
          if (pr.dist <= 0.0)
             continue;
          const double gap = pr.dist - (bs.R + pr.rho);
          const double rel = o->ReleaseGapM();
-         const double closing = -v.Dot(pr.normal);
+         const double closing = -v.Dot(pr.normal) + vb;   // relative to the surface: its bound counts as closing speed
          if (o->m_surfaceKind == "playfield")
          {
             pfGap = gap;
@@ -1973,7 +2029,52 @@ bool ContactSystemImpl::EngageImpl(HitRubber *const host, FlipperMoverObject *co
    // The ball starts the engagement touching or a little inside the rubber (the hit was found within a step). Go back to the instant it first touched: along its
    // own velocity, by depth / closing speed, at most one physics step; if it is not closing (pushed in by something else), seat it at touching distance along the normal.
    // Nothing is stored as compression.
-   if (bat == nullptr && host != nullptr)   // (a bat engagement seats its start against the moving bat in the first step: SetupBat)
+   // Found inside a part with no earlier clean state (docs/UnifiedContactDesign.txt 11, point 6): CheckOverlaps found no clean start of the sub-interval, or the engagement by proximity finds the ball already inside a
+   // moving part (point 1 engages a ball that has a past before it touches, so a ball inside at that point was created or moved there)
+   bool noPast = std::strcmp(how, "no past") == 0;
+   if (!noPast && bat == nullptr && host != nullptr && std::strcmp(how, "near") == 0)
+      for (SurfaceContact &it : rb.items)
+         if (it.r->MovingPart() != nullptr)
+         {
+            it.r->Refresh(it, bs.R, 0.03, c);
+            const TubeProbe p0 = it.r->Probe(bs, it, c);
+            if (p0.overlap && p0.delta > 1e-6)
+               noPast = true;
+         }
+   double noPastMoved = 0.0, noPastLeft = 0.0;
+   int noPastPasses = 0;
+   if (noPast && bat == nullptr && host != nullptr)
+   {
+      // Minimum translation: along the normal of each overlapped surface (the playfield is one of them) to touching distance, repeated up to 8 passes. Velocities unchanged. A ball that is squeezed and does not fit keeps
+      // the overlap that is left, and the force law carries it.
+      const V3 c0 = c;
+      for (SurfaceContact &it : rb.items)
+         it.r->Refresh(it, bs.R, 0.03, c);
+      for (; noPastPasses < 8; noPastPasses++)
+      {
+         bool moved = false;
+         for (const SurfaceContact &it : rb.items)
+         {
+            const TubeProbe p0 = it.r->Probe(bs, it, c);
+            if (!p0.overlap || p0.delta <= 1e-6)
+               continue;
+            if (noPastPasses == 0)
+               rb.delta0 = std::max(rb.delta0, p0.delta);
+            c = c + p0.normal * p0.delta;
+            moved = true;
+         }
+         if (!moved)
+            break;
+      }
+      noPastMoved = (c - c0).Length();
+      for (const SurfaceContact &it : rb.items)
+      {
+         const TubeProbe p0 = it.r->Probe(bs, it, c);
+         if (p0.overlap)
+            noPastLeft = std::max(noPastLeft, p0.delta);
+      }
+   }
+   else if (bat == nullptr && host != nullptr)   // (a bat engagement seats its start against the moving bat in the first step: SetupBat)
    {
    constexpr double kMaxRewindS = PHYSICS_STEPTIME_S;
    const double zBeforeSeat = c.z;
@@ -2017,8 +2118,24 @@ bool ContactSystemImpl::EngageImpl(HitRubber *const host, FlipperMoverObject *co
    rb.win = V3((double)pb->m_angularmomentum.x * wScale, (double)pb->m_angularmomentum.y * wScale, (double)pb->m_angularmomentum.z * wScale);
    rb.posStart = posStart;
    if (ContactTraceOn())
-      PLOGI << "ContactEngage " << (host != nullptr ? host->m_name : std::string("bat")) << " t=" << g_pplayer->m_time_msec << " how " << how << " speed " << v.Length() << " vn_in " << rb.vin.Length() << " delta0_um " << rb.delta0 * 1e6
-            << " rewind_us " << rb.rewound * 1e6 << " flip_clear " << g_pplayer->m_physics->FlipperClearance(pb->m_d, kFlipperHorizonVpt) << g_pplayer->m_physics->FlipperDebug(pb->m_d, kFlipperHorizonVpt) << " rubbers " << rb.items.size() << " pos " << pb->m_d.m_pos.x << ' ' << pb->m_d.m_pos.y << ' ' << pb->m_d.m_pos.z;
+      PLOGI << "ContactEngage " << (host != nullptr ? host->m_name : std::string("bat")) << " t=" << g_pplayer->m_time_msec << " how " << how << " speed " << v.Length() << " vn_in " << rb.vin.Length() << " pos " << posStart.x << ' ' << posStart.y << ' ' << posStart.z << " delta0_um " << rb.delta0 * 1e6
+            << " rewind_us " << rb.rewound * 1e6 << [&]() { std::string s; for (const SurfaceContact &it : rb.items) if (ContactMovingPart *const mp = it.r->MovingPart()) s += " [" + it.r->Name() + " " + mp->StateNote() + "]"; return s; }() << " flip_clear " << g_pplayer->m_physics->FlipperClearance(pb->m_d, kFlipperHorizonVpt) << g_pplayer->m_physics->FlipperDebug(pb->m_d, kFlipperHorizonVpt) << " rubbers " << rb.items.size() << " pos " << pb->m_d.m_pos.x << ' ' << pb->m_d.m_pos.y << ' ' << pb->m_d.m_pos.z;
+   if (noPast)
+   {
+      static uint32_t lastMs = 0;
+      if (g_pplayer->m_time_msec - lastMs > 500)
+      {
+         lastMs = g_pplayer->m_time_msec;
+         PLOGW << "Ball with no past found inside " << (host != nullptr ? host->m_name : std::string("?")) << " (" << rb.delta0 * 1e6 << " um deep at first sight): seated by minimum translation, moved " << noPastMoved * 1e6 << " um in " << noPastPasses << " passes, " << noPastLeft * 1e6 << " um overlap left; ball at " << posStart.x << ' ' << posStart.y << ' ' << posStart.z;
+      }
+      static std::vector<std::string> shown;   // one notification per part per table start
+      const std::string nm = host != nullptr ? host->m_name : std::string();
+      if (g_pplayer->m_liveUI != nullptr && std::find(shown.begin(), shown.end(), nm) == shown.end())
+      {
+         shown.push_back(nm);
+         g_pplayer->m_liveUI->PushNotification("A ball was found inside " + nm + " with no earlier position (created or moved there by a script, or Collidable turned on): moved out by the shortest way (see vpinball.log)", 8000);
+      }
+   }
    rb.host = host;
    rb.bat = bat;
    g_engaged.push_back(rb);
@@ -2317,7 +2434,12 @@ void ContactProf::Dump(const char *why)
       PLOGI << "PROF surface " << top[i].second << " body-cycles " << top[i].first;
 }
 
-void ContactSystem::Step(const float dtime)
+void ContactSystem::Dispatch()
+{
+   ContactSystemImpl::DispatchPending();
+}
+
+void ContactSystem::Step(float dtime)
 {
    ContactSystemImpl::StepBalls(dtime);
 }
@@ -2325,4 +2447,492 @@ void ContactSystem::Step(const float dtime)
 const ContactSystem::CycleStats &ContactSystem::LastCycle()
 {
    return g_last;
+}
+
+
+// ---- The snapshot of the start of a sub-interval (docs/UnifiedContactDesign.txt section 11, point 2) ---------------------------------------------------------------------------------
+// Everything a replay of the step would have to put back: every ball's position, velocity and spin, the engaged balls' contacts (the whole entry, copy-assigned in place so the list and the
+// pointers to its entries stay as they are; the vectors inside keep their capacity), the ball pairs, the saved state of every moving part, the size of the event queue. The engaged list and the pair
+// list only change in ApplyReleases, after the overlap check, so a snapshot of their contents is enough. Bats and bands are not saved yet: islands with them are not replayed.
+namespace
+{
+   struct PartSnap
+   {
+      ContactMovingPart *p = nullptr;
+      ContactMovingPart::State st;
+   };
+   struct BallSnap
+   {
+      HitBall *pb = nullptr;
+      Vertex3Ds pos, vel, angm;
+      float lastEventSqrDist = 0.f;
+      bool advanced = false;
+   };
+   struct StartSnap
+   {
+      std::vector<BallSnap> balls;
+      std::vector<BallContact> contacts;
+      std::vector<BallPairState> pairs;
+      std::vector<PartSnap> parts;
+      size_t deferred = 0;
+      bool valid = false;
+      unsigned us = 0;
+   };
+   StartSnap g_snap;
+   bool g_snapSkipParts = false;   // test control (VPX_SNAPSHOT_TEST=2): the parts are not put back; the test must then see a difference wherever a part moved
+}
+
+void ContactSystem::SaveStart()
+{
+   const uint64_t t0 = usec();
+   StartSnap &s = g_snap;
+   const auto &vb = g_pplayer->m_vball;
+   s.balls.resize(vb.size());
+   for (size_t i = 0; i < vb.size(); i++)
+   {
+      HitBall &hb = vb[i]->m_hitBall;
+      s.balls[i] = { &hb, hb.m_d.m_pos, hb.m_d.m_vel, hb.m_angularmomentum, hb.m_lastEventSqrDist, hb.m_rubberAdvanced };
+   }
+   s.contacts.resize(g_engaged.size());
+   size_t k = 0;
+   for (const BallContact &e : g_engaged)
+      s.contacts[k++] = e;
+   s.pairs = g_ballPairs;
+   size_t np = 0;
+   for (HitRubber *const o : ContactSystemImpl::Hosts())
+      if (ContactMovingPart *const mp = o->MovingPart())
+      {
+         if (np >= s.parts.size())
+            s.parts.emplace_back();
+         s.parts[np].p = mp;
+         mp->SaveState(s.parts[np].st);
+         np++;
+      }
+   s.parts.resize(np);
+   s.deferred = g_deferred.size();
+   s.valid = true;
+   s.us = (unsigned)(usec() - t0);
+}
+
+unsigned ContactSystem::LastSaveUs()
+{
+   return g_snap.us;
+}
+
+// Puts the snapshot back. Balls: all of them (only == nullptr), or the engaged ones and those in `only` (a replay: the free balls have been moved on, and stay)
+static void RestoreSnap(const std::vector<HitBall *> *only)
+{
+   StartSnap &s = g_snap;
+   if (!s.valid)
+      return;
+   for (const BallSnap &b : s.balls)
+   {
+      if (only != nullptr && b.pb->m_contact == nullptr && std::find(only->begin(), only->end(), b.pb) == only->end())
+         continue;
+      b.pb->m_d.m_pos = b.pos;
+      b.pb->m_d.m_vel = b.vel;
+      b.pb->m_angularmomentum = b.angm;
+      b.pb->m_lastEventSqrDist = b.lastEventSqrDist;
+      b.pb->m_rubberAdvanced = b.advanced;
+   }
+   if (g_engaged.size() == s.contacts.size())
+   {
+      size_t k = 0;
+      for (BallContact &e : g_engaged)
+         e = s.contacts[k++];
+   }
+   else
+      PLOGW << "Snapshot: the engaged list changed since it was taken (" << s.contacts.size() << " -> " << g_engaged.size() << "): contacts not restored";
+   g_ballPairs = s.pairs;
+   if (!g_snapSkipParts)
+      for (const PartSnap &p : s.parts)
+         p.p->RestoreState(p.st);
+   if (g_deferred.size() > s.deferred)
+      g_deferred.erase(g_deferred.begin() + (long)s.deferred, g_deferred.end());
+   if (ContactSystemImpl::s_pendingCy != nullptr)   // the events of the step being undone
+   {
+      ContactSystemImpl::s_pendingCy->hitEvents.clear();
+      ContactSystemImpl::s_pendingCy->partHits.clear();
+      ContactSystemImpl::s_pendingCy->releases.clear();
+      ContactSystemImpl::s_pendingCy->bandReleases.clear();
+      ContactSystemImpl::s_pendingCy = nullptr;
+   }
+}
+
+void ContactSystem::RestoreStart()
+{
+   RestoreSnap(nullptr);
+}
+
+bool ContactSystem::SnapshotTestOn()
+{
+   static const int level = []() { const char *const e = getenv("VPX_SNAPSHOT_TEST"); return e != nullptr ? atoi(e) : 0; }();
+   g_snapSkipParts = level == 2;
+   return level != 0;
+}
+
+namespace
+{
+   struct Fp
+   {
+      uint64_t balls = 14695981039346656037ull, contacts = 14695981039346656037ull, pairs = 14695981039346656037ull, parts = 14695981039346656037ull;
+   };
+   uint64_t Fnv(uint64_t h, const void *p, const size_t n)
+   {
+      const unsigned char *b = static_cast<const unsigned char *>(p);
+      for (size_t i = 0; i < n; i++)
+      {
+         h ^= b[i];
+         h *= 1099511628211ull;
+      }
+      return h;
+   }
+   template <class T> uint64_t FnvV(uint64_t h, const T &v) { return Fnv(h, &v, sizeof(T)); }
+   Fp Fingerprint()
+   {
+      Fp f;
+      for (const Ball *const b : g_pplayer->m_vball)
+      {
+         const HitBall &hb = b->m_hitBall;
+         f.balls = FnvV(f.balls, hb.m_d.m_pos);
+         f.balls = FnvV(f.balls, hb.m_d.m_vel);
+         f.balls = FnvV(f.balls, hb.m_angularmomentum);
+         f.balls = FnvV(f.balls, hb.m_lastEventSqrDist);
+      }
+      for (const BallContact &e : g_engaged)
+      {
+         f.contacts = FnvV(f.contacts, e.omega);
+         f.contacts = FnvV(f.contacts, e.lastSpeed);
+         f.contacts = FnvV(f.contacts, e.lastVn);
+         f.contacts = FnvV(f.contacts, e.dwellS);
+         f.contacts = FnvV(f.contacts, e.peakFn);
+         f.contacts = FnvV(f.contacts, e.steps);
+         for (const SurfaceContact &it : e.items)
+         {
+            f.contacts = FnvV(f.contacts, it.st.xi);
+            f.contacts = FnvV(f.contacts, it.stExtra[0].xi);
+            f.contacts = FnvV(f.contacts, it.stExtra[1].xi);
+            f.contacts = FnvV(f.contacts, it.touching);
+            f.contacts = FnvV(f.contacts, it.partTouching);
+            f.contacts = FnvV(f.contacts, it.fnLast);
+         }
+      }
+      for (const BallPairState &p : g_ballPairs)
+      {
+         f.pairs = FnvV(f.pairs, p.st.xi);
+         f.pairs = FnvV(f.pairs, p.inContact);
+         f.pairs = FnvV(f.pairs, p.lastDelta);
+      }
+      ContactMovingPart::State st;
+      for (HitRubber *const o : ContactSystemImpl::Hosts())
+         if (ContactMovingPart *const mp = o->MovingPart())
+         {
+            mp->SaveState(st);
+            f.parts = Fnv(f.parts, st.bytes, st.used);
+         }
+      return f;
+   }
+}
+
+void ContactSystem::SnapshotTest(const float dtime)
+{
+   static long compared = 0, mismatches = 0, skipped = 0;
+   if (!g_snap.valid)
+      return;
+   for (const BallContact &e : g_engaged)
+      if (e.bat != nullptr || e.band != nullptr)
+      {
+         skipped++;
+         return;
+      }
+   if (g_engaged.empty())
+      return;   // nothing the step touched
+   const Fp a = Fingerprint();
+   RestoreStart();
+   Step(dtime);
+   const Fp b = Fingerprint();
+   compared++;
+   if (a.balls != b.balls || a.contacts != b.contacts || a.pairs != b.pairs || a.parts != b.parts)
+   {
+      mismatches++;
+      PLOGW << "SnapshotTest t=" << g_pplayer->m_time_msec << ": the step taken again from the snapshot gave a different result in:" << (a.balls != b.balls ? " balls" : "") << (a.contacts != b.contacts ? " contacts" : "")
+            << (a.pairs != b.pairs ? " pairs" : "") << (a.parts != b.parts ? " parts" : "") << " (" << g_engaged.size() << " engaged balls)";
+   }
+   if (compared % 2000 == 1)
+      PLOGI << "SnapshotTest: " << compared << " steps compared, " << mismatches << " different, " << skipped << " skipped (bat or band)";
+}
+
+
+// ---- The overlap check and the replay of the sub-interval (docs/UnifiedContactDesign.txt section 11, point 2) ------------------------------------------------------------------------
+// Run after UpdateDisplacements, before the events are dispatched. A free ball found overlapping a moving part was born inside this sub-interval: it moved on a straight line (stock free flight)
+// while the part moved by its own motion. Find the time t* in the sub-interval at which the gap was zero with BOTH of them where they really were, put the snapshot of the start back, step the
+// system to t* (the engaged balls and the parts), engage the ball there with its true position and velocity, and step on to the end. The contact starts at zero depth with the real velocities.
+// Several balls: the earliest first contact first, the others are found again on the new end state (chained, at most the free balls and parts near + 1 times).
+namespace
+{
+   unsigned g_replayCount = 0, g_replayUs = 0;   // since the cost log last asked
+}
+
+void ContactSystem::TakeReplayStats(unsigned &count, unsigned &us)
+{
+   count = g_replayCount;
+   us = g_replayUs;
+   g_replayCount = g_replayUs = 0;
+}
+
+void ContactSystem::CheckOverlaps(const float hittime)
+{
+   ContactSystemImpl::CheckOverlaps(hittime);
+}
+
+void ContactSystemImpl::CheckOverlaps(const float hittime)
+{
+   using namespace RubberContact;
+   static const bool on = []() { const char *const e = getenv("VPX_OVERLAP_REPLAY"); return !(e != nullptr && atoi(e) == 0); }();
+   if (!on || !g_snap.valid || hittime <= 0.f)
+      return;
+   std::vector<HitRubber *> parts;   // the part hosts that can be overlapped (collidable); `allParts` below for the advance
+   for (HitRubber *const o : Hosts())
+      if (o->m_enabled && o->MovingPart() != nullptr)
+         parts.push_back(o);
+   if (parts.empty())
+      return;
+   const double tol = ContactSettings::Get().arrivalDepthUm * 1e-6;
+   const double dtS = (double)hittime * DEFAULT_STEPTIME_S;
+   auto isFree = [](const HitBall *pb) { return pb->m_contact == nullptr && pb->m_bandOwner == nullptr && pb->m_rubberOwner == nullptr && !pb->m_d.m_lockedInKicker; };
+   struct Cand
+   {
+      HitBall *pb;
+      HitRubber *host;
+      double delta;   // the overlap at the end of the sub-interval, m
+   };
+   std::vector<HitBall *> noPast;   // balls found overlapping with no earlier clean state (point 6): seated by minimum translation and engaged once the parts have advanced
+   std::vector<std::pair<HitBall *, HitRubber *>> noPastHost;
+   auto scan = [&](std::vector<Cand> &out) {
+      out.clear();
+      for (Ball *const b : g_pplayer->m_vball)
+      {
+         HitBall *const pb = &b->m_hitBall;
+         if (!isFree(pb) || std::find(noPast.begin(), noPast.end(), pb) != noPast.end())
+            continue;
+         BallSI bs;
+         bs.R = (double)pb->m_d.m_radius * U;
+         const V3 c((double)pb->m_d.m_pos.x * U, (double)pb->m_d.m_pos.y * U, (double)pb->m_d.m_pos.z * U);
+         for (HitRubber *const o : parts)
+         {
+            ContactMovingPart *const mp = o->MovingPart();
+            mp->SetBall(bs);
+            const TubeProbe pr = mp->Probe(c);
+            if (pr.overlap && pr.delta > tol)
+               out.push_back({ pb, o, pr.delta });
+         }
+      }
+   };
+   std::vector<Cand> cands;
+   scan(cands);
+   if (cands.empty())
+      return;
+   for (const BallContact &e : g_engaged)
+      if (e.bat != nullptr || e.band != nullptr)
+      {
+         static uint32_t lastMs = 0;
+         if (g_pplayer->m_time_msec - lastMs > 2000)
+         {
+            lastMs = g_pplayer->m_time_msec;
+            PLOGW << "Overlap with a moving part found, but an island holds a bat or a band, whose state is not saved yet: no replay (the engagement of the next cycle seats the ball)";
+         }
+         return;
+      }
+
+   const uint64_t tStart = usec();
+   struct Rp
+   {
+      HitBall *pb;
+      HitRubber *host;
+      double t;   // the share of the sub-interval at which the ball is engaged
+   };
+   std::vector<Rp> list;
+   auto snapBall = [&](const HitBall *pb) -> const BallSnap * {
+      for (const BallSnap &b : g_snap.balls)
+         if (b.pb == pb)
+            return &b;
+      return nullptr;
+   };
+   // The system at share tEnd of the sub-interval: the snapshot put back, the engaged balls and the parts stepped to each engagement, the balls of `list` engaged there, then on to tEnd
+   auto simulate = [&](const double tEnd) {
+      std::vector<HitBall *> only;
+      for (const Rp &e : list)
+      {
+         if (e.pb->m_contact != nullptr)
+            Release(e.pb, "replay");   // engaged by an earlier simulation: the snapshot has no entry for it
+         only.push_back(e.pb);
+      }
+      RestoreSnap(&only);
+      double t = 0.0;
+      bool first = true;
+      for (Rp &e : list)
+      {
+         if (e.t > tEnd)
+            break;
+         if (e.t > t)
+         {
+            s_append = !first;
+            ContactSystem::Step((float)((e.t - t) * (double)hittime));
+            s_append = false;
+            first = false;
+            t = e.t;
+         }
+         for (HitRubber *const o : Hosts())   // a part no engaged ball held has not moved yet: it is at the start of the sub-interval. It moves on to the engagement, as it would have alone (gapAt measures it so)
+            if (ContactMovingPart *const mp = o->MovingPart())
+            {
+               const double idle = dtS * e.t - mp->steppedS;
+               if (idle > 1e-9)
+               {
+                  mp->AdvanceAlone(idle);
+                  mp->steppedS += idle;   // (PartAdvance advances it for the rest of the sub-interval only)
+               }
+            }
+         if (const BallSnap *const b0 = snapBall(e.pb))
+            e.pb->m_d.m_pos = b0->pos + b0->vel * (float)(e.t * (double)hittime);   // its free flight to the engagement
+         EngageImpl(e.host, nullptr, e.pb, "overlap");
+      }
+      if (tEnd > t)
+      {
+         s_append = !first;
+         ContactSystem::Step((float)((tEnd - t) * (double)hittime));
+         s_append = false;
+      }
+   };
+   // The gap between a free ball (on its straight flight from the snapshot) and the nearest part, at share t, in the system simulate(t) left. A part that was stepped for less than t is advanced alone
+   // for the rest on a scratch copy of its state.
+   auto gapAt = [&](HitBall *pb, const double t) {
+      const BallSnap *const b0 = snapBall(pb);
+      BallSI bs;
+      bs.R = (double)pb->m_d.m_radius * U;
+      const Vertex3Ds p = b0->pos + b0->vel * (float)(t * (double)hittime);
+      const V3 c((double)p.x * U, (double)p.y * U, (double)p.z * U);
+      double gmin = 1e9;
+      for (HitRubber *const o : parts)
+      {
+         ContactMovingPart *const mp = o->MovingPart();
+         const double idle = dtS * t - mp->steppedS;
+         ContactMovingPart::State tmp;
+         const bool adv = idle > 1e-9;
+         if (adv)
+         {
+            mp->SaveState(tmp);
+            mp->AdvanceAlone(idle);
+         }
+         mp->SetBall(bs);
+         const TubeProbe pr = mp->Probe(c);
+         if (adv)
+            mp->RestoreState(tmp);
+         gmin = std::min(gmin, pr.overlap ? -pr.delta : pr.dist - bs.R);
+      }
+      return gmin;
+   };
+   int evaluations = 0;
+   // The share of the sub-interval at which the ball first touched: regula falsi on the gap with the system simulated at each trial time (the contact never starts deeper than the arrival depth)
+   auto findT = [&](const Cand &cd, double &tOut) {
+      simulate(0.0);
+      evaluations++;
+      const double g0 = gapAt(cd.pb, 0.0);
+      if (g0 < -tol)
+         return false;   // overlapping at the start of the sub-interval: no past
+      double lo = 0.0, glo = g0, hi = 1.0, ghi = -cd.delta;
+      for (int it = 0; it < 8; it++)
+      {
+         double t = (glo - ghi) > 1e-12 ? lo + (hi - lo) * glo / (glo - ghi) : 0.5 * (lo + hi);
+         t = std::min(hi - 0.02 * (hi - lo), std::max(lo + 0.02 * (hi - lo), t));   // (keeps the bracket shrinking)
+         simulate(t);
+         evaluations++;
+         const double g = gapAt(cd.pb, t);
+         if (std::abs(g) <= tol)
+         {
+            tOut = t;
+            return true;
+         }
+         if (g > 0.0)
+         {
+            lo = t;
+            glo = g;
+         }
+         else
+         {
+            hi = t;
+            ghi = g;
+         }
+      }
+      tOut = lo;   // the side that does not overlap
+      return true;
+   };
+
+   const int maxChain = (int)(g_pplayer->m_vball.size() + parts.size()) + 1;
+   std::string what;
+   for (int chain = 0; chain < maxChain && !cands.empty(); chain++)
+   {
+      Rp best = { nullptr, nullptr, 2.0 };
+      double bestDelta = 0.0;
+      for (const Cand &cd : cands)
+      {
+         double t = 0.0;
+         if (!findT(cd, t))
+         {
+            noPast.push_back(cd.pb);
+            noPastHost.emplace_back(cd.pb, cd.host);
+            static uint32_t lastMs = 0;
+            if (g_pplayer->m_time_msec - lastMs > 500)
+            {
+               lastMs = g_pplayer->m_time_msec;
+               PLOGW << "Overlap with " << cd.host->m_name << " at the START of the sub-interval (" << cd.delta * 1e6 << " um at its end): no past to rewind to; the ball is seated by minimum translation (point 6)";
+            }
+            continue;
+         }
+         if (t < best.t)
+         {
+            best = { cd.pb, cd.host, t };
+            bestDelta = cd.delta;
+         }
+      }
+      if (best.pb == nullptr)
+         break;
+      list.push_back(best);
+      std::sort(list.begin(), list.end(), [](const Rp &a, const Rp &b) { return a.t < b.t; });
+      g_replayCount++;
+      what += (what.empty() ? "" : "; ") + best.host->m_name + " at " + std::to_string((int)(best.t * 100.0)) + " % (" + std::to_string((int)(bestDelta * 1e6)) + " um deep at the end)";
+      simulate(1.0);   // the end state with the new ball in: the other free balls are checked against it
+      scan(cands);
+   }
+   if (list.empty())
+   {
+      simulate(1.0);   // the system as it was before (the same step again; nothing was engaged)
+   }
+   // the parts: advanced alone for what the contact system did not step them, as the movers do after a step
+   for (HitRubber *const o : Hosts())
+      if (o->MovingPart() != nullptr)
+         o->PartAdvance(hittime);
+   for (Ball *const b : g_pplayer->m_vball)
+      b->m_hitBall.m_rubberAdvanced = false;   // every ball has been moved for this sub-interval
+   for (const auto &nh : noPastHost)
+      if (nh.first->m_contact == nullptr)
+         EngageImpl(nh.second, nullptr, nh.first, "no past");
+   g_replayUs += (unsigned)(usec() - tStart);
+   if (!list.empty())
+   {
+      static uint32_t lastMs = 0;
+      if (g_pplayer->m_time_msec - lastMs > 500)
+      {
+         lastMs = g_pplayer->m_time_msec;
+         PLOGW << "Overlap replay t=" << g_pplayer->m_time_msec << " ms: " << what << "; " << evaluations << " evaluations, " << (usec() - tStart) << " us";
+      }
+      if (list.size() > 2 && g_pplayer->m_liveUI != nullptr)
+      {
+         static bool shown = false;
+         if (!shown)
+         {
+            shown = true;
+            g_pplayer->m_liveUI->PushNotification("Several balls overlapped moving parts in one sub-interval and were replayed (see vpinball.log, 'Overlap replay')", 8000);
+         }
+      }
+   }
 }

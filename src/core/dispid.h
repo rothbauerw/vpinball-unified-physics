@@ -154,4 +154,7 @@
 #define DISPID_RubberEvents_SwitchClosed                1702
 #define DISPID_RubberEvents_SwitchOpened                1703
 
+// jet bumper (unified engine)
+#define DISPID_BumperEvents_Switch                      1710
+
 // Must have a carriage return at end of file for correct resource file parsing

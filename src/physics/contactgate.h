@@ -259,6 +259,9 @@ namespace GateModel
          body.DriveStop(m_stopHold, open ? set.holdAngleDeg * M_PI / 180.0 : m_holdPark, set.holdSpeedDps * M_PI / 180.0);
       }
 
+      void SaveExtra(State &o) const override { Put(o, m_switchClosed); }
+      void LoadExtra(StateReader &r) override { r.Get(m_switchClosed); }
+
       bool SwitchClosed() const { return m_switchClosed; }
 
    private:

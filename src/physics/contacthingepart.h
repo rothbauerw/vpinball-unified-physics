@@ -24,6 +24,8 @@
 
 #include "physics/rubbercontact.h"
 #include "physics/contacthingebody.h"
+#include "physics/contactsurface.h"
+#include "physics/contactmovingpart.h"
 
 namespace HingePart
 {
@@ -35,12 +37,7 @@ namespace HingePart
    using RubberContact::ContactResult;
    using RubberContact::SurfaceTri;
 
-   struct Event
-   {
-      enum Kind { Hit, SwitchClosed, SwitchOpened, LimitEOS, LimitBOS, Spin } kind;
-      int ball = -1;        // Hit: the ball's index as the owner numbers them
-      double value = 0.0;   // Hit: normal approach speed (m/s); Limit: angular speed (deg/s)
-   };
+   using Event = ContactMovingPart::Event;
 
    // The per-ball state of a ball's contact with a part (owned by the caller with the ball)
    struct BallLink
@@ -49,18 +46,53 @@ namespace HingePart
       bool touching = false;   // inside the release gap since the last touch began
    };
 
-   class Part
+   // A part that turns about one fixed axis (a gate, a spinner): the body of contacthingebody.h and its wires and plates. Implements the engine's moving-part interface.
+   class Part : public ContactMovingPart
    {
    public:
       HingeBody::Body body;
       RubberParams rp;            // ball contact law
       BallSI ball;                // the ball of the present call (SetBall: balls may differ in size and mass)
-      std::vector<Event> events;
-      bool steppedThisCycle = false;   // the contact system stepped the body with the balls of an island this cycle (the part's own advance skips it once)
 
-      void SetBall(const BallSI &b) { ball = b; }
+      void SetBall(const BallSI &b) override { ball = b; }
 
-      virtual ~Part() = default;
+      // ---- the moving-part interface (contactmovingpart.h) ----
+      // the body's dynamic state, then whatever the derived part adds (its switch state): SaveExtra / LoadExtra
+      void SaveState(State &out) const override
+      {
+         out.used = 0;
+         Put(out, steppedThisCycle);
+         Put(out, steppedS);
+         HingeBody::Body::Dyn d;
+         std::memset(&d, 0, sizeof d);   // (the padding too: saved bytes must be the same for the same state)
+         body.SaveDyn(d);
+         Put(out, d);
+         SaveExtra(out);
+      }
+      void RestoreState(const State &in) override
+      {
+         StateReader r(in);
+         r.Get(steppedThisCycle);
+         r.Get(steppedS);
+         HingeBody::Body::Dyn d;
+         r.Get(d);
+         body.LoadDyn(d);
+         events.clear();
+         LoadExtra(r);
+         UpdateWorld();   // the touchable geometry follows the angle
+      }
+      virtual void SaveExtra(State &) const {}
+      virtual void LoadExtra(StateReader &) {}
+      void SetGravity(const V3 &g) override { body.SetGravity(g); }
+      V3 Origin() const override { return body.A; }
+      // the part's own contact with a ball: the one-surface contact of a gate or spinner
+      ContactResult ContactItem(int ballIndex, SurfaceContact &it, const V3 &c, const V3 &v, const V3 &w, double h) override { return Contact(ballIndex, it.st, it.partTouching, c, v, w, h); }
+      // the velocity and angular velocity of the part's surface at a point
+      void SurfaceVelocity(const V3 &point, V3 &v, V3 &w) const override
+      {
+         v = body.VelocityAt(point);
+         w = body.E * body.omega;
+      }
 
       // ---- shape: the part's distance from the axis (m) where the bend is computed; the derived part gives the bend stiffness out of its plane there ----
       virtual double BendKb(double y) const = 0;
@@ -78,7 +110,7 @@ namespace HingePart
       // One substep h of an island: the balls' reactions of this substep (added by Contact) act during all of it, and the part advances in its OWN substeps within h (its stops
       // and switch spring set them: a steel stop impact lasts ~100 us and needs a few us, far finer than the ball contacts' step). Measured in VPX: a gate stepped with the
       // island's 77 us substep hit its open stop and came back at -7427 rad/s.
-      void StepInIsland(double h)
+      void StepInIsland(double h) override
       {
          double tau;
          V3 F;
@@ -86,9 +118,10 @@ namespace HingePart
          body.AdvanceWith(h, [this] { UpdateSwitches(); }, tau, F);
          UpdateWorld();
          steppedThisCycle = true;
+         steppedS += h;
       }
       // a part no ball is near: one interval (a physics cycle) in its own substeps, the switches after every substep, the geometry once at the end
-      int AdvanceAlone(double dt)
+      int AdvanceAlone(double dt) override
       {
          const int n = body.AdvanceWith(dt, [this] { UpdateSwitches(); });
          if (n > 0)
@@ -96,7 +129,8 @@ namespace HingePart
          return n;
       }
       // the swept reach of the part from its axis (m)
-      double Reach() const { return m_reach; }
+      double Reach() const override { return m_reach; }
+      double SurfaceSpeedBound(double cycleS) const override { return body.SurfaceSpeedBound(cycleS, m_reach); }
 
       // ---- geometry at the present angle ----
       void UpdateWorld()
@@ -114,7 +148,7 @@ namespace HingePart
       }
 
       // nearest point of the part to a ball centred at c (the present geometry)
-      TubeProbe Probe(const V3 &c) const
+      TubeProbe Probe(const V3 &c) const override
       {
          TubeProbe best;
          best.dist = INFINITY;
@@ -275,7 +309,7 @@ namespace HingePart
       // The step a ball's contact with the part needs (design 6.3): the reduced mass of the ball and the part's effective mass at the contact, the series stiffness
       // of contact and bend. Before the touch the step ends at the arrival (closing speed plus a bound on the closing acceleration: gravity on the ball and the
       // part's own angular acceleration).
-      double BallStep(const V3 &c, const V3 &v, double hMax) const
+      double BallStep(const V3 &c, const V3 &v, double hMax) const override
       {
          if ((c - body.A).Length() > Reach() + ball.R + std::max(v.Length(), 0.1) * hMax)
             return hMax;

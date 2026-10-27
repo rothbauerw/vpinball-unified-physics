@@ -184,6 +184,17 @@ namespace SpinnerModel
          body.events.clear();
       }
 
+      void SaveExtra(State &o) const override
+      {
+         Put(o, m_switchClosed);
+         Put(o, m_prevWrapped);
+      }
+      void LoadExtra(StateReader &r) override
+      {
+         r.Get(m_switchClosed);
+         r.Get(m_prevWrapped);
+      }
+
       bool SwitchClosed() const { return m_switchClosed; }
       static double Wrap(double a)
       {

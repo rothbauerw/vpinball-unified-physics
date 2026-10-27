@@ -15,8 +15,11 @@
 #include "physics/contactsurface.h"
 #include "physics/hitsling.h"
 namespace HingePart { class Part; }
+class ContactMovingPart;
 class Gate;
 class Spinner;
+class Bumper;
+namespace JetBumper { class EnginePart; struct Params; }
 
 // Static rubber (post ring, wall rubber) as ONE collider: a closed tube of circular cross-section swept along the rubber's centreline.
 // Replaces the triangle/edge/point set of Rubber::PhysicSetup when rubber_contact is on for that rubber (vpx_physics.ini).
@@ -335,12 +338,17 @@ public:
    // and fires its events on the table part (gate or spinner).
    static HitRubber *MakePartHost(IEditable *part, const char *kind, const std::string &name, const std::filesystem::path &ini, std::shared_ptr<HingePart::Part> model, Gate *gate, Spinner *spinner,
                                   float *angle, float *angleSpeed, double elasticity, double friction);
-   static bool HingeWanted(const std::filesystem::path &file, const char *kind, const std::string &name);   // like HardSurfaceWanted, for [Features] hinges (gates and spinners)
+   static bool HingeWanted(const std::filesystem::path &file, const char *kind, const std::string &name);
+   // A jet bumper of the unified engine as a host (docs/JetBumperDesign.txt): one host with the bumper's three surfaces; its mover advances the model when no ball is near, writes the
+   // pose back to the table part (ring drop, skirt tilt, switch, coil current) and fires Hit / Switch on the table part. box: x, y, z of the lowest corner and the highest, VPX units.
+   static HitRubber *MakeBumperHost(IEditable *part, const std::string &name, const std::filesystem::path &ini, std::shared_ptr<ContactMovingPart> model, Bumper *bumper, const float lo[3], const float hi[3]);
+   static bool BumperWanted(const std::filesystem::path &file, const std::string &name);   // [Features] bumpers on, VPX_BUMPERS not 0, and the bumper's own section does not say physical = 0   // like HardSurfaceWanted, for [Features] hinges (gates and spinners)
    static bool HardSurfaceWanted(const std::filesystem::path &file, const char *kind, const std::string &name);
    static bool LoadHardSurfaceSettings(RubberObjectSettings &s, const std::filesystem::path &file, const char *kind, const std::string &name, double elasticity, double friction);
    void SetEventCarrier(HitObject *carrier) { m_eventCarrier = carrier; }   // a wall / primitive / ramp host: its first stock collider carries the part's hit event settings
    HitObject *HitEventObject() const override;
-   HingePart::Part *MovingPart() const override { return m_part.get(); }
+   ContactMovingPart *MovingPart() const override { return m_part.get(); }
+   double SurfaceSpeedBoundMS(double cycleS) const override;
    RubberContact::ContactResult EvaluateOwn(SurfaceContact &it, const RubberContact::BallSI &bs, const RubberContact::V3 &c, const RubberContact::V3 &v, const RubberContact::V3 &w, double h) const override;
    bool HitEventWanted(const RubberContact::V3 &normalToBall) const override;
    void PartAdvance(float dtime);           // once per physics interval (the mover): advance the part alone unless an island stepped it, write the angle back, fire its events
@@ -440,7 +448,10 @@ private:
 
    std::shared_ptr<RubberSurface> m_surface;   // a wall / primitive host: its faces (m_pts is then empty)
    std::string m_surfaceKind;                  // "wall" or "primitive": the ini section prefix
-   std::shared_ptr<HingePart::Part> m_part;   // a gate or spinner of the unified engine (MakePartHost)
+   Bumper *m_partBumper = nullptr;
+   bool m_bumperWarned = false, m_bumperSpikeShown = false;
+   JetBumper::EnginePart *m_bumperModel = nullptr;   // m_part, as the bumper model (null for a gate or spinner)
+   std::shared_ptr<ContactMovingPart> m_part;   // a gate, spinner or bumper of the unified engine (MakePartHost, MakeBumperHost)
    Gate *m_partGate = nullptr;                // its table part, for the events
    Spinner *m_partSpinner = nullptr;
    float *m_partAngle = nullptr, *m_partSpeed = nullptr;

@@ -12,7 +12,7 @@
 
 class ContactSurface;
 class HitObject;
-namespace HingePart { class Part; }
+class ContactMovingPart;
 struct RubberObjectSettings;
 
 // What one ball has with ONE surface: the material parameters, the shear state kept between cycles, and the faces near the ball this cycle.
@@ -22,6 +22,7 @@ struct SurfaceContact
    RubberContact::RubberParams rp;
    double hLayer = 0.0;
    RubberContact::RubberState st;
+   RubberContact::RubberState stExtra[2];   // a part with several surfaces (the jet bumper's skirt, ring and body) keeps one shear state per surface: st, stExtra[0], stExtra[1]
    std::vector<int> cand;   // a surface of faces: the faces near the ball this cycle
    RubberContact::V3 candC;       // where the list was built and how far it reaches: it stays valid while the ball moves less than candR - the reach asked for (a Verlet list)
    double candR = -1.0;           // < 0 = no list
@@ -45,11 +46,13 @@ public:
    virtual bool IsFloor() const = 0;        // a surface a ball rests on: gravity acts in the contact's substeps while one is in the contact
    virtual bool IsPlayfield() const = 0;
    virtual double ReleaseGapM() const = 0;  // a ball this close to the surface stays engaged (hysteresis)
+   // The fastest the surface itself can move toward a ball within a cycle (m/s, ContactMovingPart::SurfaceSpeedBound); 0 for a surface that does not move
+   virtual double SurfaceSpeedBoundMS(double /*cycleS*/) const { return 0.0; }
    // The part object whose script hit event, threshold and duplicate filter a first touch of this surface fires (null = none)
    virtual HitObject *HitEventObject() const { return nullptr; }
-   // A part on one axis whose motion the contact system integrates (a gate, a spinner: contacthingepart.h). It evaluates its own contact with a ball (EvaluateOwn: the series bend,
+   // A part whose motion the contact system integrates (contactmovingpart.h: a gate, a spinner, a jet bumper). It evaluates its own contact with a ball (EvaluateOwn: the series bend,
    // the tilt force, its Hit event, the reaction on its body) and fires its own events.
-   virtual HingePart::Part *MovingPart() const { return nullptr; }
+   virtual ContactMovingPart *MovingPart() const { return nullptr; }
    virtual RubberContact::ContactResult EvaluateOwn(SurfaceContact & /*it*/, const RubberContact::BallSI & /*bs*/, const RubberContact::V3 & /*c*/, const RubberContact::V3 & /*v*/,
                                                     const RubberContact::V3 & /*w*/, double /*h*/) const { return RubberContact::ContactResult(); }
    virtual bool HitEventWanted(const RubberContact::V3 & /*normalToBall*/) const { return true; }

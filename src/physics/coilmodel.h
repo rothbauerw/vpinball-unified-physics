@@ -201,6 +201,40 @@ namespace FlipperModel
    }
 }
 
+// A single-winding coil with a plunger: the circuit and force laws the sling plate uses (hitsling.cpp), as shared functions with the coil parameters as input.
+// The plunger position is the fraction frac = (distance from the closed end) / bobbin length; inductance L = a + b / (frac + x0) (mH), force = strength * g * (i / iss)^2
+// with g = (x0 / (frac + x0))^2 and iss = V / R. Pure functions; the owner holds the current.
+struct CoilSettings
+{
+   double vSupply = 28.0, rOhm = 3.769, lAirMH = 5.26, lArmMH = 15.77, bobbinMm = 35.3, x0 = 0.3;   // AE-23-800
+};
+struct CoilDerived
+{
+   double a = 0.0, b = 0.0, iss = 0.0, strength = 0.0;   // mH, mH, A, N
+};
+namespace CoilModel
+{
+   inline void Derive(const CoilSettings &s, CoilDerived &d)
+   {
+      FlipperModel::SolveAB(s.lArmMH, s.lAirMH, s.x0, d.a, d.b);
+      d.iss = s.vSupply / s.rOhm;
+      d.strength = 0.5 * d.iss * d.iss * d.b / (s.bobbinMm * s.x0 * s.x0);
+   }
+   // force on the plunger toward the closed end (N) at current i (A)
+   inline double Force(const CoilSettings &s, const CoilDerived &d, double frac, double i)
+   {
+      const double g = FlipperModel::Sq(s.x0 / (frac + s.x0)), ih = i / d.iss;
+      return d.strength * g * ih * ih;
+   }
+   // the current after h seconds under volts vNow with the plunger closing at vClose (m/s, >= 0): di/dt = (V - R i - i dL/dx v) / L, explicit Euler, never below zero
+   inline double NextCurrent(const CoilSettings &s, const CoilDerived &d, double frac, double vClose, double vNow, double i, double h)
+   {
+      const double dLdx = d.b / (s.bobbinMm * FlipperModel::Sq(frac + s.x0));   // mH/mm = H/m
+      const double lH = (d.a + d.b / (frac + s.x0)) * 1e-3;
+      return std::fmax(0.0, i + ((vNow - s.rOhm * i - i * dLdx * vClose) / lH) * h);
+   }
+}
+
 // Applies one [Flippers] key (l_rod_mm, r_crank_mm, wiring, ...) to a settings set; false if the key or its value is not understood.
 // Defined in hitflipper.cpp. The sling uses it for its sling_<key> lines.
 bool FlipperApplyKey(FlipperSettings &s, const std::string &key, const std::string &val);
