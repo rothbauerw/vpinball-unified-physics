@@ -5,7 +5,7 @@
 
 #include "core/VPApp.h"
 #include "math/matrix.h"
-#include "physics/hitrubber.h"
+#include "parts/hingepartadapter.h"
 #include "physics/contactsystem.h"
 #include "physics/contactgate.h"
 #include "physics/contactpartsini.h"
@@ -236,8 +236,8 @@ void Gate::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          m_d.m_vCenter + (halflength + (float)PHYS_SKIN) * tangent, m_d.m_vCenter - (halflength + (float)PHYS_SKIN) * tangent
       };
 
-      const std::filesystem::path hingeIni = HitRubber::IniPathFor(m_ptable->m_filename);
-      const bool hinged = !isUI && ContactSystem::Unified() && HitRubber::HingeWanted(hingeIni, "gate", GetName());   // unified engine: the gate is a physical model of the contact system (docs/GateSpinnerDesign.txt)
+      const std::filesystem::path hingeIni = ContactHost::IniPathFor(m_ptable->m_filename);
+      const bool hinged = !isUI && ContactSystem::Unified() && ContactHost::HingeWanted(hingeIni, "gate", GetName());   // unified engine: the gate is a physical model of the contact system (docs/GateSpinnerDesign.txt)
       if (hinged)
       {
          // the real gate: wire W / rectangle / plate / long plate on its pivot, stops, switch, hold, bending; no stock collider, mover, line segment or bracket circles
@@ -260,7 +260,7 @@ void Gate::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          m_phitgate->m_obj = (IFireEvents *)this;
          m_phitgate->m_enabled = m_d.m_collidable;
          m_phitgate->m_gateMover.m_angle = (float)m_partModel->body.theta;
-         m_partHost = HitRubber::MakePartHost(this, "gate", GetName(), hingeIni, m_partModel, this, nullptr, &m_phitgate->m_gateMover.m_angle, &m_phitgate->m_gateMover.m_anglespeed, m_d.m_elasticity, m_d.m_friction);
+         m_partHost = HingePartAdapter::MakeHost(this, "gate", GetName(), hingeIni, m_partModel, this, nullptr, &m_phitgate->m_gateMover.m_angle, &m_phitgate->m_gateMover.m_anglespeed, m_d.m_elasticity, m_d.m_friction);
          m_partHost->m_enabled = m_d.m_collidable;
          physics->AddCollider(m_partHost, isUI);
          return;

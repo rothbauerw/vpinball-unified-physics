@@ -1,0 +1,149 @@
+BAND AND SLING AS A MASSLESS CORD, STEPPED SO THAT ENERGY IS KEPT BY CONSTRUCTION   (design approved by the user piece by piece, 2026-10-29)
+==========================================================================================================================================
+The first model built on ProjectAssessment-2026-10-27.txt item 0 (energy by construction). It replaces the band chain of runs/2026-10-29-band (src/physics/
+contactbandpart.h, BandChain in rubbercontact.h), whose explicit stepping made energy in one place after another (UnifiedContactDesign.txt 12.5; to-do 1.3).
+Offline first; engine wiring (UnifiedContactDesign 12.3) waits until the offline proof passes.
+Code: src/physics/bandcord.h (pure SI). Offline test: runs/2026-10-29-band-cord.
+MEASURED = from a run on disk. CALCULATED = from the settings by hand. INFERRED = from reasoning, not checked. ASSUMED = a value chosen without data.
+
+
+1. What the band does for the ball (user, 2026-10-29)
+------------------------------------------------------
+1. Hit and rebound: right exit speed and angle, with the rubber's loss.
+2. Rest and roll: a ball lies or rolls along the band.
+3. Sling kick: the plate pushes through the band; only the coil adds energy.
+4. Posts: the band wraps its posts and comes off them.
+5. Switches: the blades close when the band bends far enough.
+6. Any number of balls on one band.
+7. One span of a loop touching another: an ordinary contact, no special rule (the old "no bounce" rule was a patch for the old model).
+
+
+2. Bodies and energies (approved 2026-10-29)
+--------------------------------------------
+The cord: massless, no body of its own. Its shape is the shortest path round its posts, the balls pressing on it, the stop posts behind it and the plate's face.
+   Pulleys of the path (centreline clearance radius; + = kept inside the loop, - = outside):
+      own posts            + (post radius + cord radius)
+      stop posts behind    + (stop radius + cord radius)
+      plate face ends      + (cord radius), at the two ends of the face; the cord lies flat on the face between them
+      balls                - (ball radius + cord radius)
+      a ball seen from the other span of its loop (item 7: the back span pressed by the dented front span)  + (ball radius + 3 cord radii), only while the ball dents the loop
+   A pulley joins the path when a straight run of the path crosses it from its own side, and leaves when its wrap angle goes below zero. The path's length L is a
+   function of the positions only; it is continuous and has a continuous gradient where a pulley joins or leaves (the wrap angle is zero there).
+Stored energy of the cord: V = EA / (2 L0) (L - L0)^2 for L > L0, else 0 (a slack cord). EA = rest tension / prestretch; L0 = the loop's rest length / (1 + prestretch).
+   One tension round the whole loop: the posts do not hold the stretch (approved: "the cord's pull stays the same all along its length").
+The force on a ball (and the torque on the plate) is the tension pulling round it: -dV/dL x dL/dq. dL/dc of a pulley = (direction of the run into it) - (direction of
+   the run out of it).
+Moving bodies: the balls (position in the band's plane, speed, spin) and the sling plate (one angle; the plate and the coil's plunger move as one body through the
+   link: the sling's link has no slop, sling_slop_deg 0; inertia I(phi) = plate + plunger x lever(phi)^2).
+Backstops (the cord squashed between a ball and something hard): ball against the cord on an own post, on a stop post, or on the plate's face. The same law as a
+   post rubber (user, 2026-10-29): rubbercontact.h ContactCore's Hertz + thin bonded layer + Hunt-Crossley damping, with the layer taken at the thickness LEFT
+   (approved 2026-10-29):  F = kH [delta^1.5 + beta reff^1.5 delta^3 / (h - delta)^3],  kH = 4/3 E* sqrt(reff), reff = the ball on the cord's round cross-section,
+   h = the cord's diameter (layer_mm 0), beta 0.33 (unchecked), damping alpha 0.18 s/m with no flat loss (the post-rubber law, user 2026-10-29). Rubber keeps its volume, so a layer pinched between steel only flows sideways, harder the thinner it is:
+   the stiffness rises without limit as delta nears h, and the cord can never be squashed through. At small squash it is today's law (h - delta ~ h).
+   Stored energy (closed form, for the exact step): kH [0.4 delta^2.5 + beta reff^1.5 W], W = 1.5 h + 3 h ln(h/u) + h^3/(2 u^2) - 3 h^2/u + u, u = h - delta.
+   Why: the first offline sweep (2026-10-29) with plain Hertz let a 3 m/s ball squash the 5.4 mm cord 6.2 mm deep on a stop post (MEASURED, stop3); CALCULATED for
+   that cord, ball stopped by the squash alone: 3 m/s 7.5 mm -> 4.6 mm (126 -> 960 N peak), 8 m/s 15.5 mm -> 5.0 mm (470 N -> 16 kN), 0.3 m/s unchanged 1.2 mm.
+   These begin exactly where the cord path between the ball and that object runs out (the clearances add up), so the squash takes over where the cord can give no
+   more. The shared law itself gets the same thickness limit later (to-do 1.20; posts, walls, flipper rubber: engine checks needed).
+Energy in: the sling coil (drive), gravity, nudge (engine only).
+Energy stored: cord stretch, backstop squash, ball and plate kinetic energy (spin included), the plate's return spring and rest stop.
+Energy out: the rubber's stretch loss (viscous tension eta L'/L0, eta = EA tan_delta / (2 pi ref_hz)), backstop damping, friction / twist / rolling resistance at the
+   ball's contact, the plate's pivot damping and rest-stop damping, the coil stop (inelastic, as today).
+Friction (approved 2026-10-29): at the ball's contact with the cord, normal force = the band's whole push on that ball (cord tension + backstop). The cord's surface
+   is treated as still along its length (it only moves sideways with the ball), so the friction's reaction goes into the posts. Coulomb with stick: while the ball
+   grips, the friction holds the contact from slipping at mid-step (no work); past mu N it slides, the impulse chosen by the maximum-dissipation rule, so its work is
+   never positive. Twist (about the contact normal, limit mu N a_twist) and rolling resistance (limit rr R N) the same way, on the spin only. Rolling resistance acts
+   about z only (rolling along the cord): spin about the cord's own direction moves the contact point across the band's plane, which is slip, taken by the friction
+   (2026-10-29). Friction and rolling resistance are solved together each round (maximum dissipation over both limits): solved one after the other they undo 5/7 of
+   each other every round when both hold (MEASURED: ratio 0.715 per round, up to 60 rounds; CALCULATED for a solid ball: 2.5 / 3.5 = 0.714).
+   Lost against the old model: the rubber surface's springy grip (shear wind-up giving spin back).
+Switch blades: sensors only (no force). A blade reads where the cord crosses the line through its rest point toward it.
+
+
+3. The step (approved 2026-10-29)
+---------------------------------
+The balls and the plate move together over each step h, solved for the end state (a discrete-gradient / energy-conserving step; Gonzalez 1996, Laursen and Chawla 1997):
+   positions:  q1 - q0 = h x (v0 + v1) / 2 (the plate through its momentum p = I(phi) omega: phi1 - phi0 = h x (p0 + p1)/2 x (1/I0 + 1/I1)/2)
+   momenta:    m (v1 - v0) = h x (force), with every stored energy's force taken as its discrete gradient:
+               cord        (V(L1) - V(L0)) / (L1 - L0) x gradL~, where gradL~ = gradL(midpoint) + a correction along the move so that gradL~ . (q1 - q0) = L1 - L0 exactly
+               backstops   the same with the overlap delta in place of L
+               plate spring, rest stop, inertia's change with the angle: exact differences over the step (one angle)
+               gravity     constant: exact
+   losses:     act on the mid-step rates (L1 - L0)/h, (delta1 - delta0)/h, (phi1 - phi0)/h and the mid-step slip, always against them: they can only remove energy.
+   coil:       its torque at mid-step (current integrated exactly over the step: an exponential with the coil's L/R and back-EMF) times the plate's turn: booked as work.
+So, when the step's equations are solved:  energy at the end = energy at the start + coil work - losses, at any step size. The energy book is not part of the step;
+it is the test output that proves it (and later the engine's on-screen safety net).
+Solver: Newton rounds on the end positions (an approximate stiffness: the cord's stretch and bend stiffness, the backstops, the plate's springs), the friction impulses
+   updated between rounds; repeat until the equations are solved to 1e-12 m/s on the balls (1e-9 rad/s on the plate). If the rounds do not settle, the step is retaken
+   at half the size (the solver's own rule, not a fix for the physics).
+Touch and release: no event handling; the path's length changes smoothly. The coil stop is the one event: a step that would carry the plate past it is shortened to end
+   there, then the plate's speed is lost (inelastic) and it stays on the stop until the net torque pulls it off.
+Step size: accuracy only, never stability. The engine's choice (h -1 offline): h <= omega_h / omega for every body (omega from its stiffness now), the cord's bend at a
+   ball may turn at most turn_max per step, a backstop being approached is reached in no fewer than about two steps, and h <= 1 ms. omega_h 0.6 (user, 2026-10-29, from
+   the omega_h sweep 0.3 - 1.2: the backstop squash of the sling hit set most steps; 0.6 gives the sling hit 25.8 us per contact ms against 37.1 at 0.3, exit
+   speed within 1.7 % of the 1 us run, every energy check passed at every value) and turn_max 2 deg (first guess).
+
+
+4. Offline pass/fail (approved 2026-10-29)
+------------------------------------------
+Cases: the 14 cases of runs/2026-10-29-band (hits at 1 and 3 m/s at 0, 30, 60 deg and at 0.2 / 0.8 of the span; the 31.6 mm band; two balls; a contact found late;
+   a stop post behind the band; the sling at rest fired by the script; the sling hit at 3 m/s firing itself) plus three balls on one band, a 4 m/s centre hit that
+   pushes one span into the other (the 3 m/s hit may already do so), a ball rolling along the band into a post, a ball resting against the band, and six balls on
+   both spans of a ring (cost).
+Step sweep: 1 us reference; 2, 5, 10, 20, 50, 100, 200, 500, 1000 us; the engine's choice.
+Pass (each run on its own):
+   1. no losses, no coil: energy stays at its start value within 1 uJ for the whole run, at every step size;
+   2. normal losses, no coil: energy never rises at any step (sum of the per-step rises <= 1 uJ), at every step size;
+   3. coil on: energy rises only by the coil's work (same 1 uJ);
+   4. no ball passes through the cord;
+   5. every step's solver finishes (rounds per step and halvings reported);
+   6. cost: time per 1 ms of game time with 1, 2 and 6 balls (reported).
+Reported only, decided with the user after the data: exit speed and direction against this model's own 1 us run (old limits 5 % and 2 deg; the sweep gives the
+   largest step inside them), and against the old model's 1 us runs (runs/2026-10-29-band/report9.txt) to show what the massless cord changes.
+Stopping rule: one run of the whole set; if anything fails, stop and report; no patching (the user decides when the time comes).
+
+
+5. Cost estimate (INFERRED, to be measured)
+-------------------------------------------
+Per step: 2 path builds per Newton round (end and midpoint; a path of up to about 10 pulleys: one sqrt and two atan2 each), 2 - 4 rounds, a dense solve of 2 x balls + 1
+unknowns. About 2 - 5 us per step with one ball. The steps are set by accuracy: with the cord alone (no backstop) the stiffest motion is the ball on the cord,
+roughly omega = sqrt(3000 N/m / 0.08 kg) = 190 rad/s at a deep dent (CALCULATED from EA 286 N, 129 mm span), so omega_h 0.3 gives about 1.5 ms: the 1 ms cap and the
+turn rule set it. Expected well under the 30 us per 1 ms target with one ball; a ball squashed on a post (Hertz) needs short steps while it lasts.
+State for the snapshot: balls (taken by the engine), the plate (angle, momentum, current, pinned, driver), the path (up to 30 pulleys, 16 bytes each): under 1 KB.
+
+
+6. What it does not handle or would break (rule 7)
+--------------------------------------------------
+Checked offline (by the sweep): touch / release, posts on and off, the stop post, the face pressing the cord, the back span (item 7), several balls, late contact.
+Open:
+- Band mass left out: about 1.1 g of cord moves with an 80 g ball on the stress table's 129 mm band (CALCULATED: 2.7 mm cord, 1100 kg/m3, a third of the span), so up
+  to about 1 % of exit speed. The cord cannot vibrate after the ball leaves: it is straight at once (band animation will show that).
+- No squash of the free cord: the first touch is soft (a string), so the peak force is lower and the contact longer than the old tube contact. Measured against the old
+  1 us runs.
+- One tension round the whole loop: a hit on one span stretches the whole loop, softer than a span held at its posts. The friction treats the cord as held (both
+  idealizations are stated; real posts grip partly).
+- Two balls pressing toward each other through both spans of a loop (ball - cord - cord - ball) have no squash between them: they could pass. INFERRED rare; the
+  offline six-ball case keeps them apart. Open.
+- A ball inside the loop (only if a table places it there) never touches: reported by the through check.
+- A wrap angle may not change by more than half a turn in one step (it is followed from the step's start). A ball would have to move about 30 mm along the cord in one
+  step: 8 m/s x 1 ms = 8 mm (INFERRED safe).
+- Planar (superseded 2026-10-29 by GroupStepDesign.txt 10.1: the ball's height is in the cord's energy, so the band lifts or presses the ball): the cord stays at its height; a ball above or below the cord's centre meets it with its cross-section at that height (engine adapter). A ball riding over the
+  band, or the band lifting, is not modelled.
+- Hard hits on a post squeeze the cord to 85 - 90 % of its thickness: very stiff near the end of the squash, so short steps there (cost; energy safe at any step).
+  beta 0.33 now sets where the stiffening starts: unchecked. A band over a post that has its own rubber ring: treated as one layer (the cord).
+- The plate: link rigid (sling slop 0), the coil stop inelastic (as today), switch blades with no force. The old two-body hand-off of SlingPlate is not used.
+- Ball-ball contact is not in the offline test (the engine's ball pair does it in the island).
+- Engine wiring (12.3): one island holds the band's balls and plate; the shared loop's engagement / release / rewind and the playfield: not built.
+  The band reads its rubber values (alpha_s_per_m, tan_delta, e_mpa, mu, beta_layer) from the same [Rubbers] keys as the post rubbers (user, 2026-10-29):
+  one shared value, no band-only key for them; a [Rubber:<name>] section may still override one rubber.
+- A step that will not solve is halved: the worst case is a cost question, measured by the sweep.
+
+
+7. Status (2026-10-29)
+----------------------
+Offline proof MEASURED (run3, after the solver precision fix and the squash law): 0 of 209 fail with losses, 0 of 209 lossless; books within 0.0011 uJ at every step
+size from 1 us to 1 ms and at the engine's choice. Solver fixes after it: friction and rolling resistance solved jointly (run4: rounds per step 2.8 - 7.4, no halving on the
+short band; exits unchanged). Cost per 1 ms in contact (run4): 1 ball 8 us, rolling ball 18, sling hit 38, 2 balls 28, 3 balls 67, 6 balls 61. Open: the sling hit
+over the 30 us one-ball target (the plate settles last, up to 12 rounds; not profiled); exit speeds 6 - 25 % above the old chain model's (reported, not
+judged); engine wiring (UnifiedContactDesign 12.3).
+

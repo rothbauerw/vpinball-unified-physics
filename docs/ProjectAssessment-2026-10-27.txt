@@ -1,0 +1,110 @@
+PROJECT ASSESSMENT - unified physics, 2026-10-27
+================================================
+Written from the code at f2114ea17 plus today's uncommitted changes (14 files), the design docs and the to-do list. Nothing was run for this report.
+MEASURED = a number from a log, a profile or an offline test already on disk (source named). INFERRED = from reading the code; not measured.
+
+Recommendation: build the stress table first (6-13 balls, bumpers, flippers, slings, a band, a turntable, all active) and measure it against the 144 Hz frame budget in
+section 2. Then do the work in section 3 in the order given. Without the stress table no speed claim for the 13-ball case can be checked: none exists today.
+
+
+1. Where the project stands
+---------------------------
+On the shared stepping loop (arrival steps, closing speed relative to the surface, depth check, rewind):
+   balls on the playfield, walls, primitives, ramps, rubber posts and wall rubbers, ball-to-ball contact, gates, spinners, jet bumpers.
+On the older uniform loop (one step size for the whole cycle, no rewind, no check inside the cycle; contactsystem.cpp IslandRewindable, line 1069):
+   flipper bats, bands (and the slings built on them), the turntable disc.
+Still stock VPX: kickers, stand-up and drop targets, triggers, plunger (with our fix). (With our flipper model the stop is inside the model and does not split the
+cycle: hitflipper.cpp GetHitTime returns -1. Only stock flippers split it.)
+Magnets: Option A built. MEASURED (offline bench, 2026-10-20): about 300 us for 6 moving balls in one cycle. 13 balls on a magnet: not measured.
+Uncommitted: today's bumper, gate/spinner and probe work. Statistical matrix run today on that build (batch_statu.ps1: drop, jt_reflip3, jt_two, gsling2d x 10 seeds,
+40 runs, finished 16:05); no pass/fail report on disk yet. No stress table. No measurement with more than 6 balls.
+
+
+2. Performance against the target (13 balls, 144 Hz)
+-----------------------------------------------------
+2a. The budget rule is wrong for 144 Hz.
+   Physics, the table script and the frame preparation run on ONE thread (core/player.cpp, FramePacingGameLoop: "without multithreading"). At 144 Hz a frame is
+   6.9 ms, which holds about 7 physics cycles plus the frame preparation.
+   - Today's rule (DevelopmentRules 5): 1 ms per cycle, judged by the worst cycle.
+   - A physics cost of 1 ms per 1 ms cycle uses the whole thread: every frame would drop. One 2 ms cycle among cheap ones drops nothing.
+   - Proposed rule: physics over any 7 consecutive cycles <= 3 ms (about 0.4 ms per cycle on average), single cycle <= 1.5 ms.
+     INFERRED: assumes the frame preparation and script take about 3-4 ms per frame on a busy table. Measure that once on the stress table and set the numbers from it.
+
+2b. What the cost is made of (MEASURED today, bumper test launch2, one ball, focused):
+   - Before today's work 85 % of the step time was the bumper's own stepping (stiff stop springs). After: >1 ms cycles 2.1 % -> about 0.1 %, p99 1.18 -> 0.52 ms.
+   - The rest of the slow cycles: about 740 substeps in one cycle, set by the steel contact step (about 1.4 us).
+   - Gates/spinners (gs8): face tests were 58 % of the substep time; today's short face list: 1.1 -> 0.5 us per ball substep.
+
+2c. How the cost grows with balls (INFERRED from the code).
+   - Balls that touch form one island, and an island runs at the finest step any of its members needs. A pile of 13 balls touching steel runs all 13 at the steel step.
+   - The contact system runs once per stock sub-interval, not once per cycle (PhysicsEngine.cpp:1042, inside the stock hit loop). Every stock hit by any ball
+     splits the cycle; each split repeats gather, islands, setup and the snapshot of every ball. More balls = more splits = more repeats.
+   - Resting balls never sleep (only parts do). Balls parked in a lock or trough are stepped every cycle. (User decision 2026-10-20: not now, it does not help the worst
+     case. It does help a 13-ball game where several balls are usually parked.)
+   - Ball-pair search is all pairs: 78 pairs at 13 balls, small.
+   - Magnet pair work grows with the number of pairs: 15 pairs at 6 balls, 78 at 13. Cost at 13 not measured.
+   - Small allocations every cycle (a probe list per ball, the free-ball list, the event closures): about 1 us per cycle at 13 balls (INFERRED). Not an issue; tidy
+     up when that code is next touched.
+
+
+3. Opportunities, in order
+--------------------------
+0. ENERGY BY CONSTRUCTION (the design target the items below serve). Launches from added energy must be impossible by design, not caught afterwards.
+   MEASURED: the stepping itself makes the energy (bumper replay: 100 us step launches the ball at 10.6 m/s vs about 0.5 m/s at 1 us; bumper alone: energy error
+   0.8 % at 1 us, 19 % at 16 us, 83 % at 32 us). The guards we keep adding (arrival steps, rewinds, depth checks, overlap replays) all fight this one failure.
+   a) Each step's contact force comes from the energy at the end of the step minus the energy at the start, divided by the compression in between (energy-conserving
+      time stepping, e.g. Laursen and Chawla 1997). Same Hertz + damping law; only the stepping changes. A late-found contact, a long step or a face switch cannot
+      give back more than was put in. Damping uses the mid-step speed, so it only removes energy.
+   b) Models describe, the engine steps: a part supplies bodies, masses, springs, contact laws, stops and drive forces; the engine moves balls and part together in
+      the same step by one rule. No part has its own stepping or step-size rule.
+   c) Energy enters only through drives (coils, motors, gravity, nudge), counted as work, so every cycle the books close. The energy check (item 5) becomes a
+      pass/fail test; the on-screen net stays.
+   d) The step is set by accuracy only, so much of the arrival / rewind machinery can go. A sweep against tunnelling through thin walls stays.
+   Open (INFERRED): cost of the small per-step solve (2-4 iterations per contact) vs longer steps; convergence in a pile of touching balls; friction; curvature
+   held fixed within a step; a ball with no history (the seat stays).
+   Magnets (user-approved 2026-10-27): energy-based while the current is steady (air-core: the force is the gradient of the ball's field energy, magnet.cpp:1226,
+   read from the code, not tested); current changes count as drive work; the pull rises steeply near the pole, so it sets the step like a stiff contact; balls
+   magnetize each other, so balls near a magnet step as one group. Iron-core and plug-at-playfield cases: not checked yet. Large change: bumper, gate, spinner lose their own
+   stepping; flippers and bands move in.
+   Proof before engine code, when the user schedules it: offline on the bumper launch replay (no launch at 100 and 200 us, match 1 us at 10-20 us), the 3 m/s skirt
+   hit (unstable at 40 us today), a 6-ball pile (convergence and cost).
+   Items 1-4 are steps toward this: build them so they fit it (one step function, one loop, parts as data), not as separate fixes.
+1. ONE STEP RULE. The "how long may this substep be" rule exists in four copies with different details:
+      contactsystem.cpp NextStep (line 1133), the ball-pair rule in SetupIsland (line 583), the bumper's BallStep (contactbumperpart.h:150), the gate/spinner BallStep
+      (contacthingepart.h:317), plus the rest / roll / bat rules in GatherBalls (lines 389-420) with ini constants.
+   Differences found: the parts use a fixed 9.81 m/s2 where the core uses gravity plus nudge; the rest test differs; hitrubber.h:57 says the rest factor defaults to 0.2
+   while hitrubber.cpp sets 0.8. Each new model copied the closest one, and later fixes went into one copy only. Make it one function that every model calls
+   (reduced mass, stiffness law, closing speed, acceleration bound, depth, resting or not). This is the root cause of the repeated mistakes on the physics side.
+2. FLIPPERS AND BANDS ONTO THE SHARED LOOP. They are the busiest objects in a game and have none of the shared guards (no arrival steps, no rewind, no depth check). The
+   2026-10-13 launch was a ball just let go by a bat (contactsystem.cpp lines 380-382). They need SaveState / RestoreState and the moving-part interface. The turntable disc likewise.
+3. CONTACT SYSTEM ONCE PER CYCLE. Take the converted objects out of the stock hit-time split, so the contact system runs once per 1 ms cycle. What still splits it:
+   stock objects (kickers, targets, triggers, plunger) and stock hits of free balls. How often: not measured (ContactProf::Split counts it).
+4. STEEL IMPACTS. The steel step is what sets the cost. Two physical routes, both from the same Hertz + damping law:
+   a) Step size at the accuracy the law needs. MEASURED offline today (two cases, bumper pinch 0.3 m/s and 3 m/s head-on on the skirt): explicit stepping matches the 1 us
+      reference up to about 20 us; the engine uses about 2 us. Relaxing needs proof on the matrix (rebound, peak force, energy).
+   b) Impact law (restitution from the same law, then a resting constraint), as already done for the bumper ring stops today. MEASURED: PartStep 1.95 -> 1.10 s, >1 ms
+      cycles 2.1 -> 0.3 %. Apply to every internal stop first (gates, spinners, flipper end stops, plunger). For the ball's own impacts it is a design study.
+      Breaks / open: a ball pinched between two moving parts, two impacts at once, friction during the impact, event timing.
+5. ENERGY CHECK IN THE SHARED LOOP (design 11 point 7e, not built). A safety net and a test, not the fix (the fix is item 0): per cycle, energy end = start + drive
+   work - losses; a violation is a WARN + notification naming the object, and a fail in the matrix.
+6. PARALLEL ISLANDS. Islands are independent and scripts never run inside the step, so separate islands could run on separate cores. This is the biggest lever for 13
+   balls, which usually split into several islands. Open: a fixed event order, parts shared between islands (they already merge islands). User decision 2026-10-20:
+   not now. Revisit after 1-5 and the stress table.
+7. SMALLER ITEMS. Material constants (E*, G*, damping) computed once instead of on every contact call (rubbercontact.h ContactCore, line 244); no allocation in the step;
+   keep the nearest face between substeps; sleep for resting balls (see 2c).
+8. STILL STOCK: kickers, targets, triggers, plunger. The user is redesigning these: ask before converting.
+
+
+4. Why the same mistakes repeat (process)
+-----------------------------------------
+- Rules are copied, not shared: the step rule (4 copies), the rest-speed constant 0.02 (5 copies), the steel stiffness formula (8 copies in two files).
+- Two stepping loops exist side by side; a new model picks one.
+- Only two model types implement the shared moving-part interface (gates/spinners, bumpers). Flippers, bands, slings, the disc each have private code.
+- No shared test bench: each model has its own offline test and new batch scripts (about 50 batch_*.ps1 files; runs/2026-10-09-slow-contact is 81 GB, 1,318 run
+  folders). No stress table, no fixed pass/fail list per model.
+- The to-do "single source" is a 429-line, 217 KB journal with lines up to 1,500 characters. A session cannot read it whole, reads part of it, misses decisions, and
+  relearns them. The testing playbook memory still names the old branch.
+- 31 environment-variable reads in the engine change behaviour without showing up in the ini (the playbook lists the traps they caused).
+- NewPhysicsReference.txt has offline flipper-link notes with the spaces stripped (change log, about lines 440-460): noise in the document every session reads.
+- The rule "use the shared guards" (CLAUDE.md) does not say which functions those guards are, so a session cannot check it.
+The standards in docs/ModelStandards.txt answer these.

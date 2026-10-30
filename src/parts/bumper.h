@@ -13,7 +13,7 @@
 
 class BumperHitCircle;
 class MeshBuffer;
-class HitRubber;
+class ContactPartHost;
 namespace JetBumper { class EnginePart; }
 
 class BumperData final : public BaseProperty
@@ -192,7 +192,7 @@ private:
    BumperHitCircle *m_pbumperhitcircle = nullptr;
 
    // physical model (null host = the stock bumper)
-   HitRubber *m_partHost = nullptr;
+   ContactPartHost *m_partHost = nullptr;
    std::shared_ptr<JetBumper::EnginePart> m_bumperModel;
    float m_physRotX = 0.0f, m_physRotY = 0.0f, m_physRing = 0.0f, m_physSkirtDrop = 0.0f, m_physSkirtZ = 0.0f, m_physSpoon = 0.0f, m_physCoil = 0.0f;
    bool m_physSwitch = false;

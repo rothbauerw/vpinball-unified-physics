@@ -32,7 +32,7 @@ VS_OUTPUT_2D vs_liveui_main (const in float4 vPosition : POSITION0,
    VS_OUTPUT_2D Out;
    Out.clipPos = vPosition.xy;
    Out.pos = mul(float4(vPosition.x, vPosition.y, 0.0, 1.0), matWorldView);
-   Out.color = sdrScale * float4(vNormal.rgb, vPosition.z);
+   Out.color = (sdrScale > 0.0 ? sdrScale : 1.0) * float4(vNormal.rgb, vPosition.z); // 0 = no conversion (sRGB backbuffer), as in the BGFX shader
    Out.tex0 = tc;
    return Out;
 }

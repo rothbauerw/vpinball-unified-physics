@@ -39,7 +39,7 @@ void main()
 {
    clipPos = vPosition.xy;
    gl_Position = matWorldView[0] * vec4(vPosition.x, vPosition.y, 0.0, 1.0);
-   color0 = sdrScale * float4(vNormal.rgb, vPosition.z);
+   color0 = (sdrScale > 0.0 ? sdrScale : 1.0) * float4(vNormal.rgb, vPosition.z); // 0 = no conversion (sRGB backbuffer), as in the BGFX shader
    tex0 = tc;
    //tex0 = float2(tc.x, 1.0-tc.y);
 }

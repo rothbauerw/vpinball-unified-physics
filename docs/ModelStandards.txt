@@ -1,0 +1,139 @@
+MODEL STANDARDS - how every physics model is built  (approved by the user section by section, 2026-10-27)
+=============================================================================================
+Read with docs/DevelopmentRules.txt (the rules there come first). This file says HOW a model is built so that each new one reuses the last instead of relearning.
+A model is not done until every box in section 7 is ticked.
+
+
+1. Before writing anything
+--------------------------
+a. Name the closest existing model and read its files first:
+      moving part with its own bodies  -> jet bumper (contactbumper.h, contactbumperpart.h) and gate/spinner (contacthingebody.h, contacthingepart.h)
+      static surface                   -> contactsurface.h, hitrubber.cpp (hard surfaces, ramps)
+      ball contact law                 -> rubbercontact.h ContactCore (Hertz + damping + friction + twist)
+b. Read section 6 (known traps) of this file.
+c. Write the design in docs/<Model>Design.txt: the physical laws, the bodies and their stiffest internal contact, the cost estimate, what it breaks (rule 7),
+   and every way energy enters the model (coil, spring preload, motor), showing that only those add energy (ProjectAssessment-2026-10-27.txt 3.0).
+d. Ask the user before engine code.
+
+
+2. The contract every model meets
+---------------------------------
+a. One interface. A part that moves implements ContactMovingPart (contactmovingpart.h), all of it: Probe, BallStep, ContactItem, StepInIsland, AdvanceAlone,
+   SaveState / RestoreState, SurfaceSpeedBound. No private stepping path; no special case for the model inside contactsystem.cpp.
+   This is the rule until ProjectAssessment 3.0 (energy by construction) is built. The target: a part only describes itself (bodies, masses, springs, contact laws,
+   stops, drives) and the engine steps part and balls together; the interface then shrinks to that description.
+b. One loop. Balls touching the model are stepped by the shared loop (SubstepsArrival). It gives the shared guards for free:
+      arrival steps        NextStep
+      closing speed        relative to the surface, plus SurfaceSpeedBound
+      depth check          RwLate, every substep, touching contacts included
+      rewind               RwTake / RwRestore (needs the model's SaveState)
+      overlap at first sight   UnifiedContactDesign.txt section 11
+      energy check         (design 11 point 7e; not built yet - when built, every model gets it)
+      on-screen report     rule 8
+   An exception (today: bands; the turntable disc and the flipper bats joined 2026-10-28) goes in the to-do with the missing piece; the model is not called done.
+   Once 3.0 is proven the guard list gets shorter; the rule stays: use what the shared loop provides.
+c. One step rule. The substep a contact needs comes from the shared step function, never from constants inside the model. (Today the rule exists in four copies:
+   see ProjectAssessment-2026-10-27.txt 3.1. Until the shared function exists, a new model calls NextStep's rule, not a copy of it.)
+d. One contact law. A ball touching anything uses ContactCore with the material's parameters. A new law only if the physics differs (name the law), and then in
+   rubbercontact.h beside the others, shared.
+e. Pure SI maths with no VPX types in the model's header, so the same code runs in the offline test. VPX units only in the adapter.
+f. Events go into the part's event list (or DeferEvent) and are fired after the step. No script runs inside the step.
+g. Settings come from the table's physics ini through the settings reader. Environment variables are for diagnostics only, read once, and listed in
+   NewPhysicsReference.txt. Duplicate or unknown keys raise a notification (rule 8).
+h. Energy enters only through named drives (coil, motor, spring preload, gravity, nudge). The model reports their work so the energy books close every cycle.
+
+
+3. Stiff things
+---------------
+a. The stiffest contact sets the step for the whole island. For every internal contact (stops, pins, switch blades) ask first: does the motion during the contact matter?
+   If not, use the impact law: restitution from the same Hertz + damping law, then a resting constraint, no stiff spring. (Proven on the bumper ring stops 2026-10-27.)
+   The bounce can never return more energy than came in.
+b. A part's own bodies step at their own time scale, not once per ball substep. Fine steps only near a stop. The engine chooses those step sizes, not the part.
+c. A part with nothing driving it and nothing touching it sleeps, and SurfaceSpeedBound still covers what can wake it.
+d. Steep fields count as stiff too: a force that rises sharply over a short distance (e.g. a magnet's pull near the pole) sets the step like a stiff contact.
+
+
+4. Cost
+-------
+a. Frame budget at 144 Hz (proposed, to confirm on the stress table): physics over any 7 consecutive cycles <= 3 ms; single cycle <= 1.5 ms.
+b. Per active object (proposed): <= 30 us per 1 ms cycle with one ball on it; state the cost with 2 and 6 balls.
+c. Measure with VPX_CONTACT_TIMING (per-cycle CSV) and VPX_CONTACT_PROFILE (scopes, CPROF). Report: worst 7-cycle window, p99, maximum, and what the slow cycles
+   spent their time on. Profile before optimising: a guess at the cost is not a finding.
+d. New step code: no allocation, no string building, no getenv, no dynamic_cast in loops. Existing allocations are tidied when that code is next touched (user,
+   2026-10-27). Material constants computed once at setup.
+e. Every model runs on the stress table before it is called done.
+f. Energy-safe stepping (ProjectAssessment 3.0): report the passes per contact it needs and how much longer each step can be in return.
+
+
+5. Tests
+--------
+a. Offline: the model alone in runs/<date>-<model>/ against a 1 us fixed-step reference: the outputs that matter, plus the energy balance (work in - losses - stored).
+   Sweep the step size and report where it breaks. At every step size the energy may only fall unless a drive adds it: a rise at any step size is a fail.
+b. In the engine: its rows in the test matrix with numeric pass/fail, and the snapshot self-test (VPX_SNAPSHOT_TEST=1) with 0 differences.
+   The test matrix is being rebuilt (user, 2026-10-27; the old batch_matrix.ps1 / batch_statu.ps1 matrix only showed behaviour staying the same and took 45-60 min).
+   Basis of the new one (user-approved):
+   1. Each run passes or fails on its own against fixed limits (energy never rises, overlap within limit, no launch, no ball through a wall, cost within budget).
+      No old run is needed.
+   2. Inputs repeat exactly: the table script's inputs follow physics time, not a timer, so the same build gives the same result.
+   3. Offline first: most checks run on the model alone in seconds; the engine runs only what needs the whole table.
+   4. Results are saved with the build they came from; nothing is rerun just to compare.
+   The design (limits, test driver, stress table, cases per model, offline split, run time) is in docs/TestMatrixDesign.txt (user-approved 2026-10-27). Not built yet.
+c. Play-speed cases: 1 m/s typical, 3 m/s extreme; two balls on the part; a ball between two parts; table restart; the part switched off.
+   Plus the cases that have launched balls before: a contact found late, a ball pinched between two moving parts, a part hit while its coil drives it.
+d. Use run.ps1 and the test matrix in docs/TestMatrixDesign.txt (shared offline bench, engine test driver, stress table), not the old batch_*.ps1 matrix. A new script is
+   added to the shared set with a one-line description, not left as a one-off.
+e. Every matrix run writes its pass/fail report to disk the day it runs.
+
+
+6. Known traps (each has cost at least one session)
+---------------------------------------------------
+- Stiff stop springs set the step: bumper 2026-10-27, 85 % of the step time.
+- The step was planned once per cycle from the arrival time, so the contact after arrival ran at the arrival step: bumper launch, 2026-10-27.
+- The acceleration bound left out the part's own drive: overlap at first sight, 2026-10-26.
+- Free balls in an island missed their gravity in the substeps: energy source, 2026-10-21.
+- A destroyed part kept balls pointing at it: crash at play end, 2026-10-20 (ReleaseBat).
+- A host object left in the registry across table restarts: turntable slowdown, 2026-10-13.
+- A duplicate ini key silently won: magnet ball_interaction, 2026-10-20.
+- Harness: unfocused runs throttle the 1 ms timer; the anti-hung rule skips game time; always check which ini was loaded; VPX_CONTACT_TIMING=1 writes a file named "1".
+- Scripted runs are not deterministic (script timer): compare against run-to-run noise from the same exe before calling a difference real.
+- Long steps create energy: bumper replay at a 100 us step launches at 10.6 m/s vs about 0.5 m/s at 1 us, 2026-10-27. Catches it: 5a step sweep (energy may not rise).
+- A fix went into one copy of a copied rule (parts use a fixed 9.81 m/s2, the core uses gravity plus nudge), 2026-10-27. Catches it: none yet (2c removes the copies).
+- Comment and code disagree (hitrubber.h:57 says rest factor 0.2, hitrubber.cpp sets 0.8), 2026-10-27. Catches it: none yet.
+- A matrix run left no report and was missed, 2026-10-27. Catches it: 5e.
+- A new model kept a route to stock: a failed solve on the cord band set a stock cooldown, ball 1.04 -> 6.15 m/s in play while the offline proof stayed exact, 2026-10-30. Catches it: none yet.
+Each trap names the test that now catches it ("none yet" until one exists); the older entries above get theirs as they are reviewed.
+
+
+7. Done checklist (copy into the report)
+----------------------------------------
+[ ] design doc with laws, cost estimate and what breaks          [ ] implements ContactMovingPart fully (SaveState included)
+[ ] shared loop, shared step rule, ContactCore                    [ ] no private constants that duplicate a shared rule
+[ ] offline test vs 1 us reference, energy balance, step sweep    [ ] matrix rows pass, snapshot self-test 0 differences
+[ ] cost on the stress table within budget                        [ ] notifications for its unwanted behaviour (rule 8)
+[ ] NewPhysicsReference.txt entry and change log                   [ ] to-do updated (open items, one line each)
+[ ] design lists every energy source; only those add energy (1c)   [ ] energy never rises at any step size in the sweep (5a)
+[ ] past launch cases tested: late contact, pinched ball, part      [ ] matrix pass/fail report on disk (5e)
+    hit while driven (5c)
+[ ] cost of energy-safe stepping: passes per contact, step gained   [ ] new traps added to section 6 with the test that catches them
+    (4f)
+
+
+8. Keeping what we learn
+------------------------
+a. The to-do list is a short list of OPEN items, one line each, with a link to detail. History goes to an archive file, not the list.
+b. A new trap goes into section 6 the day it is found.
+c. A memory that names a file, branch or flag is checked when it is read; a stale one is fixed at once.
+d. Every session reads this file first; CLAUDE.md points to it.
+e. Clean-up to bring things in line (one step at a time, each with the user's OK):
+   1. DONE 2026-10-27: to-do split into a short open list plus an archive; the user approved every group.
+   2. DONE 2026-10-27: testing playbook memory updated for the new branch (CLAUDE.md already named it). run.ps1's old default exe is to-do 8.4.
+   3. DONE 2026-10-27: frame budget in DevelopmentRules rule 5.
+   4. DONE 2026-10-27: the 22 offline flipper notes (2026-10-16) moved verbatim from NewPhysicsReference.txt to
+      runs/2026-10-16-fishtales/OFFLINE_NOTES_moved_from_NewPhysicsReference.txt; one pointer line left in the change log.
+
+
+9. Rules for one model only
+---------------------------
+Magnets (user, 2026-10-18; moved here from CLAUDE.md 2026-10-27):
+- Do not generalize the magnet physics. It is too complex: state results for the case measured only.
+- Off-axis data for magnet decisions. On-axis is the least likely pinball case; label on-axis results as such and never base a decision on them alone.

@@ -1,0 +1,685 @@
+GROUP STEP DESIGN: the engine moves balls and parts together (ProjectAssessment-2026-10-27.txt item 0 b)
+==========================================================================================================
+Started 2026-10-29 with the user, one piece at a time. Replaces the band wiring of UnifiedContactDesign.txt 12.3 (written for the old node band).
+Decision (user, 2026-10-29): no part moves its own balls. The engine moves every ball and part of a touching group together, with the band's discrete-gradient
+solve (docs/BandCordDesign.txt section 3: forces from exact energy differences, losses on mid-step speeds, drives as counted work). The band cord (src/physics/
+bandcord.h, proved offline) is the first part. Gates, spinners, bumpers, the turntable disc and the flipper bats keep today's coupling (force out, reaction a step
+later) until each moves over with its own offline proof (to-do 1.3).
+
+1. What a part supplies   (approved by the user 2026-10-29)
+-----------------------------------------------------------
+The part describes itself; the engine does all the moving.
+   1. Bodies: what can move (positions, angles) and the mass or inertia of each; inertia may depend on position (the sling plate's I(phi)).
+   2. Stored energy at any position (springs, cord stretch, squash), with the EXACT energy difference between two positions, not only a force: that is what keeps
+      the books closed at any step.
+   3. Stiffness now: a rough value, for the step length and the solve's first guess (the Newton Jacobian).
+   4. Losses: forces from mid-step speeds that can only remove energy (damping, friction, rolling resistance, with their limits).
+   5. Drives (coils, motors): forces whose work is counted.
+   6. Contacts with balls: where a ball touches and how close it is (geometry). The law is the shared rubber / steel law restated as stored energy plus losses
+      (to-do 1.20).
+   7. Hard stops (the sling's coil stop): the step ends exactly on them; they are inelastic.
+   8. An end-of-step update that changes no energy (the band re-routing round a post: the cord length is C1 through it, so no energy jump).
+   9. Save and restore of its state, and its events (as today: SaveState / RestoreState, the event list).
+The engine: forms the touching groups, picks the step length, solves the group's moves together, runs the shared guards and the energy books.
+Fixed surfaces (playfield, walls, posts) supply only 6 and 7, with no bodies. Ball-ball contact is a 6 too. A ball on the band that also rolls on the playfield and
+touches another ball is in one solve, with no lag between contacts.
+Open (ProjectAssessment item 0, not tested): the cost of the solve per step; whether it settles in a pile of touching balls; the contact's surface curvature held
+fixed within a step.
+
+2. How groups form   (approved by the user 2026-10-29)
+------------------------------------------------------
+A group is today's island (contactsystem.cpp FindIslands), with the same rules: two balls share one when they can touch within the cycle (gap below the ball
+reach plus twice their closing speed times the cycle), when they are on the same band, or when they touch the same moving part (gate, spinner, bumper, disc, bat).
+Fixed surfaces (playfield, walls, posts) link no balls: they are contacts of each ball inside its group. Nothing new to build for the grouping.
+Open: a group's solve grows with its ball count (a pile of six is one group of six); whether it settles quickly there is measured offline (piece 1 open list).
+
+3. Which groups use the new step first   (approved by the user 2026-10-29)
+--------------------------------------------------------------------------
+Groups holding a band switch first: the band is proved offline, and its groups are where the energy problem showed. Every contact of a ball in such a group
+(playfield, walls, posts, other balls) is in the same solve, so the shared contact law restated as stored energy plus losses (to-do 1.20) is built and used then.
+Other groups keep today's stepping until an offline proof on the steel cases (a 3 m/s ball into a wall, a pile of six balls: accuracy, energy, cost); then they
+switch with no new code. Groups with a gate, spinner, bumper, disc or bat follow as each part moves over (piece 1 decision).
+During the move two steppings exist; a ball's group is decided once per cycle, so a ball changes stepping only between cycles. Each move has a physics-ini switch
+for an old / new comparison on the same table, removed once the move is proved.
+Open: a band group that also holds a gate, bumper or bat keeps that part's one-step lag inside the group until it moves over (rare: a ball between a sling and a
+flipper); reported on screen when it happens (rule 8).
+
+4. The contact's push-back (normal direction) as stored energy plus losses   (approved by the user 2026-10-29)
+--------------------------------------------------------------------------------------------------------------
+Stored energy: the squash law as a closed-form energy at any depth (Hertz + the thin bonded layer at the thickness left; the formula the band uses, BandCordDesign
+section 2); post and wall rubbers get the identical law; steel (playfield, metal walls, ball-ball) is plain Hertz, the same formula with no layer.
+Losses: every damping term is a force from the mid-step speed, so it only removes energy: the rubber's squash damping (alpha, 0.18), the hard surfaces' calibrated
+viscoelastic damping and their flat loss (normal_loss).
+A contact found in the middle of a step cannot give back more than went in: the step uses the exact energy difference.
+Open: the surface's curvature is held fixed within a step; a ball crossing from one mesh face to the next keeps the energy exact but takes an averaged force
+direction for that step (edge_radius_mm rounds the edges). The squash energy needs a logarithm: slower than plain Hertz, measured in the offline proof.
+
+5. Sideways grip   (approved by the user 2026-10-29)
+----------------------------------------------------
+Every contact of the shared law keeps the sideways (shear) spring: post and ring rubbers, rubber walls and primitives, the flipper rubber once the bat moves over,
+and steel (playfield, metal walls, ball-ball; there the spring is stiff and the touch short, so the effect is small). Rubber gives sideways about two thirds as
+much as inward; a ball gripping a post on a glancing hit winds the spring up and is pushed back as it leaves (spin reversal, the superball effect). Dropping it
+would change how balls leave posts with no data to justify it.
+Energy: the wind-up is stored energy (its stiffness follows the squash depth, inside the energy, so nothing leaks as the ball leaves); slip past the friction
+limit is a loss that can only remove energy. Twist and rolling resistance stay losses.
+The band keeps its proven grip (stick or slide, no spring) for now; moving it to the same spring law later is in the to-do, so every rubber ends on one law.
+Open: each touching contact carries its wind-up in the saved state and the solve has more to find (cost, measured offline). The offline proof adds oblique post hits
+with the spring and with the simple grip, so the difference is measured. The bat's energy gain (to-do 2.10) is suspected to sit in this part of the law: INFERRED
+that the new form removes it, checked when the bat moves over.
+
+6. Step length and the guards that stay   (approved by the user 2026-10-29)
+--------------------------------------------------------------------------
+Step length by accuracy only (the step cannot make energy at any length): the stiffest body of the group, omega h <= omega_h (0.6 from the band sweep; steel
+impacts get their own value from their offline proof); a surface being closed on is reached in about two steps; a ball turns at most 2 deg per step round a band
+or post; a step ends exactly on a hard stop and at the end of the 1 ms cycle.
+Guards that stay: engagement (closing speed plus the part's speed bound); the sweep against tunnelling through thin walls; the rule for a ball found already
+overlapping a surface (the seat); halve-and-retry from the saved state when a step's solve does not settle; the group's energy books closing every cycle, a
+failure shown on screen (rule 8).
+Guards that go for groups on the new step: the extra rewinds and depth checks that existed only to catch energy being made.
+Open: whether 0.6 is accurate enough for steel impacts (decided by the steel proof).
+
+7. Offline proof   (approved by the user 2026-10-29)
+----------------------------------------------------
+The group step alone, no engine (runs/<date>-group-step). Each case at the engine's step choice and at fixed steps 2 us - 1 ms, against a 1 us run.
+Cases:
+   Steel: a ball dropped on the playfield until it rests; a ball into a metal wall at 1 and 3 m/s, head-on and at 45 deg; two balls head-on at 3 m/s; three
+      balls in a row hit from one end (cradle); a pile of six balls against a wall (the solve settles; cost).
+   Rubber: head-on post hits at 0.1, 0.32, 0.86, 3 m/s against the rebound targets (to-do 1.21); glancing post hits at 30 and 60 deg, 1 and 3 m/s, with the
+      shear spring and with the simple grip; a ball pinched between a wall rubber and a post; a ball resting against a rubber on the slope.
+   Band: the 19 band cases (runs/2026-10-29-band-cord) with the playfield and gravity in; a ball touching the band and a post at once; two touching balls on the
+      band; a sling hit with a second ball resting against the first.
+   Past launch cases: a contact found in the middle of a step; the sling hit while its coil drives.
+Pass, each run on its own:
+   1. Energy never rises beyond the drives' work (coil, gravity): with losses the per-step rises sum to <= 1 uJ and the books close within 1 uJ; with no losses
+      and no coil the energy stays within 1 uJ at every step.
+   2. No ball passes through a wall, post or band.
+   3. Every step's solve settles.
+   4. At the engine's step choice: exit speed within 5 % and direction within 2 deg of the 1 us run.
+   5. Cost: at most 30 us per 1 ms of contact for one ball; piles and multi-ball cases reported, not judged.
+Stop rule: the whole set once; anything fails -> stop and report; no patching without the user.
+Not covered: the engine's loop (grouping, engagement, guards): the engine proof after this one.
+
+8. How it plugs into the engine   (approved by the user 2026-10-29)
+-------------------------------------------------------------------
+1. The band becomes a part object: cord, sling plate, coil and switch blades, settings from the shared rubber keys. It replaces the old node band (hitrubber.cpp
+   BandChain); the old band stays behind the physics-ini switch only for an old / new comparison and is deleted once the new one is proved.
+2. The cycle is unchanged except for one fork: islands form as today; an island holding a band goes to the group step instead of today's fixed 5 us steps;
+   every other island goes where it goes now.
+3. The group step, per 1 ms: gathers the island's balls, the band and each ball's contacts (playfield, walls, posts, other balls); steps them together to the
+   cycle's end under the guards of piece 6; writes the balls back; fires the events after (band hit, switches, the sling's own fire).
+4. Forces from outside the description (magnets, the table nudge, a part not yet moved over such as a gate or bat in the same group) enter as drives: held over
+   the step, their work counted in the books.
+5. A band with no ball rings down and its plate moves by itself with the same solve and no balls.
+6. The drawn band reads the cord's path after the step. Band animation is broken today (to-do 3.9): this gives it the right shape; the animation fix is separate.
+Breaks / open: the old node band's own keys (node spacing, band_stops, ...) change meaning or go: each listed in NewPhysicsReference.txt, with an on-screen note
+when a table sets one (rule 8). Switch and sling events fire after the step (same cycle, order against other events may change). Tables with unified = 0 keep the
+stock bands.
+
+9. Build status
+---------------
+Build order (user, 2026-10-29): 1 offline group step, 2 offline proof, 3 engine wiring, 4 engine proof, 5 clean-up. Step 1 split: 1a balls + fixed surfaces + ball
+pairs with the shared law as energy; 1b the band cord plugged in.
+1a: CODED 2026-10-29, src/physics/groupstep.h + runs/2026-10-29-group-step (gs_test.cpp, 22 cases). Details found while coding: a ball's spin is solved with its
+   travel (6 unknowns per ball: the shear spring ties them); the shear spring's stretch is turned into the new contact plane with its length kept (no energy made or
+   lost by the turn); a contact's effective radius, layer and material are held for the life of a touch (taken when it starts), so its energy is one function.
+   Proof run 2026-10-29 (Sonnet, notes group-step-1a-2026-10-29.md; MEASURED): energy 242 of 242 pass with losses and 242 of 242 lossless at every step size
+   1 us - 1 ms (largest rise 0.000017 uJ, largest |book| 0.0009 uJ, lossless largest drift 0.000037 uJ); no ball through, no solve failed. Accuracy at the engine's
+   choice: every exit within 5 % / 2 deg except cradle1 (8.6 %, but measured on ball 0's leftover 0.07 m/s after a 1 m/s hit: 0.006 m/s; the metric should be the
+   far ball's exit). Cost FAILS: every one-ball rubber case is over 30 us per contact ms (39 - 180 us); walls and ball pairs cheap (2 - 6 us per cycle); the pile of
+   six 1,484 us per ms (reported). Rolling ball into a post (1 us runs): rebound 0.74 / 0.90 / 0.80 / 0.63 at 0.1 / 0.32 / 0.86 / 3 m/s against the user's guesses
+   0.97 / 0.96 / 0.87 / 0.64; the earlier 0.98 at 0.1 m/s was CALCULATED for a ball with no spin. Halvings at the 1 us reference in rest (225) and pile6 (42).
+   Glancing hits: spring against near-rigid grip differ by up to 0.11 m/s and 7 deg at 1 m/s.
+   Cost split 2026-10-29 (Sonnet, notes group-step-cost / group-step-rule-trace; MEASURED): per step 4-8 us on rubber cases, about half of it tube probes (110 ns each,
+   19-38 a step; with the engine's precomputed bounds), the rest the solve. The step count is the larger lever, and the step-rule trace shows what sets it: the
+   playfield contact's shear spring (steel on wood, omega_t about 10,100 rad/s at the resting depth: 59 us steps, 17 a ms) in every case where the ball touches the
+   playfield (rest: 8,002 of 8,502 steps; pinch 6,216 of 6,761; post0.10 781 of 913); the ball pairs' shear spring in the pile (omega_t 33,000: 18 us, 52 a ms).
+   The rubber itself set few steps. The wall and post-hit cases are cheaper because the ball is in the air most of the run: after the hit it hops (ball 0 up to
+   5.8 mm above the playfield at 1 m/s, 23.5 mm at 3 m/s on the metal wall, 18.7 mm off the post at 3 m/s; the rolling ball's forward spin meets the wall and the
+   friction lifts it). Fixes in the bench: tube shapes passed the segment count where ProbeTube takes the point count (a ring missed a piece, a straight wall rubber
+   had none); the pinch case started 2.7 mm into the wall rubber. The 1a proof is to be rerun after the cost work.
+   Step sweep 2026-10-29 (Sonnet, notes group-step-step-sweep; MEASURED; shear spring in / out of the step choice x omegaH 0.6 / 1.2 / 2.4, with the bench fixes, so
+   the default run is the 1a proof rerun): energy 242 of 242 pass with losses and lossless in all six (largest rise 0.000017 uJ, |book| 0.0009 uJ). Default (shear in,
+   0.6): exits within 3.3 % / 0.56 deg (cradle1's leftover-speed metric 8.6 %); cost 4 of 14 one-ball cases within 30 us (worst pinch 91, rest 85, post3.00 65).
+   Longer steps or the shear spring out cut cost (shear out + 2.4: rest 19, pinch 27, 9 of 14 within 30) but break steel impacts: wall3_a0 2.5 -> 5.1 % (shear out,
+   0.6) -> 172 % (shear out, 2.4); ball pair 3.3 -> 36 %. Rubber hits stay within 5 % up to 1.2 (post3.00 4.2 %), 10.4 % at 2.4. Resting cases keep their end
+   position within 0.05 mm at every setting.
+   Step rule by motion (user-approved 2026-10-29; CODED, off by default: Settings vSteady 0): a contact touching with its compression rate and its contact point's
+   slip rate both within vSteady is steady and takes omegaHRest on its normal stiffness only; impacts, slides and arrivals keep the strict rule (shear spring in, 0.6).
+   Reason: in a steady contact the strict rule resolves only a vibration of a few nanometres that moves no ball, and the step cannot make energy at any length; the
+   sweep showed resting balls within 0.05 mm at every setting. What it can break: a steady contact suddenly struck stays relaxed until its rate crosses vSteady (a
+   step late); a slow slide below vSteady takes the relaxed step. Values (vSteady 0.01 / 0.05 / 0.2 m/s x omegaHRest 1.2 / 2.4) from the six-run sweep (brief
+   brief-group-step-motion-sweep-2026-10-29.md): the cheapest pair keeping every exit within 5 % / 2 deg.
+   Rule-by-motion sweep 2026-10-29 (Sonnet, notes group-step-motion-sweep; MEASURED): energy 242 of 242 both variants in all six. Up to vSteady 0.05 m/s the exits
+   are unchanged from the strict rule (largest 3.38 % / 0.65 deg, the ball pair); at 0.2 m/s with 2.4 wall1_a0 goes to 11.5 %. Cost with vSteady 0.05, omegaHRest 2.4:
+   rest 85 -> 18.7 us per contact ms, pinch 91 -> 32.5, post0.10 42 -> 24.5, pile of six 1,505 -> 982; 7 of 14 one-ball cases within 30 us (0.01 / 2.4: 8 of 14,
+   pile 1,486). Still over: the impact cases (post3.00 57, glance3_a30 41, the near-rigid grip cases 49-67), where the strict steps stay and the time per step counts.
+   Defaults set 2026-10-29 (user): vSteady 0.05 m/s, omegaHRest 2.4. Tube probes reused instead of repeated (the step's start reuses ChooseStep's probes; each round
+   reuses the range check's probes of the same move): smoke runs give results identical to the 0.05 / 2.4 sweep run; tube probes per step 35.5 -> 19.6 (post3.00),
+   38 -> 27 (pinch). The impact cases now spend their time in solver rounds (post3.00 6.9 a step, up to 29). Check run briefed (brief-group-step-defaults).
+   Check 2026-10-29 (Sonnet, notes group-step-defaults; MEASURED): reports byte-identical to the 0.05 / 2.4 sweep run (probe reuse changes no result). Cost: 8 of 14
+   one-ball cases within 30 us per contact ms (rest 15.5, pinch 26.1, post0.10 19.9); over: post3.00 43.7 and glance3_a30 31.9 (3 m/s hits, about 7 solver rounds a
+   step) and the four near-rigid grip comparison cases (39-52, not a real setting). Pile of six 994 (reported).
+   Rounds trace 2026-10-29 (Sonnet, notes group-step-rounds; MEASURED): the 3 m/s hits' long solves (up to 29 / 37 rounds) have no shortened moves and no
+   stick / slide or touch changes; each round shrinks the change by a steady factor (post3.00 median 0.06 for the speed, 0.26 for the spin; glance3_a30 0.14 / 0.34;
+   the slowest step's spin 0.43 a round with one sticking contact). Rest 0.01, wall3_a0 0.025. A steady factor means the solve's estimate of how the forces change
+   (the Jacobian) is incomplete, mostly in the spin (INFERRED; the missing terms not yet found).
+   Jacobian check 2026-10-29 (Sonnet, notes group-step-jacobian; MEASURED): solving with a central-difference Jacobian cuts rounds per step (post3.00 6.9 -> 3.2,
+   max 29 -> 7; glance3_a30 7.3 -> 3.1, max 37 -> 5; pinch 4.7 -> 3.0, max 52 -> 9), same exits within the solver tolerance. The solve's own Jacobian is right in the
+   force blocks (within about 1 %) but misses 82-99 % of the torque-from-move block in every slow step: the torque's change with the ball's move into the post
+   (entry torque-x / move-y 0.0016 against 0.60 in post3.00 step 21). Smaller misses in torque / spin (up to 46 % in glance3_a30). INFERRED: the missing term is the
+   shear force's dependence on the squash depth (the spring stiffness kt grows with the contact patch; when sliding, the friction limit grows with the normal force),
+   not yet in the Jacobian.
+   Jacobian completed 2026-10-29 (user OK): the shear force's change with squash depth (spring stiffness with the patch; when sliding, the limit with the normal
+   force, and the sliding direction), the rolling torque's exact slope, the normal force's exact chord slope (F(d1) - chord) / (d1 - d0) instead of K / 2, and the
+   damping's change with depth. Smoke runs (rounds a step, mean / max): post3.00 6.9 / 29 -> 4.2 / 8, glance3_a30 7.3 / 37 -> 4.0 / 8, pinch 4.7 / 52 -> 3.6 / 10,
+   rest 4.4 / 9 -> 3.6 / 6, pile of six 3.1 -> 2.4 (the difference Jacobian reaches about 3.1). Full check briefed (brief-group-step-jacfix).
+   Full check 2026-10-29 (Sonnet, notes group-step-jacfix; MEASURED): energy 242 of 242 pass both variants (largest rise 0.000001 uJ, |book| 0.001 uJ). At the engine's
+   step choice every exit equals the previous run's except glance1_a60_grip (0.14 %) and the near-zero speeds of pinch / rest; rounds a step fall (mean over cases
+   4.53 -> 3.49; post3.00 6.9 -> 4.2, glance3_a30 7.3 -> 4.0). At long fixed steps (200 us - 1 ms, which the engine never chooses for an impact) the solve can land on a
+   different solution of the same step equations (wall3_a0 at 1 ms: 3.00 against 1.95 m/s), energy-exact either way. Cost: 9 of 14 one-ball cases within 30 us;
+   over: post3.00 53 (was 44; 4 halved steps against 1) and the four near-rigid grip comparison cases (37-43).
+   Halvings found 2026-10-29 (smoke trace of post3.00, one run; halving record added: why, rounds, flips, last rounds): all 4 halved attempts are solves that never
+   settled (60 rounds), with no stick / slide or touch change and nothing sliding, and every round's change the same size (rim speed 1.40, 1.08, 1.00, 0.56 m/s,
+   identical round after round): the solve jumps back and forth between two points (a two-cycle). The run solved with the exact difference Jacobian halved the same
+   4 steps, so the Jacobian is not the cause. They fall in the rebound (t 2.33-2.46 ms). INFERRED: a kink in the equations there, likely the normal force's clamp
+   at zero (friction limit, twist and rolling resistance switch off where damping pulls the net push below zero as the ball leaves).
+   Line search added 2026-10-29 (user OK): a Newton move that did not reduce the step's residual (in speed units: momentum / m, spin / (I / R)) is taken back and
+   retaken half as long. Smoke runs: post3.00 halvings 4 -> 0 (rounds 4.3 a step, max 16); other cases unchanged; the pinch's 4 halvings are on long steps where
+   a contact starts / ends or sticks / slides inside the step (a real switch, which halving resolves). Full check briefed (brief-group-step-linesearch).
+   Full check 2026-10-29 (Sonnet, notes group-step-linesearch; MEASURED): energy 242 of 242 pass both variants (largest rise 0.000001 uJ, |book| 0.0009 uJ). At the
+   engine's step every exit equals the previous run's except post3.00 (0.18 %, still 1.9 % from its 1 us run), glance1_a60_grip (0.14 %) and the pinch's near-zero
+   speed. Halvings over all rows halved (report 1,123 -> 549; lossless 4,567 -> 2,710); post3.00 none. Cost: 10 of 14 one-ball cases within 30 us per contact ms;
+   post3.00 53 -> 26.5; the four over are the near-rigid grip comparison cases (35-43, not a real setting). Pile of six 863 (reported). Long fixed steps (100 us -
+   1 ms, not used by the engine for impacts) can land on other solutions of the step (cradle1 up to 11.6 %), energy-exact.
+   STEP 1a DONE offline: energy by construction, accuracy within 5 % / 2 deg at the engine's step, every real one-ball case within the cost budget. Open: the pile's
+   cost (reported only), the cradle1 exit metric in the bench (measures ball 0's leftover speed), the rolling-ball rebound against the user's guesses (video).
+
+10. Step 1b: the band cord in the group step   (designed with the user one question at a time, 2026-10-29)
+--------------------------------------------------------------------------------------------------------
+10.1 How the band joins the solve, and the ball's height   (approved by the user 2026-10-29)
+   One solve. Each ball keeps its 6 unknowns (move and spin); the band adds no ball unknowns; the sling plate's angle is the one added unknown (none for a band
+   without a plate). The band reads each ball's centre projected into its plane (the playfield plane at the cord's height: a fixed linear map), and its forces and
+   stiffness are mapped back to 3D the same way.
+   Height is in the energy (user: "This is a 3D simulation and bands can throw or push a ball into the playfield depending on the height they are placed"): the cord
+   stays at its own height between its posts; round a ball the path's clearance is sqrt((R + r)^2 - dz^2) (R ball radius, r cord radius, dz = ball centre height -
+   cord height), so the cord's length and stored energy depend on the ball's height, and the push comes out along the 3D line from the cord's centre line to the
+   ball's centre: a cord below the centre lifts the ball, above it pushes the ball into the playfield (the playfield contact takes it in the same solve), level gives
+   no vertical push. The backstop squash (posts, stops, plate face) is measured along the same 3D line. Still one function of the positions: the exact step and the
+   energy books are unchanged; cost one square root more per ball on the band. Replaces BandCordDesign.txt section 6's "planar" note (which gave no vertical push).
+   Not handled: the cord slipping up or down along the ball (grip holds it while the contact line's tilt has tan < mu 0.9, about 42 deg or dz up to about 11 mm with
+   a 27 mm ball and 5.4 mm cord, CALCULATED; past that a real cord slides, the model keeps it at its height); the cord sliding up or down a post (posts hold it at a
+   fixed height). A ball hopping over the band: the contact fades smoothly as dz reaches R + r (16.2 mm), so it can pass over.
+10.2 The band's grip in the 3D solve   (approved by the user 2026-10-29)
+   The band keeps its proven grip (stick or slide, no shear spring; BandCordDesign 2), turned into 3D: the friction acts in the 3D contact plane (along the cord, and
+   across it tilted with the ball's height), twist about the 3D contact line, rolling resistance about the axis across the cord in that plane; the limit is the band's
+   whole push on the ball; the grip impulses are found between the solve's rounds as in the band's own solve (maximum dissipation: their work is never positive).
+   Exception to the one-shared-path rule (to-do): two grip laws in one solve until the band moves to the shear spring, which needs a patch-size rule for a contact
+   pressed by tension alone (no squash depth), with its own design and proof; the band is not called done until then.
+   Not handled: the give-back of the rubber's sideways bend on a glancing band hit (a post hit has it; 1a measured up to 0.11 m/s and 7 deg between spring and
+   near-rigid grip at 1 m/s on posts). Open (INFERRED): a ball gripping the band and the playfield at once may need more rounds (the two grips meet through the
+   ball's spin); the smoke run shows it.
+10.3 The step length with a band in the group   (approved by the user 2026-10-29)
+   The band's rules join the group's ChooseStep (the shortest wins): a ball on the cord at omegaH 0.6 on the cord's stiffness and at most 2 deg of turn round it a
+   step; a squash on a post, stop or the plate face reached in about two steps and stepped at 0.6 while it is struck; the plate's springs at 0.6, at most 2 deg of
+   turn a step, a step ending exactly on the coil stop. The steady rule applies to the band's squash too: touching with its compression rate and slip rate within
+   vSteady (0.05 m/s) it takes omegaHRest (2.4), as every steady contact does. The cord itself is soft and never sets short steps.
+   Not handled: a ball resting on the band that is struck, or resting on the sling as it fires, keeps the relaxed step until its rate passes vSteady (one step late;
+   energy safe, that step less accurate), as for every steady contact.
+10.4 Build status
+   CODED 2026-10-29 (offline): groupstep.h Part interface + bandcord.h BandCord::Part as a part (10.1-10.3); bench runs/2026-10-29-group-band (gb_test.cpp, 24 cases).
+   Force check (gradcheck, MEASURED): the band's forces on the ball (x, y, z) and the plate's torque equal central differences of its energy within 1.4e-8 N in five
+   states (dented level, 4 mm above / below the cord, squashed on a stop post, pressed on the sling face): the height term is right (4 mm above: +0.40 N up; below:
+   -0.47 N). 1a unchanged with no part (post3.00, pinch at the engine's step: identical lines, MEASURED).
+   Smoke runs at the engine's step (one run each, MEASURED): energy rises 0 in all six; |book| <= 0.000001 uJ except lowCord3 -1.14 uJ (over the 1 uJ limit; not
+   looked at). Highest a ball's bottom rose above the playfield: hit1_a30 6.8 mm, highCord3 (cord 5 mm above the centre) 3.9 mm, slingHit3 109 mm, lowCord3 (cord 5
+   mm below) 318 mm, hit3_a0 (cord level with the centre) 353 mm; hit3_a0 lossless (no grip on the band) 64 mm. Exit speed in the playfield's plane hit3_a0 1.24 m/s.
+   A ball thrown 0.1 - 0.35 m up by a band is not real play. INFERRED mechanism (not traced): with the cord held at its height between the posts, a ball above it is
+   pushed further up the higher it rises (the push follows the contact line, which tilts up as the clearance shrinks), and the stretched cord's energy goes into that
+   lift; level hits start it through the grip (the rolling ball's front moves down at its speed) or any small offset. Pressed down (highCord3) the playfield holds it.
+   Correction to 10.1's list: "the contact fades smoothly as dz reaches R + r" holds for a ball beside the cord; a ball dented into it and lifted keeps the cord's
+   bend under it and is pushed up hard, which is the launch above. The real cord is free to move up and down between its posts.
+   Open: the throw (design question for the user), lowCord3's book, the full piece-7 run (brief not written: waits for the throw).
+   Trace 2026-10-29 (Sonnet, runs/2026-10-29-group-band notes-group-band-trace-2026-10-29.md; MEASURED unless marked):
+   - hit3_a0 (3 m/s head-on, cord level with the ball's centre): the ball arrives rolling (its front surface moving down at 3.0 m/s); the band's friction slides at its
+     full limit upward (grip z = 0.900 x push on every sliding step) and lifts the ball off the playfield 0.36 ms after the first wrap; once the centre is above the
+     cord, the cord's own up-push grows with the height (dz 0.06 -> 14.3 mm, cord z force 0.016 -> 17 N). Vertical impulse: cord +137, grip +83 mN s; 2.58 m/s up at the
+     release. Present at 1 us steps too (z_max 361 mm), so not a step-size effect. Lossless (no band friction): no lift by the band (largest cord z 0.74 N, below the
+     ball's weight 0.78 N). INFERRED: the friction lift starts it; the cord held at its height turns it into a run-away.
+   - cord70_3 (the usual placing, cord 0.4 R above the centre, user): no launch (z_max 4.1 mm, from playfield hops after); the cord pushes down (-90 mN s) against the
+     grip's +82 mN s.
+   - lowCord3's book error (-1.19 uJ) is one step, where a back-span pulley ends that had held a ball 20-78 mm above the cord for 25 ms (tension above rest, push up to
+     4.2 N): the back-span pulley (clearance + 2 r) does not leave when the ball rises clear (a fault of 10.1's code).
+   - The unplanned sweep (pre-trace build, same physics): 24 of 264 FAIL with losses: roll fails to solve at every step size; back4 fails to solve at 1-10 us and its
+     book is -82.5 uJ at the engine's step (-7.3 uJ at 1 ms); lowCord3 fails to solve at 1-10 us, book -2.2 / -6.0 uJ at 500 / 1000 us. Lossless 2 of 264 FAIL: stop3 at
+     100 us (|E - E0| 1.55 mJ) and slingHit3 at 500 us (1.22 mJ), both with the squash 4.4 - 4.5 mm deep (of 5.4). Not traced.
+   - hit3_a0 steps 33-44 run at 1 ms (the 1 ms cap) while the band's friction changes sign each step (+15 / -28 N).
+   Failure trace 2026-10-29 (Sonnet, notes-group-band-failures-2026-10-29.md; MEASURED unless marked):
+   - roll (ball rolling along the band into its far post, cord level): fails at t 303.4 ms with the ball at the post (0.003 mm short of its x). The band's path will
+     not settle: the ball's pulley joins (the straight cord is 5.7 um inside the ball) and leaves (its wrap then -6e-9 rad) over and over; halving cannot remove the
+     gap. INFERRED: the join rule (the run's segment crosses the ball) and the leave rule (wrap below zero) disagree where the ball meets the cord at the post's
+     tangent point. Not a height effect (dz -0.0007 mm).
+   - back4 and lowCord3 at 10 us: fail to solve (60 rounds) as the rising ball's centre reaches dz = R + r (16.19 mm, centre over the cord): the clearance closes to
+     0 and the push grows as about clearance^-2 (5e5 - 1.9e6 N). This is the fixed-height cord's singular point (10.4's correction).
+   - back4's book (-82.6 uJ) is one step: the back-span pulley leaves a ball 28 mm above the cord while the cord still held 83.4 uJ above rest (push 0.64 N); that
+     energy vanishes unbooked. Same mechanism as lowCord3's -1.19 uJ.
+   - The lossless failures (stop3 100 us, slingHit3 500 us) are one step each and a LOSS (-1.55 / -1.22 mJ), not a gain: the step where the ball leaves the playfield
+     after a touch-down (vz -0.02 -> +0.26 and 0.00 -> +0.30 m/s), taking 50 / 49 of the 60 rounds; no pulley change, no stop, not the deepest squash. Not explained.
+   INFERRED: three of the five faults (the throw, the singular point, the back span left on a lifted ball) come from the cord held at its height between the posts.
+
+11. The cord free to move in height (replaces 10.1's cord held at its height between the posts; designed with the user one question at a time, 2026-10-29)
+--------------------------------------------------------------------------------------------------------------------------------------------------------------
+Why (10.4 traces): the fixed-height cord turns a small lift into a run-away throw, has a singular push when a ball's centre comes over it, and leaves its back span
+on a lifted ball (an unbooked energy drop when it lets go).
+11.1 What sets the cord's height   (approved by the user 2026-10-29)
+   The cord takes the shortest path in 3D. Only its own posts hold its height (they are shaped to the rubber: it does not slip up or down them, user). Between them
+   it moves up and down freely; it stays massless (no new unknowns). A ball is a sphere the cord's centre line keeps R + r from: a ball above the cord's height
+   pushes it down, below lifts it, and the pull on the ball is along the real 3D line; a ball centred on the cord gets no vertical push; one resting on top presses
+   it down. Stop posts and the plate face: the cord slides up and down on them (alone they keep it flat: its ends are held at one height). The playfield is a floor:
+   the cord's centre stays at least r above it. The cord's length stays a smooth function of the positions (the exact step holds); the back span sees the ball as
+   a sphere too and lets go of a lifted ball smoothly.
+   Not handled: the cord's weight and sag; the path's shape assumes the cord slides freely over the ball (the grip still acts on the ball, as in-plane today);
+   cost (one ball in a span: closed form; two or more: repeated passes). The roll join / leave fault and the lossless take-off loss (10.4) stay open.
+11.2 How the 3D path is found, and what the cord can touch   (approved by the user 2026-10-29)
+   The shortest path is solved exactly (to rounding) at every evaluation, by Newton's method on where the cord meets and leaves each pulley, started from the path
+   of the step's start: on an own post a point on its groove (fixed height); on a ball two points on its sphere joined by the shortest arc; on any other surface a
+   point the cord's centre line keeps r off it. Exact because the energy check needs the length to be a smooth function of the positions. The pull on a ball is
+   the tension times the difference of the two runs' directions (a property of the shortest path; the force check confirms it). A pulley joins where a straight
+   run cuts into it and leaves where its wrap goes below zero, both with the same 3D geometry (the roll fault, 10.4, is fixed here).
+   What the cord touches (user: "it shouldn't matter what it hits, wall, post, playfield, or rail, it should follow the same squash law as a post"): its own posts
+   (hold its height and place); every other surface (posts, walls and rails behind it, the plate's face, the playfield) is one kind: the cord lies against it and
+   slides on it, and a ball pressing the cord onto it squashes the cord with the post law. No surface is a special case; the offline build sets them by hand, the
+   engine's finding them from the table (to-do 3.7) is decided at the wiring. A real band never reaches the playfield (user); it is in the list for the one rule.
+   Cost (INFERRED, to be timed): one ball between two posts 2 - 4 Newton passes on a few unknowns; six balls a small linear solve a pass.
+   Not handled: a path solve that does not settle halves the step (the solver's rule); a wrap may not change by more than half a turn in a step (as now); the cord's
+   friction on the surfaces it slides on is left out (as on the posts).
+11.3 The band's grip with the cord free in height   (approved by the user 2026-10-29; replaces 10.2's across-the-cord friction against a still cord)
+   Across the cord: while the grip holds, the cord's touch on the ball stays on the same spot of the ball (it turns with the ball's spin about the cord's direction):
+   a rolling ball drags the cord down or up with its surface, the cord leaves its shortest path and its tension pulls back through the path (the cord's own stiffness,
+   like a plucked string). Past mu x the push the touch slides back toward the shortest path; that sliding is the friction's loss. Energy: while held the length is a
+   function of the positions and the held spot (the exact step holds); sliding only removes energy. Along the cord, twist and rolling resistance: as 10.2. This is
+   the shear-spring grip of the other rubbers with the cord's tension as the spring (most of the way to one shared law).
+   Not handled: each touching ball carries its held spot in the saved state (more state and solving: cost measured); the rubber's own sideways give (shear spring)
+   still left out; friction along the cord ignores the cord sliding round its posts.
+11.4 The step length   (approved by the user 2026-10-29)
+   10.3's rules unchanged (the cord at omegaH 0.6, 2 deg of turn a step round a ball, a squash reached in about two steps, the steady rule 2.4 within 0.05 m/s, a step
+   ending on the coil stop). Added: the held grip's stiffness (the cord's pull back when a ball drags it, about tension x (1/l_in + 1/l_out)) counts with the cord's at
+   0.6; the squash on any surface (11.2) uses the squash rules. The fixed-height cord's height term goes (no singular point).
+   Not handled: a held spot about to slide gets no shorter step ahead of it (caught inside the step, as the in-plane grip); the 1 ms steps seen while the friction
+   flipped sign (10.4) are INFERRED to go once the grip has a real stiffness (the trace checks it).
+11.5 The offline proof   (approved by the user 2026-10-29)
+   Bench runs/2026-10-29-group-band. Cases: the 24 band cases; cord70_1 / cord70_3 (the usual placing: the cord's centre at about 70 % of the ball's height, user);
+   the cord level / 5 mm below / 5 mm above the centre at 3 m/s; roll (along the band into its post: the roll fault); back4 (front span into the back span, the back
+   span letting go of a lifted ball); new: a ball pressing the cord onto a wall behind the band; a ball dropped 20 mm onto the top of a band.
+   Pass, each run on its own: 1 with losses the energy never rises beyond the coil's work (sum of rises <= 1 uJ) and the books close within 1 uJ; 2 lossless within
+   1 uJ at every step; 3 no ball through the cord, every step solved; 4 force check (the band's force on each ball and the plate's torque equal energy differences,
+   held grip spots included); 5 exit within 5 % / 2 deg of the 1 us run at the engine's step; 6 cost: one ball <= 30 us per 1 ms of contact, several reported;
+   7 (user: "a radius lift off the playfield could happen, anything over 1 ball diameter should be treated as a break") with losses, a ball's bottom never more
+   than one ball diameter (27 mm) above the playfield; not applied lossless (there a ball is launched off the playfield's lossless grip with no band involved,
+   64 mm MEASURED in hit3_a0 lossless).
+   Stop rule: the whole set once; anything fails -> stop and report, no patching. Not covered: the engine loop; the lossless take-off loss (10.4) is not explained:
+   if it recurs, pass 2 fails and it is traced then.
+11.6 Build status (2026-10-29)
+   CODED (offline): bandcord.h group mode on the 3D path (11.1 - 11.4); bench runs/2026-10-29-group-band. Decisions made while coding (to confirm with the user):
+   - Own posts are horizontal grooves at the cord's height (a post taken as a sphere let the cord tilt round it and slip past a ball: MEASURED, force check: the
+     cord went to -3.3 / +3.3 mm round the posts and missed a ball dented 3 mm). A run leaving a groove at a slope bends over its lip, so the pull on a ball is
+     the exact derivative of the cord's length (central differences of the path solve, 10 um / 1e-4 rad / 1e-3 rad for a held arc's turn), not the tension
+     along the runs alone (they differ by about 1e-3 at a 4 mm height offset).
+   - The path: each pulley's touch points are its common tangents with its neighbours' circles seen in its own plane (exact when they share a plane; a
+     tangent from a point failed to settle where a ball squashes the cord onto a post: the two circles overlap and no point tangent exists); a ball's plane
+     through its centre and its neighbours' touch points; a stop post, wall or face end slides to where its runs' slopes balance. Pulley passes with an
+     extrapolation of a steady creep. MEASURED: every path solve settles in at most 3 passes in the smoke runs.
+   - The held grip's slide limit uses the band's push at the step's start (with the push of the round before, the stick / slide choice flipped round to round:
+     MEASURED, a 4-round cycle in the resting case). Sliding only removes energy either way.
+   Force check MEASURED: the band's force on a ball (x, y, z), the plate's torque and a held arc's torque (turned 0.1 rad first) equal central differences of
+   the energy within 3e-7 of them (the 10 um difference step's own error) in five states.
+   Smoke runs (one each, engine's step, with losses; MEASURED): the energy never rises; |book| <= 0.00001 uJ. Highest a ball rose (limit 27 mm): cord70_1 (the
+   usual placing, 1 m/s) 4.1, hit1_a30 20.9, hit1_a0 (cord level, 1 m/s) 38.1, highCord3 28.4, slingHit3 74.5, lowCord3 73.3, back4 98.0 mm. Every 3 m/s
+   head-on hit ends with the ball moving on into the band (exit direction -90 deg): hit3_a0, lowCord3, highCord3, cord70_3 (the usual placing: 8.9 mm up, out
+   under the band at 2.31 m/s), back4. Solves fail in hit3_a0, highCord3, slingRest.
+   INFERRED (CALCULATED estimate): a 3 m/s ball into this 130 mm, 20 N band dents it about 40 mm (all the ball's 0.36 J into the stretch, EA 286 N), so its
+   centre passes the line between the posts; with any height offset the plane through the posts and the ball's centre tips toward vertical and the free cord's
+   shortest path goes over or under the ball. The held arc turns with the ball's rolling spin (about the cord's direction) and drags the cord round it. Not
+   handled by the design: the cord twisting about its own axis (a round cord on a spinning ball can roll instead of being dragged), the cord's mass.
+11.7 What a real band does (user, 2026-10-29, from a video of a sling hit at about 2.5 - 3 m/s, the user's estimate)
+   "A band would never let a ball pass through/under it." The band grips the ball as it rolls and pulls the cord down to about the ball's mid point; the ball
+   penetrates about 12 - 13 mm and stops (the sling's switch probably took some of the momentum besides the band). A slower hit behaves the same, penetrating less.
+   Against the model (11.6): the rolling grip dragging the cord down matches; the model keeps dragging it past the mid point and lets the ball over / under. A new
+   pass check follows: no ball ever ends on the band's far side. INFERRED (CALCULATED): to stop a 3 m/s rolling ball's spin (I w^2 = 0.29 J at 222 rad/s) within
+   the about 19 deg from 70 % height to the mid point takes about 2.6 N m/rad of hold; the cord's bend alone gives about 0.16 N m/rad at 20 N (T S^2 (2 / l)).
+   Candidates for the missing hold, not checked: the rubber's own sideways give at the ball (the shear spring the other rubbers have), the cord's friction on the
+   plate face and switch blades behind a sling (they would hold its height), the switch blades' own spring, the cord's tension during the hit.
+   Measured against the video 2026-10-29 (Sonnet, runs/2026-10-29-group-band notes-group-band-sling-video-2026-10-29.md; MEASURED, engine's step):
+   - Penetration (ball centre past the first-touch line): sling70_3 10.79 mm, sling70_2.5 10.23, sling70_1 6.87 (coil off: 11.07, 10.37); video 12 - 13 mm at
+     2.5 - 3 m/s. The plate face holds it (deepest face squash 4.2 mm at 4.9 ms for 3 m/s); without a plate (cord70_3, free 130 mm band) 27 mm, then 43 mm and the
+     ball goes on through.
+   - Where the cord sits on the ball: starts at +20 deg (70 % height); at 1 m/s it is pulled to the mid point and stays there (lowest -0.19 deg): matches the
+     video. At 2.5 / 3 m/s it crosses the mid point at 3.9 / 3.2 ms and goes on to -44 / -64 deg (the cord below the ball's centre); the video shows it stopping at
+     about the mid point. The held arc holds nearly the whole contact (slides 2 of 73 steps at 3 m/s); its torque peaks 0.126 N m.
+   - Every sling ball ends on the side it came from (no pass-through), but the 2.5 / 3 m/s hits launch it: vz +1.5 / +2.0 m/s at the band's release, z_max 70 / 80 mm
+     with the coil, 140 / 203 mm without (the plate's face takes some vertical speed back when it throws). Vertical impulse over the wrap at 3 m/s: cord 169 mN s,
+     grip 0.1, playfield 0.3 (INFERRED: the cord's own pull once dragged below the ball's centre).
+   - The face squash starts at 2.6 / 3.1 ms, just before the cord crosses the mid point (3.2 / 3.9 ms). INFERRED: in a real sling the cord, pressed onto the plate
+     by the ball, is held there by its friction on the plate (rubber on metal), which would stop it near the mid point as the video shows; the model lets the cord
+     slide freely on the face (11.2: "the cord's friction on the surfaces it slides on is left out").
+   - Solver: halvings come from a 4-round cycle at the 1e-11 m/s tolerance (noise floor of the difference derivatives); one step failed that way (sling70_1 at 25.9
+     ms, the plate 38 us from its stop). Open.
+11.8 The test bands' real rubbers (user, 2026-10-29)
+   The stress table (Tales of the Arabian Nights post layout) specifies black rubbers: 4 MPa by the user's earlier measurement (not recorded on disk before this).
+   Rings (inner diameter): the sling 2.5"; Rubber5 3" (and the table is missing its centre post, per the manual: the real band has two spans of about 64 mm, not the
+   bench's one 129 mm span); Rubber3 and Rubber4 2"; Rubber7 two 2" rings. The bench's 20 N at 7 % (a pull rate of 286 N per unit stretch) dates from the 12.5 MPa
+   setting (12.5 MPa x 22.9 mm2 x 7 % = 20.0 N). CALCULATED from the rings and the bench's posts and cross-sections (5.40 mm; the sling 6.48 mm; not checked
+   against the real rings), 4 MPa: Rubber5 13.8 % stretch, 12.6 N, 92 N per unit stretch; Rubber3 11.4 %, 10.4 N, 92 N; the sling 17.8 %, 23.4 N, 132 N (the user's
+   estimate of the pull needed to fit a rubber on its posts: 20 N). The stress table's ini sets e_mpa 2 (rubber_e_mpa 1.8) for these rubbers.
+   Also: rubber at 11 - 18 % stretch is not linear; the cord's stretch energy is linear in the stretch (tension and pull rate from one modulus): stated, not changed.
+   Cross-sections (user, 2026-10-29): big rings 1/4" (6.35 mm), very small rings 3/16" (4.76 mm); the bench used 5.40 mm and the sling 6.48 mm. With 6.35 mm and 4 MPa
+   (CALCULATED, the posts' own radii kept): Rubber5 13.6 % stretch, 17.2 N (3.9 lbf); Rubber3 11.2 %, 14.2 N (3.2 lbf); the sling 17.8 %, 22.6 N (5.1 lbf); all
+   127 N per unit stretch. The modulus (stiffness) 4 MPa is about 63 Shore A by Gent's conversion (an approximate relation: 50A 2.5, 60A 3.6, 65A 4.4, 70A 5.5 MPa).
+11.9 The real rubbers in the bench, and a slide fault fixed (2026-10-29)
+   gb_test.cpp: the sling, Rubber3 and the long band now use 4 MPa (stretch and squash), the 1/4" cross-section, and the stretch at rest from the ring on the posts
+   (sling 17.81 %, 22.56 N, 126.7 N per unit stretch; Rubber3 11.17 %, 14.15 N; the long band 13.60 %, 17.22 N; GB_OLDBAND=1 restores the old values).
+   FAULT FOUND in the bench's smoke run (MEASURED): the free band at 3 m/s had 0.214 J of energy rises with the books still closing; all five rising steps were held
+   arcs sliding on 1 ms steps, booking a negative slide loss. Two causes: the slide's end was searched between the held turn and no turn (a cord slides the way its
+   pull points, which can be the other way: with a non-linear pull the search could land on the wrong side and the friction did positive work); and the slide's
+   friction counted the cord's stretch-loss force on the arc's turn (its sign is not tied to the slip). Fixed (Coulomb by construction): the arc slides the way the
+   cord pulls it until its elastic pull is down to mu x push x R (bracketed from the held turn in the pull's direction, then false position); the friction on the
+   ball is that pull, against the slip; the cord's stretch loss acts on the move's share of the length change (the arcs' turn takes none). Rerun of the same five
+   cases: energy rises 0 in all (MEASURED).
+   Rerun with the real rubbers 2026-10-29 (Sonnet, notes-group-band-real-rubber-2026-10-29.md; MEASURED, engine's step):
+   - Energy: rise 0 (lossless run: |E - E0| 0.000002 uJ), |book| <= 0.000001 uJ in all seven runs.
+   - Penetration: sling 3 m/s 10.08 mm, 2.5 m/s 9.41 (coil off 10.29 / 9.54), 1 m/s 6.49; Rubber3 (stop post behind, 3 m/s) 12.15 mm (stop squash 4.15 mm). Video:
+     12 - 13 mm (sling, 2.5 - 3 m/s). The real rubber lowered the sling's penetration by about 0.8 mm.
+   - The cord on the ball: still dragged past the mid point at 2.5 / 3 m/s (lowest -42.8 / -62.9 deg; was -44.1 / -63.6); Rubber3 to -89.3 deg; at 1 m/s it stops
+     +0.6 deg above the mid point (matches the video). The squash on the plate / stop starts before the cord crosses the mid point (sling 3 m/s: 2.6 ms, crossing
+     3.1 - 3.4 ms; lowest at 13 ms), so the cord goes on sliding down the surface it is pressed onto.
+   - Lift: sling 3 m/s 81 mm, 2.5 m/s 43 (coil off 197 / 135), Rubber3 114 mm; vertical impulse from the cord 124 - 163 mN s, the grip 0.1. No ball passes the band.
+   - Solver: both FAILED lines (this run and the last) are in the step where the plate reaches its coil stop (sling 1 m/s), stalled at the 1e-11 m/s tolerance.
+   INFERRED: the rubber values were not the cause of the drag; the cord sliding freely on the plate face / stop post it is pressed onto (11.2: its friction there
+   is left out) is the remaining candidate the numbers point to.
+   User (2026-10-29, from the slow-motion video): the sling plate definitely stops the ball; without it the ball would have gone much deeper. (The model agrees: the
+   plate face's squash stops the sling hits at 9.4 - 10.3 mm.)
+   User (2026-10-29): the sling's switches help stop the ball too: once a switch closes its blade has a stiff back. The model's switch blades are sensors only (no
+   force; the bench's blades sit at 35 % and 65 % of the span, closing at 1/16" = 1.59 mm of cord travel: ASSUMED placement). For the next design piece: a switch
+   is one more surface behind the cord (a light spring until it closes, then a stiff back), under the same squash and grip law.
+   Switches (user, 2026-10-29): the blades rest against the rubber at rest and close after 1/16"; once closed the back is not much stiffer (two blades instead of one):
+   "probably mostly immaterial to slowing the ball down". The 12 - 13 mm penetration is the user's estimate; in the video the ball hit between the sling plate and a
+   switch. Positions from the stress table's log (run_cost6_p1_pre123, switch001 / switch002 box centres projected on span 1, CALCULATED): 25 % and 72 % of the span
+   (the user's estimate: about 30 / 70; the bench had 35 / 65); the plate's centre at 49 %.
+11.10 The cord's friction on the surfaces it is pressed onto   (approved by the user 2026-10-29)
+   Where a ball squashes the cord onto a surface (the plate face, a stop post, a wall, an own post), that surface grips the cord too: the same stick / slide law as
+   the ball's grip, limit mu x the squash force there. It holds the cord's position up and down on the surface (along its length the cord still slides freely: one
+   tension round the loop). The squashed cord is held by both: while both hold, the ball's spin cannot drag it; the grip that reaches its limit first slides (a
+   rolling ball against a still plate: the ball slides on the cord and its spin is spent on friction instead of winding the cord round it). Each friction only
+   removes energy (Coulomb). Before the squash starts nothing changes. mu: the band's (rubber on steel) for the plate and posts; a wall its own material's.
+   Not handled: the cord sliding along its length on the surfaces; the switch blades' force (immaterial, user); the cord's twist and mass; cost (one more stick /
+   slide test per pressed ball per step: measured). Proof: as 11.5 (lift limit, no ball past the band) on the sling at 70 % (1, 2.5, 3 m/s, and a hit between the
+   plate and a switch) and Rubber3: the cord should stop near the ball's mid point and the ball not launch.
+11.11 Build status of 11.10 (2026-10-29)
+   CODED (offline): bandcord.h, a held ball pressed onto a surface (squash force Ns at the step's start): the two grips in series, the weaker slides, chosen once a
+   step from their limits (the ball's mu N R, the surface's mu Ns (R + 2 r)). The surface's the stronger (the usual case once squashed): the arc stays still and the
+   ball rubs on it (the grip's friction against a still cord, found between the solve's rounds). The ball's the stronger: the arc turns with the ball and the
+   surface's friction acts on that turn (also between rounds). Unpressed: as 11.3. A first version took the ball's friction direction from the sign of its turn
+   inside the solve: the cord stayed at the ball's mid point (MEASURED, -0.26 deg) but the torque flipped +-0.74 N m step to step once the spin stopped (static
+   friction must be solved for, not signed): replaced.
+   groupstep.h: a solve that has stalled at its forces' own noise (moves and grip changes below tolNoise 1e-9 m/s for 6 rounds without halving) counts as solved
+   (Books::noiseStops). Reason: the band's force is a central difference; its rounding left the sling's solves cycling at 1 - 3.5e-11 m/s against tolV 1e-11 (the
+   failures at the plate's stop, 10.4 / 11.6); the energy left over is about m v x 3e-11 m/s = 6e-12 J a step. 1a unchanged (post3.00, pinch, rest, pile6,
+   glance3_a30: identical lines, MEASURED).
+   Smoke (one run each, engine's step, MEASURED): energy rise 0, |book| <= 0.000009 uJ in all; z_max sling 3 m/s 22.1 mm, 2.5 m/s 10.7, between plate and switch
+   9.5 / 9.9, 1 m/s 2.2; stop3 51.4 mm (over the 27 mm limit); the two-post long band (not the real Rubber5) fails at 1 m/s. Force check: forces equal the energy's
+   differences within 1.1e-7 N; a held arc's torque within 2e-9 N m when free; pressed, the cord's pull goes to the surface (by design).
+   Measured 2026-10-29 (Sonnet, notes-group-band-surface-grip-2026-10-29.md; MEASURED, engine's step): energy rise 0, |book| <= 0.000009 uJ in all; no FAILED line,
+   halvings down 82 - 100 %. The cord now comes to the ball's mid point and stays within 4 deg of it through the largest penetration in every 2.5 / 3 m/s sling hit
+   (-0.75 to -3.6 deg; was -25 to -36): matches the video. Penetration 9.4 - 10.2 mm (video estimate 12 - 13); stop3 12.1 mm. z_max (limit 27 mm): sling 22.1 / 10.7 /
+   9.5 / 9.9 / 2.2 mm with the coil (3, 2.5, the two plate-switch hits, 1 m/s); OVER: coil off 3 m/s 34.0 mm, stop3 51.4 mm. The cord's vertical push fell 80 - 90 %;
+   the centre 3 m/s hits now lift through the grip: the cord held still by the face at the mid point, the rolling ball climbs it by friction (gripFz peak 98 N,
+   49 mN s; INFERRED, like a ball rolling into a wall). Grip chatter: in five runs gripFz alternates sign step to step (peaks 77 - 153 N, net small). stop3 (cord
+   level with the ball's centre in this case) is dragged to -40 deg before the stop post pins it, then the cord's push lifts the ball (77 of 85 mN s).
+   User (2026-10-29): some upward throw is expected, especially on the slings. (The lift limit stays one ball diameter, 27 mm, unless the user sets another.)
+   User (2026-10-29): the penetration is a pass (12 - 13 mm was an estimate; it depends on the plate's placement); 27 mm stays as the line for review, not a fail by
+   itself (no reference for the coil-off sling or a band at Rubber3's level height; physics does not rule them out). Rubber3's case had its cord level with the
+   ball's centre (a leftover of the old flat bench): stop3_70 added at the usual 70 %. Next: trace the grip chatter (brief-group-band-chatter-2026-10-29.md).
+11.12 Grip stick at the step's end; the last proof cases (2026-10-30; decided under the user's go-ahead for the session, for the user's review)
+   MEASURED (Sonnet, notes-group-band-chatter-2026-10-29.md): the chatter is the grip's stick rule. Holding the contact's slip at zero at mid-step did no work, so a
+   start slip came back reversed at the step's end (16 of 16 sticking flips, end / start -0.90 to -1.09, the friction exactly the force that reversal needs, the slip's
+   size not decaying over 5 - 7 steps). Real static friction stops the slip and spends its energy.
+   DECISION: sticking means no slip at the step's END: each grip impulse (along and across the cord, rolling, twist, the surface's friction on a turning pressed
+   arc) is chosen on the end rate (the mid-step rate less half the start rate, the slip taken as changing evenly), which spends the start slip (its work is minus
+   the start slip's share); where that impulse would do positive work (other forces turning the slip over within the step) the mid-step rule is kept (no work).
+   So the grip's work is never positive (checked on every impulse). Smoke (MEASURED): P2 flips over 10 N: 0 in sling70_2.5_f37, stop3, sling70_3 (were 6, 5, 0);
+   energy rise 0, |book| <= 0.000013 uJ in 15 runs; force check unchanged.
+   Rubber3 at 70 % (stop3_70): z_max 26.5 mm before this change, 37.9 mm after (over the 27 mm review line; no reference).
+   New cases: wall3_70 (Rubber3 at 70 % with a 2 mm wall 8 mm behind its cord's surface in place of the stop post, ASSUMED placement: the same squash distance as the
+   stop post for a centre hit, and the same result); dropTop70 (a ball let go 20 mm above the top of Rubber3's cord, 2 mm outward of its line: it lands on the cord,
+   is thrown back up and out (28 mm), and rolls away on its own side; energy exact).
+   Not handled: a ball exactly centred over the cord's line (the join test's side, from the plan view, is undefined there; MEASURED: centred, the ball fell through
+   the cord, caught by the through check). The bench's sweep now marks a ball ending on the band's far side (FAIL), an exit beyond 5 % / 2 deg at the engine's step
+   (ACCURACY), and lift over 27 mm (REVIEW).
+11.13 Proof run, part 1 (2026-10-30)
+   Timing (Sonnet, notes-group-band-proof-2026-10-30.md; MEASURED): the 1 us reference of sling70_3 takes 5.5 s; of six1 (six balls on the 300 mm test band, the old
+   20 N / 7 % values, cord level with the balls' centres) 30 min, and it FAILS (through, 1761 path solves not settled, 4578 halvings). The full sweep would take about
+   9 h: the proof is run in parts (bench: GB_BALLS=<n> keeps cases with at most n balls); the single-ball part (29 cases, about 10 min) is running.
+   six1 at the engine's step (MEASURED, coding session): fails at 47.3 ms; four of the six balls are past the band (31 - 41 mm beyond its line, lifted 2 - 14 mm), the
+   cord over or under them; the failing step repeats the same 0.17 mm move every round at any step length (a discontinuity, not noise). 5.5 million path solves in
+   243 steps. A six1_70 case (the cord at 70 %) is added to tell the level placing from the many-ball code (built after the proof run frees the executable).
+   Cost, open: the pull on the balls is a central difference of the path's length (two path solves per ball coordinate and per held arc), so a step with n balls costs
+   about 6 n + 2 n path solves an evaluation; the remedy is an exact derivative of the length in one pass (the touch points' sensitivity to the positions: the
+   fixed point's adjoint), not built.
+11.14 Proof run, single-ball part (2026-10-30)
+   MEASURED (Sonnet, notes-group-band-proof-2026-10-30.md; 29 single-ball cases x the 1 us reference, 9 fixed steps 2 - 1000 us and the engine's step):
+   With losses 98 of 319 runs FAIL (51 a step not solved, 80 a ball on the far side, overlapping); lossless 40 of 319 FAIL (37 not solved; |E - E0| over 1 uJ in
+   short3 at 500 us, 3.8 mJ, and slingHit3 at 1000 us, 0.45 mJ; back4 through the cord at 20 us). 13 ACCURACY rows, 129 REVIEW rows. No energy rise or book fault in
+   any run with losses.
+   Pass at every step size (both variants): every sling70 case (1, 2.5, 3 m/s, the plate-switch hits), stop3, stop3_70, wall3_70, slingRest, roll, rest, rollPost,
+   cord70_1, late1, the hit1 cases.
+   The failures: hit3_a0 / a30 / a60 / f02 / f08, back4, lowCord3, highCord3, cord70_3, all at 3 m/s on the bench's two-post 130 mm band (the real Rubber5 has a
+   centre post the bench lacks, and a 3" ring; the user, 2026-10-29); short3 (not solved at 50, 100, 200 us and the engine's step); dropTop70 (1 - 5 us). The 1 us
+   reference itself fails in 10 cases, so their accuracy rows are not meaningful.
+   Cost (cost.txt): every case over the 30 us per 1 ms of contact budget, 9.4 - 80 x (sling70_3: 1236 us per contact ms, 446 us a step).
+   Where the cost goes (MEASURED, coding session, engine's step, path solves by caller): sling70_3 20 506 solves in 328 steps (settling the end and mid paths 25 %,
+   the length's derivative 28 %, the held arcs' turn 46 %); cord70_1 19 646 in 381 (20 / 22 / 56 %); rest 88 886 in 751 (11 / 31 / 57 %). About 2 passes a solve.
+   So three quarters of the cost is the central differences (the length's derivative over the ball positions, and Lb's over the held arcs' turns).
+   Open, in order: (1) an exact derivative of the length (the fixed point's adjoint: one linear solve gives the touch points' sensitivity, the derivative over every
+   ball coordinate and arc turn in one pass), removing about 75 % of the solves; (2) why the 3 m/s hits on the two-post band end past it (trace one, hit3_a0);
+   (3) short3; (4) six1_70 (built) to tell the level placing from the many-ball code.
+11.15 Rubber friction 0.8; why a dropped ball goes through (2026-10-30)
+   Friction: rubber on steel set to 0.8 (user; was 0.9, no measurement behind it): bandcord.h, contacthost.h, rubbercontact.h, coilmodel.h defaults, the bench and the
+   [Rubbers] mu / [Flippers] rubber_mu lines of the tables' ini files. The band uses it for the ball on the cord and the cord on the surfaces behind it. User's tilt
+   test on a flipper rubber varied too much with weight and area to settle it (12 - 25 deg without weight, 50 - 60 deg with).
+   User's research figures: white / black rubbers 0.8 - 0.85; silicone rings (Titan, Perfect Play) 0.65 - 0.76; polyurethane (Super-Bands) 0.6 - 0.7. Not measured here.
+   The drop (correction of 11.12, which called it "exactly centred" only): MEASURED, engine's step, mu 0.8, a ball let go 20 mm above Rubber3's cord at 70 %:
+     2 mm to the outside (dropTop70): lands on the cord, thrown up to 42.06 mm, rolls off; through 0.
+     centre over the cord's line (dropCentre70): through 1, cord overlap 1155 um, then a step fails.
+     2 mm to the inside (dropIn70): through 1, overlap 1322 um, then a step fails.
+   Mechanism (read from the code, Settle3; the runs agree): before a ball may join the cord, a test asks which side of the run its centre is on, in plan view only, and
+   a ball must be on the outside of the loop (its signed radius is fixed as outside). Over the line the answer is zero, inside it is the wrong side: the ball is never
+   considered, the cord does not exist for it, it falls through, and the through check catches it. This is left over from the flat band. The cord's length, force
+   and energy laws are 3D and are not at fault; energy stayed exact in all three (rise 0, |book| 0).
+11.16 Flat rules left in the band (read from the code 2026-10-30, not run; for the user's decision)
+   User (2026-10-30): any 2D handling seems inappropriate. Coding session's view: right for every rule that stands in for something with a height or a direction; not for
+   geometry that really lies in a plane.
+   Wrong, to remove: the ball's join test looks from above (Settle3); a ball is fixed as outside the loop, its new arc plane starts from straight up.
+   Wrong, needs data: stop posts, the plate and walls have no height (Circle, PlateGeom, WallSpec hold none; Overlap uses the in-plane distance only): a ball above one still
+   squashes on it, and the cord can never go over its top. Needs each part's height.
+   Approximate, measure first: the cord on a sliding surface is a level arc with sloped runs (true shape: a helix); second order in the slope, error not measured.
+   Minor: a switch reads the cord's move from above, its blade has no height (user: switches mostly immaterial).
+   Not a fault: a cord on a sphere does lie in a plane (the great circle is the shortest path); an own post's groove is a level ring. All own posts share one height (a limit).
+   Clean-up: the old flat solver in bandcord.h is unused in the group step (old bench only); the bench's far-side mark looks from above.
+11.17 A ball meets the cord from any direction (2026-10-30; approved by the user)
+   Removed (bandcord.h): (1) the look-from-above side test for a ball joining the cord; any ball whose sphere a run cuts into may join, and the trial wrap decides.
+   (2) A ball fixed as outside the loop: its arc's plane now starts from the geometry, its centre on the bend's inside, so a ball may be on either side or on top.
+   (3) Found by the first run, same fault: a post saw a joining ball as a level circle of full radius whatever the arc's tilt. MEASURED before: wrap 18 deg at 0.2 mm depth, the
+   length jumping 0.2 - 0.4 mm at the join. Now a neighbour's circle is seen in this pulley's plane: its radius times the cosine between the two planes (a run touching both
+   lies in both, so this is exact for a level run; for a run sloped at a groove second order in the slope). After: wrap 0.68 deg at 0.22 mm, jump 1.3 um.
+   The back span keeps a side test, in 3D: a run beyond the ball's own arc, seen from the ball; the runs to its own arc are excluded.
+   Smoke (MEASURED, engine's step, mu 0.8, coding session; 20 mm drop onto Rubber3's cord at 70 %): rise 0, |book| <= 0.000001 uJ, through 0, failed 0 in all three.
+     2 mm outside: highest point after touching 40.8 mm (ball's bottom; start 42.1, the cord's top 22.1, so 18.7 of the 20 mm back).
+     centre over the cord: 39.5 mm. 2 mm inside: 32.8 mm. None ends past the band's far side by the bench's mark (see below).
+   Regression (same run, friction already 0.8; exit speed, z_max before -> after): sling70_3 2.688 -> 2.721 m/s, 11.1 -> 17.8 mm; stop3_70 2.158 -> 2.158 m/s, 31.6 -> 31.5 mm;
+   cord70_1 0.967 -> 0.969 m/s, 3.9 -> 4.0 mm. Force check (sling70_3): forces equal the energy's differences within 7.8e-8 N. hit3_a0 is NOT fixed: still goes over the
+   two-post band, 2.012 m/s, 141 mm. Friction alone (0.9 -> 0.8, before these changes): sling70_3 z_max 22.1 -> 11.1 mm; stop3_70 37.9 -> 31.6 mm.
+   Correction: dropTop70's "42 mm" (reported to the user 2026-10-30, and marked REVIEW in the proof) was its start height, not a lift. The bench now counts a dropped ball's height
+   from its first touch; a ball let go above the cord has no side, so the far-side mark skips it. REVIEW still reads any z_max over 27 mm, so the drops show REVIEW though they
+   rise less than they fell. The "thrown up 28 mm" in 11.12 is from an earlier run and is not rechecked.
+   What it does not handle (open): a ball inside a loop small enough to touch two spans at once (a ball joins the cord once: the second span is caught by the through check);
+   a ball exactly on a run's line (plane undefined; cannot be reached without passing through); a ball inside a loop still feels the stop posts' and plate's squash as if the cord
+   lay between (they have no height or side, 11.16); a dead-centre drop could balance on the cord. A ball that rolls along the cord into a post joins late, with a run of about
+   0.1 mm: length jump up to 0.44 mm (dropIn70, MEASURED, about 6 mJ of cord energy at 14 N, CALCULATED; books exact). Not looked at further.
+11.18 What the far-side failure is (2026-10-30; trace of cord70_3, friction 0.8, 1 us and the engine's step; tr7_cord70_3_*.csv)
+   MEASURED (1 us; the engine's step follows the same path to at least 18 ms): the ball's spin carries the cord's held arc down its front: cord +15 deg on the ball at first touch, 0 at about 3.2 ms,
+   -31 at 6 ms, -51 at 8 ms, -71 at 10 ms, -89 at 11.6 ms (the bottom of the ball), sticking throughout. At 11.6 ms the pull across the cord is 7.3 N (held torque 0.113 N m / 16.7 mm, CALCULATED)
+   against a grip limit of 12.1 N, so the friction law keeps it. The ball's bottom never rises above 4.2 mm (the cord's rest top is 22.07 mm): the ball rolls over the cord, the cord going under it. It is not
+   thrown over, and the cord does not ride over its top (the earlier guess in the chat, "under, the cord over the ball", was wrong). The ball slows from 3.0 to 1.30 m/s, then the cord behind it pushes it on to
+   1.88 m/s; at 18 ms the wrap reaches zero and it leaves the cord (the engine's-step run: about 2 m/s on past the band).
+   CALCULATED: at 11.6 ms the cord's centre is 0.7 mm below the playfield surface (ball centre 15.93 mm, less 16.68 mm), its bottom 3.9 mm below: nothing in the model stops the cord at the playfield.
+   Not explained: at 12.2 - 12.3 ms the cord jumps from -84 to -22 deg on the ball, wrap 32 to 15 deg, tension 23.6 to 21.1 N. The 1 us run fails at 18.0 ms as the wrap reaches zero (steps down to 1.5 ns).
+   Not known: what a real free band does here; whether the playfield under the cord or Rubber5's centre post would stop it.
+11.19 The lossless energy faults explained (2026-10-30; traces tr8_*, MEASURED, debug in runs/2026-10-30-band-energy)
+   The gain (short3, engine's step, +39.37 uJ in one step, booked as friction -39.37 uJ): the ball squashes the cord onto a post, so the run between them has no length and the cord's length has a kink in the arc's turn
+   (V shape, slope about 14 mm/rad either side, MEASURED by a scan of 13 turns). The pull's slope comes from a central difference of 1e-3 rad, far wider than the kink, so close to zero turn it reads -0.0143 N m while the true pull on
+   either side is about +0.36 to +0.38. The slide search, with limit 0, took that jump for the place the pull meets the limit. A slid arc's loss was the pull times the slip, so it came out negative: 0.0143 N m x 2.753e-3 rad = 39.37 uJ.
+   FIX (law, by construction; built): a slid arc's torque IS the friction, at its limit against the slip. Its loss cannot be negative. At a true solution the two are the same value. An inexact stop at a jump now shows in the book.
+   Smoke, private copy against the frozen bench (engine's step): short3 lossless rise 39.37 -> 0.000001 uJ. stop3_70, wall3_70, cord70_1, dropIn70 unchanged. It was also acting with losses on, hidden as a smaller loss: sling70_3 loss total
+   271.01 -> 272.29 mJ of energy change, z_max 17.8 -> 18.7 mm, exit 2.721 -> 2.719 m/s; sling70_2.5_f37 163.02 -> 162.51 mJ, z_max 9.36 -> 9.27 mm. Force check unchanged. Proof not rerun.
+   The two losses (short3 500 us -3.82 mJ, slingHit3 1000 us -0.45 mJ), and the take-off loss left unexplained on 10-29: they are playfield friction, booked as slip (slip 3824.83 and 449.42 uJ, every other loss 0). The bench's lossless setting
+   is grip 1e9, not friction 0: in the step the ball leaves the playfield the normal force falls to almost nothing, the grip limit falls with it, and the shear spring slips over the step's whole slip distance. Energy is lost, not made, and it
+   is booked. Seen only at 500 and 1000 us steps. No model fault found; the bench's lossless pass rule does not allow for it.
+11.20 Spans, stacked rubbers, leaf switches (user's research, 2026-10-30; decisions open)
+   User: high speed zones typically use stacked rubbers, one at about 70 % of the ball's height and one right below it, to stop balls slipping over or past the rubber, or add a post on long spans. Resistance and friction should be added for
+   the leaf switches: this also helps the band slipping too low (replaces the earlier "switches mostly immaterial"). Question: are shorter spans stiffer? Yes.
+   CALCULATED from the cord law, ring 3 in, tension at rest 17.22 N, pull rate 126.7 N per unit stretch, unstretched loop 259 mm, ball at mid span; force on the ball at a dent of 15 / 30 mm:
+     130 mm span, today's model (one tension round the whole loop): 8.5 / 19.8 N.   65 mm span, today's model: 17.1 / 38.9 N.
+     130 mm span, the span stretching alone (posts gripping the cord): 9.4 / 26.7 N.   65 mm span, stretching alone: 26.7 / 93.8 N.
+   Today's model has the first effect by construction, not the second: the cord slides freely round its posts (one tension, Lr of the whole loop). A real cord wrapped 180 deg on a post at mu 0.8 can hold a tension ratio of about 12 (e^(0.8 pi), CALCULATED, post
+   friction ASSUMED equal to the ball's). So a real hit span likely stretches almost alone (INFERRED, not measured).
+   Far-side diagnosis (Sonnet, notes-group-band-farside-2026-10-30.md; MEASURED): in all 14 runs of the seven 3 m/s two-post cases the cord goes under the ball, none goes over; the cord's centre goes below the playfield in 12 of 14 (to -2.60 mm), its bottom in all 14. The
+   jump at 12.25 ms is the held arc reaching its grip limit and sliding 61 deg in two 1 us steps, 113.8 mJ booked as friction. hit3_f02 / f08's 341 mm throw is the cord under the ball pressing it up over about 12 ms (cordFz peak 23 N, vz to 2.49 m/s): the ball's own energy, E never rises.
+   The user's research says real balls do slip past long spans at high speed, so the far-side mark on a 130 mm two-post band at 3 m/s may be right physics rather than a fault. The cord below the playfield is a fault whatever the case.
+   User (2026-10-30): a post on a span typically has a notch holding the rubber vertically, like the end posts: in the model an own post (a level groove at the cord's height), which the path already supports. Stop posts standing clear behind the band stay sliding unless the user says otherwise.
+11.21 The band's cost: the exact pull and the rest (2026-10-30; session band-speed, private copy runs/2026-10-30-band-cost, merged the same day; notes-band-cost-2026-10-30.md there)
+   MEASURED (friction 0.8, one ball, engine's step, best of 5, us per 1 ms of contact, budget 30; the cost mode rerun by the coding session): sling70_3 2280 -> 88, sling70_3_f37 2625 -> 135, stop3_70 1167 -> 65, cord70_1 625 -> 43, rest 369 -> 23.
+   The limit set for the speed test (300 on the sling hit, a route to 100) is passed; the budget is met only by rest. Tolerance 1e-11 -> 1e-9 m/s gives 78 on sling70_3 (exits unchanged to the digits printed, book 3e-4 uJ): the user's call, not applied.
+   Physics: forces equal the energy's differences within 2.5e-8 N, rise and |book| at most about 3e-5 uJ in the smoke runs; sling70_3 exit 2.721 -> 2.688 m/s and z_max 17.8 -> 11.2 mm, the exit now agreeing with its fixed 5 - 20 us runs (the old values INFERRED to be the central differences' noise). Proof: see the next section when run.
+   What changed:
+   1. Exact derivative of L (`Linearize3`, `LinSweep`, `LinDeriv`, `GradL3`, `GradBeta`). No path solves. The classic t_in - t_out plus each run's bend over a groove's lip, closed form. Free ball planes and sliding pulley heights are the only feedback: one small linear solve. Central differences kept only as the check (`debugGrad`).
+   2. Held arcs: no repeat solve when the arc does not slide; none at all for an arc held still; the mid-turn solve replaced by the derivative at the turn's two ends (second order too, and the discrete gradient's exact energy is not touched); the slide point is Newton on the exact derivative and kept for the step (the pull depends only on the turns, in a step).
+   3. Path solve: tangents worked out only when their inputs change (same inputs, same output), algebra in place of atan2 / cos / sin, no rebuilding of big scratch records. 1.7 -> 0.2 us.
+   4. Rounds: the grip reads the push at the current move (from the stiffness), sliding friction's change with the push is in the Newton matrix; first guess from the last step's accelerations; a round whose Newton move is within tolerance stops there, no extra evaluation; an attempt that has not halved its best move in 12 rounds halves the step without using all 60.
+   Tried and dropped (MEASURED): Broyden secant update of the matrix (hundreds of halvings at contact kinks); the grip using the group's true compliance (same answer, as predicted, but no fewer rounds and slower).
+   What it does not handle, or could break:
+   Checked: free back-span chains, several balls, sliding pulleys (derivative check above), a slide at a kink (short3 lossless rise 1.2e-5 uJ).
+   Open:
+   - Rounds still converge steadily, by about 0.08 a round, in slide and pressed-arc steps. Cause not found: the measured Jacobian alone gives only 15 % fewer rounds, so it is not the matrix; true compliance did not help.
+   - A ball joining at the very end of a step: the arc's plane is ill defined at a tiny wrap and the force jumps 5x on a 1e-9 m move (MEASURED in the failed attempts; the 11.17 open item). Costs 3 failed attempts per sling hit; they now cost 12 or more rounds each instead of 60.
+   - `noProgressRounds` 12 could halve a step that would have converged later. Halvings unchanged on the five cases, not proved in general.
+   - The kept slide point assumes the same root stays right for the step; several roots not seen, not excluded.
+   - Several held arcs: the turn's gradient is now the two ends' mean, not the mid-turn's: the same order, not the same number. Energy exact either way.
+   - Scratch state in Part: one group at a time, as the group's Jacobian already is. Not safe for groups stepped in parallel.
+   - Book now about 3e-5 uJ in place of 1e-6.
+   Definitions agreed with the user (2026-10-30): a stop post stands behind the band, inside the loop, not touching the rubber at rest, and comes into play only when a hit presses the cord against it; not notched (highly unlikely), so the cord slides up and down it. An own post
+   (end posts, a post on a span, also a mid-span post the rubber just touches at rest) holds the rubber at all times and is notched.
+11.22 Full proof after the speed work (2026-10-30; Sonnet, notes-group-band-proof3-2026-10-30.md, data in proof3_single/ and proof_data/)
+   MEASURED. Run time: single-ball 86 s (was 853 s), multi-ball 266 s. Single-ball, 31 cases: with losses 89 of 341 runs fail (87 far side, 8 solver, a row can have both), lossless 57 of 341 (55 solver, 2 energy: short3 and slingHit3 at 1000 us, slip). The short band's energy gain is gone. New failures: dropIn70 at 1 us (solver),
+   hit3_a30 lossless at 1, 2, 50 us, short3 lossless at 1000 us. Cost at the engine's step, us per contact ms: sling 73 - 133, slingRest 97, stop3_70 62, cord70_1 41, hit1_a30 43, roll 62, rest 22 (only rest within 30).
+   Multi-ball, 6 cases: 44 of 66 fail with losses, 44 of 66 lossless; two2, three2, six1, six1_70 fail, pair2 and slingPair pass. Cost: two2 275, three2 1005, six1 4527 us per contact ms.
+   ENERGY FAULT, several balls on one cord: lossless (no drive, no loss booked) E changes by -2.9 to -75 mJ (two2), +277 / +215 mJ (three2 at 1 us / engine's step), +271 / +249 mJ (six1), +310 / +281 mJ (six1_70). With losses: book up to -5.7 mJ, rise up to 22 uJ (six1_70, engine's step). Through in 10 rows (six1, six1_70).
+   Not caused by the speed work: the bench from before it gives the same order (three2 lossless, engine's step, rise 835 mJ; six1 369 mJ; two2 5.8 mJ), then hidden as a negative friction loss (book 0); 11.19's fix makes it show in the book.
+   Saved data (three2, two2, six1 lossless at 20 us): E moves step by step during stick code 3 (a held arc sliding) with both a ball and the back span on the cord, the steps growing and changing sign (three2: +0.06, +0.09, -0.08, +0.14, ... +1.48 mJ).
+   INFERRED (from Eval, not proved): each held arc's slide is solved in turn, one at a time, but the arcs are coupled through the runs between balls, so when the last is done the earlier ones no longer meet their limit, and the energy of the arcs' joint turn no longer equals the friction's work. One ball has no such coupling, which fits every single-ball case being exact.
+   Group step's own bench (gs_test, h -1): energy within 0.00001 uJ in all 14 rows; hard hits within 0.3 % (post3.00 full) and up to 2.7 % lossless (wall3_a0). pinch and rest exits differ a lot (pinch full 0.29 -> 0.00006 m/s, steps 8500 -> 1542), but its old report looks older than the step rule's defaults (INFERRED): not settled.
+11.23 Several arcs on one cord solved together (2026-10-30; approved by the user)
+   PROVED (debug copy runs/2026-10-30-band-energy, engine's step): the energy error is (pull - friction) x turn summed over the sliding arcs, to every digit compared: three2 lossless dE +214.673 mJ, mismatch -214.673 mJ; six1 +249.311 / -249.311; six1_70 +281.365 / -281.365; two2 -75.149 / +75.149; six1_70 with losses book -5.717 mJ, mismatch +5.717. Every step with a mismatch had
+   2 or more arcs sliding together, never one. Each arc was solved in turn, once, though the arcs pull on each other through the runs between them.
+   FIX (law: all arcs meet Coulomb together): after the single pass, when more than one arc can turn, a quasi-Newton solve over the sliding arcs (matrix started from each arc's own slope, corrected by the moves made, Broyden), then a check of which arcs slide: one over its limit starts, one turned back against its friction stops. It ends only when each sliding arc's (pull - limit) x turn is within 2e-13 J; otherwise the step is shortened. A first try with repeated passes over the arcs also closed the energy but cost 10 times more (six1 50 418 us per contact ms): not kept.
+   Smoke (MEASURED, engine's step): with losses two2, three2, six1, six1_70, pair2, slingPair: rise at most 0.000001 uJ, |book| at most 0.000004 uJ (was up to 5717 uJ), through 0, failed 0. Lossless: rise at most 0.00002 uJ, |book| at most 0.00001 uJ (was up to 281 000 uJ). Single-ball sling70_3, stop3_70, cord70_1, rest, short3, hit3_a0: output unchanged. Cost, us per contact ms: two2 275 -> 318, three2 1005 -> 1064, six1 4527 -> 5183.
+   Open: lossless two2, three2, six1 at the engine's step stop on a step not solved (energy exact up to there); lossless has zero friction, which real rubber never does, and single-ball lossless 3 m/s cases fail the same way. Not looked at. Lifts on the two-post band stay large (two2 172 mm, three2 146 mm with losses: the cord under the ball, 11.20). The multi-ball proof is not rerun. A ball inside a loop touching two spans is still not handled (11.17).
+11.24 Posts grip the cord, and the playfield under it (design with the user, one question at a time, 2026-10-30)
+   Piece 1, posts grip the cord (capstan friction), APPROVED: each span between own posts (end posts, notched span posts) has its own unstretched length and tension in place of one tension round the loop. A post holds while T_high / T_low <= e^(mu theta), theta the cord's wrap on it; past that the cord slips round the post until the ratio is at the limit, the energy booked as friction. Spans start at equal tension. mu on a post ASSUMED equal to the ball's (0.8) until there is a better number.
+   Not handled or to watch: stop posts and the plate do not divide a span (tension the same both sides; a simplification); a ball pressing the cord onto a post (the split must stay energy-exact as it passes: test first); several posts slipping at once are solved together from the start (11.23's lesson); cost to be measured against 88 us on sling70_3; real bands may not start at equal tension (no data).
+   Piece 2, the playfield under the cord, APPROVED: one more surface behind the cord, the same squash law and two-grips rule (11.10); measured at the height of the arc's lowest point on the ball: squash = cord radius - that point's height (with the ball straight above it this is the wall's law, R + 2 r - ball centre height). With the ball on the playfield the cord's centre meets it 38 deg below the ball's middle (CALCULATED). Not expected to stop a 3 m/s ball on a long span (lifting 6.35 mm is about 5 mJ of 360 mJ).
+   User (2026-10-30): this scenario should never happen in normal practice; if it does, the rubber is designed incorrectly. So it is a fault to show (DevelopmentRules rule 8: on-screen notification + WARN in the engine; a mark in the bench), not a behaviour to tune. mu on the playfield ASSUMED 0.8. Runs near the floor are not checked (two balls on a span could hold one low: not handled).
+   Built 2026-10-30 (bandcord.h, merged; previous files in runs/2026-10-30-band-cost/main_before_spans). The cord's force is one discrete gradient over one scalar: the energy of all spans, the playfield's squash, each span's stretch loss written as its frozen rate times its length. So energy closes exactly with any number of spans at no extra solve: the derivative's sweep already holds each run's and arc's share (GroupStepDesign 11.21). A slip round a post moves unstretched cord from the slack span to the tight one at the step's commit, the path unchanged: no path solve; its energy loss is positive by construction and booked in friction (Books postSlipJ). The several slipping posts are in passes over cheap arithmetic. A post the cord has lifted off has no wrap, so ratio 1: its two spans equalise.
+   Smoke (MEASURED, engine's step, friction 0.8): rise at most 0.00002 uJ, |book| at most 0.00005 uJ in every run. Force check: forces equal the energy's differences within 2.3e-8 N.
+     Real bands, the cord never reaches the playfield and no post slips: sling70_3 exit 2.688 -> 2.643 m/s, z_max 11.2 -> 10.6 mm; sling70_3_f37 z_max 10.0 mm; sling70_1 2.1 mm; stop3_70 and wall3_70 exit 2.158 -> 2.152 m/s, z_max 31.5 -> 36.4 mm; cord70_1 0.969 -> 0.973 m/s, 4.0 mm; rest unchanged in kind. Cost, us per contact ms: sling70_3 88 -> 100, stop3_70 65 -> 73, cord70_1 43 -> 41.
+     Slip checked by forcing it (GB_POSTMU): post friction 0.05: sling70_3 slips 14.7 mJ, stop3_70 1.4 mJ, books exact. Post friction 0 should fall back to one tension round the loop: exit sling70_3 2.669 (one tension 2.688), stop3_70 2.151 (2.158), cord70_1 0.963 (0.969) m/s, z_max 10.9 / 31.0 / 4.0 (11.2 / 31.5 / 4.0) mm; the difference is the slip's booked loss at each commit (3.8 / 0.75 / 0.17 mJ), which a zero-friction post would not have. No real case slips at 0.8.
+     The two-post 130 mm band at 3 m/s and the multi-ball cases on it do reach the playfield, flagged, deepest 0.9 - 1.9 mm, and the throw grows: cord70_3 z_max 6.8 -> 354 mm (no longer passing), hit3_a0 142 -> 319 mm (still passes), hit3_f02 341 -> 376, back4 62 -> 308, lowCord3 68 -> 202, three2 145 -> 292 mm. Energy exact: the ball's own energy. Lossless hit3_a0 stops on an unsolved step. Per the user these should not occur on a correct rubber: not tuned. The bench's band is not real (Rubber5 has a centre post).
+   Not handled: the engine's on-screen notification (rule 8) waits for the engine wiring; the bench marks it (CORD ON THE PLAYFIELD).
+11.25 The real long rubbers: Rubber5 with its centre post, Rubber7 stacked (2026-10-30)
+   User: the Rubber5 post is right in the middle of the other two, the same post, and touches both the front and rear runs. Rubber7 to be two stacked rubbers, checked at 2 m/s; the user expects it to withstand a 2 m/s hit.
+   Layouts read from the stress table's rubber points (circle fits): Rubber5 end post centres 123.27 mm apart (the bench's old two-post band was 130.24), 3 in ring: loop 280.63 mm, 8.21 % stretch, 10.40 N. Rubber7 86.76 mm apart, 2 in ring: loop 207.55 mm, 15.60 %, 19.76 N.
+   The centre post is listed once per run (Geometry postTwin: the second listing has no squash of its own), its radius 0.05 mm over the end posts' (ASSUMED) so that the cord bends round it at rest by 0.09 deg a side and is on the path. Stacked: a second band on the same posts, its cord one cord diameter (6.35 mm) below the first (ASSUMED), both at the same time on the ball. The two cords do not touch each other in the model (not handled).
+   Smoke (MEASURED, engine's step, cord at 70 %, ball at mid span of a half for Rubber5, friction 0.8; z_max = highest point of the ball's bottom; rise 0 and |book| at most 0.000004 uJ in all, through 0, failed 0; none ends past the band):
+     case       v in   exit speed in the playfield's plane   z_max     post slip   cord on the playfield
+     r5_1       1      0.82 m/s    5.1 mm      1.2 mJ    no
+     r5_2       2      1.60        75.3        8.5       no
+     r5_3       3      0.72        317         27.1      no
+     r5near_3   3      1.88        3.5         16.2      no  (10 % from the centre post)
+     r7_1       1      0.90        3.1         0         no
+     r7_2       2      1.93        62.6        0         no
+     r7_3       3      1.36        336         0         yes, 0.44 mm
+     r7s_1      1      0.99        3.8         0         no
+     r7s_2      2      1.76        87.7        0         no
+     r7s_3      3      2.23        242         0         no
+   So all hold, none passes, the capstan slip does happen on Rubber5's shallow centre post, and stacking keeps the cord off the playfield at 3 m/s. But the lift is large: over the 27 mm line at 2 m/s, and stacking raises it at 2 m/s (62.6 -> 87.7 mm).
+   Trace (20 us, MEASURED): r7_2 on the cord 2 - 22 ms, largest dent 14.4 mm; the spin carries the cord to 23 deg below the ball's middle by 11 ms; cordFz peak 9.6 N; vz 1.10 m/s and vy 1.90 m/s leaving; spin from 148 to -7 rad/s (64 mJ of spin). r7s_2: dent 11.3 mm, cord -10 deg, vz 1.32, vy 1.71. r5_2: dent 15.2 mm, -22 deg, vz 1.16, vy 1.55. z_max at 20 us: r7_2 74.8, r7s_2 102.7, r5_2 86.0 mm: about 20 % over the engine's step, the step's accuracy to look at.
+   Not known: what a real ball does here. The law that holds the cord to the ball without limit while it rolls (11.3) has been checked only against the sling video, where the plate stops the cord. To ask the user.
+11.26 Full proof after 11.23 - 11.24 (2026-10-30; Sonnet, notes-group-band-proof4-2026-10-30.md; data in proof4_single/ and proof_data/; Rubber5 and Rubber7 of 11.25 not in it)
+   MEASURED. No row in any of the four reports fails on energy: largest multi-ball |book| 0.029 uJ, largest lossless deviation 0.107 uJ (proof 3: 40 and 44 rows over 1 uJ). Runs failed: single with losses 54 of 341 (was 89), lossless 41 of 341 (57); multi with losses 34 of 66 (44), lossless 34 of 66 (44). With losses the failures are far side 35 + 27, solver 19 + 6, through 3 + 4. Times 102 s and 296 s, 571 MB saved.
+   The playfield mark on the real bands: only stop3 (the leftover case with its cord level with the ball's centre, not the usual 70 %), 0.28 - 0.88 mm at 9 of 11 step sizes. stop3_70, wall3_70, every sling and drop case: never. Failing at every step size: hit3_a0, back4, lowCord3, three2, six1, six1_70 (all on the two-post or level test bands). Through: hit3_a60 at 1 and 2 us, dropCentre70 at 1 us (a ball "off the cord" cutting a run: not looked at), six1 at four step sizes, three2 and six1 lossless. Cost, us per contact ms: sling 84 - 139, stop3_70 72, cord70_1 40, rest 26; two2 272, three2 874, six1 2764. Post slip per run is not saved in the reports (a gap in the bench).
+11.27 Why the free-span throw is too high (2026-10-30; proposed, not built)
+   User (2026-10-30): 60 - 90 mm at 2 m/s is too high (not impossible, not common); with the middle post not much jump, certainly not 317 mm; the two stacked rubbers must touch or nearly touch at rest (the model's are one cord diameter apart centre to centre: touching); asked whether an earlier model's lock at the posts holds a clue.
+   The earlier models (read 2026-10-30): the node band and the flat cord had no height at all, so they could not throw; the cord held at one height between its posts (10.1) threw up to 353 mm; the grooves at the posts (11.6) hold the cord at the post and are in today's model. Locking the posts in today's model does not help (MEASURED, GB_POSTMU 1e9, engine's step): r5_3 317 -> 359 mm, r5_2 75 -> 68 mm, r7 unchanged. So the posts are not the mechanism.
+   MEASURED (r5_3, 20 us): the arc turns with the ball: 3 m/s spin 222 rad/s. Cord centre lowest 4.3 mm at 8 - 9 ms, from 18.9 mm, over 30 mm to each post, and the length grows only 6.8 %: short spans do not stop it. Pull across the cord at most 9.8 N against a grip limit up to 32 N: it never slips. At a dent of 16.7 mm (R + r) the ball's centre is on the line between the posts, so turning the arc costs nothing (pull 0.2 N at 9 ms). Then the cord pushes up from below: cordFz up to 22 N for about 15 ms, vz 2.3 m/s.
+   Missing law (INFERRED): the arc is fixed to the ball (11.3), so all the ball's surface travel must move the cord's centre. A round cord can also roll about its own axis, against its twist. For r7_2 (CALCULATED, G = E / 3 = 1.33 MPa, J = pi d^4 / 32, 43 mm to each post): twist stiffness at the cord's surface about 970 N/m against the tension's 1160 N/m, so about half the travel goes into twist, and the cord would stop near the ball's middle (from +18.6 deg, about -2 in place of -23 deg), as in the user's video.
+   Bounds, MEASURED, engine's step (private copy, GB_NOHOLD: the arc never turns with the ball, the spin only rubs on the cord): z_max r7_2 62.6 -> 0.27 mm, r7s_2 87.7 -> 4.0 (a step failed), r5_2 75.3 -> 0.08, r5_3 317 -> 0.04 (a step failed), r7_3 336 -> 0.08, r7s_3 242 -> 22, stop3_70 36.4 -> 13.1, sling70_3 10.6 -> 27.1 mm. Exit speeds fall (r7_2 1.93 -> 1.30 m/s): the spin's energy goes to friction. So the arc held on the ball is what throws the ball, and the truth lies between the two.
+   For scale (CALCULATED): a rolling ball whose spin is stopped by a contact that does not move leaves at 2/7 of its speed upward: 4 / 17 / 37 mm at 1 / 2 / 3 m/s.
+11.28 The cord's twist (approved by the user 2026-10-30; first version on a private copy, runs/2026-10-30-band-energy, NOT merged; patch p_twist in the session's scratchpad)
+   Law: at the contact the ball's surface moves R bb, the cord's centre S bc round the ball (S = R + r), and the cord rolls about its own axis by dpsi: without slip S bc - r dpsi = R bb. Stationary energy gives one contact force f: the pull on the arc S f, the twist's mid torque k psi = r f, the ball's torque R f. Past mu N it slides, f at the limit against the slip; the loss is f x the slip. All arcs on one cord in one quasi-Newton solve. k = G J (1 / L1 + 1 / L2), G = E / 3, J = pi r^4 / 2, L1 and L2 to the next post or ball, fixed at the join so that the energy is exact; the twist stored at a leave (almost nothing) is booked. Energy stays exact: rise at most 0.00002 uJ, |book| at most 0.00005 uJ.
+   MEASURED, engine's step, z_max mm (exit m/s) at the calculated stiffness, against before: r7_2 62.6 -> 50.4 (1.96), r7_3 336 -> 282, r7s_2 87.7 -> 119 (worse), r7s_3 242 -> 347 (worse), r5_2 75.3 -> 90.2, r5_3 317 -> 275, stop3_70 36.4 -> 16.8, sling70_3 10.6 -> 7.3, short3 76.8 -> 10.6. r7_2's cord at the largest dent -11 deg (was -24; calculated about -2: wrong, the arc still falls through the rebound, to -19). Spin 148 -> -59 rad/s. Failed runs: cord70_3, six1_70. Cost: sling70_3 88 -> 104, stop3_70 65 -> 88, cord70_1 43 -> 51, three2 874 -> 1410 us per contact ms.
+   The result is very sensitive to k (GB_TWIST, engine's step, z_max mm, scale 1 / 0.3 / 0.1):
+     r7_1 2.8 / 0.09 / 0; r7_2 50 / 0.85 / 0; r7_3 282 / 0.18 / 0; r7s_2 119 / 56 / 2.8; r7s_3 347 / 163 / 9.3; r5_2 90 / 4.6 / 0; r5_3 275 / 9.2 / 0 (a failed step); stop3_70 16.8 / 2.0 / 0.07; sling70_3 7.3 / 8.8 / 8.1; cord70_1 4.6 / 0.09 / 0. Below 0.1 more Rubber5 runs fail on a step.
+   k assumes the posts hold the twist. If it runs on round the posts, L is the whole loop: r7's k scale about 0.1 (21.5 / 207 mm, CALCULATED). So this one fact decides the hop. Not measured. To ask the user.
+   Faults seen: exit above entry at scale 0.3 (r7_2 2.05 m/s at 2 m/s, cord70_1 1.05 at 1 m/s; total energy falls: the spin's energy goes into the rebound, and the twist has no loss yet; real rubber's tan delta should act on it: to add). Stacked rubbers hold 2 m/s but stay the highest: the lower cord starts near the ball's centre and goes below it at once; the two cords do not touch each other in the model.
+   Shear spring (user, 2026-10-30: undecided whether bands need it; would spin look natural without?): the twist already gives the spin a spring (it reverses). The patch's wind-up at f = 16 N is about 8 mJ (CALCULATED, f^2 / 2 k_t) against 64 mJ of spin at 2 m/s, 3 - 8 % of the travel. Recommended: leave it out for now, decide after the twist is settled; it stays recorded as the exception to the shared contact rule.
+   User (2026-10-30): a twist can travel partway into a post, not past it. So the twist's length is the run plus part of the post's wrap (half ASSUMED), and the stiffness stays near the calculated value: the whole-loop case (scale 0.1) is out. Added on the private copy, with the rubber's own loss on the twist (c = k tan delta / 2 pi f, as on the stretch).
+   MEASURED, engine's step, z_max mm (exit m/s), glued arc -> twist with both: r7_1 3.1 -> 1.6 (1.00); r7_2 62.6 -> 35.4 (1.98); r7_3 336 -> 256 (2.09); r7s_2 87.7 -> 112 (1.68); r7s_3 242 -> 323 (1.88); r5_1 5.1 -> 4.3 (0.99); r5_2 75.3 -> 77.5 (1.64); r5_3 317 -> 242 (1.10); stop3_70 36.4 -> 16.2 (2.17); sling70_1 2.1 -> 1.4; sling70_3 10.6 -> 6.4 (2.66); cord70_1 4.0 -> 3.0 (1.02). Energy exact, no failed run in these.
+   Better on Rubber3 and the sling; the free spans at 2 and 3 m/s still too high for the user's expectation. Scale 0.5, for reference: r7_2 2.3, r7_3 12.4, r5_2 33, r5_3 167, r7s_2 84, r7s_3 240, stop3_70 5.7, sling70_3 5.5 mm.
+   CALCULATED: the split of the ball's surface travel between moving the cord and rolling it is set by 2 T / (pi G r^2) (about 1.2 at 25 N), not by the span: tension and twist stiffness both go as 1 / L. So a short span does not by itself keep the cord up; Rubber5 is at a disadvantage with its low tension (10.4 N at rest, 8.2 %). Candidates left, none tested: a pressed cord flattens and rolls on a smaller radius (a about 2.2 mm at 30 N: about 1.5 mm less, about 1.75 x softer, like scale 0.57); stacked cords touching each other.
+11.29 The sling video of 2026-10-30 (videos/2026-10-30 14-43-50.mp4, Willy Wonka, white rubber; slow motion, wide shot from a fixed camera, then a close shot)
+   Method: the ball tracked by its bright reflections in the wide shot, 10 frames a second of video (runs/2026-10-30-band-energy holds the comparison builds; the frames are the session's scratch). Scale from the ball's diameter, 68 px = 27 mm (read by eye, about +/- 7 %). Time scale from the ball's own fall: its height above its later rolling line fits a parabola (peak 33 px, from video t 12.56 to 17.75), so the video runs about 50 x slow. Ball size does not change on the way in, so the approach is not foreshortened.
+   MEASURED from the video, CALCULATED scales: speed in 1.4 m/s (not the 2.5 - 3 m/s estimated for the earlier video). Ball leaves the playfield as it turns round, before the plate moves: hop 13 mm (bottom of the ball; half a ball diameter), about 0.5 m/s up. First rebound along the path 0.53 of the speed in (37 against 70 px/s). The plate is seen to move about 33 - 39 ms after first touch (between two frames 1/3 s of video apart); the ball then speeds up to 60 px/s. Speed out after landing 1.18 m/s, 0.85 of the speed in. Dent along the path about 4 mm (10 px; the hit is oblique, so the normal dent is not this). In the close shot the cord stays straight to the ball and meets it at about its middle throughout: it does not go under. The rubber has no marks, so its twist cannot be seen; the ball has no marks, so its spin cannot be seen.
+   Model at 1.4 m/s, head on, the same engine's step (MEASURED): coil on (fires 2.1 ms after touch): glued arc exit 1.85 m/s, z_max 5.3 mm; twist exit 1.89 m/s, 3.3 mm. Coil off: glued exit 0.55 m/s, 9.8 mm, cord 19 to 4 deg on the ball; twist exit 0.61 m/s, 4.8 mm, 19 to 9 deg. Dent 7.7 mm, on the cord 19 - 21 ms.
+   Reading: the kick in the model comes about 30 ms too soon and gives the ball far too much (1.85 against 1.18 m/s). Against the coil-off runs, the real hop (13 mm) is above both laws, nearer the glued arc: on a sling the twist as built takes the hop the wrong way. Real hops are not small: if the height goes as speed squared (INFERRED, one hit) it is about 26 mm at 2 m/s and 60 mm at 3 m/s on a sling. So the user's 'too high' for free spans should be read against this. It is one hit, oblique, a white rubber (the user's silicone figures: friction 0.65 - 0.76), a plate behind it; nothing here tests a free span.
+   User (2026-10-30): the rubber can definitely be seen twisting in the first video (so the twist is real; "goes the wrong way" meant only that the model's coil-off hop falls further below the video's 13 mm with it); lifts are not known to be normal: other videos show very little, maybe slower hits.
+   Second video (videos/2026-10-30 14-58-11.mp4, a screen capture of a slow-motion clip, hand-held; another machine, cream rubber, a sling; no flight, so no time scale): frames every 0.2 s of video. The cord meets the ball in its upper half and stays there, with a visible hook in the rubber at the contact; it does not go under. The plate fires about 1.0 s of video after first touch, with the ball still pressing the cord (the camera shakes at the kick); the ball then leaves about 5 x faster than it came, with no clear lift (the shake and blur prevent a measurement). If its slow-down is the first video's 50 x (ASSUMED), that kick is about 20 ms after touch, against 33 - 39 ms there.
+   Reading (INFERRED, two hits): the lift depends on when the plate fires. In the first video the ball has already turned and lifted before the kick; in the second the kick comes while it is pressing, and it leaves low and fast. The model agrees in direction: coil on gives less hop than coil off (glued 5.3 against 9.8 mm). A fixed delay would not fit both: the delay differs by hit or machine (ball speed, where it hits against the switches, the game's timing). To test: a switch-to-coil delay swept against both videos, twist kept.
+11.30 Switch-to-coil delay, per sling (user, 2026-10-30: different slings have different delays; built: SlingSettings coilDelayMs, ini sling_coil_delay_ms in [Slings] / [Sling:<name>], default 0 = as before; hitsling.h, hitrubber.cpp, contacthost.cpp, bandcord.h; engine not rebuilt; bench GB_COILDELAY).
+   Sweep, sling hit at 1.4 m/s head on, engine's step, delay ms: exit m/s, z_max mm, twist | glued: 0: 1.89, 3.3 | 1.85, 5.3. 5: 1.80, 3.0 | 1.76, 5.3. 10: 1.91, 3.5 | 1.95, 6.7. 15: 1.91, 4.3 | 1.79, 8.3. 20: 0.59, 4.7 | 0.55, 9.8. 25 and over: 0.61, 4.8 | 0.55, 9.8 (the kick misses: the ball has gone, 19 ms after touch).
+   Early delays match the second video's kind of hit (low, fast). No delay reproduces the first (13 mm, 1.18 m/s): hop at most 4.8 (twist) or 9.8 mm (glued), and the exit steps from about 1.9 to about 0.6 between 15 and 20 ms.
+   Video 1 against the model, timing (MEASURED from the track, 50 x): ball slows from t 11.6; turns at about 12.2 (12 ms; model 6 ms); back at a steady speed from about 12.5 (off the cord: 18 ms; model 19 ms, correcting 11.29's 'still pressing' reading of 40 ms); speeds up at about 13.4 and most at 14.0 - 14.3, 36 - 54 ms after touch, 18 - 36 ms after it left, when it is about 15 - 20 mm clear (CALCULATED) and about 11 mm up. So the real plate reaches a ball that has already left, in about 7 ms from first seen moving. Model's plate: first moves 1.3 ms after the coil, 20 deg (15 mm at its tip) at 22 ms after the coil: slow by comparison (one hit; the coil's values are guesses). To test next: an oblique hit (the video's), then the plate's speed.
+11.31 What sets the sling's hop: the cord's height, not the angle (2026-10-30; coil off, 1.4 m/s, engine's step, MEASURED; bench GB_A, GB_DZ, GB_F on the private copy)
+   Angle: an oblique hit lowers the hop. z_max twist | glued at 0 deg 4.8 | 9.8; 15: 4.9 | 6.1; 30: 3.4 | 8.5; 45: 1.4 | 3.3; 60: 0.2 | 1.8 mm. Turnaround lengthens (6 -> 9 ms; video 12). So the angle does not explain the video.
+   Cord height on the ball (share of the ball's height), z_max mm, vz m/s leaving, twist | glued: 70 %: 4.8, 0.17 | 9.8, 0.28. 65 %: 9.5, 0.30 | 13.9, 0.37. 60 %: 12.6, 0.36 | 16.1, 0.44. 55 %: 15.9, 0.44 | 20.0, 0.50. 50 %: 18.3, 0.48 | 23.3, 0.55. Speed leaving about 0.8 m/s (video's first rebound 0.74), off the cord 19 ms (video 18).
+   First video: 13 mm and about 0.5 m/s up, with the cord meeting the ball about at its middle in the close shot (camera angle: not a measurement). Second video: the cord in the ball's upper half, little lift. So height alone may explain the difference between the two (INFERRED, two hits): twist at about 60 % or glued at about 65 % fits the first; the videos do not separate them while the height is not measured. The first video's exit (1.18 m/s) still needs the plate to catch the ball.
+   It also explains the stacked rubbers' high lift: the lower cord starts near the ball's middle. The user's video-free question stands for free spans.
+12. In the engine (2026-10-30; user: get a model into VPX to test; first version, not proved)
+   An island holding a band with the cord model goes to the group step for the whole cycle (ContactSystemImpl::CordIsland; piece 8). Keys: [Rubber:<name>] band_model (1 = the cord, the default; 0 = the old node band), band_ring_in (ring inner diameter, inches: stretch from the ring and the posts). Twist merged. Run: stress table, scripted phase 3 (6 balls, BGFX): completes, driver checks pass.
+   Limits of this first version: gates, bats and other moving parts in the island are treated as still surfaces for that cycle, without their reaction; ball-pair shear state and ball-pair hit events are not carried; a surface's shear law is retaken each cycle; the drawn band does not follow the cord yet (to-do 3.9); a step that cannot be solved lets the ball go in free flight with a notification (WRONG, see 12.2: 20 ms of stock collision follow); more than 8 balls or 32 surfaces in an island are left out.
+
+12.1 First play test: three faults fixed (2026-10-30; Rubber Test.vpx, Rubber004, GL build, scripted spinless launches, VPX_CORD_TRACE per-cycle energy, runs/2026-10-09-slow-contact run_cord_b2 before, run_cord_b4 after)
+   User: end posts very dead; a stop post sometimes dead, sometimes throws a ball higher than it was dropped from.
+   Dead (MEASURED): the release rule measured the gap to the cord's straight runs only, so a ball rebounding off an own post was let go in mid-squash. End post at 2 m/s: last row 110 mJ above the base, ball's own 9.5 mJ, leaves at 0.486 m/s; about 100 mJ thrown away. Fix: CordGap also counts every backstop the ball squashes; it stays in the group until that energy has come back.
+   Energy gain (MEASURED): the squash was counted from the ball's depth when it joined. Over the stop post, 297 mJ appeared in one cycle (drop_overoff_40, ball left at 2.15 m/s from a 61 mm drop). On a plain touch at the stop too: 7.9 mJ at x 458, 0.54 mJ at x 466 (MEASURED); INFERRED: Rubber004's stop lies inside the ball-plus-cord distance at rest. Fix: a squash grows from zero: the depth at joining is that pair's zero (bsZero) until the ball backs out, which only lowers it while nothing is stored. Law: no stored energy without the work that stored it. The "0.035 in, 0.2142 out" launch in the user's log (about 1.8 mJ) is INFERRED to be this; that slow touch has not been rerun.
+   Gravity twice (MEASURED): a ball high on the cord with no floor in its contact kept the engine's kick and got gravity in the steps as well (energy between cycles changed by m g vz dt, 0.38 mJ at 0.48 m/s). Fix: the group takes the kick back for every ball.
+   After (same shots): no step gains energy, no jump over 20 uJ between cycles, largest book error 0.48 uJ; no drop returns above its start height. Rebound on the end post, spinless launch, release speed out / in: 0.77 at 0.98 m/s, 0.69 at 1.99, 0.62 at 2.99 (user's rubber guesses for a rolling ball 0.87 at 0.86 m/s, 0.64 at 3). At the stop, mid span: 0.89 at 1.0 m/s. Drop on the post from 40 mm: first bounce 33 mm.
+   Open: (a) free-span hit away from the stop is dead at speed: 0.38 at 1.0 m/s, 0.34 at 2.0, but 0.83 - 0.89 at 0.16 - 0.26 m/s. At 1.0 m/s, 21 of 40 mJ goes to ball-on-cord friction (MEASURED) and the ball leaves with 47 rad/s of spin against its travel. The grip turns the ball as the arc tilts going in (wx to +60 rad/s), then slides as the push falls (INFERRED). Not judged right or wrong: no free-span video. (b) "A ball went through the cord" shows once on a slow touch at x 497 that rebounded normally: false alarm, depth not measured. (c) A ball hitting a stop from inside the loop, no cord between, still meets the stop 4.3 mm early. (d) A stop has no top: a ball over it meets a surface it was found inside, only when moving deeper; no energy comes of it. (e) A script moving a ball deep into a squash while it is in the group still creates energy. (f) Slings, multi-ball and cost not rerun with these fixes; offline proof not rerun.
+
+12.2 Second play test: launches come from the hand-back after a failed solve (2026-10-30; user's own play, BGFX, 17:06 - 17:23, Rubber Test and Basic Example Table VPW 1.7.1 Sling; prefs/rubber-contact/vpinball.log. No code changed.)
+   User: end post better but not right; between end post and span dead; around the stop post dead; balls fly off the table; slings lift too much, ball over the other sling; energy looks added on hits with bands and their posts.
+   What the energy proof covers: only steps inside the group. The books never see a ball after the group lets it go. 12.1's "no energy gained" covered scripted spinless shots on Rubber004 only.
+   Launch chain (MEASURED from the log): the group fails to solve a step on a sling (10 failures on the Basic table, Rubber001/002, 1 on Rubber Test); CordSolveFailed lets the ball go and sets a 20 ms cooldown (hitrubber.cpp); the log then says "stock collision: cooling down"; StockImpulse fires; in that same cycle the ball speeds up. 5 of the 10 sling failures, plate at rest (-0.05 deg), so no coil drive; ball speed m/s left -> next release, peak force, gain (CALCULATED, 80 g): 1.04 -> 6.15, 83159 N, 1469 mJ (t=7211). 0.77 -> 4.09, 50957 N, 644 mJ (t=84868). 0.37 -> 3.63, 44741 N, 523 mJ (t=74673). 1.40 -> 1.78, 17434 N, 49 mJ (t=34409). 0.67 -> 1.29, 2900 N, 49 mJ (t=77277). All three releases above 3 m/s in the session are on this chain. The other 5 sling failures had no stock hit and no speed-up. This breaks the rule "no stock hand-back inside a unified design"; 12's "no stock hand-back" was wrong.
+   Routes to stock for a ball on a cord band (read from the code; none allowed, DevelopmentRules 2): (1) the stock impulse in HitRubber's hit, hitrubber.cpp 1194, the end of all the others; (2) the 20 ms cooldown after a failed solve, hitrubber.cpp 2134; (3) the seat refusal, contactsystem.cpp 2426 - 2429, seen in all the launches above that reached it; (4) a flipper near or owning the ball, FlipperBlocks and band_flipper_margin_u, into (1). The stock hit search itself still runs on the band (to-do 1.8), which is what lets (1) fire.
+   Not known: why the solve fails (why C mostly, ball on the playfield at about 1 m/s, plate at rest); what in that cycle makes the force (a stiff surface with the ball deep in it is INFERRED from the force; seat passes show 1 - 2 mm into the playfield, but those come after the speed-up).
+   High exit with no failure (MEASURED, one case, t=32196): Rubber002, in 1.22 m/s, released at (550, 1591) 38 mm above rest and still rising at 0.70 m/s (about 26 mm more, CALCULATED), next contact MetalWall003 at (173, 1656), 11 mm above rest, on the far side of the left sling: the user's "over the other sling" (INFERRED). Whether the coil fired was not checked. Other clean exits reach at most 19 mm above rest.
+   Fixed-speed "launches" on Rubber Test are not physics (INFERRED): out 0.214 m/s, exactly along a table axis, any speed in; the table's arrow-key ball control is BCvel = 4 (0.216 m/s). This is the "0.035 in, 0.2142 out" of 12.1, so that was not the squash fault.
+   Not explained: Rubber004 (no plate) on the Basic table, 0.36 -> 0.60 m/s at t=40783, energy x 2.7 (spin is not logged, so gain not proved or ruled out). Rubber004 in about 1.27 -> out about 1.31, repeated, near (550, 1730): downhill roll of about 63 mm would do it (CALCULATED, not checked).
+   Dead spots: not measured where the user sees them. 12.1's friction figure is mid span, spinless. Scripted shots so far have no rolling spin; real balls do.

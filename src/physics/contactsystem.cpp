@@ -10,6 +10,7 @@
 #include "parts/flipper.h"
 #include "contactsystem.h"
 #include "hitrubber.h"
+#include "contactparthost.h"
 #include "hitball.h"
 #include "hitflipper.h"
 #include "magnet.h"
@@ -21,8 +22,10 @@
 #include <map>
 #include <unordered_map>
 #include "physicsini.h"
+#include "testdriver.h"
 #include "ui/live/LiveUI.h"
 #include "PhysicsEngine.h"
+#include "physics/cordband.h"
 #include "input/InputManager.h"
 
 namespace
@@ -108,6 +111,11 @@ using namespace RubberContact;
 static std::list<BallContact> g_engaged;
 static ContactSystem::CycleStats g_last;
 static std::vector<std::function<void()>> g_deferred;      // events raised inside the step, fired after it (Finish)
+// The test driver's cost split of this cycle (docs/TestMatrixDesign.txt section 3 point 10 b-d): null unless the driver times the cycle in detail. Per island: what set each
+// substep (TestDriver::ContactCost::Why) and the smallest substep.
+static TestDriver::ContactCost *s_cc = nullptr;
+static int s_islWhy[TestDriver::ContactCost::kWhys];
+static double s_islMinStep = 1.0;
 void ContactSystem::DeferEvent(std::function<void()> f) { g_deferred.push_back(std::move(f)); }
 static constexpr float kFlipperHorizonVpt = 1.0f;   // trace only: VPX time units (1 VPT = 10 ms) a bat is looked ahead for in the flip_clear numbers
 
@@ -116,14 +124,13 @@ struct ContactSystemImpl
    static void StepBalls(float dtime);
    static void Release(HitBall *ball, const char *why);
    static void Regather(BallContact &e, const Vertex3Ds &pos, float radiusU);
-   static bool EngageImpl(HitRubber *host, FlipperMoverObject *bat, HitBall *pb, const char *how);
+   static bool EngageImpl(ContactHost *host, HitBall *pb, const char *how);
    static void EngageNear(float dtime);
-   static void DetachBat(BallContact &e);
 
    // A ball in the step: its SI state, the substep's forces, and what the step needs to know about it.
    struct Body
    {
-      HitRubber *o = nullptr;   // the rubber that engaged the ball (its settings drive the step)
+      ContactHost *o = nullptr;   // the rubber that engaged the ball (its settings drive the step)
       BallContact *e = nullptr;    // its engagement; null = a free ball that only joined an island through a pair
       HitBall *pb = nullptr;
       BallSI bs;
@@ -133,7 +140,9 @@ struct ContactSystemImpl
       double lScale = 1.0;
       double vCap = 50.0;
       int steps = 1;
+      int stepsWhy = TestDriver::ContactCost::kEnd;   // the rule that set steps (test driver cost split, TestMatrixDesign section 3 point 10c)
       bool magnetsOn = false;
+      bool extTaken = false;    // Sources::Begin took this cycle's gravity and nudge out of the velocity (they act in the substeps)
       bool magParts = false;    // the Option A ball-ball force is applied re-aimed at every substep (MagnetPartForces), not as the held increment
       double magAcc = 0.0;      // m/s2: the magnets' acceleration of this ball at the start of the step (the substep bound)
       double eddyRate = -1.0;   // eddy-current braking of the spin across the coil field, 1/s: evaluated once per cycle (negative = not yet); eddyDir = the field direction
@@ -147,16 +156,7 @@ struct ContactSystemImpl
       bool tripped = false;
       const char *tripWhy = "";
       int tripStep = 0;
-      // a bat engaged with the ball (its rubber is one more surface; the bat is stepped with the island)
-      FlipperMoverObject *bat = nullptr;
-      bool batLive = false;     // the bat's rubber is still in contact bookkeeping (false once released mid-cycle)
-      RubberParams batRp;
-      Outline batOl;
-      V3 absCorr;               // position correction at the end when the start was rewound against a moving bat
-      double pivOff = 0.0;      // how far the pivot has moved (nudge) since the start of the cycle, m
-      double ctq = 0.0;         // torque on the bat from the ball in this substep, closing direction
-      bool hitStop = false;     // the bat's plunger reached the coil stop during this cycle
-      bool noPairs = false;     // a flipper's ball: ball-to-ball stays with the stock collision
+      bool noPairs = false;     // a band's ball outside the unified engine: ball-to-ball stays with the stock collision
       // a band whose nodes the ball loads (the band's nodes are stepped with the island)
       HitRubber *band = nullptr;
       BandBall *bb = nullptr;
@@ -193,6 +193,7 @@ struct ContactSystemImpl
       RubberParams rpBall;               // steel on steel: Hertz with the pair's effective modulus (half of one ball's), no thin layer, no loss tangent
       std::vector<BallPairState *> pst;  // the current island's pair states
       int steps = 1;                     // the current island's substeps
+      int stepsWhy = TestDriver::ContactCost::kEnd;   // the rule that set them (fixed-step islands; test driver cost split)
       int stepsPair = 1;                 // the substeps its ball pairs need alone (the arrival-time loop adds the surfaces' own)
       float dtimeF = 0.0f;               // the cycle in engine time units
       std::vector<HitRubber *> bands;    // bands begun this cycle
@@ -213,11 +214,12 @@ struct ContactSystemImpl
       // Gravity and nudge: the engine has added this step's increment to the ball already (the stock contacts of everything else rely on it): this cycle's share of it is taken
       // back here and given back in small pieces, so the step ends with the same total.
       // Only while the playfield is one of the surfaces of the contact, or the ball has no contact at all: with the stock plane contact under it the ball needs the engine's kick to stay on the plane.
-      static void Begin(Body &w, const double dt)
+      static void Begin(Body &w, const double dt, const bool always = false)
       {
          HitBall *const pb = w.pb;
          // A free ball (no contact of its own, in an island only through a ball pair) has nothing of the stock engine under it: its gravity, nudge and magnet pull act in the substeps like an engaged ball's.
-         const bool onPlayfieldModel = w.e == nullptr || std::any_of(w.e->items.begin(), w.e->items.end(), [](const SurfaceContact &it) { return it.r->IsFloor(); });
+         const bool onPlayfieldModel = always || w.e == nullptr || std::any_of(w.e->items.begin(), w.e->items.end(), [](const SurfaceContact &it) { return it.r->IsFloor(); });
+         w.extTaken = onPlayfieldModel;
          const Vertex3Ds extInc = onPlayfieldModel ? pb->ExternalVelocityIncrement() : Vertex3Ds(0.f, 0.f, 0.f);   // what the engine added this step: gravity, nudge, magnets at the start position
          const Vertex3Ds extBase = onPlayfieldModel ? pb->ExternalVelocityIncrement(false) : Vertex3Ds(0.f, 0.f, 0.f);   // the part that does not depend on the position
          w.magnetsOn = onPlayfieldModel && pb->m_magnetic && Magnets::Active();   // a magnet's pull follows the ball: evaluated at every substep, not once per cycle
@@ -303,7 +305,7 @@ struct ContactSystemImpl
          if (it.r->IsFloor() || it.r->MovingPart() != nullptr)   // (a gate or spinner bounds the step by its own arrival rule: Part::BallStep in SetupIsland)
             continue;
          it.r->Refresh(it, w.bs.R, 2.0 * w.v.Length() * dt + 0.005, w.c);
-         if (it.candR >= 0.0 && it.cand.empty())
+         if (it.NoFaces(w.c))
             continue;
          const TubeProbe pr = it.r->Probe(w.bs, it, w.c);
          if (pr.dist <= 0.0)
@@ -344,17 +346,11 @@ struct ContactSystemImpl
       for (auto eit = g_engaged.begin(); eit != g_engaged.end();)
       {
          BallContact &e = *eit++;   // (a release below erases only this entry)
-         HitRubber *const o = e.host;   // null for a ball only a bat holds
+         ContactHost *const o = e.host;   // null for a ball only a band holds
          if (o != nullptr && !o->m_set.contact)   // switched off in the ini while a ball is engaged
          {
             Release(e.ball, "rubber contact switched off");
             continue;
-         }
-         if (e.bat != nullptr)
-         {
-            e.bat->FlipperEnsureInit();
-            if (!e.bat->m_bat.set.rubberContact)   // switched off in the ini while a ball is engaged
-               DetachBat(e);
          }
          {
             HitBall *const pb = e.ball;
@@ -377,9 +373,9 @@ struct ContactSystemImpl
                continue;
             }
             LoadState(w);
-            // The settings that set the substep are those of the finest surface the ball touches or can reach: the one that engaged it and every surface in its contact set. A ball only
-            // a bat engaged has no engaging surface; stepped once per cycle after the bat let go (measured: replay of the 2026-10-13 launch, 1 ms step against the playfield, 28 um deep
-            // at the start of the next, 247 N held for 1 ms, +3 m/s) it is the contact's own stiffness that must limit the step, whatever engaged the ball.
+            // The settings that set the substep are those of the finest surface the ball touches or can reach: the one that engaged it and every surface in its contact set
+            // (measured: replay of the 2026-10-13 launch, a ball just let go by a bat stepped once per cycle against the playfield, 28 um deep at the start of the next, 247 N held
+            // for 1 ms, +3 m/s: it is the contact's own stiffness that must limit the step, whatever engaged the ball).
             const RubberObjectSettings *so = o != nullptr ? o->Settings() : nullptr;   // (a gate or spinner has none: its step is its own, SetupIsland)
             for (const SurfaceContact &it : e.items)
                if (const RubberObjectSettings *const s = it.r->Settings())
@@ -389,8 +385,7 @@ struct ContactSystemImpl
             // A ball at rest on the rubber (slow at both ends of the cycle) does not need the impact step: the contact's own frequency sets the stable step (omega * h <= 0.2),
             // up to rest_substep_us. The rest depth is the force balance, not a property of the step.
             int steps = stepsN;
-            if (e.bat != nullptr)
-               SetupBat(w, e, dt);   // (rewinds the start against a moving bat: before the step count is chosen)
+            w.stepsWhy = stepsN > 1 ? TestDriver::ContactCost::kSetting : TestDriver::ContactCost::kEnd;
             if (so != nullptr)
             {
                const RubberObjectSettings &set = *so;
@@ -398,31 +393,24 @@ struct ContactSystemImpl
                {
                const double hRest = std::min(set.restSubstepUs * 1e-6, set.restOmegaH / e.omega);
                steps = std::max(1, std::min(stepsN, (int)std::ceil(dt / hRest)));
+               w.stepsWhy = steps > 1 ? TestDriver::ContactCost::kSurfaceStiffness : TestDriver::ContactCost::kEnd;
                }
                else if (set.restSubstepUs > set.substepUs && set.rollTravelUm > 0.0 && e.omega > 0.0 && ApproachSpeed(w, e, dt) < set.restSpeedMmS * 1e-3)
                {
                // Rolling or sliding along a surface (nothing approaches it): the contact's stiffness and the distance covered per step limit the step, not the impact step.
                const double hRoll = std::min({ set.restSubstepUs * 1e-6, set.restOmegaH / e.omega, set.rollTravelUm * 1e-6 / std::max(w.v.Length(), 1e-6) });
                steps = std::max(1, std::min(stepsN, (int)std::ceil(dt / hRoll)));
+               w.stepsWhy = steps > 1 ? TestDriver::ContactCost::kSurfaceStiffness : TestDriver::ContactCost::kEnd;
                }
-            }
-            if (w.bat != nullptr)
-            {
-               // The bat's own substep while a ball is on it; a ball at rest on a still bat steps by the contact's stiffness, as on any surface (the rest limits are the ball's other
-               // surface's, else the usual ones)
-               const double hBat = std::min(2e-5, w.bat->m_bat.set.rubberSubstepUs * 1e-6);
-               const double restSpeed = (so != nullptr ? so->restSpeedMmS : 30.0) * 1e-3, restSub = (so != nullptr ? so->restSubstepUs : 50.0) * 1e-6, restOmegaH = so != nullptr ? so->restOmegaH : 0.8;
-               const double batSpeed = std::abs((double)w.bat->m_bat.omega) * (double)w.bat->m_flipperradius * U;
-               double h = hBat;
-               if (restSub > hBat && w.v.Length() < restSpeed && e.lastSpeed < restSpeed && batSpeed < restSpeed && e.omega > 0.0)
-                  h = std::max(hBat, std::min(restSub, restOmegaH / e.omega));
-               steps = std::max(steps, (int)std::ceil(dt / h));
             }
             if (e.band != nullptr)
             {
                SetupBand(cy, w, e);
-               if (w.band != nullptr)   // the band's substep
-                  steps = std::max(steps, w.band->m_bc.steps);
+               if (w.band != nullptr && w.band->m_bc.steps > steps)   // the band's substep
+               {
+                  steps = w.band->m_bc.steps;
+                  w.stepsWhy = TestDriver::ContactCost::kBand;
+               }
             }
             w.steps = steps;
             Sources::Begin(w, dt);
@@ -526,14 +514,6 @@ struct ContactSystemImpl
                         break;
                      }
                }
-      for (int i = 0; i < nw; i++)   // balls on the same bat are one island: the bat takes all their torques
-         if (cy.bodies[i].bat != nullptr)
-            for (int j = 0; j < i; j++)
-               if (cy.bodies[j].bat == cy.bodies[i].bat)
-               {
-                  cy.links.emplace_back(j, i);
-                  break;
-               }
       cy.islands.Build(nw, cy.pairs, cy.links);
    }
 
@@ -573,9 +553,13 @@ struct ContactSystemImpl
             }
          }
 
-      int steps = 1;
+      int steps = 1, stepsWhy = TestDriver::ContactCost::kEnd;
       for (const int i : isl.members)
-         steps = std::max(steps, cy.bodies[i].steps);
+         if (cy.bodies[i].steps > steps)
+         {
+            steps = cy.bodies[i].steps;
+            stepsWhy = cy.bodies[i].stepsWhy;
+         }
       int stepsPair = 1;
       // The pair's step comes from its stiffness at the compression it will reach (the same criterion as a ball on a surface: omega * h limited), not from a constant per
       // situation: Hertz k = 2 E* sqrt(Reff delta), delta the depth it rests at or the depth an impact at the closing speed reaches (Hertz energy). An impact is resolved with
@@ -602,7 +586,11 @@ struct ContactSystemImpl
             const double omega = std::sqrt(2.0 * Estar * std::sqrt(reff * delta) / mRed);
             const double omegaH = closing > kRestSpeedFree ? kImpactOmegaH : kRestOmegaH;
             const double h = std::min(kMaxPairStepS, std::max(cs.ballSubstepUs * 1e-6, omegaH / omega));
-            steps = std::max(steps, (int)std::ceil(dt / h));
+            if ((int)std::ceil(dt / h) > steps)
+            {
+               steps = (int)std::ceil(dt / h);
+               stepsWhy = TestDriver::ContactCost::kPairStiffness;
+            }
             stepsPair = std::max(stepsPair, (int)std::ceil(dt / h));
          }
       }
@@ -610,8 +598,8 @@ struct ContactSystemImpl
       cy.stepsPair = stepsPair;
       // The gates and spinners of the island. Their step is the reduced-mass rule of a moving body (design 6.3): every ball's contact with a part is resolved for the reduced mass of
       // the ball and the part's effective mass at the contact, with the series stiffness of contact and bend, and ends at the arrival (Part::BallStep); the part's own forces
-      // (pendulum, stops, switch spring) are resolved in its own substeps inside each island substep (Part::StepInIsland). A heavy moving body (the turntable's disc: the normal of a ball on it is along its axis, so the normal force
-      // cannot turn it; a bat: hundreds of grams at the contact against an 80 g ball) has an effective mass far above the ball's and is not affected.
+      // (pendulum, stops, switch spring) are resolved in its own substeps inside each island substep (Part::StepInIsland). A turntable disc is held along its axis by its bearing, so no
+      // normal moves (its BallStep sets no limit); a bat's BallStep uses the bat's own effective mass at the contact (contactbatpart.h).
       cy.islandParts.clear();
       for (const int i : isl.members)
          if (cy.bodies[i].e != nullptr)
@@ -621,13 +609,19 @@ struct ContactSystemImpl
                   if (std::find(cy.islandParts.begin(), cy.islandParts.end(), hg) == cy.islandParts.end())
                   {
                      cy.islandParts.push_back(hg);
-                     hg->SetGravity(HitRubber::PartGravitySI());   // (its own forces are resolved in its own substeps: Part::StepInIsland)
+                     hg->SetGravity(ContactPartHost::PartGravitySI());   // (its own forces are resolved in its own substeps: Part::StepInIsland)
                   }
                   const Body &w = cy.bodies[i];
                   hg->SetBall(w.bs);
-                  steps = std::max(steps, (int)std::ceil(dt / hg->BallStep(w.c, w.v, dt) - 1e-9));
+                  const int sp = (int)std::ceil(dt / hg->BallStep(w.c, w.v, dt) - 1e-9);
+                  if (sp > steps)
+                  {
+                     steps = sp;
+                     stepsWhy = TestDriver::ContactCost::kPartStep;
+                  }
                }
       cy.steps = steps;
+      cy.stepsWhy = stepsWhy;
       cy.islandBands.clear();
       for (const int i : isl.members)
       {
@@ -652,112 +646,19 @@ struct ContactSystemImpl
       }
    }
 
-   // ---- A bat engaged with a ball: its rubber is one more surface of the ball's contact, and the bat is stepped with the island ----
-   // (the contact law is the bat's own, RubberContact::Evaluate: the bat is a moving surface whose reaction is a torque on it)
-
-   // Per cycle: the bat's outline and rubber, the pivot, and, for the first step of an engagement, the seat of the starting overlap.
-   static void SetupBat(Body &w, BallContact &e, const double dt)
-   {
-      FlipperMoverObject &m = *e.bat;
-      w.bat = &m;
-      w.batLive = true;
-      w.noPairs = !ContactSystem::Unified();   // (the bat is stepped with the island, so its balls take part in pair contact)
-      w.batRp = FlipperModel::MakeRubberParams(m.m_bat.set);
-      w.batOl.rb = (double)m.m_hitcircleBase.radius * U;
-      w.batOl.re = (double)m.m_endradius * U;
-      w.batOl.Lc = (double)m.m_flipperradius * U;
-      if (!e.batJustEngaged)
-         return;
-      e.batJustEngaged = false;
-      // The ball starts the engagement inside the rubber: the hit was found late. Go back to the instant it first touched: in the bat's frame, along
-      // the relative velocity, by depth / closing speed, at most one physics step. Moving the ball along its relative velocity puts it where it was
-      // when it touched the bat's earlier pose; the ball's own absolute path is then restored at the end by the bat's displacement over that time.
-      // If it is not closing (pushed in by something else) it is seated at touching distance along the normal. Nothing is stored as compression.
-      (void)dt;
-      constexpr double kMaxRewindS = PHYSICS_STEPTIME_S;
-      const double dirSign = m.m_direction ? 1.0 : -1.0;
-      const V3 pivotW((double)m.m_hitcircleBase.center.x * U, (double)m.m_hitcircleBase.center.y * U, 0.0);
-      V3 c = w.c - pivotW;
-      const double phi0 = (double)m.m_angleStart + dirSign * m.m_bat.phi - M_PI / 2.0;
-      const V3 ez(0.0, 0.0, 1.0);
-      double rewoundS = 0.0;
-      for (int pass = 0; pass < 3; pass++)
-      {
-         const Probe pr = ProbeSurface(w.batRp, w.bs, w.batOl, phi0, c);
-         if (!pr.overlap || pr.delta <= 1e-6 || pr.dist <= 1e-12)
-            break;
-         const V3 nrm = (c - pr.point) / pr.dist;
-         const V3 vs = ez.Cross(pr.point) * (dirSign * m.m_bat.omega);   // bat surface velocity at the contact point
-         const V3 vrel = w.v - vs;
-         const double closing = -vrel.Dot(nrm);
-         if (closing > 0.01)
-         {
-            const double t = std::min(pr.delta / closing, kMaxRewindS);
-            c = c - vrel * t;
-            w.absCorr = w.absCorr - vs * t;
-            rewoundS += t;
-         }
-         else
-            c = c + nrm * pr.delta;   // seat
-      }
-      w.c = c + pivotW;
-      if (rewoundS > 0.0)
-         PLOGI << "Rubber: " << m.m_pflipper->GetName() << " rewound the ball " << rewoundS * 1e3 << " ms to its first touch";
-   }
-
-   // The bat rubber's force on the ball at substep s (and the torque on the bat), the release bookkeeping, and the pivot's nudge motion
-   static void BatForces(Body &w, const double h, const int s)
-   {
-      CPROF(BatForces);
-      w.ctq = 0.0;
-      if (w.bat == nullptr || !w.batLive || w.e == nullptr)
-         return;
-      FlipperMoverObject &m = *w.bat;
-      BallContact &e = *w.e;
-      const double dirSign = m.m_direction ? 1.0 : -1.0;
-      const FlipperSettings &fs = m.m_bat.set;
-      // pivot velocity (flipper nudge): the contact sees the ball's velocity relative to it
-      double nzD = 0.0, nzV = 0.0;
-      if (m.m_bat.nzActive)
-         m.NudgeEval(m.m_bat.nzT + (s + 0.5) * h, nzD, nzV);
-      const V3 pivotW((double)m.m_hitcircleBase.center.x * U + w.pivOff, (double)m.m_hitcircleBase.center.y * U, 0.0);
-      const V3 cRel = w.c - pivotW;
-      const V3 vRel = w.v - V3(nzV, 0.0, 0.0);
-      const double phiMath = (double)m.m_angleStart + dirSign * m.m_bat.phi - M_PI / 2.0;   // engine angle 0 points along (0,-1)
-      const ContactResult r = Evaluate(w.batRp, w.bs, w.batOl, phiMath, dirSign * m.m_bat.omega, cRel, vRel, w.w, h, e.batSt);
-      if (r.inContact)
-      {
-         m.m_rbLogSteps++;
-         m.m_rbLogPeakFn = std::max(m.m_rbLogPeakFn, r.fn);
-         m.m_rbLogPeakDelta = std::max(m.m_rbLogPeakDelta, r.delta);
-         w.F = w.F + r.force;
-         w.Mb = w.Mb + r.torqueOnBall;
-         w.ctq = dirSign * r.torqueOnBat;   // the bat step wants the torque in the closing direction
-         w.deepest = std::max(w.deepest, r.delta);
-         w.vnLast = std::max(w.vnLast, std::abs(w.v.x * r.normal.x + w.v.y * r.normal.y + w.v.z * r.normal.z));
-         if (s == 0 && r.fn > 0.0 && r.delta > 1e-9)
-            w.omega2 += 3.0 * r.fn / r.delta / w.bs.m;   // the bat rubber's stiffness (Hertz 1.5 Fn / delta, doubled for the layer's stiffening) is part of what limits the step, like a surface's
-      }
-      // Resting regime: a ball hovering a few micrometres off the rubber is still engaged. It is let go only once it is clear by more than
-      // rubber_release_gap_mm as well as receding (release hysteresis), else it is released and re-hit by the engine dozens of times a second.
-      const bool receding = r.dist > e.batLastDist;
-      e.batLastDist = r.dist;
-      const bool clearOfRubber = !r.inContact && r.dist - w.bs.R > fs.rubberReleaseGapMm * 1e-3;
-      e.batClear = (clearOfRubber && receding) ? e.batClear + 1 : 0;
-      if (e.batClear >= (int)fs.rubberReleaseSteps)
-      {
-         DetachBat(e);
-         w.batLive = false;
-      }
-      w.pivOff += nzV * h;   // the pivot has moved on by the end of the substep
-   }
-
    // ---- A ball on a band: the band's nodes are stepped with the island, the ball's contact with the band is one more force on the ball ----
 
    // Per cycle, the first ball of a band begins the band's cycle (the sling's driver and switches, the substep, the follow nodes); then this ball is attached to its BandBall.
    static void SetupBand(Cycle &cy, Body &w, BallContact &e)
    {
       HitRubber *const band = e.band;
+      if (band->CordOn())   // the group step takes the whole island (CordIsland)
+      {
+         if (std::find(cy.bands.begin(), cy.bands.end(), band) == cy.bands.end())
+            cy.bands.push_back(band);
+         w.band = band;
+         return;
+      }
       if (std::find(cy.bands.begin(), cy.bands.end(), band) == cy.bands.end())
       {
          cy.bands.push_back(band);
@@ -810,7 +711,7 @@ struct ContactSystemImpl
       for (SurfaceContact &it : e.items)
       {
          const size_t k = itemIdx++;
-         if (it.candR >= 0.0 && it.cand.empty())   // a surface of faces with none within reach of the ball this cycle: no contact
+         if (it.NoFaces(w.c))   // a surface of faces with none within reach of the ball this cycle: no contact
          {
             it.st.Reset();
             it.touching = false;
@@ -841,7 +742,7 @@ struct ContactSystemImpl
             }
             continue;
          }
-         V3 vsurf, wsurf;   // velocity of the surface at the contact and its angular velocity (a moving surface: a turntable's disc)
+         V3 vsurf, wsurf;   // velocity of the surface at the contact and its angular velocity (zero for a static surface: the moving parts took the branch above)
          if (pr.overlap)
             it.r->VelocityAt(pr, vsurf, wsurf);
          ContactResult r;
@@ -1023,40 +924,7 @@ struct ContactSystemImpl
             tripped = true;
          }
       }
-      StepBats(cy, isl, h, true);   // the bat takes the balls' reaction in the same substep (no contact torque from a bad contact)
       return tripped;
-   }
-
-   // Every bat of the island steps ONCE per substep, with the torque of all the balls on it (several balls can be on one bat); withTorque false = the rest of the cycle after the balls were handed back
-   static void StepBats(Cycle &cy, const ContactSystem::Islands::Island &isl, const double h, const bool withTorque)
-   {
-      for (const int i : isl.members)
-      {
-         Body &w = cy.bodies[i];
-         if (w.bat == nullptr)
-            continue;
-         bool seen = false;
-         for (const int j : isl.members)
-            if (j == i)
-               break;
-            else if (cy.bodies[j].bat == w.bat)
-            {
-               seen = true;
-               break;
-            }
-         if (seen)
-            continue;
-         double tq = 0.0;
-         if (withTorque)
-            for (const int j : isl.members)
-               if (cy.bodies[j].bat == w.bat && !cy.bodies[j].tripped)
-                  tq += cy.bodies[j].ctq;
-         w.bat->FlipperStep(h, tq);
-         const bool stop = w.bat->m_bat.plungerHitStop;
-         for (const int j : isl.members)
-            if (cy.bodies[j].bat == w.bat)
-               cy.bodies[j].hitStop |= stop;
-      }
    }
 
    // ---- Arrival-time substeps (islands of balls and static surfaces) ----
@@ -1064,64 +932,106 @@ struct ContactSystemImpl
    // by the time the ball needs to get within kArriveM of it (distance, closing speed, and the acceleration it can pick up), and a touching one by its own stiffness at the depth the
    // contact will reach (omega * h limited, Hertz). A ball with nothing near takes the rest of the cycle as one step. The ball pairs keep the step their own rule gives (cy.stepsPair).
 
-   static bool IslandStatic(const Cycle &cy, const ContactSystem::Islands::Island &isl)
+   // Islands the arrival loop (with the rewind) can step: balls, static surfaces and moving parts (gates, spinners, bumpers, turntable discs: they step inside the loop and are saved
+   // with the snapshot, UnifiedContactDesign.txt 11 point 7, 12.1 and 12.2: flipper bats). A band keeps the uniform path until it can be saved and restored (12.3).
+   static bool IslandRewindable(const Cycle &cy, const ContactSystem::Islands::Island &isl)
    {
       for (const int i : isl.members)
       {
          const Body &w = cy.bodies[i];
-         if (w.bat != nullptr || w.band != nullptr)
+         if (w.band != nullptr)
             return false;
-         if (w.e != nullptr)
-            for (const SurfaceContact &it : w.e->items)
-            {
-               if (it.r->MovingPart() != nullptr)
-                  return false;
-               if (const HitRubber *const hr = dynamic_cast<const HitRubber *>(it.r))
-                  if (hr->m_turntable >= 0)
-                     return false;
-            }
       }
       return true;
    }
 
-   static void ProbeBody(Body &w)
+   // t: the time of this substep into the cycle (s). At the cycle's first substep every surface is probed; after that a static surface whose gap, less what the ball has moved
+   // since its last probe, is still more than the ball can close in the rest of the cycle (its speed and the acceleration bound of the arrival rule, NextStep) is not probed: it
+   // cannot touch the ball in this cycle, and NextStep would have passed it over (d > vc h + a h^2 for every h up to the rest of the cycle). Moving parts are always probed.
+   static void ProbeBody(Cycle &cy, Body &w, const double t)
    {
       CPROF(ProbeBody);
+      constexpr double kTouchM = 1.0e-6;   // as NextStep: within this gap a surface counts as touching
       w.probesReady = false;
       if (w.e == nullptr)
          return;
       w.probes.resize(w.e->items.size());
+      const bool first = t <= 0.0;
+      const double rem = std::max(cy.dt - t, 0.0);
+      const double aBall = w.extBaseVS.Length() / PHYSICS_STEPTIME_S + w.magAcc + w.F.Length() / w.bs.m;
+      const double reach = w.v.Length() * rem + aBall * rem * rem;
       size_t k = 0;
       for (SurfaceContact &it : w.e->items)
       {
          TubeProbe &pr = w.probes[k++];
-         if (it.candR >= 0.0 && it.cand.empty())   // no face within reach this cycle: far
+         if (it.NoFaces(w.c))   // no face within reach this cycle: far
          {
             pr = TubeProbe();
             pr.dist = -1.0;
+            it.probeT = -1.0;
             continue;
          }
-         pr = it.r->Probe(w.bs, it, w.c);
+         if (first)
+            it.probeT = -1.0;
+         else if (it.probeT >= 0.0 && it.r->MovingPart() == nullptr && it.probeGap - (w.c - it.probeC).Length() - kTouchM > reach)
+         {
+            pr = TubeProbe();   // cannot be reached in the rest of the cycle: far
+            pr.dist = -1.0;
+            it.hcStep = 0.0;    // (as NextStep does for a surface that is not touching)
+            continue;
+         }
+         if (ContactProf::On())
+         {
+            const uint64_t t0 = __rdtsc();
+            pr = it.r->Probe(w.bs, it, w.c);
+            if (ContactProf::ProbeTime(it.r, __rdtsc() - t0))
+               ContactProf::ProbeName(it.r, it.r->Name());
+         }
+         else
+            pr = it.r->Probe(w.bs, it, w.c);
+         it.probeGap = pr.overlap ? -pr.delta : pr.dist - (w.bs.R + pr.rho);
+         it.probeC = w.c;
+         it.probeT = t;
+         // VPX_PROBE_CHECK=1: the short face list must give the same nearest face as the whole Verlet list wherever it matters (within the ball's radius plus 3 mm); mismatches are counted in the profile notes
+         static const bool check = getenv("VPX_PROBE_CHECK") != nullptr;
+         if (check && it.candV.size() > it.cand.size() && it.candR >= 0.0)
+         {
+            SurfaceContact full = it;
+            full.cand = it.candV;
+            full.tightC = w.c;
+            const TubeProbe p2 = it.r->Probe(w.bs, full, w.c);
+            const double nearM = w.bs.R + 0.003;
+            const bool relevant = std::min(pr.dist, p2.dist) <= nearM;
+            if (relevant && (std::abs(pr.dist - p2.dist) > 1e-12 || pr.seg != p2.seg))
+               ContactProf::Note(std::string("PROBE MISMATCH ") + it.r->Name());
+            else if (relevant)
+               ContactProf::Note("probe check ok");
+         }
       }
       w.probesReady = true;
    }
 
    // The next substep of an island: at most `remaining`
-   static double NextStep(Cycle &cy, const ContactSystem::Islands::Island &isl, const double remaining, int &arrivals)
+   // why: the rule that set the step (TestDriver::ContactCost::Why, for the test driver's cost split)
+   static double NextStep(Cycle &cy, const ContactSystem::Islands::Island &isl, const double remaining, int &arrivals, int &why)
    {
+      using CC = TestDriver::ContactCost;
       CPROF(NextStep);
       constexpr double kTouchM = 1.0e-6;          // within this gap a surface counts as touching
       constexpr double kArriveM = 0.5e-6;         // an arrival step ends this far above the surface
       constexpr double kMinStepS = 0.2e-6, kMaxContactStepS = 100e-6;
-      constexpr double kImpactOmegaH = 0.2, kRestOmegaH = 0.8;
+      const double kImpactOmegaH = 0.2 * ContactOmegaHScale();
+      constexpr double kRestOmegaH = 0.8;
       constexpr double kRestSpeed = 0.02;   // as the ball pairs' rule
       // resting = slow AND the forces on the ball balance: what is left over (m times its acceleration over the last substep) is at most this share of the contact's own force.
       // At rest the contact carries everything that presses the ball into it (weight, magnets, balls on top); at the deepest point of an impact it far exceeds the rest.
       constexpr double kBalance = 0.2;   // measured 2026-10-21 (6 balls on the magnet): the strongest contact of a resting ball shows net force / contact force 0.005 median and 0.01 at most; in the bursts after a landing 99 % of cycles are under 0.08. 0.2 is 20x the resting maximum
       double h = remaining;
-      if (cy.stepsPair > 1)
+      why = CC::kEnd;
+      if (cy.stepsPair > 1 && cy.dt / cy.stepsPair < h)
       {
-         h = std::min(h, cy.dt / cy.stepsPair);
+         h = cy.dt / cy.stepsPair;
+         why = CC::kPairStiffness;
       }
       for (const int i : isl.members)
       {
@@ -1130,19 +1040,29 @@ struct ContactSystemImpl
             continue;
          // the acceleration the ball can pick up: gravity and the nudge, a magnet's pull, and what the contact forces of the last substep gave it
          const double fLeft = w.hS > 0.0 ? (w.v - w.vS).Length() / w.hS * w.bs.m : -1.0;   // N, the ball's net force over the last substep (< 0 = unknown)
-         const double aBound = w.extBaseVS.Length() / PHYSICS_STEPTIME_S + w.magAcc + w.F.Length() / w.bs.m;
+         const double aBallBound = w.extBaseVS.Length() / PHYSICS_STEPTIME_S + w.magAcc + w.F.Length() / w.bs.m;
          size_t k = 0;
          for (SurfaceContact &it : w.e->items)
          {
             const TubeProbe &pr = w.probes[k++];
             if (!pr.overlap && pr.dist < 0.0)
                continue;   // far
+            // a moving part closes on the ball too: its present speed and what its drive can add (SurfaceSpeedBound, linear in the time) join the ball's closing speed and acceleration
+            ContactMovingPart *const mp = it.r->MovingPart();
+            double vSurf = 0.0, aSurf = 0.0;
+            if (mp != nullptr)
+            {
+               mp->SetBall(w.bs);
+               vSurf = mp->SurfaceSpeedBound(0.0);
+               aSurf = (mp->SurfaceSpeedBound(cy.dt) - vSurf) / cy.dt;
+            }
+            const double aBound = aBallBound + aSurf;
             const double gap = pr.overlap ? -pr.delta : pr.dist - (w.bs.R + pr.rho);
-            const double vn = -w.v.Dot(pr.normal);   // (static surface)
+            const double vn = -w.v.Dot(pr.normal);
             if (gap > kTouchM)
             {
                it.hcStep = 0.0;
-               const double d = gap - kArriveM, vc = std::max(vn, 0.0);
+               const double d = gap - kArriveM, vc = std::max(vn, 0.0) + vSurf;
                if (d > vc * h + aBound * h * h)   // (semi-implicit Euler moves the ball by the new velocity: v h + a h^2 for a constant acceleration)
                   continue;   // cannot get there within the step
                { static const bool noSplit = getenv("VPX_ARRIVAL_NOSPLIT") != nullptr; if (noSplit) continue; }   // diagnostic: no arrival split, the rewind has to catch every late contact
@@ -1154,18 +1074,21 @@ struct ContactSystemImpl
                if (t < h)
                {
                   h = std::max(t, kMinStepS);
+                  why = t < kMinStepS ? CC::kMinimum : CC::kArrival;
                   arrivals++;
                }
             }
             else
             {
                static const bool noLand = getenv("VPX_ARRIVAL_NOSPLIT") != nullptr;
-               if (!noLand && !pr.overlap && vn > 1e-9 && gap > 0.0)   // inside the touch gap but not touching yet: land on the surface exactly, so the force starts at the touch
+               const double vl = std::max(vn, 0.0) + vSurf;
+               if (!noLand && !pr.overlap && vl > 1e-9 && gap > 0.0)   // inside the touch gap but not touching yet: land on the surface exactly, so the force starts at the touch
                {
-                  const double tl = aBound > 1e-9 ? (-vn + std::sqrt(vn * vn + 4.0 * aBound * gap)) / (2.0 * aBound) : gap / vn;
+                  const double tl = aBound > 1e-9 ? (-vl + std::sqrt(vl * vl + 4.0 * aBound * gap)) / (2.0 * aBound) : gap / vl;
                   if (tl < h)
                   {
                      h = std::max(tl, kMinStepS);
+                     why = tl < kMinStepS ? CC::kMinimum : CC::kArrival;
                      arrivals++;
                   }
                }
@@ -1199,10 +1122,28 @@ struct ContactSystemImpl
                      const V3 vt = w.v - pr.normal * w.v.Dot(pr.normal);
                      hc = std::min(hc, set->rollTravelUm * 1e-6 / std::max(vt.Length(), 1e-6));
                   }
-               h = std::min(h, std::max(hc, kMinStepS));
+               int hcWhy = CC::kSurfaceStiffness;
+               if (mp != nullptr)   // the reduced mass of the ball and the part, the part's own stiffness and the surface speed it can reach (Part::BallStep)
+               {
+                  const double hp = mp->BallStep(w.c, w.v, h);
+                  if (hp < hc)
+                  {
+                     hc = hp;
+                     hcWhy = CC::kPartStep;
+                  }
+               }
+               if (std::max(hc, kMinStepS) < h)
+               {
+                  h = std::max(hc, kMinStepS);
+                  why = hc < kMinStepS ? CC::kMinimum : hcWhy;
+               }
             }
          }
       }
+      if (h < kMinStepS && kMinStepS < remaining)
+         why = CC::kMinimum;
+      else if (remaining <= std::max(h, kMinStepS))
+         why = CC::kEnd;
       return std::min(remaining, std::max(h, kMinStepS));
    }
 
@@ -1218,6 +1159,7 @@ struct ContactSystemImpl
       std::vector<Pr> p;
       std::vector<double> gap, vn;   // per surface of each ball (flat, in the order of b): the gap and the closing speed at the snapshot (1e9 / 0 = far)
       std::vector<double> pairGap;
+      std::vector<ContactMovingPart::State> parts;   // the island's moving parts (cy.islandParts), saved with the balls
       size_t partHits = 0, hitEvents = 0;
       double t = 0.0, h = 0.0;
       int s = 0;
@@ -1267,6 +1209,9 @@ struct ContactSystemImpl
       }
       sn.partHits = cy.partHits.size();
       sn.hitEvents = cy.hitEvents.size();
+      sn.parts.resize(cy.islandParts.size());
+      for (size_t k = 0; k < cy.islandParts.size(); k++)
+         cy.islandParts[k]->SaveState(sn.parts[k]);
       sn.t = t;
       sn.s = s;
       sn.approaching = false;
@@ -1316,6 +1261,8 @@ struct ContactSystemImpl
       }
       cy.partHits.resize(sn.partHits);
       cy.hitEvents.resize(sn.hitEvents);
+      for (size_t k = 0; k < cy.islandParts.size() && k < sn.parts.size(); k++)
+         cy.islandParts[k]->RestoreState(sn.parts[k]);
    }
 
    // Did the substep just taken start a contact deeper than it should (the surface was not touching at its start)? The allowed first depth is the larger of the setting and a quarter of
@@ -1334,10 +1281,27 @@ struct ContactSystemImpl
          for (const SurfaceContact &it : w.e->items)
          {
             const TubeProbe &pr = w.probes[k];
-            const double prevGap = sn.gap[d.itemBase + k], vnPrev = sn.vn[d.itemBase + k];
+            const double prevGap = sn.gap[d.itemBase + k];
+            // the closing speed of ball and surface: a moving part adds its own speed and what its drive can add in the substep (SurfaceSpeedBound)
+            const double vnPrev = std::max(sn.vn[d.itemBase + k], 0.0) + (it.r->MovingPart() != nullptr ? it.r->MovingPart()->SurfaceSpeedBound(sn.h) : 0.0);
             k++;
-            if (!pr.overlap || prevGap <= kTouchM)
-               continue;   // not touching, or it was touching at the start of the substep: not an arrival
+            if (!pr.overlap)
+               continue;
+            if (prevGap <= kTouchM)
+            {
+               // a contact that was already touching: the depth cannot grow by more than the closing speed carries it in the substep (a margin of 3 for the contact's own motion), or the step was too long
+               const double prevDepth = std::max(0.0, -prevGap);
+               if (pr.delta > prevDepth + 3.0 * vnPrev * sn.h + 2.0 * allowAbs)
+               {
+                  f = 0.55;
+                  what = std::string("deepening surface ") + it.r->Name();
+                  depthOut = pr.delta;
+                  prevGapOut = prevGap;
+                  vnOut = vnPrev;
+                  return true;
+               }
+               continue;
+            }
             const double depth = pr.delta;
             const double Estar = it.rp.eMpa * 1e6 / (1.0 - it.rp.nu * it.rp.nu);
             const double dImp = vnPrev > kRestSpeed ? std::pow(15.0 * w.bs.m * vnPrev * vnPrev / (16.0 * Estar * std::sqrt(w.bs.R)), 0.4) : 0.0;
@@ -1411,8 +1375,11 @@ struct ContactSystemImpl
          const bool finished = !(t < cy.dt * (1.0 - 1e-9) && !tripped && s < kMaxSubsteps);
          if (finished && !(havePrev && sn.approaching && !tripped && rewinds < kMaxRewinds))
             break;   // (the last substep of the cycle is checked too when a surface was approaching at its start)
-         for (const int i : isl.members)
-            ProbeBody(cy.bodies[i]);
+         {
+            const TestDriver::KindTimer kt(s_cc, TestDriver::ContactCost::kSurfaces);
+            for (const int i : isl.members)
+               ProbeBody(cy, cy.bodies[i], t);
+         }
          if (havePrev && rewinds < kMaxRewinds)
          {
             double f = 1.0, depth = 0.0, prevGap = 0.0, vn = 0.0;
@@ -1434,7 +1401,8 @@ struct ContactSystemImpl
             break;
          RwTake(cy, isl, sn, t, s);
          havePrev = true;
-         double h = (s == kMaxSubsteps - 1) ? cy.dt - t : NextStep(cy, isl, cy.dt - t, arrivals);
+         int why = TestDriver::ContactCost::kEnd;
+         double h = (s == kMaxSubsteps - 1) ? cy.dt - t : NextStep(cy, isl, cy.dt - t, arrivals, why);
          for (const int i : isl.members)
          {
             cy.bodies[i].vS = cy.bodies[i].v;
@@ -1442,14 +1410,33 @@ struct ContactSystemImpl
          }
          if (hCap > 0.0)
          {
+            if (hCap < h)
+               why = TestDriver::ContactCost::kRetake;
             h = std::min(h, hCap);
             hCap = 0.0;
          }
          sn.h = h;
-         for (const int i : isl.members)
-            SurfaceForces(cy, cy.bodies[i], h, s);
-         PairForces(cy, isl, h, s);
+         if (s_cc != nullptr)
+         {
+            s_islWhy[why]++;
+            s_islMinStep = std::min(s_islMinStep, h);
+         }
+         {
+            const TestDriver::KindTimer kt(s_cc, TestDriver::ContactCost::kSurfaces);
+            for (const int i : isl.members)
+               SurfaceForces(cy, cy.bodies[i], h, s);
+         }
+         {
+            const TestDriver::KindTimer kt(s_cc, TestDriver::ContactCost::kPairs);
+            PairForces(cy, isl, h, s);
+         }
          tripped = Integrate(cy, isl, h, s);
+         {
+            CPROF(PartStep);
+            const TestDriver::KindTimer kt(s_cc, TestDriver::ContactCost::kMovingParts);
+            for (ContactMovingPart *const hg : cy.islandParts)   // the part moves with the reactions of all its balls summed, in its own substeps within h
+               hg->StepInIsland(h);
+         }
          if (tripped && rewinds < kMaxRewinds && h > 4.0 * kMinStepS)
          {
             // the model left its range in this substep: take it again in two
@@ -1495,42 +1482,67 @@ struct ContactSystemImpl
    // The island's substeps: at every one, all forces are summed from the current states before any body moves
    static bool Substeps(Cycle &cy, const ContactSystem::Islands::Island &isl)
    {
-      if (ArrivalOn(cy) && IslandStatic(cy, isl))
+      if (ArrivalOn(cy) && IslandRewindable(cy, isl))
          return SubstepsArrival(cy, isl);
       CPROF(Substeps);
+      using CC = TestDriver::ContactCost;
       const double h = cy.dt / cy.steps;
+      if (s_cc != nullptr)
+      {
+         s_islWhy[cy.stepsWhy] += cy.steps;
+         s_islMinStep = std::min(s_islMinStep, h);
+      }
       bool tripped = false;
       int s = 0;
       for (; s < cy.steps && !tripped; s++)
       {
-         for (HitRubber *const b : cy.islandBands)
-            b->BandSubstepBegin();
-         for (const int i : isl.members)
-            SurfaceForces(cy, cy.bodies[i], h, s);
-         for (const int i : isl.members)
-            BatForces(cy.bodies[i], h, s);
-         for (const int i : isl.members)
-            BandForces(cy.bodies[i]);
-         PairForces(cy, isl, h, s);
+         {
+            const TestDriver::KindTimer kt(s_cc, CC::kBands);
+            for (HitRubber *const b : cy.islandBands)
+               b->BandSubstepBegin();
+         }
+         {
+            const TestDriver::KindTimer kt(s_cc, CC::kSurfaces);
+            for (const int i : isl.members)
+               SurfaceForces(cy, cy.bodies[i], h, s);
+         }
+         {
+            const TestDriver::KindTimer kt(s_cc, CC::kBands);
+            for (const int i : isl.members)
+               BandForces(cy.bodies[i]);
+         }
+         {
+            const TestDriver::KindTimer kt(s_cc, CC::kPairs);
+            PairForces(cy, isl, h, s);
+         }
          tripped = Integrate(cy, isl, h, s);
-         for (ContactMovingPart *const hg : cy.islandParts)   // the part moves with the reactions of all its balls summed, in its own substeps within h
-            hg->StepInIsland(h);
-         for (HitRubber *const b : cy.islandBands)   // the nodes step after the forces on them were summed
-            tripped = b->BandSubstepEnd() || tripped;
+         {
+            const TestDriver::KindTimer kt(s_cc, CC::kMovingParts);
+            for (ContactMovingPart *const hg : cy.islandParts)   // the part moves with the reactions of all its balls summed, in its own substeps within h
+               hg->StepInIsland(h);
+         }
+         {
+            const TestDriver::KindTimer kt(s_cc, CC::kBands);
+            for (HitRubber *const b : cy.islandBands)   // the nodes step after the forces on them were summed
+               tripped = b->BandSubstepEnd() || tripped;
+         }
          for (const int i : isl.members)
             if (cy.bodies[i].band != nullptr && cy.bodies[i].bb != nullptr && !std::isfinite(cy.bodies[i].band->BandBallPeak(*cy.bodies[i].bb)))
                tripped = true;
       }
-      // The bat keeps stepping whatever happens to the ball: the rest of the cycle without a contact torque
+      // The parts keep stepping whatever happens to the ball: the rest of the cycle without the balls' reactions
       for (; s < cy.steps; s++)
       {
-         StepBats(cy, isl, h, false);
+         const TestDriver::KindTimer kt(s_cc, CC::kMovingParts);
          for (ContactMovingPart *const hg : cy.islandParts)
             hg->StepInIsland(h);
       }
-      for (HitRubber *const b : cy.islandBands)   // idle nodes merged away; a band that left the model's range is reset and its balls let go
-         if (!b->BandCycleEnd())
-            tripped = true;
+      {
+         const TestDriver::KindTimer kt(s_cc, CC::kBands);
+         for (HitRubber *const b : cy.islandBands)   // idle nodes merged away; a band that left the model's range is reset and its balls let go
+            if (!b->BandCycleEnd())
+               tripped = true;
+      }
       if (ContactTraceDetail())
          for (size_t k = 0; k < isl.edges.size(); k++)
          {
@@ -1552,13 +1564,6 @@ struct ContactSystemImpl
             PLOGW << "Rubber " << w.o->m_name << ": force-model contact left the model's range (" << w.tripWhy << " at substep " << w.tripStep << " of " << cy.steps << ", depth " << w.deepest * 1e3 << " mm, speed " << w.v.Length() << " m/s, cluster " << isl.members.size() << "), using the stock collision";
             w.o->m_contactCooldownUntilMs = g_pplayer->m_time_msec + 20;
          }
-         if (w.tripped && w.o == nullptr && w.bat != nullptr)
-         {
-            PLOGW << "Rubber: " << w.bat->m_pflipper->GetName() << " contact step left the model's range (" << w.tripWhy << "), using the impulse path (ball untouched this cycle)";
-            w.bat->m_rbCooldownUntilMs = g_pplayer->m_time_msec + 20;
-         }
-         else if (w.tripped && w.bat != nullptr)
-            w.bat->m_rbCooldownUntilMs = g_pplayer->m_time_msec + 20;
          if (w.tripped && w.band != nullptr)
             w.band->m_bandCooldownUntilMs = g_pplayer->m_time_msec + 20;
          if (w.e != nullptr)
@@ -1596,7 +1601,6 @@ struct ContactSystemImpl
             PLOGI << "ContactTrace t=" << g_pplayer->m_time_msec << " pos " << w.c.x / U << ' ' << w.c.y / U << ' ' << w.c.z / U << " v " << w.v.x << ' ' << w.v.y << ' ' << w.v.z << " w " << w.w.x << ' ' << w.w.y << ' ' << w.w.z
                   << " depth" << o.str() << " cluster " << isl.members.size();
          }
-         w.c = w.c + w.absCorr;
          pb->m_d.m_pos = Vertex3Ds((float)(w.c.x / U), (float)(w.c.y / U), (float)(w.c.z / U));
          pb->m_d.m_vel = Vertex3Ds((float)(w.v.x / VS), (float)(w.v.y / VS), (float)(w.v.z / VS));
          pb->m_angularmomentum = Vertex3Ds((float)(w.w.x * w.lScale), (float)(w.w.y * w.lScale), (float)(w.w.z * w.lScale));
@@ -1611,10 +1615,21 @@ struct ContactSystemImpl
          if (ep == nullptr)
             continue;   // a free ball has nothing to release
          BallContact &e = *ep;
-         if (e.bat != nullptr)
-            continue;   // the bat holds the ball until its own release rule lets go
          if (e.band != nullptr)   // the band holds the ball until its own release rule lets go (the ball stays in its other contacts)
          {
+            if (e.band->CordOn())
+            {
+               // off the cord and clear of it; a plate on its way out can still catch a ball close by, so it stays in the group until the plate is quiet or the ball is far
+               CordBand &cb = *e.band->Cord();
+               int slot = -1;
+               for (int k = 0; k < (int)cb.slots.size(); k++)
+                  if (cb.slots[k] == pb)
+                     slot = k;
+               const double gap = slot >= 0 ? cb.part.CordGap(slot) : 1.0;
+               if (gap > 0.03 || (gap > 0.001 && cb.part.PlateQuiet()))
+                  cy.bandReleases.emplace_back(pb, "clear");
+               continue;
+            }
             for (BandBall &b : e.band->m_engaged)
                if (b.ball == pb && e.band->BandBallClear(b, w.bs, w.c, w.bandContact, w.lastGap, w.relNormalVel))
                   cy.bandReleases.emplace_back(pb, "clear");
@@ -1649,25 +1664,303 @@ struct ContactSystemImpl
    }
 
    // The bats that took part: finish the cycle (the pivot's nudge, then UpdateDisplacements only publishes the angle and fires the events)
-   static void FinishBats(Cycle &cy, const ContactSystem::Islands::Island &isl)
+   // The island's members for the test driver's cost split: its balls (the driver's names), then the surfaces, flippers and bands they touch at the end of the step
+   // ---- An island with a cord: one group step for the whole island (docs/GroupStepDesign.txt 8, 11) ----
+   // A surface of a ball's contact as a shape of the group (its own list of near faces, so one ball's)
+   class SurfaceShape : public GroupStep::Shape
    {
+   public:
+      const ContactSurface *r = nullptr;
+      const SurfaceContact *it = nullptr;
+      BallSI bs;
+      void Probe(const V3 &c, double R, GroupStep::Hit &h) const override
+      {
+         const TubeProbe pr = r->Probe(bs, *it, c);
+         h.delta = pr.overlap ? pr.delta : (pr.dist > 0.0 ? R + pr.rho - pr.dist : -1.0);
+         h.n = pr.normal;
+         h.reff = pr.reff > 0.0 ? pr.reff : R;
+         h.curvDist = pr.reff > 0.0 && pr.reff < 0.999 * R ? pr.dist : 0.0;
+      }
+   };
+
+   static bool IslandHasCord(const Cycle &cy, const ContactSystem::Islands::Island &isl)
+   {
+      for (const int i : isl.members)
+         if (cy.bodies[i].band != nullptr && cy.bodies[i].band->CordOn())
+            return true;
+      return false;
+   }
+
+   // the group's balls change between cycles: each cord's own per-ball state follows them
+   static void CordFollow(CordBand &cb, GroupStep::Group &g, HitBall *const *balls, const int n)
+   {
+      BandCord::Part &p = cb.part;
+      if (!cb.attached)
+      {
+         p.AttachGroup(g.ball, n);
+         cb.attached = true;
+      }
+      else
+      {
+         bool same = (int)cb.slots.size() == n;
+         for (int i = 0; same && i < n; i++)
+            same = cb.slots[i] == balls[i];
+         if (!same)
+         {
+            int oldOfNew[GroupStep::kMaxBalls];
+            for (int i = 0; i < n; i++)
+            {
+               oldOfNew[i] = -1;
+               for (int k = 0; k < (int)cb.slots.size(); k++)
+                  if (cb.slots[k] == balls[i])
+                     oldOfNew[i] = k;
+            }
+            p.RemapBalls(oldOfNew, n);
+         }
+      }
+      cb.slots.assign(balls, balls + n);
+   }
+
+   static bool CordSteps(GroupStep::Group &g, const double dt, double &done)
+   {
+      done = 0.0;
+      int guard = 0;
+      while (done < dt - 1e-12)
+      {
+         const double h = std::min(g.ChooseStep(), dt - done);
+         const double taken = g.Step(h);
+         if (g.books.failed || taken <= 0.0 || ++guard > 3000)
+            return false;
+         done += taken;
+      }
+      return true;
+   }
+
+   static void CordIsland(Cycle &cy, const ContactSystem::Islands::Island &isl)
+   {
+      static GroupStep::Group g;
+      static std::deque<SurfaceShape> shapes;
+      shapes.clear();
+      g.nb = g.ns = g.np = 0;
+      g.set.pair = cy.rpBall;
+      g.set.hMin = 2e-6;   // a step that cannot be solved gives up here: in real time it must not spend the frame halving
+      HitBall *balls[GroupStep::kMaxBalls];
+      std::vector<HitRubber *> cords;
+      bool gSet = false;
       for (const int i : isl.members)
       {
          Body &w = cy.bodies[i];
-         if (w.bat == nullptr)
-            continue;
-         bool seen = false;
-         for (const int j : isl.members)
-            if (j == i)
-               break;
-            else if (cy.bodies[j].bat == w.bat)
-               seen = true;
-         if (seen)
-            continue;   // (a bat with several balls on it finishes once)
-         w.bat->NudgeStep(cy.dt);
-         w.bat->m_gAdvanced = true;
-         w.bat->m_gAdvHitStop = w.hitStop;
+         if (g.nb >= GroupStep::kMaxBalls)
+         {
+            PLOGW << "Cord group: more than " << GroupStep::kMaxBalls << " balls in one island: the others are left out this cycle";
+            break;
+         }
+         if (!w.extTaken)   // the group gives every ball its gravity in its steps, wherever the ball is (a ball high on the cord has no floor in its contact)
+            Sources::Begin(w, cy.dt, true);
+         const int ib = g.nb++;
+         balls[ib] = w.pb;
+         GroupStep::Ball &b = g.ball[ib];
+         b.m = w.bs.m;
+         b.R = w.bs.R;
+         b.c = w.c;
+         b.v = w.v;
+         b.w = w.w;
+         b.fExt = V3();
+         if (!gSet && w.extBaseVS.Length() > 0.0)
+         {
+            g.set.g = w.extBaseVS * (1.0 / PHYSICS_STEPTIME_S);   // gravity along the table's slope, and the nudge
+            gSet = true;
+         }
+         if (w.magAcc > 0.0)   // the magnets' pull, held for the cycle: a drive
+         {
+            const Vertex3Ds inc = w.pb->ExternalVelocityIncrement(), base = w.pb->ExternalVelocityIncrement(false);
+            b.fExt = V3((inc.x - base.x) * VS, (inc.y - base.y) * VS, (inc.z - base.z) * VS) * (b.m / PHYSICS_STEPTIME_S);
+         }
+         if (w.band != nullptr && w.band->CordOn() && std::find(cords.begin(), cords.end(), w.band) == cords.end() && (int)cords.size() < GroupStep::kMaxParts)
+            cords.push_back(w.band);
+         if (w.e != nullptr)
+            for (SurfaceContact &it : w.e->items)
+            {
+               if (g.ns >= GroupStep::kMaxShapes)
+                  break;
+               shapes.emplace_back();
+               SurfaceShape &sh = shapes.back();
+               sh.r = it.r;
+               sh.it = &it;
+               sh.bs = w.bs;
+               sh.rp = it.rp;
+               sh.layerM = it.hLayer;
+               sh.onlyBall = ib;
+               g.shape[g.ns++] = &sh;
+            }
       }
+      for (HitRubber *const c : cords)
+      {
+         CordFollow(*c->Cord(), g, balls, g.nb);
+         g.part[g.np++] = &c->Cord()->part;
+         c->CordBegin();
+         c->m_cordStepped = true;
+      }
+      g.Configure();
+      // what a touch keeps between cycles: the shear spring's stretch
+      for (int k = 0; k < g.ni; k++)
+      {
+         GroupStep::Item &it = g.item[k];
+         if (it.b >= 0)
+            continue;
+         const SurfaceShape *const sh = static_cast<const SurfaceShape *>(g.shape[it.s]);
+         if (it.touching && sh->it->gsTouch)
+            it.xi = sh->it->gsXi;
+      }
+      V3 v0[GroupStep::kMaxBalls];
+      for (int i = 0; i < g.nb; i++)
+         v0[i] = g.ball[i].v;
+      // VPX_CORD_TRACE=<file>: per cycle the group's energy at its start and end, and what happened to the ball on the cord
+      static FILE *const cordTrace = []() -> FILE * {
+         const char *const e = getenv("VPX_CORD_TRACE");
+         FILE *const f = e != nullptr ? fopen(e, "w") : nullptr;
+         if (f != nullptr)
+            fprintf(f, "t_ms,dt_us,nb,np,E_start_mJ,E_end_mJ,loss_uJ,drive_uJ,book_uJ,x_U,y_U,z_U,vx,vy,vz,wx,wy,wz,on_cord,hold,stick,wrap,tension,gap_mm,psi,slip_J,floorV,L_normal,L_slip,L_shear,L_twist,L_roll,L_part,P_cord,P_back,P_fric,items\n");
+         return f;
+      }();
+      const double traceE0 = cordTrace != nullptr ? g.Energy() : 0.0;
+      double done = 0.0;
+      const bool ok = CordSteps(g, cy.dt, done);
+      if (cordTrace != nullptr)
+      {
+         const double E1 = g.Energy(), loss = g.books.Losses(), drive = g.books.driveJ;
+         const BandCord::Part *const pc = cords.empty() ? nullptr : &cords[0]->Cord()->part;
+         fprintf(cordTrace, "%d,%.2f,%d,%d,%.6f,%.6f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%d,%d,%d,%.2f,%.3f,%.3f,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%s\n", (int)g_pplayer->m_time_msec, cy.dt * 1e6, g.nb, g.np,
+                 traceE0 * 1e3, E1 * 1e3, loss * 1e6, drive * 1e6, (E1 - traceE0 + loss - drive) * 1e6, g.ball[0].c.x / U, g.ball[0].c.y / U, g.ball[0].c.z / U, g.ball[0].v.x, g.ball[0].v.y, g.ball[0].v.z,
+                 g.ball[0].w.x, g.ball[0].w.y, g.ball[0].w.z, pc != nullptr && pc->InPath(BandCord::kBall, 0) ? 1 : 0, pc != nullptr ? pc->gdiag.held[0] : 0, pc != nullptr ? pc->gdiag.stick[0] : 0, pc != nullptr ? pc->gdiag.wrap[0] * 57.2958 : 0.0,
+                 pc != nullptr ? pc->Tension() : 0.0, pc != nullptr ? pc->CordGap(0) * 1e3 : 0.0, pc != nullptr ? pc->TwistOf(0) : 0.0, pc != nullptr ? pc->books.postSlipJ * 1e6 : 0.0, pc != nullptr ? pc->books.floorMaxM * 1e3 : 0.0, g.books.normalLossJ * 1e6, g.books.slipJ * 1e6, g.books.shearDampJ * 1e6, g.books.twistJ * 1e6, g.books.rollJ * 1e6, g.books.partLossJ * 1e6,
+                 pc != nullptr ? pc->books.cordLossJ * 1e6 : 0.0, pc != nullptr ? pc->books.backstopLossJ * 1e6 : 0.0, pc != nullptr ? pc->books.frictionJ * 1e6 : 0.0, [&]() {
+                    static std::string names;
+                    names.clear();
+                    for (int k = 0; k < g.ni; k++)
+                       if (g.item[k].touching && g.item[k].b < 0)
+                          names += static_cast<const SurfaceShape *>(g.shape[g.item[k].s])->r->Name() + "|";
+                    return names.c_str();
+                 }());
+         fflush(cordTrace);
+      }
+      int ib = 0;
+      for (const int i : isl.members)
+      {
+         if (ib >= g.nb)
+            break;
+         Body &w = cy.bodies[i];
+         w.c = g.ball[ib].c;
+         w.v = g.ball[ib].v;
+         w.w = g.ball[ib].w;
+         if (!ok)   // what is left of the cycle: free flight
+         {
+            const double rem = cy.dt - done;
+            w.c = w.c + w.v * rem;
+            w.v = w.v + g.set.g * rem;
+         }
+         ib++;
+      }
+      // the part's hit events, and what the touches keep
+      for (int k = 0; k < g.ni; k++)
+      {
+         const GroupStep::Item &gi = g.item[k];
+         if (gi.b >= 0)
+            continue;
+         const SurfaceShape *const sh = static_cast<const SurfaceShape *>(g.shape[gi.s]);
+         SurfaceContact &it = *const_cast<SurfaceContact *>(sh->it);
+         if (gi.touching && !it.touching)
+         {
+            GroupStep::Hit hp;
+            sh->Probe(g.ball[gi.a].c, g.ball[gi.a].R, hp);
+            const float vn = (float)(-v0[gi.a].Dot(hp.n) / VS);
+            const HitObject *const ho = it.r->HitEventObject();
+            if ((vn >= cy.hitFloor || (ho != nullptr && ho->m_fe && vn >= ho->m_threshold)) && it.r->HitEventWanted(hp.n))
+               cy.partHits.push_back({ it.r, balls[gi.a], vn, Vertex3Ds((float)hp.n.x, (float)hp.n.y, (float)hp.n.z) });
+         }
+         it.touching = gi.touching;
+         it.gsTouch = gi.touching;
+         it.gsXi = gi.xi;
+      }
+      if (!ok)
+      {
+         PLOGW << "Cord group failed: why " << g.failWhy << " at " << done * 1e6 << " us of " << cy.dt * 1e6 << " us, balls " << g.nb << ", ball 0 at (" << g.ball[0].c.x / U << ", " << g.ball[0].c.y / U << ", " << g.ball[0].c.z / U << ") v " << g.ball[0].v.Length() << " m/s, halvings " << g.books.halvings << ", settle fails " << (cords.empty() ? 0 : cords[0]->Cord()->part.gdiag.settleFails) << ", plate " << (cords.empty() ? 0.0 : cords[0]->Cord()->part.PlateDeg()) << " deg";
+         for (HitRubber *const c : cords)
+            c->CordSolveFailed("the group step could not solve a step: the ball was let go");
+      }
+      else
+         for (HitRubber *const c : cords)
+         {
+            CordBand &cb = *c->Cord();
+            if (cb.part.books.cordOnPlayfield && !cb.warnedFloor)
+            {
+               cb.warnedFloor = true;
+               const std::string msg = "Rubber " + c->Name() + ": the cord reached the playfield (" + std::to_string(cb.part.books.floorMaxM * 1e3).substr(0, 4) + " mm): this rubber is placed wrong";
+               PLOGW << msg;
+               g_pplayer->m_liveUI->PushNotification(msg, 6000);
+            }
+            if (g.books.through && !cb.warnedThrough)
+            {
+               cb.warnedThrough = true;
+               const std::string msg = "Rubber " + c->Name() + ": a ball went through the cord";
+               PLOGW << msg;
+               g_pplayer->m_liveUI->PushNotification(msg, 6000);
+            }
+         }
+      WriteBack(cy, isl);
+   }
+
+   // a cord with no ball this cycle: a plate moving by itself, or the path letting go of a ball just gone (GroupStepDesign 8 point 5)
+   static void CordAlone(HitRubber *const band, const float dtime)
+   {
+      CordBand &cb = *band->Cord();
+      BandCord::Part &p = cb.part;
+      const double dt = (double)dtime * DEFAULT_STEPTIME_S;
+      if (dt <= 0.0)
+         return;
+      if (cb.attached && cb.slots.empty() && p.PlateQuiet() && !band->SlingTriggerPending())
+      {
+         band->CordBegin();   // (the switches, the driver: nothing to step unless they start something)
+         if (p.PlateQuiet())
+            return;
+      }
+      static GroupStep::Group g;
+      g.nb = g.ns = g.np = 0;
+      g.set.hMin = 2e-6;
+      CordFollow(cb, g, nullptr, 0);
+      g.part[g.np++] = &p;
+      if (!(cb.attached && cb.slots.empty() && !p.PlateQuiet()))
+         band->CordBegin();
+      g.Configure();
+      double done = 0.0;
+      if (!CordSteps(g, dt, done))
+         band->CordSolveFailed("the plate's step could not be solved");
+   }
+
+   static void IslandMembers(const Cycle &cy, const ContactSystem::Islands::Island &isl, std::string &out)
+   {
+      std::vector<std::string> balls, parts;
+      auto add = [&parts](const std::string &n) { if (parts.size() < 10 && std::find(parts.begin(), parts.end(), n) == parts.end()) parts.push_back(n); };
+      for (const int i : isl.members)
+      {
+         const Body &w = cy.bodies[i];
+         const char *const n = TestDriver::BallName(w.pb);
+         balls.push_back(n != nullptr ? n : "ball");
+         if (w.e != nullptr)
+            for (const SurfaceContact &it : w.e->items)
+               if (it.touching)
+                  add(it.r->Name());
+         if (w.band != nullptr)
+            add("band " + w.band->Name());
+      }
+      out = "balls";
+      for (const std::string &b : balls)
+         out += ' ' + b;
+      out += " | touching:";
+      for (const std::string &p : parts)
+         out += ' ' + p + ';';
+      if (parts.empty())
+         out += " nothing";
    }
 
    // Releases, forgetting the pairs that no longer touch, and the deferred events (the script never runs inside the step)
@@ -1747,7 +2040,7 @@ struct ContactSystemImpl
       }
    }
    static Cycle *s_pendingCy;   // the step whose events have not been dispatched yet
-   static std::vector<HitRubber *> &Hosts() { return HitRubber::Registry(); }   // (for the snapshot, outside the struct)
+   static std::vector<ContactHost *> &Hosts() { return ContactHost::Registry(); }   // (for the snapshot, outside the struct)
    static bool s_append;   // StepBalls: do not flush or clear the queued events: the steps of one replayed sub-interval chain
    static bool PreventOn()   // point 1 of the overlap standard; VPX_PREVENT=0 switches it off (test only)
    {
@@ -1810,6 +2103,7 @@ void ContactSystemImpl::StepBalls(const float dtime)
    cy.rpBall.normalLoss = cy.cs->ballTanDelta > 0.0;
 
    CPROF(StepBalls);
+   s_cc = TestDriver::Contact();
    static const bool timed = getenv("VPX_CONTACT_TIMING") != nullptr && *getenv("VPX_CONTACT_TIMING") != 0;
    uint64_t tp = timed ? usec() : 0;
    auto lap = [&](int &acc) { if (timed) { const uint64_t t = usec(); acc += (int)(t - tp); tp = t; } };
@@ -1822,6 +2116,18 @@ void ContactSystemImpl::StepBalls(const float dtime)
    for (size_t ii = 0; ii < cy.islands.count; ii++)
    {
       const ContactSystem::Islands::Island &isl = cy.islands.list[ii];
+      const uint64_t islT0 = s_cc != nullptr ? TestDriver::Ticks() : 0;
+      if (s_cc != nullptr)
+      {
+         std::fill(std::begin(s_islWhy), std::end(s_islWhy), 0);
+         s_islMinStep = 1.0;
+      }
+      if (IslandHasCord(cy, isl))
+      {
+         CordIsland(cy, isl);
+         lap(g_last.substepUs);
+         continue;
+      }
       SetupIsland(cy, isl);
       lap(g_last.setupUs);
       if (ContactProf::On())
@@ -1842,16 +2148,27 @@ void ContactSystemImpl::StepBalls(const float dtime)
          g_last.bandBodies += cy.bodies[i].band != nullptr ? 1 : 0;
          g_last.restBodies += cy.bodies[i].steps < 25 ? 1 : 0;
       }
-      for (const int i : isl.members)
-         g_last.bats += cy.bodies[i].bat != nullptr ? 1 : 0;
       const bool tripped = Substeps(cy, isl);
       lap(g_last.substepUs);
-      FinishBats(cy, isl);
+      const bool top = s_cc != nullptr && cy.steps > s_cc->topSteps;
+      if (top)
+         IslandMembers(cy, isl, s_cc->topMembers);   // (before the write-back, which may release a ball's contact)
       if (tripped)
          HandBack(cy, isl);
       else
          WriteBack(cy, isl);
       lap(g_last.writeUs);
+      if (s_cc != nullptr)
+      {
+         s_cc->islands++;
+         if (top)
+         {
+            s_cc->topSteps = cy.steps;
+            s_cc->topTicks = TestDriver::Ticks() - islT0;
+            s_cc->topMinStepUs = s_islMinStep * 1e6;
+            std::copy(std::begin(s_islWhy), std::end(s_islWhy), s_cc->topWhy);
+         }
+      }
    }
    FinishState(cy);
    s_pendingCy = &cy;   // its events are dispatched by ContactSystem::Dispatch, after the free balls have moved
@@ -1859,7 +2176,8 @@ void ContactSystemImpl::StepBalls(const float dtime)
    if (ContactProf::On())
    {
       static int calls = 0;
-      if (++calls % 5000 == 0)
+      static const int period = []() { const char *const e = getenv("VPX_CONTACT_PROFILE"); const int n = e != nullptr ? atoi(e) : 0; return n > 1 ? n : 5000; }();   // VPX_CONTACT_PROFILE=<n>: a dump every n step calls
+      if (++calls % period == 0)
          ContactProf::Dump("periodic");
    }
 }
@@ -1878,7 +2196,7 @@ void ContactSystemImpl::EngageNear(const float dtime)
       const char *const e = getenv("VPX_PROXIMITY");
       if (e != nullptr)
          return atoi(e) != 0;
-      const std::filesystem::path ini = HitRubber::IniPathFor(g_pplayer->m_ptable->m_filename);
+      const std::filesystem::path ini = ContactHost::IniPathFor(g_pplayer->m_ptable->m_filename);
       return PhysicsIni::Active(ini).proximityEngage;
    }();
    if (!on)
@@ -1888,7 +2206,7 @@ void ContactSystemImpl::EngageNear(const float dtime)
    struct NearEntry
    {
       const HitBall *ball;
-      const HitRubber *host;
+      const ContactHost *host;
       SurfaceContact it;
       uint32_t seenMs;
    };
@@ -1921,9 +2239,9 @@ void ContactSystemImpl::EngageNear(const float dtime)
       bs.R = (double)pb->m_d.m_radius * U;
       const V3 c((double)pos.x * U, (double)pos.y * U, (double)pos.z * U);
       const V3 v((double)pb->m_d.m_vel.x * VS, (double)pb->m_d.m_vel.y * VS, (double)pb->m_d.m_vel.z * VS);
-      HitRubber *best = nullptr;
+      ContactHost *best = nullptr;
       double bestGap = 1e9, pfGap = 1e9, pfClosing = 0.0;
-      for (HitRubber *const o : HitRubber::Registry())
+      for (ContactHost *const o : ContactHost::Registry())
       {
          if (!o->m_enabled || !o->m_set.contact || o->m_set.band || g_pplayer->m_time_msec < o->m_contactCooldownUntilMs)
             continue;
@@ -1967,7 +2285,7 @@ void ContactSystemImpl::EngageNear(const float dtime)
          }
       }
       if (best != nullptr)
-         EngageImpl(best, nullptr, pb, "near");
+         EngageImpl(best, pb, "near");
       else
       {
          if (ContactProf::On() && pb->m_d.m_pos.y > 1500.f)
@@ -1984,7 +2302,7 @@ void ContactSystemImpl::EngageNear(const float dtime)
 
 // ---- Engagement: which balls the contact system holds ----------------------------------------------------------------------------------------------------------------
 // A ball enters when a surface's stock collider finds it (the stock impulse is skipped) and leaves when it is clear of every surface and receding.
-bool ContactSystemImpl::EngageImpl(HitRubber *const host, FlipperMoverObject *const bat, HitBall *const pb, const char *how)
+bool ContactSystemImpl::EngageImpl(ContactHost *const host, HitBall *const pb, const char *how)
 {
    CPROF(EngageImpl);
    using namespace RubberContact;
@@ -2001,7 +2319,7 @@ bool ContactSystemImpl::EngageImpl(HitRubber *const host, FlipperMoverObject *co
    const V3 v((double)pb->m_d.m_vel.x * VS, (double)pb->m_d.m_vel.y * VS, (double)pb->m_d.m_vel.z * VS);
    {
       const float reach = pb->m_d.m_radius + 20.0f;   // VPX units: the ball radius plus what it can travel during a hit
-      for (HitRubber *const o : HitRubber::Registry())
+      for (ContactHost *const o : ContactHost::Registry())
       {
          if (o != host)
          {
@@ -2009,7 +2327,7 @@ bool ContactSystemImpl::EngageImpl(HitRubber *const host, FlipperMoverObject *co
                continue;
             if (o->IsPlayfield() && InPlayfieldHole(posStart))
                continue;   // no floor over a kicker's hole
-            if (host == nullptr && bat == nullptr && o->m_set.band)
+            if (host == nullptr && o->m_set.band)
                continue;   // a band engagement: the band rubbers are the band model's; as a rigid surface contact they would stop the ball before the band could deflect
             const FRect3D &bb = o->m_hitBBox;
             if (posStart.x < bb.left - reach || posStart.x > bb.right + reach || posStart.y < bb.top - reach || posStart.y > bb.bottom + reach
@@ -2032,7 +2350,7 @@ bool ContactSystemImpl::EngageImpl(HitRubber *const host, FlipperMoverObject *co
    // Found inside a part with no earlier clean state (docs/UnifiedContactDesign.txt 11, point 6): CheckOverlaps found no clean start of the sub-interval, or the engagement by proximity finds the ball already inside a
    // moving part (point 1 engages a ball that has a past before it touches, so a ball inside at that point was created or moved there)
    bool noPast = std::strcmp(how, "no past") == 0;
-   if (!noPast && bat == nullptr && host != nullptr && std::strcmp(how, "near") == 0)
+   if (!noPast && host != nullptr && std::strcmp(how, "near") == 0)
       for (SurfaceContact &it : rb.items)
          if (it.r->MovingPart() != nullptr)
          {
@@ -2043,7 +2361,7 @@ bool ContactSystemImpl::EngageImpl(HitRubber *const host, FlipperMoverObject *co
          }
    double noPastMoved = 0.0, noPastLeft = 0.0;
    int noPastPasses = 0;
-   if (noPast && bat == nullptr && host != nullptr)
+   if (noPast && host != nullptr)
    {
       // Minimum translation: along the normal of each overlapped surface (the playfield is one of them) to touching distance, repeated up to 8 passes. Velocities unchanged. A ball that is squeezed and does not fit keeps
       // the overlap that is left, and the force law carries it.
@@ -2074,7 +2392,7 @@ bool ContactSystemImpl::EngageImpl(HitRubber *const host, FlipperMoverObject *co
             noPastLeft = std::max(noPastLeft, p0.delta);
       }
    }
-   else if (bat == nullptr && host != nullptr)   // (a bat engagement seats its start against the moving bat in the first step: SetupBat)
+   else if (host != nullptr)
    {
    constexpr double kMaxRewindS = PHYSICS_STEPTIME_S;
    const double zBeforeSeat = c.z;
@@ -2118,7 +2436,7 @@ bool ContactSystemImpl::EngageImpl(HitRubber *const host, FlipperMoverObject *co
    rb.win = V3((double)pb->m_angularmomentum.x * wScale, (double)pb->m_angularmomentum.y * wScale, (double)pb->m_angularmomentum.z * wScale);
    rb.posStart = posStart;
    if (ContactTraceOn())
-      PLOGI << "ContactEngage " << (host != nullptr ? host->m_name : std::string("bat")) << " t=" << g_pplayer->m_time_msec << " how " << how << " speed " << v.Length() << " vn_in " << rb.vin.Length() << " pos " << posStart.x << ' ' << posStart.y << ' ' << posStart.z << " delta0_um " << rb.delta0 * 1e6
+      PLOGI << "ContactEngage " << (host != nullptr ? host->m_name : std::string("band")) << " t=" << g_pplayer->m_time_msec << " how " << how << " speed " << v.Length() << " vn_in " << rb.vin.Length() << " pos " << posStart.x << ' ' << posStart.y << ' ' << posStart.z << " delta0_um " << rb.delta0 * 1e6
             << " rewind_us " << rb.rewound * 1e6 << [&]() { std::string s; for (const SurfaceContact &it : rb.items) if (ContactMovingPart *const mp = it.r->MovingPart()) s += " [" + it.r->Name() + " " + mp->StateNote() + "]"; return s; }() << " flip_clear " << g_pplayer->m_physics->FlipperClearance(pb->m_d, kFlipperHorizonVpt) << g_pplayer->m_physics->FlipperDebug(pb->m_d, kFlipperHorizonVpt) << " rubbers " << rb.items.size() << " pos " << pb->m_d.m_pos.x << ' ' << pb->m_d.m_pos.y << ' ' << pb->m_d.m_pos.z;
    if (noPast)
    {
@@ -2137,7 +2455,6 @@ bool ContactSystemImpl::EngageImpl(HitRubber *const host, FlipperMoverObject *co
       }
    }
    rb.host = host;
-   rb.bat = bat;
    g_engaged.push_back(rb);
    pb->m_contact = &g_engaged.back();
    return true;
@@ -2150,12 +2467,11 @@ void ContactSystemImpl::Release(HitBall *const ball, const char *why)
    const auto itE = std::find_if(g_engaged.begin(), g_engaged.end(), [ball](const BallContact &r) { return &r == ball->m_contact; });
    if (itE == g_engaged.end())
       return;
-   DetachBat(*itE);
    if (itE->band != nullptr && ball->m_bandOwner == itE->band)
       itE->band->BandRelease(ball, why);   // clears itE->band and the ball's band owner
    itE->band = nullptr;
    const BallContact e = *itE;
-   HitRubber *const host = e.host;
+   ContactHost *const host = e.host;
    if (getenv("VPX_RUBBERS_LOG"))
    {
       using namespace RubberContact;
@@ -2163,14 +2479,14 @@ void ContactSystemImpl::Release(HitBall *const ball, const char *why)
       const double wScale = 1.0 / (inertiaU * DEFAULT_STEPTIME_S);
       const V3 v((double)ball->m_d.m_vel.x * VS, (double)ball->m_d.m_vel.y * VS, (double)ball->m_d.m_vel.z * VS);
       const V3 w((double)ball->m_angularmomentum.x * wScale, (double)ball->m_angularmomentum.y * wScale, (double)ball->m_angularmomentum.z * wScale);
-      PLOGI << "RubberSolve " << (host != nullptr ? host->m_name : std::string("bat")) << " t=" << g_pplayer->m_time_msec << " steps " << e.steps << " ms " << e.dwellS * 1e3 << " peakFn " << e.peakFn << " why " << why
+      PLOGI << "RubberSolve " << (host != nullptr ? host->m_name : std::string("band")) << " t=" << g_pplayer->m_time_msec << " steps " << e.steps << " ms " << e.dwellS * 1e3 << " peakFn " << e.peakFn << " why " << why
             << " vin " << e.vin.x << ' ' << e.vin.y << ' ' << e.vin.z << " vout " << v.x << ' ' << v.y << ' ' << v.z
             << " win " << e.win.x << ' ' << e.win.y << ' ' << e.win.z << " wout " << w.x << ' ' << w.y << ' ' << w.z
             << " delta0 " << e.delta0 * 1e3 << " rewind_ms " << e.rewound * 1e3 << " rubbers " << e.items.size()
             << " pos " << e.posStart.x << ' ' << e.posStart.y << ' ' << e.posStart.z << " (m/s, rad/s, VPX units)";
    }
    if (ContactTraceOn())
-      PLOGI << "ContactRelease " << (host != nullptr ? host->m_name : std::string("bat")) << " t=" << g_pplayer->m_time_msec << " why " << why << " dwell_ms " << e.dwellS * 1e3 << " peakFn " << e.peakFn
+      PLOGI << "ContactRelease " << (host != nullptr ? host->m_name : std::string("band")) << " t=" << g_pplayer->m_time_msec << " why " << why << " dwell_ms " << e.dwellS * 1e3 << " peakFn " << e.peakFn
             << " speed " << std::sqrt((double)ball->m_d.m_vel.Dot(ball->m_d.m_vel)) * 0.53975e-3 / DEFAULT_STEPTIME_S << " pos " << ball->m_d.m_pos.x << ' ' << ball->m_d.m_pos.y << ' ' << ball->m_d.m_pos.z;
    if (ContactProf::On())
       ContactProf::Note(std::string("release ") + why);
@@ -2179,20 +2495,9 @@ void ContactSystemImpl::Release(HitBall *const ball, const char *why)
    g_engaged.erase(itE);
 }
 
-// The bat lets go of the ball (clear and receding, or the contact is dropped): the ball stays in whatever other contact it has
-void ContactSystemImpl::DetachBat(BallContact &e)
+void ContactSystem::StepCordAlone(HitRubber *const band, const float dtime)
 {
-   FlipperMoverObject *const m = e.bat;
-   if (m == nullptr)
-      return;
-   if (e.ball != nullptr)
-      PLOGI << "Rubber: " << m->m_pflipper->GetName() << " released ball at t=" << g_pplayer->m_time_msec << " ms, vel (" << e.ball->m_d.m_vel.x << ',' << e.ball->m_d.m_vel.y << ',' << e.ball->m_d.m_vel.z << ") U/T";
-   if (e.ball != nullptr && e.ball->m_rubberOwner == m)
-      e.ball->m_rubberOwner = nullptr;
-   if (m->m_rbBall == e.ball)
-      m->m_rbBall = nullptr;
-   m->m_rbClearSteps = 0;
-   e.bat = nullptr;
+   ContactSystemImpl::CordAlone(band, dtime);
 }
 
 bool ContactSystem::EngageBand(HitRubber *const band, HitBall *const pb)
@@ -2202,34 +2507,11 @@ bool ContactSystem::EngageBand(HitRubber *const band, HitBall *const pb)
       return false;   // another band has the ball
    if (e == nullptr)
    {
-      if (!ContactSystemImpl::EngageImpl(nullptr, nullptr, pb, "band"))
+      if (!ContactSystemImpl::EngageImpl(nullptr, pb, "band"))
          return false;
       e = pb->m_contact;
    }
    e->band = band;
-   return true;
-}
-
-bool ContactSystem::EngageBat(FlipperMoverObject *const bat, HitBall *const pb)
-{
-   BallContact *e = pb->m_contact;
-   if (e != nullptr && e->bat != nullptr && e->bat != bat)
-      return false;   // another bat has the ball
-   if (e == nullptr)
-   {
-      if (!ContactSystemImpl::EngageImpl(nullptr, bat, pb, "bat"))
-         return false;
-      e = pb->m_contact;
-   }
-   e->bat = bat;
-   e->batSt.Reset();
-   e->batLastDist = 0.0;
-   e->batClear = 0;
-   e->batJustEngaged = true;
-   bat->m_rbBall = pb;
-   bat->m_rbClearSteps = 0;
-   pb->m_rubberOwner = bat;
-   PLOGI << "Rubber: " << bat->m_pflipper->GetName() << " engaged ball at t=" << g_pplayer->m_time_msec << " ms, pos (" << pb->m_d.m_pos.x << ',' << pb->m_d.m_pos.y << ',' << pb->m_d.m_pos.z << ") vel (" << pb->m_d.m_vel.x << ',' << pb->m_d.m_vel.y << ',' << pb->m_d.m_vel.z << ") U/T";
    return true;
 }
 
@@ -2247,7 +2529,7 @@ void ContactSystemImpl::Regather(BallContact &e, const Vertex3Ds &pos, const flo
    e.regatherPos = pos;
    e.regatherMs = nowMs;
    std::vector<SurfaceContact> next;
-   for (HitRubber *const o : HitRubber::Registry())
+   for (ContactHost *const o : ContactHost::Registry())
    {
       if (!o->m_enabled || !o->m_set.contact)
          continue;
@@ -2282,9 +2564,9 @@ void ContactSystem::EngageNear(const float dtime)
    ContactSystemImpl::EngageNear(dtime);
 }
 
-bool ContactSystem::Engage(HitRubber *const host, HitBall *const pb, const char *how)
+bool ContactSystem::Engage(ContactHost *const host, HitBall *const pb, const char *how)
 {
-   return ContactSystemImpl::EngageImpl(host, nullptr, pb, how);
+   return ContactSystemImpl::EngageImpl(host, pb, how);
 }
 
 void ContactSystem::Release(HitBall *const ball, const char *why)
@@ -2292,7 +2574,7 @@ void ContactSystem::Release(HitBall *const ball, const char *why)
    ContactSystemImpl::Release(ball, why);
 }
 
-void ContactSystem::ReleaseHost(HitRubber *const host)
+void ContactSystem::ReleaseHost(ContactHost *const host)
 {
    // the host is going away: its engagements end without a log line (a ball can outlive the physics engine: it must not keep a pointer to the entry)
    for (BallContact &e : g_engaged)
@@ -2307,19 +2589,6 @@ void ContactSystem::ReleaseHost(HitRubber *const host)
       }
       else
          ++it;
-}
-
-void ContactSystem::ReleaseBat(FlipperMoverObject *const bat)
-{
-   // the bat is going away: every ball on it lets go without a log line. With several balls on one bat the bat's m_rbBall names only the last one, so the
-   // others are found here (a ball can outlive the physics engine: a pointer left to the bat crashed ~HitBall at table close, 2026-10-20)
-   for (BallContact &e : g_engaged)
-      if (e.bat == bat)
-      {
-         if (e.ball != nullptr && e.ball->m_rubberOwner == bat)
-            e.ball->m_rubberOwner = nullptr;
-         e.bat = nullptr;
-      }
 }
 
 bool ContactSystem::Holds(const HitBall *ball)
@@ -2399,6 +2668,26 @@ void ContactProf::Split(int cause, bool staticTime, const char *what)
    g_staticSplits += staticTime ? 1 : 0;
 }
 
+namespace
+{
+   struct ProbeCost { std::string name; uint64_t ticks = 0, calls = 0; };
+   std::unordered_map<const void *, ProbeCost> &ProbeCosts()
+   {
+      static std::unordered_map<const void *, ProbeCost> m;
+      return m;
+   }
+}
+bool ContactProf::ProbeTime(const void *surface, uint64_t ticks)
+{
+   auto it = ProbeCosts().find(surface);
+   const bool fresh = it == ProbeCosts().end();
+   ProbeCost &pc = fresh ? ProbeCosts()[surface] : it->second;
+   pc.ticks += ticks;
+   pc.calls++;
+   return fresh;
+}
+void ContactProf::ProbeName(const void *surface, const std::string &name) { ProbeCosts()[surface].name = name; }
+
 void ContactProf::Dump(const char *why)
 {
    const double us = (double)(usec() - g_t0Us), cyc = (double)(__rdtsc() - g_tsc0);
@@ -2425,6 +2714,14 @@ void ContactProf::Dump(const char *why)
       std::sort(sw.rbegin(), sw.rend());
       for (size_t i = 0; i < sw.size() && i < 25; i++)
          PLOGI << "PROF split by " << sw[i].second << " " << sw[i].first;
+   }
+   {
+      std::vector<const ProbeCost *> v;
+      for (const auto &kv : ProbeCosts())
+         v.push_back(&kv.second);
+      std::sort(v.begin(), v.end(), [](const ProbeCost *a, const ProbeCost *b) { return a->ticks > b->ticks; });
+      for (size_t q = 0; q < v.size() && q < 8; q++)
+         PLOGI << "PROF probe " << v[q]->name << " total_us " << (uint64_t)(v[q]->ticks * usPerTick) << " calls " << v[q]->calls << " us_per_call " << (v[q]->ticks * usPerTick) / (double)std::max<uint64_t>(1, v[q]->calls);
    }
    std::vector<std::pair<uint64_t, std::string>> top;
    for (const auto &kv : g_census)
@@ -2499,7 +2796,7 @@ void ContactSystem::SaveStart()
       s.contacts[k++] = e;
    s.pairs = g_ballPairs;
    size_t np = 0;
-   for (HitRubber *const o : ContactSystemImpl::Hosts())
+   for (ContactHost *const o : ContactSystemImpl::Hosts())
       if (ContactMovingPart *const mp = o->MovingPart())
       {
          if (np >= s.parts.size())
@@ -2624,7 +2921,7 @@ namespace
          f.pairs = FnvV(f.pairs, p.lastDelta);
       }
       ContactMovingPart::State st;
-      for (HitRubber *const o : ContactSystemImpl::Hosts())
+      for (ContactHost *const o : ContactSystemImpl::Hosts())
          if (ContactMovingPart *const mp = o->MovingPart())
          {
             mp->SaveState(st);
@@ -2640,7 +2937,7 @@ void ContactSystem::SnapshotTest(const float dtime)
    if (!g_snap.valid)
       return;
    for (const BallContact &e : g_engaged)
-      if (e.bat != nullptr || e.band != nullptr)
+      if (e.band != nullptr)
       {
          skipped++;
          return;
@@ -2659,7 +2956,7 @@ void ContactSystem::SnapshotTest(const float dtime)
             << (a.pairs != b.pairs ? " pairs" : "") << (a.parts != b.parts ? " parts" : "") << " (" << g_engaged.size() << " engaged balls)";
    }
    if (compared % 2000 == 1)
-      PLOGI << "SnapshotTest: " << compared << " steps compared, " << mismatches << " different, " << skipped << " skipped (bat or band)";
+      PLOGI << "SnapshotTest: " << compared << " steps compared, " << mismatches << " different, " << skipped << " skipped (band)";
 }
 
 
@@ -2691,8 +2988,8 @@ void ContactSystemImpl::CheckOverlaps(const float hittime)
    static const bool on = []() { const char *const e = getenv("VPX_OVERLAP_REPLAY"); return !(e != nullptr && atoi(e) == 0); }();
    if (!on || !g_snap.valid || hittime <= 0.f)
       return;
-   std::vector<HitRubber *> parts;   // the part hosts that can be overlapped (collidable); `allParts` below for the advance
-   for (HitRubber *const o : Hosts())
+   std::vector<ContactHost *> parts;   // the part hosts that can be overlapped (collidable); `allParts` below for the advance
+   for (ContactHost *const o : Hosts())
       if (o->m_enabled && o->MovingPart() != nullptr)
          parts.push_back(o);
    if (parts.empty())
@@ -2703,11 +3000,11 @@ void ContactSystemImpl::CheckOverlaps(const float hittime)
    struct Cand
    {
       HitBall *pb;
-      HitRubber *host;
+      ContactHost *host;
       double delta;   // the overlap at the end of the sub-interval, m
    };
    std::vector<HitBall *> noPast;   // balls found overlapping with no earlier clean state (point 6): seated by minimum translation and engaged once the parts have advanced
-   std::vector<std::pair<HitBall *, HitRubber *>> noPastHost;
+   std::vector<std::pair<HitBall *, ContactHost *>> noPastHost;
    auto scan = [&](std::vector<Cand> &out) {
       out.clear();
       for (Ball *const b : g_pplayer->m_vball)
@@ -2718,7 +3015,7 @@ void ContactSystemImpl::CheckOverlaps(const float hittime)
          BallSI bs;
          bs.R = (double)pb->m_d.m_radius * U;
          const V3 c((double)pb->m_d.m_pos.x * U, (double)pb->m_d.m_pos.y * U, (double)pb->m_d.m_pos.z * U);
-         for (HitRubber *const o : parts)
+         for (ContactHost *const o : parts)
          {
             ContactMovingPart *const mp = o->MovingPart();
             mp->SetBall(bs);
@@ -2733,13 +3030,13 @@ void ContactSystemImpl::CheckOverlaps(const float hittime)
    if (cands.empty())
       return;
    for (const BallContact &e : g_engaged)
-      if (e.bat != nullptr || e.band != nullptr)
+      if (e.band != nullptr)
       {
          static uint32_t lastMs = 0;
          if (g_pplayer->m_time_msec - lastMs > 2000)
          {
             lastMs = g_pplayer->m_time_msec;
-            PLOGW << "Overlap with a moving part found, but an island holds a bat or a band, whose state is not saved yet: no replay (the engagement of the next cycle seats the ball)";
+            PLOGW << "Overlap with a moving part found, but an island holds a band, whose state is not saved yet: no replay (the engagement of the next cycle seats the ball)";
          }
          return;
       }
@@ -2748,7 +3045,7 @@ void ContactSystemImpl::CheckOverlaps(const float hittime)
    struct Rp
    {
       HitBall *pb;
-      HitRubber *host;
+      ContactHost *host;
       double t;   // the share of the sub-interval at which the ball is engaged
    };
    std::vector<Rp> list;
@@ -2782,7 +3079,7 @@ void ContactSystemImpl::CheckOverlaps(const float hittime)
             first = false;
             t = e.t;
          }
-         for (HitRubber *const o : Hosts())   // a part no engaged ball held has not moved yet: it is at the start of the sub-interval. It moves on to the engagement, as it would have alone (gapAt measures it so)
+         for (ContactHost *const o : Hosts())   // a part no engaged ball held has not moved yet: it is at the start of the sub-interval. It moves on to the engagement, as it would have alone (gapAt measures it so)
             if (ContactMovingPart *const mp = o->MovingPart())
             {
                const double idle = dtS * e.t - mp->steppedS;
@@ -2794,7 +3091,7 @@ void ContactSystemImpl::CheckOverlaps(const float hittime)
             }
          if (const BallSnap *const b0 = snapBall(e.pb))
             e.pb->m_d.m_pos = b0->pos + b0->vel * (float)(e.t * (double)hittime);   // its free flight to the engagement
-         EngageImpl(e.host, nullptr, e.pb, "overlap");
+         EngageImpl(e.host, e.pb, "overlap");
       }
       if (tEnd > t)
       {
@@ -2812,7 +3109,7 @@ void ContactSystemImpl::CheckOverlaps(const float hittime)
       const Vertex3Ds p = b0->pos + b0->vel * (float)(t * (double)hittime);
       const V3 c((double)p.x * U, (double)p.y * U, (double)p.z * U);
       double gmin = 1e9;
-      for (HitRubber *const o : parts)
+      for (ContactHost *const o : parts)
       {
          ContactMovingPart *const mp = o->MovingPart();
          const double idle = dtS * t - mp->steppedS;
@@ -2908,14 +3205,14 @@ void ContactSystemImpl::CheckOverlaps(const float hittime)
       simulate(1.0);   // the system as it was before (the same step again; nothing was engaged)
    }
    // the parts: advanced alone for what the contact system did not step them, as the movers do after a step
-   for (HitRubber *const o : Hosts())
+   for (ContactHost *const o : Hosts())
       if (o->MovingPart() != nullptr)
          o->PartAdvance(hittime);
    for (Ball *const b : g_pplayer->m_vball)
       b->m_hitBall.m_rubberAdvanced = false;   // every ball has been moved for this sub-interval
    for (const auto &nh : noPastHost)
       if (nh.first->m_contact == nullptr)
-         EngageImpl(nh.second, nullptr, nh.first, "no past");
+         EngageImpl(nh.second, nh.first, "no past");
    g_replayUs += (unsigned)(usec() - tStart);
    if (!list.empty())
    {

@@ -11,7 +11,7 @@
 #include "meshes/bumperSocketMesh.h"
 #include "physics/collideex.h"
 #include "physics/PhysicsEngine.h"
-#include "physics/hitrubber.h"
+#include "physics/contactparthost.h"
 #include "physics/contactbumperpart.h"
 #include "physics/contactpartsini.h"
 #include "physics/contactsystem.h"
@@ -108,14 +108,84 @@ STDMETHODIMP Bumper::InterfaceSupportsErrorInfo(REFIID riid)
 
 #pragma region Physics
 
+namespace
+{
+   // The table side of the jet bumper's moving part (JetBumper::EnginePart, contactbumperpart.h; UnifiedContactDesign.txt 12.5): the pose for the script and the renderer,
+   // the detectors, and the part's events as the bumper's script events
+   class BumperPartAdapter final : public PartAdapter
+   {
+   public:
+      BumperPartAdapter(Bumper *bumper, JetBumper::EnginePart *model, const std::string &name) : m_bumper(bumper), m_model(model), m_name(name) {}
+
+      void Publish() override
+      {
+         const JetBumper::Bumper &b = m_model->model;
+         constexpr double U = ContactSystem::kMetresPerUnit;
+         m_bumper->SetPhysicalPose((float)b.RotXDeg(), (float)b.RotYDeg(), (float)(-b.dr / U), (float)((b.zc - b.zRest) / U), (float)(b.zc / U), (float)(b.ds / U), b.switchClosed, (float)b.iCoil);
+         // detector (rule 8): a contact force far above what the part's hits give (a ball found deep inside it)
+         if (!m_model->spikeNote.empty())
+         {
+            const std::string msg = "Bumper " + m_name + ": " + m_model->spikeNote;
+            PLOGW << msg;
+            if (!m_spikeShown && g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+            {
+               m_spikeShown = true;
+               g_pplayer->m_liveUI->PushNotification("Bumper " + m_name + ": a ball met it with a contact force of kilonewtons (see vpinball.log, 'Bumper " + m_name + "')", 8000);
+            }
+            m_model->spikeNote.clear();
+         }
+         // detector (rule 8): the coil energised for a long time (a skirt held down?)
+         if (!m_warned && b.coilOnMaxS * 1000.0 > 500.0)
+         {
+            m_warned = true;
+            const std::string msg = "Bumper " + m_name + ": coil energised for " + std::to_string((int)(b.coilOnMaxS * 1000.0)) + " ms (the skirt held down by a ball? a held drive burns the coil)";
+            PLOGW << msg;
+            if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+               g_pplayer->m_liveUI->PushNotification(msg, 8000);
+         }
+      }
+
+      void Fire(const std::vector<ContactMovingPart::Event> &events) override
+      {
+         for (const ContactMovingPart::Event &e : events)
+         {
+            switch (e.kind)
+            {
+            case ContactMovingPart::Event::Hit:   // the switch closed (no speed threshold; Threshold is ignored)
+               if (m_bumper->m_d.m_hitEvent)
+               {
+                  g_pplayer->m_pininput.PlayBumperRumble();
+                  m_bumper->FireGroupEvent(DISPID_HitEvents_Hit);
+               }
+               break;
+            case ContactMovingPart::Event::SwitchClosed:
+               m_bumper->FireVoidEventParm(DISPID_BumperEvents_Switch, 1);
+               break;
+            case ContactMovingPart::Event::SwitchOpened:
+               m_bumper->FireVoidEventParm(DISPID_BumperEvents_Switch, 0);
+               break;
+            default:
+               break;
+            }
+         }
+      }
+
+   private:
+      Bumper *m_bumper;
+      JetBumper::EnginePart *m_model;
+      std::string m_name;
+      bool m_warned = false, m_spikeShown = false;
+   };
+}
+
 void Bumper::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 {
    if (!isUI && GetPartGroup() != nullptr && GetPartGroup()->GetReferenceSpace() != PartGroupData::SpaceReference::SR_PLAYFIELD)
       return;
 
    const float height = m_ptable->GetSurfaceHeight(m_d.m_szSurface, m_d.m_vCenter.x, m_d.m_vCenter.y);
-   const std::filesystem::path ini = HitRubber::IniPathFor(m_ptable->m_filename);
-   if (!isUI && ContactSystem::Unified() && HitRubber::BumperWanted(ini, GetName()))
+   const std::filesystem::path ini = ContactHost::IniPathFor(m_ptable->m_filename);
+   if (!isUI && ContactSystem::Unified() && ContactHost::BumperWanted(ini, GetName()))
    {
       // the physical bumper (docs/JetBumperDesign.txt): no stock collider, no stock ring or skirt animation
       constexpr double U = ContactSystem::kMetresPerUnit;
@@ -127,7 +197,16 @@ void Bumper::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       const float r = (float)(m_bumperModel->Reach() / U);
       const float lo[3] = { m_d.m_vCenter.x - r, m_d.m_vCenter.y - r, height };
       const float hi[3] = { m_d.m_vCenter.x + r, m_d.m_vCenter.y + r, height + (float)(0.06 / U) };
-      m_partHost = HitRubber::MakeBumperHost(this, GetName(), ini, m_bumperModel, this, lo, hi);
+      RubberObjectSettings hs;   // (the host's own step and rest settings are not used: a moving part sets its own step, ContactMovingPart::BallStep)
+      hs.surfaceRubber = true;
+      hs.contact = true;
+      m_partHost = new ContactPartHost(this, m_bumperModel, std::make_unique<BumperPartAdapter>(this, m_bumperModel.get(), GetName()), hs, ini, GetName(), "bumper", lo, hi);
+      m_partHost->SetHardSurface(0.5, 0.3);
+      {
+         const JetBumper::Bumper &b = m_bumperModel->model;
+         PLOGI << "Bumper " << GetName() << ": unified part (skirt " << b.p.skirtMass * 1e3 << " g, ring assembly " << b.p.ringMass * 1e3 << " g, spoon " << b.p.spoonMass * 1e3 << " g, switch closes at "
+               << b.p.switchCloseMm << " mm, drive " << (b.p.mode == JetBumper::DriveMode::Held ? "held" : b.p.mode == JetBumper::DriveMode::External ? "external" : "pulse") << ", supply " << b.p.coil.vSupply << " V)";
+      }
       m_partHost->m_enabled = m_d.m_collidable;
       physics->AddCollider(m_partHost, isUI);
       static const void *s_noticeTable = nullptr;   // one notice per table start
@@ -187,8 +266,8 @@ void Bumper::RenderSetup(Renderer *renderer)
    m_skirtKzU = m_ringMidU = m_ringKzU = 0.0f;
    m_drawRotX = m_drawRotY = m_drawRing = m_drawSkirtDrop = 1e9f;
    {
-      const std::filesystem::path ini = HitRubber::IniPathFor(m_ptable->m_filename);
-      if (ContactSystem::Unified() && HitRubber::BumperWanted(ini, GetName()))
+      const std::filesystem::path ini = ContactHost::IniPathFor(m_ptable->m_filename);
+      if (ContactSystem::Unified() && ContactHost::BumperWanted(ini, GetName()))
       {
          constexpr double U = ContactSystem::kMetresPerUnit;
          JetBumper::Params prm;

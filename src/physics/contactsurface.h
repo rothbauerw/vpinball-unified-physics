@@ -3,7 +3,7 @@
 // point, normal and curvature of the part of the surface near the ball (Probe), and, for a surface that moves, the velocity of the surface at the contact and the reaction
 // on it. The contact law (Hertz + damping + Mindlin + twist + rolling resistance) and the integration are the same for every surface and live outside.
 //
-// Today's implementation is HitRubber (a rubber tube, the faces of a wall or primitive, the playfield, a turntable disc). The unified engine's own surfaces
+// Implemented by the hosts (contacthost.h): HitRubber (a rubber tube, the faces of a wall, primitive, ramp or the playfield) and ContactPartHost (a moving part). The unified engine's own surfaces
 // (playfield mesh, ramps, wall and primitive meshes) will implement this interface directly.
 
 #include <string>
@@ -23,14 +23,27 @@ struct SurfaceContact
    double hLayer = 0.0;
    RubberContact::RubberState st;
    RubberContact::RubberState stExtra[2];   // a part with several surfaces (the jet bumper's skirt, ring and body) keeps one shear state per surface: st, stExtra[0], stExtra[1]
-   std::vector<int> cand;   // a surface of faces: the faces near the ball this cycle
+   std::vector<int> cand;   // a surface of faces: the faces the ball can touch this cycle (those of candV whose box is within the ball's radius plus its reach of the ball)
+   std::vector<int> candV;  // the Verlet list: the faces within the reach plus a margin of where the list was built; cand is filtered from it every cycle
    RubberContact::V3 candC;       // where the list was built and how far it reaches: it stays valid while the ball moves less than candR - the reach asked for (a Verlet list)
+   RubberContact::V3 tightC;      // where cand was filtered (it holds every face within the reach plus kTightSkin of there: valid while the ball stays within kTightSkin of it)
    double candR = -1.0;           // < 0 = no list
+   static constexpr double kTightSkin = 0.002;   // m
+   // the faces to test for a ball at c: the short list while the ball is within the skin of where it was filtered, the whole Verlet list beyond it
+   const std::vector<int> &Faces(const RubberContact::V3 &c) const { return (c - tightC).Length() <= kTightSkin ? cand : candV; }
+   // no face within reach: the surface has nothing to probe this cycle
+   bool NoFaces(const RubberContact::V3 &c) const { return candR >= 0.0 && Faces(c).empty(); }
    bool touching = false;         // in contact at the last substep (a hit event is a transition to touching)
+   bool gsTouch = false;          // the group step (an island with a cord): touching at the cycle's end, and the shear spring's stretch then
+   RubberContact::V3 gsXi;
    double hcStep = 0.0, hcSpeed = 0.0, hcDelta = 0.0;   // the arrival-time loop's step for this contact and the speed and compression it was computed for (it is reused while they hold)
    double fnLast = 0.0;           // normal force of this contact at the last substep (N): the resting test compares the ball's leftover force with it
    bool hcRest = false;           // hcStep came from the resting rule   // 6-ball stall: hcStep came from the resting (quasi-static) rule
    bool partTouching = false;     // a moving part's own release-gap hysteresis for its Hit event (HingePart::Part::Contact)
+   // The last probe of this surface in the arrival loop: the gap (m, < 0 = overlap; probeT < 0 = none yet this cycle), where the ball was and when (s into the cycle). A static
+   // surface's gap can shrink by no more than the ball has moved since, so a surface the ball cannot reach in the rest of the cycle is not probed again (ProbeBody).
+   double probeGap = 0.0, probeT = -1.0;
+   RubberContact::V3 probeC;
 };
 
 class ContactSurface

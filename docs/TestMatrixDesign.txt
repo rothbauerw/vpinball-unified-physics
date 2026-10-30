@@ -1,0 +1,203 @@
+TEST MATRIX DESIGN - unified physics  (to-do 8.1 and 8.2; designed with the user section by section, started 2026-10-27)
+=====================================================================================================================
+Replaces the old scenario matrix (runs/2026-10-09-slow-contact: batch_matrix.ps1, batch_statu.ps1, matrix_compare.py, stat_metric.py), which the user judged a
+fail on 2026-10-27: results differed on every run (the table script timer is not deterministic), it only showed behaviour staying the same, not whether bad
+things happen, it reran old scenarios each time and took 45-60 min.
+Basis (user-approved, ModelStandards.txt 5b): fixed limits per run; inputs that repeat exactly; offline first; results saved with the build.
+Read with DevelopmentRules.txt and ModelStandards.txt. MEASURED = a number already on disk (source named); INFERRED = reasoned, not measured.
+
+
+1. Fixed limits every run must pass on its own  (approved by the user 2026-10-27)
+-----------------------------------------------
+A run fails if any one of these happens. No older run is needed to judge it.
+
+1. Energy rises. Per cycle the total energy (balls: motion, spin, height; parts: motion and stored spring energy) may rise only by the work the drives put in
+   (coils, motors, spring preload, gravity, nudge), plus an allowance: 1 % of the energy present or 1 mJ, whichever is larger (1 mJ = an 80 g ball from rest to
+   0.16 m/s). The allowance is INFERRED, a starting value; MEASURED only offline: bumper energy error 0.8 % at a 1 us step (ProjectAssessment 3.0).
+   Not built yet: the energy check (to-do 1.6) and the drive-work reports (ModelStandards 2h). Until they exist, limit 3 stands in for this one.
+2. Overlap too deep. No contact deeper than 1.25 x the depth the contact law gives for that impact's closing speed. Scale: steel on steel at 3 m/s about 76 um
+   (Hertz, E 210 GPa, ball R 13.5 mm, 80 g; calculated, not measured). The margin 1.25 is INFERRED, a starting value.
+3. Launch. No ball faster than 8 m/s unless the test names a drive that can do it (e.g. the plunger). 8 m/s = the fast-ball watchdog default (VPX_SPEED_WATCH,
+   PhysicsEngine.cpp); INFERRED as a limit, a starting value. Section 4 adds tighter limits per part.
+4. Ball through a wall. After every cycle no ball is inside a solid object, below the playfield or outside the table. Zero allowed. Below the playfield = ball
+   centre more than 200 U under it (user, 2026-10-28: pockets and subways are lower than the playfield).
+5. Safety net tripped. Any trip fails the run: rewind cap reached, a ball with no past seated inside a part, an overlap replay, a hand-back to stock. Each is already
+   a WARN and a notification (rule 8); a net may exist, a run that needs it fails.
+6. Cost (DevelopmentRules rule 5). On the stress table: physics over the worst 7 consecutive cycles <= 3 ms, worst single cycle <= 1.5 ms. Per active object
+   <= 30 us per 1 ms cycle with one ball. Measured on focused runs only.
+
+The starting values (allowance in 1, margin in 2, speed in 3) are reviewed after the first stress-table run and only lowered with data.
+
+
+2. Inputs that repeat exactly  (approved by the user 2026-10-27)
+-----------------------------
+Why runs differed (read from the code, not run; INFERRED unless marked):
+- Script timers fire on physics time (stdafx.h ACCURATETIMERS; PhysicsEngine.cpp UpdatePhysics calls FireTimers(0) once per 1 ms cycle; hittimer.cpp Update). But the GL
+  build stops firing them for the rest of a frame once the script has used 5 ms of real time in that frame (MAX_TIMERS_MSEC_OVERALL, unless frame pacing). The
+  unfocused harness runs about 190 cycles per frame, so a test script that writes a file every 1 ms can pass 5 ms: inputs then shift with machine load.
+  Most likely cause of the old matrix's run-to-run differences.
+- Some work runs once per frame, not per cycle (frame-sync and game-sync timers, input polling, plugin messages); the cycles per frame depend on real time.
+- One random generator with a fixed seed (def.cpp mwc64x_state) serves stock scatter, the collision order swaps (PhysicsEngine.cpp), the kd-tree order, and
+  also sounds and light sequences: draws made per frame can shift the physics draws.
+- MEASURED before: flipper and parity runs gave identical files (cmp); the sling script (gsling2) repeated only its first ~4 shots.
+
+Design: an engine test driver, harness only; test inputs no longer go through the table script.
+1. A plain input file lists actions by physics millisecond: create a ball (position, velocity, spin, mass), teleport, flipper on/off, coil fire, nudge.
+2. At the start of each cycle, before the physics step, the driver applies that cycle's actions. No script and no frame timing involved.
+3. The driver resets the random generator at table start.
+4. The driver records the ball states and checks the section 1 limits inside the engine (no loss to slow script sampling).
+5. run.ps1 gets an input-file option; the table script stays empty.
+6. Once per build, one case runs twice and the two output files must be identical: the proof of repeatability.
+Needs: one new file, one call in PhysicsEngine.cpp (already ours), the reseed, the run.ps1 option. Environment variable for the input file: harness only, listed in
+NewPhysicsReference.txt.
+Status 2026-10-27: BUILT. src/physics/testdriver.cpp (VPX_TEST_INPUT, VPX_TEST_OUT; format in NewPhysicsReference.txt section 11), run.ps1 -Drive. Checks so
+far: speed limit, below the floor, outside the table, ball removed by the table, skipped cycles. 2026-10-28: magnet and turntable actions added (built, not run).
+Not yet: nudge and coil actions other than flippers, slings, magnets and turntables;
+energy, overlap depth, ball inside a solid, safety-net counts, cost (report.txt lists them as not checked).
+Repeatability, MEASURED 2026-10-27 (runs/2026-10-09-slow-contact run_drv_rep1/2 unfocused, run_drv_foc1/2 focused; input drive_drop2.txt: Rubber Test 2, unified, two
+balls, 3 s): all four balls.csv byte-identical (md5 c3eeb34d...), 0 skipped cycles, every driver check PASS. Covers this one short scene only. Not shown: the
+skip detector firing (no skip happened), flippers, slings, many balls, long runs.
+Flippers and slings, MEASURED 2026-10-27 (run_drv_fs1/2 unfocused; input drive_flipsling.txt on fixtures/gorgar.vpx + gorgar.ini, model flippers and slings, unified,
+4 balls, 8 s, 18 flip actions, 2 driver sling fires): both balls.csv byte-identical (md5 9b23ecac...), 0 skipped cycles, every driver check PASS. Seen in the run:
+the left sling fired from its switch at t=2058 (ball S1 kicked to 1.11 m/s) and from the driver at 2521; ball T1 reached 2.11 m/s at t=1037, right after the left
+flip at 1000 (a flipper hit, INFERRED from the timing). Not shown: focused runs of this scene, more balls, the skip detector.
+Does not handle (rule 7): tests that need the table's own script (game rules, solenoid callbacks) stay on the script and are marked "not repeatable"; live
+keyboard input. INFERRED, open: random draws made per frame by sounds or lights during a run (point 6 shows whether they matter).
+
+
+3. The stress table  (approved by the user 2026-10-27)
+-------------------
+Today (read, not run): the cost log (VPX_CONTACT_TIMING) writes one row per contact-system call, several per 1 ms cycle when stock hits split it, and covers only the
+contact system and magnets (not stock hit tests, the turntable step or the script). No table has every model on it.
+
+1. One new table in tables/stress, built by the user in the editor from a layout list (positions, sizes) added to this section: two flippers, two slings, three jet
+   bumpers in a triangle, one band, one turntable, one gate, one spinner, one magnet. The magnet is off in the ini; a second run switches it on (magnets are rarer and
+   MEASURED about 300 us for 6 balls, offline bench 2026-10-20).
+2. Inputs from the section 2 driver: balls start at fixed spots and speeds, the flippers fire on a fixed pattern, a drained ball goes back to its start spot. Bumpers
+   fire from ball hits; the turntable motor runs.
+3. Three phases per run, 20 s of physics time each: spread play (balls all over the table); a pile (balls stacked on a raised flipper and in a corner); everything
+   fast at once (all flippers firing, balls at 3 m/s).
+4. Ball counts 6, 9, 13.
+5. Measured: the true time of each physics cycle (the whole cycle minus the script); per frame the script time and the frame preparation time. Reported: worst
+   7-cycle window, worst single cycle, p99, frames whose work (physics + script + frame preparation) is over 6.9 ms, and what the worst windows spent their time on
+   (the existing cost log columns).
+6. Frame counting by work time (user, 2026-10-27; the user's monitor runs 75 Hz): run with vsync and the frame cap off and count frames whose work is over 6.9 ms.
+   No 144 Hz display needed. Not counted: time waiting on the graphics card (INFERRED small).
+7. The first run also sets the real budget: the 3 ms per 7 cycles assumes the script and frame preparation take 3-4 ms per frame (INFERRED, ProjectAssessment 2a);
+   this run measures it and section 1 limit 6 is set from it.
+8. Runs are focused; the user is told first so the machine stays idle.
+9. How point 5 is measured (approved by the user 2026-10-28), in the section 2 driver:
+   a. Each 1 ms cycle: the whole loop pass timed (from its start, before the script timers, to its end), minus the script time inside it (VPX's frame profiler
+      keeps script time apart). Split into physics step, magnets, turntable and the rest. Kept in memory, written to cycles.csv at the end (no file writing
+      during the run).
+   b. Each frame: physics, script, preparation, other and sleep times from VPX's frame profiler, and the number of cycles in the frame, to frames.csv.
+   c. Report: worst 7-cycle window, worst single cycle, 99th percentile, frames with work (physics + script + preparation) over 6.9 ms, frame rate and
+      cycles per frame, and the 5 worst windows split by part. The first 1 s (table loading) is left out. Judged against limit 6 only in a focused run.
+   d. Run setup: focused, BGFX build (what the user plays), a separate settings folder with vsync off and the frame rate capped at 144 fps, so each frame
+      holds about 7 cycles as at 144 Hz on the user's 75 Hz monitor; the user's own settings are not touched.
+   Does not handle (rule 7): driver runs have no table script, so script time is near zero; a ROM game's script and controller time per frame must be measured
+   on a ROM table to set the real budget (point 7). Time waiting on the graphics card is not counted. Script run from a hit event inside the physics step is
+   counted in the step and also taken off the total, so "rest" can read slightly low. To check on the first run: the frame rate holds at 144 with vsync off;
+   the measuring's own cost.
+10. Full cost measurement list (user, 2026-10-28: plan every measurement a cost result needs at once, down to the cause; point 9 grew one run at a time).
+   Each line: the question, what answers it, and what exists today (checked in the code 2026-10-28).
+   a. How long is each cycle and each frame? Point 9a and 9b. BUILT.
+   b. Which group of touching objects (island) made a cycle slow? Per cycle, the island with the most substeps: its members by name (balls, and the parts and
+      surfaces they touch: playfield, wall, post, flipper, band, bumper, gate, spinner, turntable), its substeps, its time, its smallest step. Today: the cost log
+      (VPX_CONTACT_TIMING) has the most substeps of any island per call (max_steps), no names, no time per island. MISSING.
+   c. Why were its substeps small? For that island, substeps counted by what set the step: an impact arriving, the contact's stiffness, a substep taken again
+      (rewind), the end of the cycle, the smallest step allowed. Today: none. MISSING.
+   d. What does each kind of object cost (section 1 limit 6, 30 us per object)? Per cycle, time by kind: playfield and wall contact, ball-ball pairs, flippers,
+      bands and slings, bumpers, gates and spinners, magnets, turntable, and the shared work (finding islands, integration, step choice). Today: magnets and
+      turntable per cycle (9a); the contact profiler (VPX_CONTACT_PROFILE) has times per function and per surface, but summed over the whole run, nested, and
+      written to the log. Per cycle: MISSING.
+   e. How long does the old stock collision search take? Per cycle, the stock hit search and stock moving parts, measured apart from the contact system.
+      Today: only as a remainder (physics step minus the cost log). MISSING.
+   f. What is in the time outside the physics step ("rest", 9a)? Split into input, the driver's own actions and checks, ball creation, the fast-ball watchdog,
+      the magnet guide tubes, ball trails. Today: none (two 2 ms "rest" cycles in run_cost6_p1c are unexplained). MISSING.
+   g. Start-up: the driver's time starts at the first cycle after start-up (first normal frame), so a focused run does not skip cycles, and the cost leaves
+      out start-up by that mark instead of a fixed 1 s. Today: fixed 1 s; focused run_cost6_p1 skipped 11 cycles at t 1-11 ms. MISSING.
+   h. What does the measuring cost? One run with the per-cycle splits (b-f) off and only the cycle total on, same input; compare the mean and p99 cycle.
+      Not done.
+   i. Output: every per-cycle number in one row of cycles.csv (no joins by time across files); kept in memory and written at the end (the cost log today writes
+      during the run). report.txt gives, for the 5 worst 7-cycle windows, the island members, the step reasons and the split by kind. All on in every driver run.
+   Does not handle: one island holding several kinds of object shares its step choice and integration; that time is reported as "shared", not given to one
+   kind. A ROM game's script time (point 9). Time on the graphics card.
+   Status 2026-10-28: approved by the user and BUILT (GL and BGFX), not run. a-g and i in the driver, the physics loop and the contact system; h = input action
+   "timing total". Substep reasons count every substep taken, retaken ones included. The start-up mark (g) is the first frame shorter than 100 ms (half the
+   200 ms anti-hung limit). Open risk: table parts move before time 0 with no balls (the start of the driver's time now varies with the start-up), so a
+   repeatability check is needed again.
+   First runs 2026-10-28, MEASURED (focused, BGFX, -Timing, 6 balls, phase 1): run_cost6_p1d (detail) and run_cost6_p1t (total only). balls.csv byte-identical
+   in both (time 0 at engine 1409 and 1408 ms): the split does not change the physics, and the new time 0 kept repeatability (these two runs only). Cost of
+   the split: mean cycle 166 vs 156 us (+10 us, 6.6 %), p99 544 vs 509 us, worst 7 cycles 7089 vs 7080 us. 0 skips, 144 frames/s, 6.9 cycles per frame,
+   no frame over 6.9 ms. Mean cycle (detail run): contact system 92 us (surfaces 36, shared 42, flippers 5, bands 5, gates 2, pairs 1), stock hit search 21,
+   movers 25, the driver itself 23 (writing balls.csv every cycle; cost runs should use record 0). Worst windows: a ball beside the turntable disc (131 U from
+   its centre, touching nothing) or on a flipper runs the fixed 5 us step of the ini's substep_us for the whole cycle (201 substeps, reason "ini substep_us"),
+   because islands with a turntable, flipper or band do not use the arrival-time step (IslandRewindable). Worst cycle (1862 us, t=5673): a ball at 0.11 m/s
+   beside Gate001, 927 substeps (681 impact arriving, 225 at the 0.2 us smallest step), gates 295 us.
+Building the table: the user, or the MCP server on jsm174's branch (to try later, to-do 8.5) built in its own folder, never merged into this branch.
+Status 2026-10-28: built by the user, tables/stress/stress.vpx + stress.physics.ini (kickers disabled: no script kicks out). Driver inputs for every phase and
+ball count: runs/2026-10-09-slow-contact/drive_stress<6|9|13>_p<1|2|3>.txt, written by make_stress_drive.ps1 (its header gives each phase's plan: spots,
+flipper and sling timing, turntable 12 V, magnets off, respawn below the flippers and for a ball centre below z = 15 U). Run so far: 6 balls phase 1, unfocused
+(run_stress6_p1b): driver checks PASS, all balls in play the whole 20 s. Phases 2 and 3 run unfocused (run_stress6_p2, p3): driver checks PASS.
+First cost run 2026-10-28, MEASURED (run_cost6_p1: focused, BGFX, -Timing, 6 balls, phase 1): 142.9 frames/s, 7.5 cycles per frame; cycle mean 153 us,
+99th percentile 491 us, worst cycle 1705 us (limit 1500), worst 7 cycles 4898 us (limit 3000), nearly all in the physics step; frame work median about
+1.2 ms (physics 0.97, preparation 0.23, script 0 with no table script); 2 frames over 6.9 ms, both in start-up; 11 cycles skipped at t 1-11 ms (start-up).
+Same with the cost log (run_cost6_p1c): mean 152 us, 0 skips, worst 7 cycles 4388 us; in the worst windows 88-95 % of the time is the contact system's substep
+loop, with one island taking about 200 substeps per cycle; 37 % of all cycles have an island at 150 or more substeps. Which contact: not yet known.
+
+
+4. Pass cases per model  (approved by the user 2026-10-27)
+-----------------------
+Two rules for every model, on top of section 1:
+a. Tighter launch limit: a ball's exit energy <= its entry energy + the most the part's drive could add in the contact; a part with no drive (wall, rubber, gate,
+   spinner) <= entry energy. Needs each part's drive-work report (ModelStandards 2h, not built); until then section 1 limit 3 (8 m/s) applies.
+b. Events fire exactly once per hit: no doubles, none missed.
+
+Common cases, every model, each at 1 m/s and 3 m/s (ModelStandards 5c):
+- one hit at three angles
+- two balls on the part
+- a ball between this part and another
+- a contact found late (ball placed already touching the part)
+- the part switched off
+- table restart with a ball on the part
+- offline: step sweep against the 1 us reference. Fail: energy rises at any step size, or exit speed more than 5 % or direction more than 2 deg from the reference.
+  5 % and 2 deg are INFERRED starting values.
+
+Extra cases per model:
+1. Contact core (playfield, walls, rubbers, posts, ball on ball): drop that ends at rest with no creep; 13-ball pile at rest; 10 m/s ball into a thin post (no
+   tunnelling); a ball pinched between two balls.
+2. Flippers: flip with a ball resting on the bat; ball hits the bat mid-swing (part hit while driven); release at the end of the stroke (launch of 2026-10-13);
+   ball pinched between bat and sling at full swing; two balls on a raised bat (to-do 2.5).
+3. Bands and slings: sling fires with a ball on the band; ball pinched between band and post; hits at three points along the band.
+4. Jet bumpers: fires with a ball on the skirt; ball between two bumpers; three-bumper triangle; pinch under the ring; Collidable switched with a ball inside
+   (to-do 4.2, 4.3).
+5. Gates and spinners: both directions; back-hit on a one-way gate; hit while still swinging or spinning; ball placed inside it.
+6. Magnets (off-axis only, ModelStandards 9): pass by with the coil on; coil switched on with a ball near the pole; hold and release; 2 and 6 balls; a non-magnetic
+   ball.
+7. Turntable: ball rolls onto the spinning disc; ball at the disc edge / gap; motor starts with a ball on it; 2 and 3 balls on the spinning disc (user,
+   2026-10-28: common, not rare; UnifiedContactDesign 12.1 f).
+Open: bands have no SaveState, so their rows run without the snapshot self-test (VPX_SNAPSHOT_TEST) until to-do 1.3 is done. Flipper bats have it since 2026-10-28
+   (run_bat_flip1, input runs/2026-10-09-slow-contact/drive_flip1.txt, row 2 on the stress table; its 1 m/s mid-swing timing needs retiming). The disc has it since
+   2026-10-28 (run_disc3: 12,001 steps, 0 different; input runs/2026-10-09-slow-contact/drive_disc3.txt covers row 7 on the stress table).
+   Design for to-do 1.3: UnifiedContactDesign.txt section 12 (approved 2026-10-28, not built); its proof is 12.4.
+
+
+5. Offline first, results saved per build, run time  (approved by the user 2026-10-27)
+----------------------------------------------------
+Offline-ready today (no VPX types in the file, checked 2026-10-27): rubbercontact.h (contact law), contactbumper.h / contactbumperpart.h (jet bumpers),
+contacthingebody.h / contacthingepart.h (gates, spinners), magnetcore.cpp / magnetballs.cpp (magnets).
+Not offline-ready (VPX types): hitflippermodel.cpp and contactbat.cpp (flippers), hitrubber.cpp (bands, slings), turntable.cpp, contactsystem.cpp (the shared loop).
+Offline tests prove a model and its contact law; only engine runs prove the shared loop.
+
+1. One shared offline bench replaces the separate benches in runs/ (2026-10-14-hinge, 2026-10-26-bumper, 2026-10-27-replay, 2026-10-27-stopimpact). It runs every
+   offline-ready model's section 4 cases and the step sweep in one go.
+2. Engine runs: models not yet offline-ready, the shared loop, events, table restart, a part switched off, the snapshot self-test, the repeatability check
+   (section 2 point 6), the stress table. A model's cases move offline when its code becomes pure SI.
+3. Results saved per build: one folder per build, named by commit, uncommitted-diff hash and exe hash. Each case saves everything it computed (feedback: save
+   everything computed), its pass/fail, input file, ini and table hash. A one-page report is written the same day (ModelStandards 5e).
+4. Nothing is rerun to compare: comparing two builds = reading two folders. A case is skipped when the same exe, input, ini and table already have a result.
+5. Run-time targets (targets, not measured; no measured time per engine run found on disk): offline bench < 2 min; engine cases < 10 min; stress table about
+   10 min, run only when cost matters or a model is called done. Normal total per change < 12 min (old matrix 45-60 min). The first run times one case alone and
+   reports an estimate before the rest.
+Open: making the flipper, band, turntable and loop code pure SI is to-do work (mostly to-do 1.1 and 1.3), not part of this design.

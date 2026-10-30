@@ -12,6 +12,8 @@
 #include "physics/rubbercontact.h"
 #include "physics/hitrubber.h"
 #include "physics/contactbat.h"
+#include "physics/contactbatpart.h"
+#include "physics/contactparthost.h"
 #include "physics/contactsystem.h"
 #include "physics/physicsini.h"
 
@@ -179,7 +181,10 @@ void FlipperMoverObject::NudgeEval(const double t, double& dispM, double& velMs)
 
 void FlipperMoverObject::NudgeStart(const double dispM, const double riseS, const double fallS)
 {
-   m_bat.NudgeStart(m_hitcircleBase.center.x, dispM, riseS, fallS);
+   if (m_part != nullptr)
+      m_part->bat.NudgeStart(m_hitcircleBase.center.x, dispM, riseS, fallS);   // (the part moves its pivot: BatPart::Part::PivotNow)
+   else
+      m_bat.NudgeStart(m_hitcircleBase.center.x, dispM, riseS, fallS);
 }
 
 // Advances the pulse by dtS and moves the pivot to where it is at the end of that time.
@@ -230,7 +235,7 @@ bool FlipperMoverObject::RubberWants(const HitBall *ball) const
       && (ball->m_rubberOwner == nullptr || ball->m_rubberOwner == this);
 }
 
-bool FlipperMoverObject::RubberSideHas(const HitRubber *r) const
+bool FlipperMoverObject::RubberSideHas(const ContactHost *r) const
 {
    if (m_rbSide)
       for (const SurfaceContact &it : m_rbSide->items)
@@ -270,16 +275,13 @@ void FlipperMoverObject::RubberEngage(HitBall *ball)
 
 FlipperMoverObject::~FlipperMoverObject()
 {
-   ContactSystem::ReleaseBat(this);   // every ball on the bat (unified: several), not only m_rbBall
-   RubberRelease();
+   RubberRelease();   // (a bat that is a moving part: its host lets go of the balls when it is destroyed, ~ContactHost)
 }
 
 void FlipperMoverObject::RubberRelease()
 {
    if (m_rbBall != nullptr)
    {
-      if (m_rbBall->m_contact != nullptr && m_rbBall->m_contact->bat == this)
-         m_rbBall->m_contact->bat = nullptr;   // (unified: the bat leaves the ball's contact)
       PLOGI << "Rubber: " << m_pflipper->GetName() << " released ball at t=" << g_pplayer->m_time_msec << " ms, vel (" << m_rbBall->m_d.m_vel.x << ',' << m_rbBall->m_d.m_vel.y << ',' << m_rbBall->m_d.m_vel.z << ") U/T";
       m_rbBall->m_rubberOwner = nullptr;
    }
@@ -501,4 +503,154 @@ bool FlipperMoverObject::RubberAdvance(const float dtime)
    m_gAdvanced = true;
    m_gAdvHitStop = hitStop;
    return true;
+}
+
+// ---------------------------------------------------------------------------
+// The bat as a moving part of the contact system (unified engine, rubber_contact on; docs/UnifiedContactDesign.txt 12.2). The part (contactbatpart.h) steps the bat with its
+// balls; this adapter is the table side: the state the script and the renderer read, the stroke events, the nudge of the other bat, the flipper's Hit event.
+
+namespace
+{
+   // The host's contact settings from the bat's rubber keys: the release gap and the material the contact system's own step rule reads (the contact itself is the part's)
+   RubberObjectSettings FlipperHostSettings(const FlipperSettings &f)
+   {
+      RubberObjectSettings s;
+      s.contact = true;
+      s.surfaceRubber = true;
+      s.eMpa = f.rubberEMpa;
+      s.layerMm = f.rubberThicknessMm;
+      s.betaLayer = f.rubberBetaLayer;
+      s.alphaSPerM = f.rubberAlphaSPerM;
+      s.mu = f.rubberMu;
+      s.shearScale = f.rubberShearScale;
+      s.shearZeta = f.rubberShearZeta;
+      s.twist = f.rubberTwist;
+      s.tanDelta = f.rubberTanDelta;
+      s.normalLoss = false;   // (MakeRubberParams: the bat rubber keeps its tuned rebound)
+      s.releaseGapMm = f.rubberReleaseGapMm;
+      return s;
+   }
+
+   class FlipperPartAdapter final : public PartAdapter
+   {
+   public:
+      FlipperPartAdapter(FlipperMoverObject *mover, HitFlipper *flipper) : m_mover(mover), m_flipper(flipper) {}
+      ContactPartHost *m_host = nullptr;
+
+      void Publish() override
+      {
+         FlipperMoverObject &m = *m_mover;
+         BatPart::Part &p = *m.m_part;
+         constexpr double U = ContactSystem::kMetresPerUnit;
+         // the bat's ini keys are read again about every 0.5 s (as the flipper's own stepping did); a change reconfigures the part and the host
+         if (++m_reloadCounter >= 500)
+         {
+            m_reloadCounter = 0;
+            const auto before = p.bat.iniTime;
+            p.bat.LoadSettings(m.m_pflipper->GetName(), m.m_pflipper->m_ptable != nullptr ? m.m_pflipper->m_ptable->m_filename : std::filesystem::path(), false);
+            if (p.bat.iniTime != before)
+            {
+               p.Configure();
+               m.m_bat.set = p.bat.set;   // (the mover's copy: the nudge target, RubberProbe)
+               m_host->SetContactSettings(FlipperHostSettings(p.bat.set));
+            }
+         }
+         m_host->m_enabled = m.m_enabled;   // the flipper's Enabled: the balls touch the bat or not
+         // the state the script and the renderer read
+         const double dirSign = p.dirSign;
+         m.m_angleCur = m.m_angleStart + (float)(dirSign * p.bat.phi);
+         m.m_angleSpeed = (float)(dirSign * p.bat.omega * DEFAULT_STEPTIME_S);   // rad / VPT
+         m.m_angularAcceleration = (float)(dirSign * p.bat.lastAlpha * DEFAULT_STEPTIME_S * DEFAULT_STEPTIME_S);
+         m.m_inertia = (float)(p.bat.InertiaSI() / (FLIPPER_MASS_UNIT_KG * FLIPPER_U_M * FLIPPER_U_M));
+         m.m_angularMomentum = m.m_inertia * m.m_angleSpeed;
+         {
+            double vx;
+            m.m_hitcircleBase.center.x = (float)(p.PivotNow(vx).x / U);   // the pivot during a nudge pulse (the renderer draws the bat there)
+         }
+         // EOS = the plunger reached the coil stopper; BOS = the bat is back at rest; the striking bat's stop hit nudges the other bat's pivot
+         const bool hitStop = p.hitStopLatch;
+         p.hitStopLatch = false;
+         const float anglespd = fabsf(RADTOANG(m.m_angleSpeed));
+         if (hitStop && p.bat.set.nudgeGain > 0.0 && !p.bat.set.nudgeTarget.empty())
+         {
+            FlipperMoverObject *const t = m.NudgeFindTarget();
+            if (t != nullptr && t != &m)
+            {
+               const double sgn = t->m_hitcircleBase.center.x >= m.m_hitcircleBase.center.x ? 1.0 : -1.0;
+               const double ampMm = p.bat.set.nudgeGain * p.bat.hitL;
+               t->NudgeStart(sgn * ampMm * 1e-3, p.bat.set.nudgeRiseMs * 1e-3, p.bat.set.nudgeFallMs * 1e-3);
+               PLOGI << "Nudge: " << m.m_pflipper->GetName() << " struck its stop at t=" << g_pplayer->m_time_msec << " ms, L " << p.bat.hitL << " kg m2/s, pivot of " << p.bat.set.nudgeTarget << " moves " << sgn * ampMm << " mm";
+            }
+         }
+         if (hitStop && m.m_enableRotateEvent > 0)
+         {
+            m.m_pflipper->FireVoidEventParm(DISPID_LimitEvents_EOS, anglespd);
+            m.m_enableRotateEvent = 0;
+         }
+         else if (m.m_enableRotateEvent < 0 && p.bat.phi <= 0.0 && p.bat.omega <= 0.0)
+         {
+            m.m_pflipper->FireVoidEventParm(DISPID_LimitEvents_BOS, anglespd);
+            m.m_enableRotateEvent = 0;
+         }
+      }
+
+      // the bat's Hit (a ball's contact began: its closing speed, m/s) as the flipper's script Hit / Collide event and the haptics
+      void Fire(const std::vector<ContactMovingPart::Event> &events) override
+      {
+         for (const ContactMovingPart::Event &e : events)
+            if (e.kind == ContactMovingPart::Event::Hit)
+            {
+               const float bnv = -(float)(e.value / ContactSystem::kVelocityScale);   // engine velocity units, < 0 approaching
+               m_flipper->FireHitEventsAndRumble(bnv, false, -bnv);
+            }
+      }
+
+      bool FixedSettings() const override { return true; }   // (the host has no ini of its own: Publish reloads the bat's keys and passes them on)
+
+   private:
+      FlipperMoverObject *m_mover;
+      HitFlipper *m_flipper;
+      int m_reloadCounter = 0;
+   };
+}
+
+void FlipperMoverObject::SetPartSolenoid(const bool s)
+{
+   m_part->solenoid = s;
+}
+
+ContactPartHost *FlipperMoverObject::MakePart(HitFlipper *const owner, const float zlow, const float zhigh)
+{
+   if (!FlipperModelEnabled())
+      return nullptr;
+   constexpr double U = ContactSystem::kMetresPerUnit;
+   auto part = std::make_shared<BatPart::Part>();
+   part->bat.LoadSettings(m_pflipper->GetName(), m_pflipper->m_ptable != nullptr ? m_pflipper->m_ptable->m_filename : std::filesystem::path(), true);
+   if (!part->bat.set.rubberContact)
+      return nullptr;   // the impulse path: the flipper keeps its own stepping
+   const double dirSign = m_direction ? 1.0 : -1.0;
+   part->bat.Reset(dirSign * (double)(m_angleCur - m_angleStart), m_solState);
+   part->pivot = RubberContact::V3((double)m_hitcircleBase.center.x * U, (double)m_hitcircleBase.center.y * U, 0.0);   // (z = 0: the rubber heights are from the playfield)
+   part->ol.rb = (double)m_hitcircleBase.radius * U;
+   part->ol.re = (double)m_endradius * U;
+   part->ol.Lc = (double)m_flipperradius * U;
+   part->angleStart = (double)m_angleStart;
+   part->dirSign = dirSign;
+   part->solenoid = m_solState;
+   part->Configure();
+   m_bat.set = part->bat.set;   // (the mover's copy: the nudge target, RubberProbe)
+   m_part = part;
+   // the box the bat can sweep: the circle of its reach about the pivot (VPX units)
+   const float reachU = (float)(part->TipReach() / U) + 1.f;
+   const float lo[3] = { m_hitcircleBase.center.x - reachU, m_hitcircleBase.center.y - reachU, zlow };
+   const float hi[3] = { m_hitcircleBase.center.x + reachU, m_hitcircleBase.center.y + reachU, zhigh };
+   auto adapter = std::make_unique<FlipperPartAdapter>(this, owner);
+   FlipperPartAdapter *const a = adapter.get();
+   // (no ini path for the host: the adapter reads the bat's keys and passes the host its settings)
+   ContactPartHost *const host = new ContactPartHost(m_pflipper, part, std::move(adapter), FlipperHostSettings(part->bat.set), std::filesystem::path(), m_pflipper->GetName(), "flipper", lo, hi);
+   a->m_host = host;
+   host->m_enabled = m_enabled;
+   PLOGI << "Flipper " << m_pflipper->GetName() << ": unified part (bat inertia " << part->bat.der.iFlipper << " kg m^2, reach " << part->TipReach() * 1e3 << " mm, rubber e_mpa "
+         << part->bat.set.rubberEMpa << ", largest acceleration " << part->alphaMax << " rad/s^2)";
+   return host;
 }

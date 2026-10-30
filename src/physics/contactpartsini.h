@@ -112,6 +112,7 @@ namespace PartsIni
          else if (k == "ring_rise_mm") p.ringRiseMm = v;
          else if (k == "ring_mid_rest_mm") p.ringMidRestMm = v;
          else if (k == "ring_stroke_mm") p.ringStrokeMm = v;
+         else if (k == "own_step_us") p.ownStepUs = v;
          else if (k == "skirt_mass_g") p.skirtMass = v * 1e-3;
          else if (k == "ring_assembly_mass_g") p.ringMass = v * 1e-3;
          else if (k == "spoon_mass_g") p.spoonMass = v * 1e-3;

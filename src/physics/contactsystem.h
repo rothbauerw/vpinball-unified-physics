@@ -11,6 +11,7 @@
 #include <vector>
 
 class HitRubber;
+class ContactHost;
 class HitBall;
 struct BallS;
 class ContactSurface;
@@ -77,12 +78,11 @@ namespace ContactSystem
    void EngageNear(float dtime);
 
    // Engagement: a surface (the host) takes a ball into the force model; the ball stays until it is clear of every surface and receding
-   bool Engage(HitRubber *host, HitBall *pb, const char *how);   // false = the stock collision keeps the ball
-   bool EngageBat(FlipperMoverObject *bat, HitBall *pb);         // a bat takes the ball (contact-held or free): its rubber joins the ball's contact
+   bool Engage(ContactHost *host, HitBall *pb, const char *how);   // false = the stock collision keeps the ball
    bool EngageBand(HitRubber *band, HitBall *pb);               // a band takes the ball: its nodes join the ball's contact (the ball stays in the other contacts it has)
+   void StepCordAlone(HitRubber *band, float dtime);   // a cord with no ball on it this cycle (its plate moving by itself, a ball just gone)
    void Release(HitBall *ball, const char *why);                  // no-op if the contact system does not hold the ball
-   void ReleaseHost(HitRubber *host);                            // the host is destroyed
-   void ReleaseBat(FlipperMoverObject *bat);                     // the bat is destroyed: every ball on it lets go
+   void ReleaseHost(ContactHost *host);                            // the host is destroyed
    bool Holds(const HitBall *ball);
    bool Owns(const BallS &ball, const ContactSurface *surface);  // the contact that holds the ball includes this surface
    size_t Count();                                               // balls held

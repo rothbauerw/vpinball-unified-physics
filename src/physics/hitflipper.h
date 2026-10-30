@@ -14,6 +14,10 @@ class Flipper;
 #include <string>
 
 class HitRubber;
+class ContactHost;
+class ContactPartHost;
+class HitFlipper;
+namespace BatPart { class Part; }
 struct RubberSideSet;
 
 #include "physics/coilmodel.h"
@@ -28,7 +32,7 @@ public:
    void UpdateDisplacements(const float dtime) override;
    void UpdateVelocities() override;
 
-   bool AddToList() const override { return true; }
+   bool AddToList() const override { return m_part == nullptr; }   // (a bat that is a moving part is advanced by its host, ContactPartHost)
 
    void SetSolenoidState(const bool s);
    float GetStrokeRatio() const;
@@ -80,7 +84,7 @@ public:
    static bool MultiBall();
    bool RubberWants(const HitBall *ball) const;   // rubber_contact is on and this ball may engage (else the impulse path runs)
    bool RubberIsEngaged(const BallS& ball) const;
-   bool RubberSideHas(const HitRubber *r) const;   // the force-model rubbers around the engaged ball (a post beside the bat) are part of this flipper's step
+   bool RubberSideHas(const ContactHost *r) const;   // the force-model rubbers around the engaged ball (a post beside the bat) are part of this flipper's step
    std::shared_ptr<RubberSideSet> m_rbSide;        // those rubbers with their shear state, null = none engaged
    void RubberEngage(HitBall *ball);
    void RubberRelease();
@@ -115,6 +119,13 @@ public:
    FlipperMoverObject *m_nzTarget = nullptr;
 
    ContactBat m_bat;                 // the bat body: settings, plunger/coil/spring state, the substep and the pivot nudge (contactbat.h)
+
+   // Unified engine, a model flipper with rubber_contact on: the bat is a moving part of the contact system (contactbatpart.h; docs/UnifiedContactDesign.txt 12.2). This mover
+   // and the stock collider then only hold the state the script and the renderer read (angle, speed, solenoid); the part's adapter writes it (hitflippermodel.cpp).
+   std::shared_ptr<BatPart::Part> m_part;
+   // Builds the part and its host when this flipper is one (null otherwise: the flipper keeps its own stepping). zlow, zhigh: the bat's height range (VPX units).
+   ContactPartHost *MakePart(HitFlipper *owner, float zlow, float zhigh);
+   void SetPartSolenoid(bool s);   // the coil input of the part (the table set it between cycles)
 
    Flipper *m_pflipper;
 
@@ -193,6 +204,9 @@ public:
 
    FlipperMoverObject m_flipperMover;
 
+   // the same from scalars: bnv the normal speed (engine units, < 0 approaching), hitMomentBit as CollisionEvent::m_hitmoment_bit, arrival the ball's own speed toward the face
+   // (the bat's part adapter fires its Hit through this, hitflippermodel.cpp)
+   void FireHitEventsAndRumble(float bnv, bool hitMomentBit, float arrival);
 private:
    void FireHitEventsAndRumble(float bnv, const CollisionEvent& coll, const Vertex3Ds& normal, const Vertex3Ds& vB); // script Hit/Collide event and haptics, shared by the impulse and rubber paths
 

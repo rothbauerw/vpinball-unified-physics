@@ -4,6 +4,7 @@
 #include <array>
 
 #include <iomanip>
+#include <optional>
 
 #include "PhysicsEngine.h"
 
@@ -25,6 +26,7 @@
 #include "physics/physicsini.h"
 #include "physics/magnet.h"
 #include "physics/turntable.h"
+#include "physics/testdriver.h"
 #include "parts/ball.h"
 #include "parts/flipper.h"
 #include "parts/primitive.h"
@@ -44,7 +46,7 @@ PhysicsEngine::PhysicsEngine(PinTable *const table)
    m_contacts.reserve(8);
 
    // a host the previous table did not release is tested against every ball of this one (slowdown that grows with each restart in one session)
-   m_leftoverHosts = HitRubber::LeftoverHosts();
+   m_leftoverHosts = ContactHost::LeftoverHosts();
    if (!m_leftoverHosts.empty())
       PLOGW << "Physics: surface hosts left over from the previous table (a leak, the game will slow down with each restart): " << m_leftoverHosts;
    else
@@ -94,7 +96,7 @@ PhysicsEngine::~PhysicsEngine()
 {
    delete m_UIQuadTtree;
    delete m_playfieldHost;
-   for (HitRubber *const h : m_ownedHosts)
+   for (ContactHost *const h : m_ownedHosts)
       delete h;
 
    if (m_pendingHitObjects)
@@ -677,6 +679,7 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
 
    while (m_nextPhysicsFrameTime < initial_time_usec) // loop here until physics (=simulated) time catches up to current real time, still staying behind real time by up to one physics emulation step
    {
+      TestDriver::LoopStart();   // cycle timing (docs/TestMatrixDesign.txt section 3 point 9); nothing unless VPX_TEST_INPUT is set
       const uint64_t ptIter0 = pt.On() ? usec() : 0;
       m_time_sec = max(m_time_sec, (double)(m_curPhysicsFrameTime - m_startTime_usec) / 1000000.0); // First iteration is done before precise time
       m_time_msec = (uint32_t)((m_curPhysicsFrameTime - m_startTime_usec) / 1000); // Get time in milliseconds for timers
@@ -729,6 +732,7 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
       // Anti hung mechanism
       if (g_pplayer && g_pplayer->m_playMode != Player::PlayMode::CaptureAttract)
       {
+         const TestDriver::Timed tdInput(TestDriver::kInput);
          const uint64_t cur_time_usec = usec()
             - delta_frame; //!! one could also do this directly in the while loop condition instead (so that the while loop will really match with the current time), but that leads to some stuttering on some heavy frames
 
@@ -762,43 +766,65 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
             || g_pplayer->m_logicProfiler.Get(FrameProfiler::PROFILE_SCRIPT) <= 1000 * MAX_TIMERS_MSEC_OVERALL) // if overall script time per frame exceeded, skip
 #endif
       )
+      {
+         const TestDriver::Timed tdTimers(TestDriver::kTimers);
          g_pplayer->FireTimers(0);
+      }
 #endif
+
+      {
+         const TestDriver::Timed tdDriver(TestDriver::kDriver);
+         TestDriver::BeginCycle(m_time_msec);   // harness inputs by physics time (docs/TestMatrixDesign.txt section 2); nothing unless VPX_TEST_INPUT is set
+      }
 
       // Since we are deriving forces/accelerations from velocities by doing a simple substract without scaling by delta time, we need dtime to be constant
       assert(fabs(physics_diff_time - ((double)PHYSICS_STEPTIME / (double)DEFAULT_STEPTIME)) < 1e-5);
 
-      if (g_pplayer)
       {
-         g_pplayer->m_pininput.m_nudgeHandler->StepOneMillisecond();
-         g_pplayer->m_pininput.m_plungerHandler->StepOneMillisecond();
+         const TestDriver::Timed tdNudge(TestDriver::kNudge);
+         if (g_pplayer)
+         {
+            g_pplayer->m_pininput.m_nudgeHandler->StepOneMillisecond();
+            g_pplayer->m_pininput.m_plungerHandler->StepOneMillisecond();
+         }
+
+         const Vertex2D cabinetAcceleration = GetCabinetAcceleration();
+         m_plumbHandler.StepOneMillisecond(cabinetAcceleration);
+         if (g_pplayer)
+            g_pplayer->m_pininput.PlayNudgeRumble(cabinetAcceleration);
       }
 
-      const Vertex2D cabinetAcceleration = GetCabinetAcceleration();
-      m_plumbHandler.StepOneMillisecond(cabinetAcceleration);
-      if (g_pplayer)
-         g_pplayer->m_pininput.PlayNudgeRumble(cabinetAcceleration);
-
       {
+         const TestDriver::Timed tdMag(TestDriver::kMagnets);
          static const bool ctOn = getenv("VPX_CONTACT_TIMING") != nullptr && *getenv("VPX_CONTACT_TIMING") != 0;
          const uint64_t m0 = ctOn ? usec() : 0;
          Magnets::Step();   // coil currents and ball-ball forces: its time goes to the next cost-log row (mag_us)
          if (ctOn)
             s_ctMagUs += usec() - m0;
       }
-      Turntables::Step();
 
-      for (size_t i = 0; i < m_vmover.size(); i++)
-         m_vmover[i]->UpdateVelocities();      // always on integral physics frame boundary (spinner, gate, flipper, plunger, ball)
+      {
+         const TestDriver::Timed tdVel(TestDriver::kVelocities);
+         for (size_t i = 0; i < m_vmover.size(); i++)
+            m_vmover[i]->UpdateVelocities();      // always on integral physics frame boundary (spinner, gate, flipper, plunger, ball)
+      }
 
       //primary physics loop
       const uint64_t ptSim0 = pt.On() ? usec() : 0;
-      PhysicsSimulateCycle(physics_diff_time); // main simulator call
+      {
+         const TestDriver::Timed tdStep(TestDriver::kStep);
+         PhysicsSimulateCycle(physics_diff_time); // main simulator call
+      }
       const uint64_t ptSim1 = pt.On() ? usec() : 0;
+      {
+         const TestDriver::Timed tdDriver(TestDriver::kDriver);
+         TestDriver::EndCycle(m_time_msec);
+      }
 
       // Fast-ball watchdog: a ball above VPX_SPEED_WATCH m/s (default 8; 0 = off) is logged once per second with its last 8 cycles (position, velocity, who holds it), so a rare launch
       // can be traced afterwards. Costs a copy of a few floats per ball per cycle.
       {
+         const TestDriver::Timed tdWatch(TestDriver::kWatchdog);
          static const double watch = []() { const char *const e = getenv("VPX_SPEED_WATCH"); return e != nullptr && *e ? atof(e) : 8.0; }();
          if (watch > 0.0 && g_pplayer != nullptr)
          {
@@ -841,6 +867,8 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
       }
 
       if (g_pplayer != nullptr && Magnets::HasGuides()) // air-core guide tube and stop
+      {
+         const TestDriver::Timed tdGuides(TestDriver::kGuides);
          for (const auto ball : g_pplayer->m_vball)
          {
             HitBall &hb = ball->m_hitBall;
@@ -855,10 +883,14 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
                hb.m_angularmomentum = Vertex3Ds(L[0], L[1], L[2]);
             }
          }
+      }
 
       // Store new position of balls for ball trails
-      for (HitBall *const ball : m_vballs)
-         ball->OnPhysicStepProcessed(m_time_msec);
+      {
+         const TestDriver::Timed tdTrails(TestDriver::kTrails);
+         for (HitBall *const ball : m_vballs)
+            ball->OnPhysicStepProcessed(m_time_msec);
+      }
 
       //PLOGD << "PT: " << physics_diff_time << ' ' << physics_to_graphic_diff_time << ' ' << (uint32_t)(m_curPhysicsFrameTime/1000) << ' ' << (uint32_t)(initial_time_usec/1000) << ' ' << cur_time_msec;
 
@@ -870,6 +902,7 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
          const uint64_t sim = ptSim1 - ptSim0;
          pt.AddIter(sim, (usec() - ptIter0) - sim);
       }
+      TestDriver::LoopEnd();
    } // end while (m_curPhysicsFrameTime < initial_time_usec)
 
    assert(m_curPhysicsFrameTime < m_nextPhysicsFrameTime);
@@ -893,12 +926,16 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
 
    int StaticCnts = STATICCNTS; // maximum number of static counts
    // it's okay to have this code outside of the inner loop, as the ball hitrects already include the maximum distance they can travel in that timespan
-   m_hitoctree_dynamic.Update();
+   {
+      const TestDriver::Timed tdSearch(TestDriver::kStockSearch);
+      m_hitoctree_dynamic.Update();
+   }
 
    static FILE *const ctLog = []() -> FILE * { const char *const p = getenv("VPX_CONTACT_TIMING"); FILE *const f = (p != nullptr && *p) ? fopen(p, "w") : nullptr; if (f != nullptr) fputs("t_ms,step_us,pre_us,near_us,bodies,islands,substeps,bats,band_bodies,rest_bodies,max_steps,items,probes,gather_us,setup_us,substep_us,write_us,rewinds,mag_us,snap_us,replays,replay_us\n", f); return f; }();   // cost log: one row per call that did work
    uint64_t ctNear = 0;
    if (ContactSystem::Unified())
    {
+      const TestDriver::Timed tdContact(TestDriver::kContact);
       const uint64_t n0 = ctLog != nullptr ? usec() : 0;
       ContactSystem::EngageNear(dtime);
       ctNear = ctLog != nullptr ? usec() - n0 : 0;
@@ -916,6 +953,7 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
       const HitObject *splitObj = nullptr;
       const HitBall *splitBall = nullptr;
       bool splitStatic = false;
+      std::optional<TestDriver::Timed> tdSearch(std::in_place, TestDriver::kStockSearch);   // the stock hit search, to m_recordContacts = false below
 
       // find earliest time where a flipper collides with its stop
       for (size_t i = 0; i < m_vFlippers.size(); ++i)
@@ -1017,13 +1055,15 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
       } // end loop over all balls
 
       m_recordContacts = false;
+      tdSearch.reset();
 
-      // hittime now set ... or full frame if no hit 
+      // hittime now set ... or full frame if no hit
       // now update displacements to collide-contact or end of physics frame
       // !!!!! 2) move objects to hittime
 
       if (hittime > STATICTIME) StaticCnts = STATICCNTS; // allow more zeros next round
 
+      std::optional<TestDriver::Timed> tdContact(std::in_place, TestDriver::kContact);   // the contact system's step, to the snapshot test below
       if (ContactSystem::Unified())
          ContactSystem::SaveStart();   // the state of the start of this sub-interval, for a replay (docs/UnifiedContactDesign.txt 11, point 2)
       const uint64_t ctT0 = ctLog != nullptr ? usec() : 0;
@@ -1042,9 +1082,13 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
       ContactSystem::Step(hittime); // contact-held balls: surface contacts and, for touching balls, ball-to-ball contact, stepped together
       if (ContactSystem::Unified() && ContactSystem::SnapshotTestOn())
          ContactSystem::SnapshotTest(hittime);   // test mode: the same step again from the snapshot must give the same result
+      tdContact.reset();
       const uint64_t ctT1 = ctLog != nullptr ? usec() : 0;
-      for (size_t i = 0; i < m_vmover.size(); i++)
-         m_vmover[i]->PreUpdateDisplacements(hittime); // flippers with a rubber-engaged ball move bat and ball together here
+      {
+         const TestDriver::Timed tdMove(TestDriver::kMoveParts);
+         for (size_t i = 0; i < m_vmover.size(); i++)
+            m_vmover[i]->PreUpdateDisplacements(hittime); // flippers with a rubber-engaged ball move bat and ball together here
+      }
       if (ctLog != nullptr)
       {
          const uint64_t ctT2 = usec();
@@ -1059,11 +1103,15 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
                fflush(ctLog);
          }
       }
-      for (size_t i = 0; i < m_vmover.size(); i++)
-         m_vmover[i]->UpdateDisplacements(hittime); // step 2: move the objects about according to velocities (spinner, gate, flipper, plunger, ball)
+      {
+         const TestDriver::Timed tdMove(TestDriver::kMoveParts);
+         for (size_t i = 0; i < m_vmover.size(); i++)
+            m_vmover[i]->UpdateDisplacements(hittime); // step 2: move the objects about according to velocities (spinner, gate, flipper, plunger, ball)
+      }
 
       if (ContactSystem::Unified())
       {
+         const TestDriver::Timed tdContactOverlaps(TestDriver::kContact);
          ContactSystem::CheckOverlaps(hittime);   // a free ball found inside a moving part: the sub-interval is replayed with the ball engaged at its first contact (docs/UnifiedContactDesign.txt 11, point 2)
          unsigned nRep = 0, usRep = 0;
          ContactSystem::TakeReplayStats(nRep, usRep);
@@ -1072,7 +1120,10 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
       }
 
       // the events the contact step and the parts queued in this sub-interval: after the free balls have moved, as stock fires its collision events (docs/UnifiedContactDesign.txt 11, point 2)
-      ContactSystem::Dispatch();
+      {
+         const TestDriver::Timed tdDispatch(TestDriver::kContact);
+         ContactSystem::Dispatch();
+      }
 
       // find balls that need to be collided and script'ed (generally there will be one, but more are possible)
 

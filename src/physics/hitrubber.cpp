@@ -11,24 +11,18 @@
 #include "imgui/imgui.h"
 #include "parts/ball.h"
 #include "physics/hitrubber.h"
+#include "physics/cordband.h"
 #include "physics/turntable.h"
 #include "physics/contactsystem.h"
 #include "physics/hitball.h"
 #include "physics/magnet.h"
 #include "physics/hitflipper.h"
 #include "physics/physicsini.h"
-#include "physics/contacthingepart.h"
-#include "physics/contactbumperpart.h"
-#include "physics/contactpartsini.h"
-#include "parts/bumper.h"
 #include "ui/live/LiveUI.h"
 #include "physics/cabinet/NudgeHandler.h"
-#include "parts/gate.h"
-#include "parts/spinner.h"
 #include "physics/PhysicsEngine.h"
 #include "parts/rubber.h"
 #include "parts/primitive.h"
-
 
 bool ContactTraceDetail()   // VPX_CONTACT_TRACE=2: also the per-cycle lines (ContactTrace, ContactPair): huge logs, the log file rotates; 1 = engage / release / part hit lines only
 {
@@ -47,197 +41,7 @@ namespace
    constexpr double U = ContactSystem::kMetresPerUnit;
    constexpr double VS = ContactSystem::kVelocityScale;
    constexpr double kMassUnitKg = ContactSystem::kMassUnitKg;
-
-   struct NumKey { const char *name; double RubberObjectSettings::*field; };
-   struct BoolKey { const char *name; bool RubberObjectSettings::*field; };
-   const NumKey NUM_KEYS[] = {
-      { "sling_gap_mm", &RubberObjectSettings::slingGapMm },
-      { "surface_layer_mm", &RubberObjectSettings::surfaceLayerMm }, { "edge_radius_mm", &RubberObjectSettings::edgeRadiusMm },
-      { "e_mpa", &RubberObjectSettings::eMpa }, { "layer_mm", &RubberObjectSettings::layerMm },
-      { "alpha_s_per_m", &RubberObjectSettings::alphaSPerM }, { "restitution", &RubberObjectSettings::restitution }, { "plate_areal_density_kg_m2", &RubberObjectSettings::plateArealKgM2 }, { "plate_mass_g", &RubberObjectSettings::plateMassG }, { "plate_clearance_u", &RubberObjectSettings::plateClearanceU }, { "restitution_ref_speed_ms", &RubberObjectSettings::restitutionRefMs }, { "beta_layer", &RubberObjectSettings::betaLayer },
-      { "mu", &RubberObjectSettings::mu }, { "shear_scale", &RubberObjectSettings::shearScale },
-      { "shear_zeta", &RubberObjectSettings::shearZeta }, { "tan_delta", &RubberObjectSettings::tanDelta },
-      { "substep_us", &RubberObjectSettings::substepUs }, { "rest_substep_us", &RubberObjectSettings::restSubstepUs }, { "rest_omega_h", &RubberObjectSettings::restOmegaH }, { "rest_speed_mm_s", &RubberObjectSettings::restSpeedMmS }, { "roll_travel_um", &RubberObjectSettings::rollTravelUm }, { "max_ms", &RubberObjectSettings::maxMs }, { "release_gap_mm", &RubberObjectSettings::releaseGapMm },
-      { "band_curve_radius_mm", &RubberObjectSettings::bandCurveRadiusMm }, { "band_min_span_mm", &RubberObjectSettings::bandMinSpanMm },
-      { "band_prestretch_pct", &RubberObjectSettings::bandPrestretchPct }, { "band_tension_n", &RubberObjectSettings::bandTensionN }, { "band_node_zeta", &RubberObjectSettings::bandNodeZeta },
-      { "band_ring_zeta", &RubberObjectSettings::bandRingZeta }, { "band_rest_mm", &RubberObjectSettings::bandRestMm },
-      { "band_substep_us", &RubberObjectSettings::bandSubstepUs }, { "band_shear_zeta", &RubberObjectSettings::bandShearZeta }, { "band_ref_hz", &RubberObjectSettings::bandRefHz },
-      { "band_node_mass_g", &RubberObjectSettings::bandNodeMassG }, { "band_max_ms", &RubberObjectSettings::bandMaxMs },
-      { "band_flipper_margin_u", &RubberObjectSettings::bandFlipperMarginU }, { "band_follow_mm", &RubberObjectSettings::bandFollowMm }, { "band_node_mm", &RubberObjectSettings::bandNodeMm },
-      { "switch_gap_mm", &RubberObjectSettings::switchGapMm }, { "switch_min_closed_ms", &RubberObjectSettings::switchMinClosedMs },
-   };
-   const BoolKey BOOL_KEYS[] = {
-      { "contact", &RubberObjectSettings::contact }, { "rubber", &RubberObjectSettings::surfaceRubber }, { "normal_loss", &RubberObjectSettings::normalLoss }, { "viscoelastic_damping", &RubberObjectSettings::viscoelastic }, { "slow_contact", &RubberObjectSettings::slowContact }, { "twist", &RubberObjectSettings::twist }, { "band", &RubberObjectSettings::band },
-      { "band_ringing", &RubberObjectSettings::bandRinging }, { "band_follow", &RubberObjectSettings::bandFollow },      { "band_lock_z", &RubberObjectSettings::bandLockZ },
-   };
-
-   std::string Trim(const std::string &s)
-   {
-      const size_t a = s.find_first_not_of(" \t\r\n");
-      if (a == std::string::npos)
-         return std::string();
-      return s.substr(a, s.find_last_not_of(" \t\r\n") - a + 1);
-   }
-   std::string Lower(std::string s)
-   {
-      for (char &c : s)
-         c = (char)tolower((unsigned char)c);
-      return s;
-   }
-
-   bool ApplyKey(RubberObjectSettings &s, const std::string &key, const std::string &val)
-   {
-      if (key == "band_stops")
-      {
-         s.bandStops = val;
-         return true;
-      }
-      if (key == "band_posts")
-      {
-         s.bandPosts = val;
-         return true;
-      }
-      if (key == "sling_plate")
-      {
-         s.slingPlate = val;
-         return true;
-      }
-      if (key == "sling_switches")
-      {
-         s.slingSwitches = val;
-         return true;
-      }
-      if (key == "switches")
-      {
-         s.switches = val;
-         return true;
-      }
-      const std::string v = Lower(val);
-      for (const BoolKey &k : BOOL_KEYS)
-         if (key == k.name)
-         {
-            s.*(k.field) = (v == "1" || v == "true" || v == "yes" || v == "on");
-            return true;
-         }
-      for (const NumKey &k : NUM_KEYS)
-         if (key == k.name)
-         {
-            char *end = nullptr;
-            const double d = strtod(val.c_str(), &end);
-            if (end == val.c_str())
-               return false;
-            s.*(k.field) = d;
-            return true;
-         }
-      if (key.rfind("sling_", 0) == 0)   // the sling's own settings, then any [Flippers] key for its plate and coil with the prefix sling_
-      {
-         const std::string k = key.substr(6);
-         auto num = [&](double &d) {
-            char *end = nullptr;
-            const double x = strtod(val.c_str(), &end);
-            if (end == val.c_str())
-               return false;
-            d = x;
-            return true;
-         };
-         if (k == "pulse_ms")
-            return num(s.sling.pulseMs);
-         if (k == "min_closed_ms")
-            return num(s.sling.minClosedMs);
-         if (k == "switch_gap_mm")
-            return num(s.sling.switchGapMm);
-         if (k == "plate_contact_zeta")
-            return num(s.sling.plateContactZeta);
-         return FlipperApplyKey(s.sling.mech, k, val);
-      }
-      return false;
-   }
-
-   bool ApplySection(RubberObjectSettings &s, const std::filesystem::path &file, const std::string &section, const std::string &who, const char *keyPrefix = "")
-   {
-      std::ifstream in(file);
-      if (!in)
-         return false;
-      std::string line, cur;
-      const std::string want = Lower(section);
-      while (std::getline(in, line))
-      {
-         const size_t c = line.find_first_of("#;");
-         if (c != std::string::npos)
-            line.resize(c);
-         line = Trim(line);
-         if (line.empty())
-            continue;
-         if (line.front() == '[' && line.back() == ']')
-         {
-            cur = Lower(Trim(line.substr(1, line.size() - 2)));
-            continue;
-         }
-         if (cur != want)
-            continue;
-         const size_t eq = line.find('=');
-         std::string key = eq == std::string::npos ? std::string() : Lower(Trim(line.substr(0, eq)));
-         if (*keyPrefix != 0 && key.rfind("sling_", 0) != 0)   // in a [Slings] / [Sling:<name>] section the keys are written without sling_
-            key = keyPrefix + key;
-         if (eq == std::string::npos || !ApplyKey(s, key, Trim(line.substr(eq + 1))))
-            PLOGW << "Rubber settings (" << who << "): ignored line '" << line << "'";
-      }
-      return true;
-   }
-
-   void Clamp(RubberObjectSettings &s, const std::string &who, const double eMaxMpa = 1000.0)
-   {
-      auto clampKey = [&](const char *key, double &v, double lo, double hi) {
-         const double was = v;
-         v = std::min(std::max(v, lo), hi);
-         if (v != was)
-            PLOGW << "Rubber settings (" << who << "): " << key << " = " << was << " is out of range, using " << v;
-      };
-      clampKey("e_mpa", s.eMpa, 0.1, eMaxMpa);
-      clampKey("layer_mm", s.layerMm, 0.0, 50.0);
-      clampKey("surface_layer_mm", s.surfaceLayerMm, 0.2, 50.0);
-      clampKey("edge_radius_mm", s.edgeRadiusMm, 0.05, 20.0);
-      clampKey("alpha_s_per_m", s.alphaSPerM, 0.0, 2.0);
-      clampKey("restitution", s.restitution, 0.0, 0.99);
-      clampKey("restitution_ref_speed_ms", s.restitutionRefMs, 0.05, 20.0);
-      clampKey("beta_layer", s.betaLayer, 0.0, 5.0);
-      clampKey("mu", s.mu, 0.0, 3.0);
-      clampKey("shear_scale", s.shearScale, 0.01, 100.0);
-      clampKey("shear_zeta", s.shearZeta, 0.0, 10.0);
-      clampKey("tan_delta", s.tanDelta, 0.0, 2.0);
-      clampKey("substep_us", s.substepUs, 1.0, 100.0);
-      clampKey("rest_substep_us", s.restSubstepUs, 0.0, 500.0);
-      clampKey("rest_omega_h", s.restOmegaH, 0.05, 1.5);
-      clampKey("rest_speed_mm_s", s.restSpeedMmS, 0.0, 500.0);
-      clampKey("roll_travel_um", s.rollTravelUm, 0.0, 1000.0);
-      clampKey("max_ms", s.maxMs, 1.0, 200.0);
-      clampKey("release_gap_mm", s.releaseGapMm, 0.0, 5.0);
-      clampKey("band_curve_radius_mm", s.bandCurveRadiusMm, 2.0, 500.0);
-      clampKey("band_min_span_mm", s.bandMinSpanMm, 0.0, 500.0);
-      clampKey("switch_gap_mm", s.switchGapMm, 0.05, 20.0);
-      clampKey("switch_min_closed_ms", s.switchMinClosedMs, 0.0, 1000.0);
-      clampKey("band_prestretch_pct", s.bandPrestretchPct, 0.0, 50.0);
-      clampKey("band_tension_n", s.bandTensionN, 0.0, 2000.0);
-      clampKey("band_ref_hz", s.bandRefHz, 1.0, 10000.0);
-      clampKey("band_node_zeta", s.bandNodeZeta, 0.0, 2.0);
-      if (s.bandRingZeta >= 0.0)
-         clampKey("band_ring_zeta", s.bandRingZeta, 0.0, 2.0);
-      clampKey("band_rest_mm", s.bandRestMm, 0.001, 5.0);
-      clampKey("band_substep_us", s.bandSubstepUs, 0.0, 50.0);
-      if (s.bandShearZeta >= 0.0)
-         clampKey("band_shear_zeta", s.bandShearZeta, 0.0, 10.0);
-      clampKey("band_node_mass_g", s.bandNodeMassG, 0.0, 100.0);
-      clampKey("band_max_ms", s.bandMaxMs, 1.0, 1000.0);
-      clampKey("band_flipper_margin_u", s.bandFlipperMarginU, 0.0, 200.0);
-      clampKey("band_follow_mm", s.bandFollowMm, 5.0, 50.0);
-      if (s.bandNodeMm > 0.0)
-         clampKey("band_node_mm", s.bandNodeMm, 3.0, 30.0);
-      clampKey("sling_gap_mm", s.slingGapMm, 0.0, 50.0);
-      clampKey("sling_pulse_ms", s.sling.pulseMs, 1.0, 500.0);
-      clampKey("sling_min_closed_ms", s.sling.minClosedMs, 0.0, 100.0);
-      clampKey("sling_switch_gap_mm", s.sling.switchGapMm, 0.05, 20.0);
-      clampKey("sling_plate_contact_zeta", s.sling.plateContactZeta, 0.0, 2.0);
-   }
+   using PhysicsIni::Trim;
 
    // Earliest time t >= 0 at which a point at p0 moving with velocity v is at distance r from the point q (-1 = none)
    double SphereTime(const RubberContact::V3 &p0, const RubberContact::V3 &v, const RubberContact::V3 &q, double r)
@@ -254,378 +58,6 @@ namespace
       const double t = (-b - std::sqrt(disc)) / a;
       return t >= 0.0 ? t : -1.0;
    }
-}
-
-RubberContact::RubberParams RubberObjectSettings::ToParams() const
-{
-   RubberContact::RubberParams p;
-   p.eMpa = eMpa;
-   p.alphaSPerM = alphaSPerM;
-   p.gammaKK = viscoelastic ? gammaKK : 0.0;
-   p.betaLayer = betaLayer;
-   p.mu = mu;
-   p.shearScale = shearScale;
-   p.shearZeta = shearZeta;
-   p.twist = twist;
-   p.tanDelta = tanDelta;
-   p.rollingMu = rollingMu;
-   p.normalLoss = !band && normalLoss;   // a band keeps its tuned rebound
-   return p;
-}
-
-std::filesystem::path HitRubber::IniPathFor(const std::filesystem::path &tableFile)
-{
-   return PhysicsIni::FindUnified(tableFile);   // the table's vpx_physics.ini (or VPX_PHYSICS_INI); empty = none
-}
-
-bool HitRubber::LoadSettings(RubberObjectSettings &s, const std::filesystem::path &file, const std::string &name)
-{
-   if (!ContactSystem::Unified())
-      return false;   // stock engine: stock rubbers
-   // the rubber model is on for every rubber the [Features] allow (no file: every model on with its defaults; a rubber says contact = 0 to opt out);
-   // a sling section makes its rubber a band
-   const PhysicsIni::Features feat = PhysicsIni::Active(file);
-   s.contact = true;
-   ApplySection(s, file, "rubbers", name);
-   ApplySection(s, file, "slings", name, "sling_");
-   ApplySection(s, file, "rubber:" + name, name);
-   ApplySection(s, file, "sling:" + name, name, "sling_");
-   Clamp(s, name);
-   if (!s.slingPlate.empty())
-      s.band = true;
-   if (s.band ? !feat.bands : !feat.rubbers)
-      s.contact = false;
-   if (!feat.slings)
-      s.slingPlate.clear();
-   return true;
-}
-
-bool HitRubber::LoadSurfaceSettings(RubberObjectSettings &s, const std::filesystem::path &file, const char *kind, const std::string &name)
-{
-   if (file.empty() || !PhysicsIni::Active(file).surfaceRubbers)   // the rubber = 1 flag is in the object's own section: needs the file
-      return false;
-   const std::string section = std::string(kind) + ":" + name;
-   ApplySection(s, file, "rubbers", name);
-   s.surfaceRubber = false;   // the flag is read from the object's own section only: [Rubbers] is the default for the numbers, not a switch for every wall
-   s.band = false;
-   ApplySection(s, file, section, name);
-   s.band = false;
-   Clamp(s, name);
-   s.contact = s.surfaceRubber;
-   return s.surfaceRubber;
-}
-
-double HitRubber::HardSurfaceE(const HitObject *first)
-{
-   return first != nullptr ? (double)ElasticityWithFalloff(first->m_elasticity, first->m_elasticityFalloff, (float)ContactSystem::kVelocityScale > 0.f ? (float)(1.0 / ContactSystem::kVelocityScale) : 18.53f) : 0.3;
-}
-
-HitRubber *HitRubber::MakePartHost(IEditable *part, const char *kind, const std::string &name, const std::filesystem::path &ini, std::shared_ptr<HingePart::Part> model, Gate *gate, Spinner *spinner,
-                                   float *angle, float *angleSpeed, const double elasticity, const double friction)
-{
-   RubberObjectSettings s;
-   LoadHardSurfaceSettings(s, ini, kind, name, elasticity, friction);
-   // the box the part can sweep (its reach about the axis), VPX units: the proximity engagement and the stock tree see it
-   auto faces = std::make_shared<RubberSurface>();
-   const RubberContact::V3 &A = model->body.A;
-   const double r = model->Reach();
-   faces->lo[0] = (float)((A.x - r) / U);
-   faces->lo[1] = (float)((A.y - r) / U);
-   faces->lo[2] = (float)((A.z - r) / U);
-   faces->hi[0] = (float)((A.x + r) / U);
-   faces->hi[1] = (float)((A.y + r) / U);
-   faces->hi[2] = (float)((A.z + r) / U);
-   HitRubber *const host = new HitRubber(part, faces, s, ini, name, kind);
-   host->m_part = model;
-   host->m_partGate = gate;
-   host->m_partSpinner = spinner;
-   host->m_partAngle = angle;
-   host->m_partSpeed = angleSpeed;
-   host->SetHardSurface(elasticity, friction);
-   // (the gravity it feels is set at every advance: the physics engine is still being built here)
-   PLOGI << (gate != nullptr ? "Gate " : "Spinner ") << name << ": unified part (mass " << model->body.mp.m * 1e3 << " g, inertia " << model->body.mp.I << " kg m^2, centre of mass "
-         << model->body.PendulumArm() * 1e3 << " mm from the axis, reach " << r * 1e3 << " mm)";
-   return host;
-}
-
-HitRubber *HitRubber::MakeBumperHost(IEditable *part, const std::string &name, const std::filesystem::path &ini, std::shared_ptr<ContactMovingPart> model, Bumper *bumper, const float lo[3], const float hi[3])
-{
-   RubberObjectSettings s;   // (the host's own step and rest settings are not used: a moving part sets its own step, ContactMovingPart::BallStep)
-   s.surfaceRubber = true;
-   s.contact = true;
-   auto faces = std::make_shared<RubberSurface>();
-   for (int i = 0; i < 3; i++)
-   {
-      faces->lo[i] = lo[i];
-      faces->hi[i] = hi[i];
-   }
-   HitRubber *const host = new HitRubber(part, faces, s, ini, name, "bumper");
-   host->m_bumperModel = static_cast<JetBumper::EnginePart *>(model.get());
-   host->m_part = model;
-   host->m_partBumper = bumper;
-   host->SetHardSurface(0.5, 0.3);
-   const JetBumper::Bumper &b = host->m_bumperModel->model;
-   PLOGI << "Bumper " << name << ": unified part (skirt " << b.p.skirtMass * 1e3 << " g, ring assembly " << b.p.ringMass * 1e3 << " g, spoon " << b.p.spoonMass * 1e3 << " g, switch closes at "
-         << b.p.switchCloseMm << " mm, drive " << (b.p.mode == JetBumper::DriveMode::Held ? "held" : b.p.mode == JetBumper::DriveMode::External ? "external" : "pulse") << ", supply " << b.p.coil.vSupply << " V)";
-   return host;
-}
-
-bool HitRubber::BumperWanted(const std::filesystem::path &file, const std::string &name)
-{
-   static const bool envOn = []() { const char *const e = getenv("VPX_BUMPERS"); return !(e != nullptr && atoi(e) == 0); }();
-   if (!envOn)
-      return false;
-   if (!PhysicsIni::Active(file).bumpers)   // no file: on with the defaults
-      return false;
-   bool physical = true;   // [Bumper:<name>] physical = 0 keeps the stock bumper for this one
-   if (!file.empty())
-      PartsIni::ReadSections(file, "", "bumper:" + name, [&](const std::string &k, double v, const std::string &) {
-         if (k == "physical")
-            physical = v != 0.0;
-      });
-   return physical;
-}
-
-double HitRubber::SurfaceSpeedBoundMS(const double cycleS) const
-{
-   return m_part != nullptr ? m_part->SurfaceSpeedBound(cycleS) : 0.0;
-}
-
-RubberContact::ContactResult HitRubber::EvaluateOwn(SurfaceContact &it, const RubberContact::BallSI &bs, const RubberContact::V3 &c, const RubberContact::V3 &v, const RubberContact::V3 &w, const double h) const
-{
-   if (m_part == nullptr)
-      return RubberContact::ContactResult();
-   m_part->SetBall(bs);
-   return m_part->ContactItem(0, it, c, v, w, h);
-}
-
-RubberContact::V3 HitRubber::PartGravitySI()
-{
-   // the balls' ExternalVelocityIncrement (gravity, nudge) without the magnets, as an acceleration: per physics step in VPX units -> m/s^2
-   if (g_pplayer == nullptr || g_pplayer->m_physics == nullptr || g_pplayer->m_pininput.m_nudgeHandler == nullptr)
-      return RubberContact::V3(0.0, 0.0, -9.81);
-   const Vertex3Ds g = g_pplayer->m_physics->GetGravity();
-   const float slope = ANGTORAD(g_pplayer->m_ptable->GetPlayfieldSlope());
-   const Vertex2D &ca = g_pplayer->m_pininput.m_nudgeHandler->GetCabinetAcceleration();
-   Vertex3Ds dv = (float)PHYS_FACTOR * g;
-   dv.x -= (float)PHYS_FACTOR * MS2TOVPUVPT2(ca.x);
-   dv.y -= (float)PHYS_FACTOR * MS2TOVPUVPT2(ca.y) * cosf(slope);
-   dv.z -= (float)PHYS_FACTOR * MS2TOVPUVPT2(ca.y) * sinf(slope);
-   const double k = ContactSystem::kVelocityScale / PHYSICS_STEPTIME_S;
-   return RubberContact::V3(dv.x * k, dv.y * k, dv.z * k);
-}
-
-void HitRubber::PartAdvance(const float dtime)
-{
-   if (m_part == nullptr)
-      return;
-   const RubberContact::V3 g = PartGravitySI();
-   if (!m_partLogged)
-   {
-      m_partLogged = true;
-      PLOGI << "Part " << m_name << ": gravity felt " << g.x << ' ' << g.y << ' ' << g.z << " m/s^2 (|g| " << g.Length() << ")";
-   }
-   m_part->SetGravity(g);   // (a nudge wakes a sleeping part)
-   {
-      // the contact system stepped it with its balls for steppedS; the rest of the interval it moves alone
-      const double rest = (double)dtime * DEFAULT_STEPTIME_S - m_part->steppedS;
-      if (rest > 1e-9)
-         m_part->AdvanceAlone(rest);
-      m_part->steppedS = 0.0;
-      m_part->steppedThisCycle = false;
-   }
-   if (m_partBumper != nullptr && m_bumperModel != nullptr)
-   {
-      // a jet bumper: the pose for the script and the renderer, then its events in the order they happened (outside the contact step: a script may move or delete balls)
-      const JetBumper::Bumper &b = m_bumperModel->model;
-      constexpr double U = ContactSystem::kMetresPerUnit;
-      m_partBumper->SetPhysicalPose((float)b.RotXDeg(), (float)b.RotYDeg(), (float)(-b.dr / U), (float)((b.zc - b.zRest) / U), (float)(b.zc / U), (float)(b.ds / U), b.switchClosed, (float)b.iCoil);
-      std::vector<HingePart::Event> bq;
-      bq.swap(m_part->events);
-      if (!bq.empty())   // queued: the engine fires them after the free balls have moved (ContactSystem::Dispatch)
-         ContactSystem::DeferEvent([this, bq]() {
-            for (const HingePart::Event &e : bq)
-            {
-               switch (e.kind)
-               {
-               case HingePart::Event::Hit:   // the switch closed (no speed threshold; Threshold is ignored)
-                  if (m_partBumper->m_d.m_hitEvent)
-                  {
-                     g_pplayer->m_pininput.PlayBumperRumble();
-                     m_partBumper->FireGroupEvent(DISPID_HitEvents_Hit);
-                  }
-                  break;
-               case HingePart::Event::SwitchClosed:
-                  m_partBumper->FireVoidEventParm(DISPID_BumperEvents_Switch, 1);
-                  break;
-               case HingePart::Event::SwitchOpened:
-                  m_partBumper->FireVoidEventParm(DISPID_BumperEvents_Switch, 0);
-                  break;
-               default:
-                  break;
-               }
-            }
-         });
-      // detector (rule 8): a contact force far above what the part's hits give (a ball found deep inside it)
-      if (!m_bumperModel->spikeNote.empty())
-      {
-         const std::string msg = "Bumper " + m_name + ": " + m_bumperModel->spikeNote;
-         PLOGW << msg;
-         if (!m_bumperSpikeShown && g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
-         {
-            m_bumperSpikeShown = true;
-            g_pplayer->m_liveUI->PushNotification("Bumper " + m_name + ": a ball met it with a contact force of kilonewtons (see vpinball.log, 'Bumper " + m_name + "')", 8000);
-         }
-         m_bumperModel->spikeNote.clear();
-      }
-      // detector (rule 8): the coil energised for a long time (a skirt held down?)
-      if (!m_bumperWarned && b.coilOnMaxS * 1000.0 > 500.0)
-      {
-         m_bumperWarned = true;
-         const std::string msg = "Bumper " + m_name + ": coil energised for " + std::to_string((int)(b.coilOnMaxS * 1000.0)) + " ms (the skirt held down by a ball? a held drive burns the coil)";
-         PLOGW << msg;
-         if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
-            g_pplayer->m_liveUI->PushNotification(msg, 8000);
-      }
-      return;
-   }
-   // the stock sign of the part's state: the stock renderer turns a two-way gate's mesh by +angle and a one-way gate's by -angle (Gate::Render), so a two-way
-   // gate's angle is written with the opposite sign of the body's (which is the same for both: positive swings toward the front)
-   const double sign = (m_partGate != nullptr && m_partGate->m_d.m_twoWay) ? -1.0 : 1.0;
-   HingePart::Part *const hinge = static_cast<HingePart::Part *>(m_part.get());   // (a gate or spinner from here on: the bumper returned above)
-   if (m_partAngle != nullptr)
-      *m_partAngle = (float)(sign * hinge->body.theta);
-   if (m_partSpeed != nullptr)
-      *m_partSpeed = (float)(sign * hinge->body.omega * DEFAULT_STEPTIME_S);   // rad per VPT
-   // the part's events, in the order they happened (outside the contact step: a script may move or delete balls)
-   std::vector<HingePart::Event> q;
-   q.swap(m_part->events);
-   if (q.empty())
-      return;
-   ContactSystem::DeferEvent([this, q]() {   // queued: the engine fires them after the free balls have moved (ContactSystem::Dispatch)
-   for (const HingePart::Event &e : q)
-   {
-      IFireEvents *const fe = m_partGate != nullptr ? (IFireEvents *)m_partGate : (IFireEvents *)m_partSpinner;
-      if (fe == nullptr)
-         break;
-      switch (e.kind)
-      {
-      case HingePart::Event::Hit:
-         if (m_partGate != nullptr)
-            m_partGate->FireGroupEvent(DISPID_HitEvents_Hit);
-         break;
-      case HingePart::Event::Spin:
-         if (m_partSpinner != nullptr)
-            m_partSpinner->FireGroupEvent(DISPID_SpinnerEvents_Spin);
-         break;
-      case HingePart::Event::LimitEOS:
-         if (m_partGate != nullptr)
-            m_partGate->FireVoidEventParm(DISPID_LimitEvents_EOS, (float)e.value);
-         else
-            m_partSpinner->FireVoidEventParm(DISPID_LimitEvents_EOS, (float)e.value);
-         break;
-      case HingePart::Event::LimitBOS:
-         if (m_partGate != nullptr)
-            m_partGate->FireVoidEventParm(DISPID_LimitEvents_BOS, (float)e.value);
-         else
-            m_partSpinner->FireVoidEventParm(DISPID_LimitEvents_BOS, (float)e.value);
-         break;
-      case HingePart::Event::SwitchClosed:
-      case HingePart::Event::SwitchOpened:
-         if (ContactTraceOn())   // (no script event yet: SwitchClosed / SwitchOpened for gates and spinners come with the IDL change, design build step 7)
-            PLOGI << "PartSwitch " << m_name << (e.kind == HingePart::Event::SwitchClosed ? " closed" : " opened") << " t=" << g_pplayer->m_time_msec;
-         break;
-      }
-   }
-   });
-}
-
-bool HitRubber::HingeWanted(const std::filesystem::path &file, const char *kind, const std::string &name)
-{
-   static const bool envOn = []() { const char *const e = getenv("VPX_HINGES"); return !(e != nullptr && atoi(e) == 0); }();
-   if (!envOn)
-      return false;
-   if (!PhysicsIni::Active(file).hinges)   // no file: on with the defaults
-      return false;
-   RubberObjectSettings probe;
-   probe.surfaceRubber = true;
-   ApplySection(probe, file, std::string(kind) + ":" + name, name);
-   return probe.surfaceRubber;
-}
-
-bool HitRubber::HardSurfaceWanted(const std::filesystem::path &file, const char *kind, const std::string &name)
-{
-   if (!PhysicsIni::Active(file).hardSurfaces)   // no file: on with the defaults
-      return false;
-   RubberObjectSettings probe;
-   probe.surfaceRubber = true;   // a hard surface unless the object's own section says rubber = 0
-   ApplySection(probe, file, std::string(kind) + ":" + name, name);
-   return probe.surfaceRubber;
-}
-
-bool HitRubber::LoadHardSurfaceSettings(RubberObjectSettings &s, const std::filesystem::path &file, const char *kind, const std::string &name, const double elasticity, const double friction)
-{
-   s = RubberObjectSettings();
-   static const bool veDefault = []() { const char *const e = getenv("VPX_VISCOELASTIC"); return !(e != nullptr && atoi(e) == 0); }();
-   s.viscoelastic = veDefault;
-   s.eMpa = 7875.0;   // as the playfield: E* = 10.5 GPa
-   s.betaLayer = 0.0;
-   s.alphaSPerM = std::min(2.0, std::max(0.02, 1.1 * (1.0 - elasticity)));   // rebound ratio ~ 1 - alpha v at about 1 m/s: the part's restitution (the stock falloff with speed is not modelled)
-   s.tanDelta = 0.05;
-   s.mu = friction;
-   s.rollingMu = ContactSettings::Get().enable ? ContactSettings::Get().rollingResistance : 0.0;
-   s.restSubstepUs = 250.0;
-   s.restOmegaH = 0.8;
-   s.surfaceRubber = true;
-   s.band = false;
-   ApplySection(s, file, "surfaces", name);
-   s.band = false;
-   ApplySection(s, file, std::string(kind) + ":" + name, name);
-   s.band = false;
-   Clamp(s, name, 1.0e6);
-   s.contact = s.surfaceRubber;
-   // Viscoelastic normal damping (the default for hard surfaces; VPX_VISCOELASTIC=0 or viscoelastic_damping = 0 restores the alpha law): gamma is calibrated so that a ball of the default
-   // size and mass rebounds with the part's restitution (its elasticity with the stock falloff at the reference speed) at the reference speed; at other speeds the law gives
-   // e ~ v^(-1/5) relative to that, not the alpha law's fall to zero.
-   if (s.viscoelastic && s.surfaceRubber)
-   {
-      const double eT = s.restitution > 0.0 ? s.restitution : elasticity;
-      static std::map<std::pair<long long, long long>, double> memo;   // gamma by (e, parameters): most parts share a few elasticities
-      const RubberContact::RubberParams rp = s.ToParams();
-      const long long k1 = (long long)(eT * 1e6), k2 = (long long)(s.restitutionRefMs * 1e3) * 1000003LL + (long long)(s.eMpa * 10.0);
-      auto it = memo.find({ k1, k2 });
-      if (it == memo.end())
-         it = memo.emplace(std::make_pair(k1, k2), RubberContact::CalibrateKK(rp, 25.0 * ContactSystem::kMetresPerUnit, ContactSystem::kMassUnitKg, s.restitutionRefMs, eT)).first;
-      s.gammaKK = it->second;
-      PLOGI << "Hard surface " << name << ": viscoelastic damping gamma " << s.gammaKK << " N s/m^2 for restitution " << eT << " at " << s.restitutionRefMs << " m/s";
-   }
-   return s.surfaceRubber;
-}
-
-// The playfield material. Steel ball on a lacquered wood playfield, all values UNVERIFIED (published figures, not measured on a table):
-//   e_mpa 7875    effective modulus E/(1 - 0.5^2) of the model's fixed nu = 0.5, so that E* = E/(1 - nu^2) = 10.5 GPa (steel 200 GPa / 0.3, wood plus lacquer ~10 GPa / 0.3)
-//   beta_layer 0  no thin-layer stiffening (a hard, thick support)
-//   alpha_s_per_m 0.5, tan_delta 0.05   normal damping (rebound ratio ~ 1 - alpha v) and loss tangent (drop tests: first rebound e ~ 0.55 - 0.65 for 0.2 - 1.3 m/s)
-//   mu            the table's friction (it is the static mu of every surface)
-bool HitRubber::LoadPlayfieldSettings(RubberObjectSettings &s, const std::filesystem::path &file, const double tableMu)
-{
-   if (!PhysicsIni::Active(file).playfieldContact)   // no file: on with the defaults
-      return false;
-   s = RubberObjectSettings();
-   s.eMpa = 7875.0;
-   s.betaLayer = 0.0;
-   s.alphaSPerM = 0.5;
-   s.tanDelta = 0.05;
-   s.mu = tableMu;
-   s.rollingMu = ContactSettings::Get().enable ? ContactSettings::Get().rollingResistance : 0.0;   // a ball rolling on hard wood: the measured coefficient of [Contact], not the rubber hysteresis law
-   s.restSubstepUs = 250.0;   // a hard contact's own frequency (about 1 kHz) is what limits the step of a resting ball
-   s.restOmegaH = 0.8;
-   ApplySection(s, file, "playfield", "playfield");
-   s.band = false;
-   Clamp(s, "playfield", 1.0e6);
-   s.surfaceRubber = true;
-   s.contact = true;
-   return true;
 }
 
 bool HitRubber::SurfaceHeightAt(const double xU, const double yU, double &zU) const
@@ -659,24 +91,8 @@ bool HitRubber::SurfaceHeightAt(const double xU, const double yU, double &zU) co
    return found;
 }
 
-RubberObjectSettings HitRubber::TurntableSettings(const double mu, const double rollingResistance)
-{
-   RubberObjectSettings s;
-   s.eMpa = 7875.0;
-   s.betaLayer = 0.0;
-   s.alphaSPerM = 0.5;
-   s.tanDelta = 0.05;
-   s.mu = mu;
-   s.rollingMu = rollingResistance >= 0.0 ? rollingResistance : (ContactSettings::Get().enable ? ContactSettings::Get().rollingResistance : 0.0);
-   s.restSubstepUs = 250.0;
-   s.restOmegaH = 0.8;
-   s.surfaceRubber = true;
-   s.contact = true;
-   return s;
-}
-
 HitRubber::HitRubber(IEditable *editable, const std::vector<Vertex3Ds> &pts, const float radius, const RubberObjectSettings &settings, const std::filesystem::path &iniPath, const std::string &name)
-   : HitObject(editable), m_pts(pts), m_radius(radius), m_set(settings), m_ini(iniPath), m_name(name)
+   : ContactHost(editable, settings, iniPath, name, ""), m_pts(pts), m_radius(radius)
 {
    if (!m_pts.empty())
       m_pts.push_back(m_pts.front()); // close the loop
@@ -689,11 +105,6 @@ HitRubber::HitRubber(IEditable *editable, const std::vector<Vertex3Ds> &pts, con
       m_cumSI[i] = m_cumSI[i - 1] + (m_ptsSI[i] - m_ptsSI[i - 1]).Length();
    if (m_set.band)
       DetectBand();
-   Registry().push_back(this);
-   std::error_code ec;
-   if (!m_ini.empty())
-      m_iniTime = std::filesystem::last_write_time(m_ini, ec);
-   m_lastCheck = std::chrono::steady_clock::now();
 }
 
 void RubberSurface::Add(const Vertex3Ds &a, const Vertex3Ds &b, const Vertex3Ds &c)
@@ -715,25 +126,17 @@ void RubberSurface::Add(const Vertex3Ds &a, const Vertex3Ds &b, const Vertex3Ds 
 
 HitRubber::HitRubber(IEditable *editable, std::shared_ptr<RubberSurface> surface, const RubberObjectSettings &settings, const std::filesystem::path &iniPath, const std::string &name,
                      const char *kind)
-   : HitObject(editable), m_surface(std::move(surface)), m_surfaceKind(kind), m_radius(0.f), m_set(settings), m_ini(iniPath), m_name(name)
+   : ContactHost(editable, settings, iniPath, name, kind), m_surface(std::move(surface)), m_radius(0.f)
 {
-   Registry().push_back(this);
-   std::error_code ec;
-   if (!m_ini.empty())
-      m_iniTime = std::filesystem::last_write_time(m_ini, ec);
-   m_lastCheck = std::chrono::steady_clock::now();
 }
 
 HitRubber::~HitRubber()
 {
-   // A ball can outlive its physics engine (a script still references it when the table closes): it must not keep a pointer to a rubber that is gone, or ~HitBall
-   // would release it from freed memory.
-   ContactSystem::ReleaseHost(this);
+   // A ball can outlive its physics engine (a script still references it when the table closes): it must not keep a pointer to a band that is gone (the contact system lets
+   // go of the host's balls in ~ContactHost)
    for (const BandBall &e : m_engaged)
       if (e.ball != nullptr && e.ball->m_bandOwner == this)
          e.ball->m_bandOwner = nullptr;
-   auto &reg = Registry();
-   reg.erase(std::remove(reg.begin(), reg.end(), this), reg.end());
 }
 
 static std::vector<RubberContact::SurfaceHole> g_playfieldHoles;   // metres
@@ -760,23 +163,6 @@ bool InPlayfieldHole(const Vertex3Ds &pos)
          return true;
    }
    return false;
-}
-
-std::string HitRubber::LeftoverHosts()
-{
-   const std::vector<HitRubber *> &reg = Registry();
-   if (reg.empty())
-      return std::string();
-   std::string s = std::to_string(reg.size()) + " (";
-   for (size_t i = 0; i < reg.size() && i < 6; i++)
-      s += (i ? ", " : "") + reg[i]->m_surfaceKind + " " + reg[i]->m_name;
-   return s + (reg.size() > 6 ? ", ...)" : ")");
-}
-
-std::vector<HitRubber *> &HitRubber::Registry()
-{
-   static std::vector<HitRubber *> reg;
-   return reg;
 }
 
 // Band detection (step 1 of the band model: find the posts and the free spans; the contact itself is still the rigid tube).
@@ -985,6 +371,7 @@ void HitRubber::SlingAttach(Primitive *const plate, const std::vector<Primitive 
    m_plate.Configure(m_set.sling, true);
    m_plateConfigured = true;
    m_driver.SetPulse(m_set.sling.pulseMs * 1e-3);
+   m_driver.SetDelay(m_set.sling.coilDelayMs * 1e-3);
    PLOGI << "Sling " << m_name << ": plate " << plate->GetName() << " (pivot " << m_slingBase.x << ", " << m_slingBase.y << ", " << m_slingBase.z << "), " << switches.size()
          << " switch blades, collision off on all of them";
    SlingPlace();
@@ -1323,6 +710,7 @@ void HitRubber::SlingAdvance(const float dtime)
       return;
    const SlingSettings &ss = m_set.sling;
    m_driver.SetPulse(ss.pulseMs * 1e-3);
+   m_driver.SetDelay(ss.coilDelayMs * 1e-3);
 
    // a plate that has left the model's range (not a number, or far past its coil stop) is put back at rest, and the band with it, instead of staying broken
    {
@@ -1747,22 +1135,9 @@ float HitRubber::HitTest(const BallS &ball, const float dtime, CollisionEvent &c
    return (float)bestT;
 }
 
-void HitRubber::ReloadIfChanged() const
+void HitRubber::Reload() const
 {
-   if (m_ini.empty())
-      return;
-   const auto now = std::chrono::steady_clock::now();
-   if (now - m_lastCheck < std::chrono::seconds(1))
-      return;
-   m_lastCheck = now;
-   std::error_code ec;
-   const auto mtime = std::filesystem::last_write_time(m_ini, ec);
-   if (ec || mtime == m_iniTime)
-      return;
-   m_iniTime = mtime;
    RubberObjectSettings s;
-   if (m_turntable >= 0)
-      return;   // a turntable disc keeps the settings it was built with (its keys are read when the table loads)
    if (m_surface != nullptr && m_surfaceKind == "playfield")
    {
       if (!LoadPlayfieldSettings(s, m_ini, m_tableMu))
@@ -1791,12 +1166,6 @@ void HitRubber::ReloadIfChanged() const
 }
 
 static constexpr float kFlipperHorizonVpt = 1.0f;   // trace only: VPX time units (1 VPT = 10 ms) a bat is looked ahead for in the flip_clear numbers
-// A ball that a flipper's rubber model drives is not taken by the contact model. The other way round, a contact-held ball that touches a bat is handed to the flipper at the
-// moment of contact (HitFlipper::Collide / Contact release it: the flipper's step carries the nearby rubbers, so the post stays on the force model).
-bool HitRubber::FlipperBlocks(const HitBall *pball)
-{
-   return pball->m_rubberOwner != nullptr;
-}
 
 void HitRubber::Collide(const CollisionEvent &coll)
 {
@@ -1832,66 +1201,11 @@ void HitRubber::Collide(const CollisionEvent &coll)
    }
 }
 
-// A stock collider of a flagged wall / primitive found the ball: take it into the force model, as Collide() does for a rubber post.
-bool HitRubber::SurfaceCollide(HitBall *const pball, const Vertex3Ds &n)
-{
-   if (!m_set.contact)
-      return false;
-   if (ContactOwns(pball->m_d) || SideHolds(pball))
-      return true;   // already held (by a force-model contact or by the flipper's model, which carries this rubber): another collider of the same hit
-   const float dot = -(n.Dot(pball->m_d.m_vel));
-   if (dot < C_LOWNORMVEL)
-      return false;   // receding or sliding: nothing to solve (a resting ball is the stock contact's)
-   ReloadIfChanged();
-   if (!m_set.contact)
-      return false;
-   const bool flipperBusy = FlipperBlocks(pball);
-   if (!flipperBusy && pball->m_bandOwner == nullptr && pball->m_contact == nullptr && g_pplayer->m_time_msec >= m_contactCooldownUntilMs && ContactEngage(pball))
-   {
-      g_pplayer->m_physics->OnBallWallHit(*pball, n, dot);   // the force-model contact is stepped by the engine from here on (no impulse here)
-      return true;
-   }
-   return false;
-}
-
-bool HitRubber::HitEventWanted(const RubberContact::V3 &normalToBall) const
-{
-   return m_part == nullptr;   // a gate or spinner fires its own Hit (HingePart::Part::Contact: near its start angle)
-}
-
 HitObject *HitRubber::HitEventObject() const
 {
    if (m_surface != nullptr)
       return m_eventCarrier;
    return m_set.band ? nullptr : const_cast<HitRubber *>(this);   // a rubber post / ring fires its own hit event (Collide above)
-}
-
-bool HitRubber::SlowContact(HitBall *const pball)
-{
-   if (!m_set.contact || !m_set.slowContact)
-      return false;
-   if (ContactOwns(pball->m_d) || SideHolds(pball))
-      return true;   // already held (by this or another collider of the same touch, or by the flipper's model that carries this rubber)
-   ReloadIfChanged();
-   if (!m_set.contact || !m_set.slowContact)
-      return false;
-   const char *why = nullptr;
-   if (pball->m_rubberOwner != nullptr)
-      why = "a flipper's rubber model owns the ball";
-   else if (pball->m_bandOwner != nullptr || pball->m_contact != nullptr)
-      why = "another band / force-model contact owns the ball";
-   else if (g_pplayer->m_time_msec < m_contactCooldownUntilMs)
-      why = "cooldown";
-   else if (ContactEngage(pball, "slow"))
-      return true;
-   else
-      why = "ContactEngage declined";
-   if (ContactTraceOn() && (long long)g_pplayer->m_time_msec - m_slowNoteMs >= 500)
-   {
-      m_slowNoteMs = g_pplayer->m_time_msec;
-      PLOGI << "SlowContact " << m_name << " t=" << g_pplayer->m_time_msec << " refused: " << why;
-   }
-   return false;
 }
 
 void HitRubber::SideGather(const BallS &ball, const RubberContact::V3 &c, const double ballR, const double reachM, RubberSideSet &set)
@@ -1905,9 +1219,9 @@ void HitRubber::SideGather(const BallS &ball, const RubberContact::V3 &c, const 
    }
    std::vector<SurfaceContact> items;
    const float reach = ball.m_radius + 20.0f;   // VPX units, as for a engagement
-   for (HitRubber *const o : Registry())
+   for (ContactHost *const o : Registry())
    {
-      if (!o->m_enabled || !o->m_set.contact)
+      if (!o->m_enabled || !o->ContactSettings().contact)
          continue;
       const FRect3D &bb = o->m_hitBBox;
       if (ball.m_pos.x < bb.left - reach || ball.m_pos.x > bb.right + reach || ball.m_pos.y < bb.top - reach || ball.m_pos.y > bb.bottom + reach
@@ -1924,7 +1238,7 @@ void HitRubber::SideGather(const BallS &ball, const RubberContact::V3 &c, const 
             break;
          }
       it.r = o;
-      it.rp = o->m_set.ToParams();
+      it.rp = o->ContactSettings().ToParams();
       it.hLayer = o->LayerM();
       if (!known)
          it.st.Reset();
@@ -1953,46 +1267,53 @@ void HitRubber::SideStep(RubberSideSet &set, const RubberContact::BallSI &bs, co
    }
 }
 
-bool HitRubber::SideHolds(const HitBall *const pball) const
-{
-   return pball->m_rubberOwner != nullptr && pball->m_rubberOwner->RubberSideHas(this);
-}
-
 double HitRubber::LayerM() const
 {
-   if (m_set.layerMm > 0.0)
-      return m_set.layerMm * 1e-3;
-   return m_surface != nullptr ? m_set.surfaceLayerMm * 1e-3 : 2.0 * m_radiusSI;
+   if (m_set.layerMm > 0.0 || m_surface != nullptr)
+      return ContactHost::LayerM();
+   return 2.0 * m_radiusSI;
 }
 
 void HitRubber::Refresh(SurfaceContact &it, const double ballR, const double reachM, const RubberContact::V3 &c) const
 {
-   if (m_part != nullptr)   // a gate or spinner probes its own few wires and faces: no candidate list
-   {
-      it.candR = -1.0;
-      it.cand.clear();
-      return;
-   }
    if (m_surface == nullptr)
       return;
    // A list built with some margin stays good until the ball has moved farther than the margin allows: scanning every face of a playfield mesh for every ball on every
    // call was the main cost of a table with several balls on it.
    const double need = ballR + reachM;
-   if (it.candR >= 0.0 && (c - it.candC).Length() + need <= it.candR)
+   if (!(it.candR >= 0.0 && (c - it.candC).Length() + need <= it.candR))
+   {
+      constexpr double kMargin = 0.008;   // m
+      RubberContact::SurfaceCandidates(m_surface->tris, c, need + kMargin, it.candV);
+      it.candC = c;
+      it.candR = need + kMargin;
+   }
+   // The faces the ball can touch in this cycle: those whose box is within `need` of the ball (a face farther than the ball's radius plus its reach cannot touch it, and the nearest-face
+   // query only has to find faces that can). The probes of the cycle's substeps test this short list, not the whole Verlet list. A surface with carved holes keeps the whole list (the hole moves the nearest point).
+   const RubberContact::CarvedHole *holes = nullptr;
+   int nHoles = 0;
+   if (m_surfaceKind == "playfield")
+      Turntables::Holes(holes, nHoles);
+   it.cand.clear();
+   it.tightC = c;
+   if (nHoles > 0)
+   {
+      it.cand = it.candV;
       return;
-   constexpr double kMargin = 0.008;   // m
-   RubberContact::SurfaceCandidates(m_surface->tris, c, need + kMargin, it.cand);
-   it.candC = c;
-   it.candR = need + kMargin;
+   }
+   it.tightC = c;
+   const double need2 = (need + SurfaceContact::kTightSkin) * (need + SurfaceContact::kTightSkin);
+   for (const int i : it.candV)
+   {
+      const RubberContact::SurfaceTri &t = m_surface->tris[i];
+      const double dx = std::max(std::max(t.lo.x - c.x, c.x - t.hi.x), 0.0), dy = std::max(std::max(t.lo.y - c.y, c.y - t.hi.y), 0.0), dz = std::max(std::max(t.lo.z - c.z, c.z - t.hi.z), 0.0);
+      if (dx * dx + dy * dy + dz * dz <= need2)
+         it.cand.push_back(i);
+   }
 }
 
 RubberContact::TubeProbe HitRubber::Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const
 {
-   if (m_part != nullptr)
-   {
-      m_part->SetBall(bs);
-      return m_part->Probe(c);
-   }
    if (m_surface != nullptr)
    {
       if (m_surfaceKind == "playfield")
@@ -2000,44 +1321,11 @@ RubberContact::TubeProbe HitRubber::Probe(const RubberContact::BallSI &bs, const
          const RubberContact::CarvedHole *holes = nullptr;
          int nHoles = 0;
          Turntables::Holes(holes, nHoles);   // the playfield has a round hole under every turntable disc
-         return RubberContact::ProbeTriangles(bs, m_surface->tris, it.cand, m_set.edgeRadiusMm * 1e-3, c, holes, nHoles);
+         return RubberContact::ProbeTriangles(bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, holes, nHoles);
       }
-      return RubberContact::ProbeTriangles(bs, m_surface->tris, it.cand, m_set.edgeRadiusMm * 1e-3, c);   // (no carved hole: a ball inside a non-legacy kicker's circle is handed to the stock contact instead, see InPlayfieldHole; a carved hole let balls fall through a plane playfield)
+      return RubberContact::ProbeTriangles(bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c);   // (no carved hole: a ball inside a non-legacy kicker's circle is handed to the stock contact instead, see InPlayfieldHole; a carved hole let balls fall through a plane playfield)
    }
    return RubberContact::ProbeTube(bs, m_ptsSI.data(), (int)m_ptsSI.size(), m_radiusSI, c, &m_tubePre);
-}
-
-// A turntable disc turns about its axis: the surface point moves at w x r
-void HitRubber::VelocityAt(const RubberContact::TubeProbe &pr, RubberContact::V3 &v, RubberContact::V3 &w) const
-{
-   if (m_part != nullptr)
-   {
-      m_part->SurfaceVelocity(pr.point, v, w);
-      return;
-   }
-   if (m_turntable < 0)
-      return;
-   double axX = 0.0, axY = 0.0;
-   Turntables::Axis(m_turntable, axX, axY);
-   const double wDisc = Turntables::Omega(m_turntable);
-   v = RubberContact::V3(-wDisc * (pr.point.y - axY), wDisc * (pr.point.x - axX), 0.0);
-   w = RubberContact::V3(0.0, 0.0, wDisc);
-}
-
-// The equal and opposite force at the contact point and the couples (twist, rolling resistance) turn the disc
-void HitRubber::ApplyReaction(const RubberContact::TubeProbe &pr, const RubberContact::ContactResult &r, const double ballR, const double h) const
-{
-   using namespace RubberContact;
-   if (m_part != nullptr)
-      return;   // a gate or spinner takes the reaction in its own contact (EvaluateOwn)
-   if (m_turntable < 0)
-      return;
-   double axX = 0.0, axY = 0.0;
-   Turntables::Axis(m_turntable, axX, axY);
-   const V3 rB = r.normal * (-(ballR - r.delta / 2.0));
-   const V3 Mc = r.torqueOnBall - rB.Cross(r.force);
-   const double tauZ = -((pr.point.x - axX) * r.force.y - (pr.point.y - axY) * r.force.x) - Mc.z;
-   Turntables::AddImpulse(m_turntable, tauZ * h);
 }
 
 // ---- Engine-stepped contact ----
@@ -2047,23 +1335,6 @@ void HitRubber::ApplyReaction(const RubberContact::TubeProbe &pr, const RubberCo
 // advances the same force model by that cycle's substeps (about 80 us), and the ball is handed back to the engine when it is clear of every rubber and moving away.
 // Only the rubber's own contact force and torque act in the substeps; gravity, the playfield and every other object are left to the engine (as for a band).
 // Every force-model rubber within reach of the ball is part of the contact, each with its own parameters and shear state, so a ball between two rubbers feels both.
-
-
-bool HitRubber::ContactOwns(const BallS &ball) const
-{
-   return ContactSystem::Owns(ball, this);
-}
-
-bool HitRubber::ContactEngage(HitBall *const pb, const char *how)
-{
-   return ContactSystem::Engage(this, pb, how);
-}
-
-void HitRubber::ContactReleaseAll(const char *)
-{
-   ContactSystem::ReleaseHost(this);
-}
-
 
 bool HitRubberContactHolds(const HitBall *ball);
 
@@ -2103,16 +1374,11 @@ bool HitRubberContactPairModel(const HitBall *a, const BallS &b)
 
 bool BandMover::AddToList() const
 {
-   return (m_owner->m_set.band && !m_owner->m_bandSpans.empty()) || m_owner->m_slingPlate != nullptr || m_owner->m_set.contact || m_owner->m_part != nullptr;
+   return (m_owner->m_set.band && !m_owner->m_bandSpans.empty()) || m_owner->m_slingPlate != nullptr || m_owner->m_set.contact;
 }
 
 void BandMover::PreUpdateDisplacements(const float dtime)
 {
-   if (m_owner->m_part != nullptr)
-   {
-      m_owner->PartAdvance(dtime);   // a gate or spinner: its own advance (nothing of the band applies)
-      return;
-   }
    m_owner->BandAdvance(dtime);
 }
 
@@ -2411,6 +1677,20 @@ bool HitRubber::BandEngage(HitBall *const pb)
    using namespace RubberContact;
    if (!BandWants(pb))
       return false;
+   CordEnsure();
+   if (CordOn())   // the group step takes it from here: the cord finds the ball itself
+   {
+      if (!ContactSystem::EngageBand(this, pb))
+         return false;
+      BandBall e;
+      e.ball = pb;
+      e.chain = -1;
+      e.node = -1;
+      e.vin = V3((double)pb->m_d.m_vel.x * VS, (double)pb->m_d.m_vel.y * VS, (double)pb->m_d.m_vel.z * VS);
+      m_engaged.push_back(e);
+      pb->m_bandOwner = this;
+      return true;
+   }
    BallSI bs;
    bs.R = (double)pb->m_d.m_radius * U;
    const Vertex3Ds p = pb->m_d.m_pos;
@@ -2652,6 +1932,15 @@ void HitRubber::BandAfterCore(const float dtime)
 
 void HitRubber::BandAdvance(const float dtime)
 {
+   CordEnsure();
+   if (CordOn())
+   {
+      if (!m_cordStepped)
+         ContactSystem::StepCordAlone(this, dtime);
+      m_cordStepped = false;
+      CordFinish(dtime);
+      return;
+   }
    if (m_bandIslandStepped)   // unified engine: the contact system did the sling's driver and the band's step with its balls
    {
       m_bandIslandStepped = false;
@@ -2661,6 +1950,188 @@ void HitRubber::BandAdvance(const float dtime)
    BandBeforeCore(dtime);
    BandAdvanceCore(dtime);
    BandAfterCore(dtime);
+}
+
+// ---- The cord in the group step (docs/GroupStepDesign.txt 8, 11) ----
+void HitRubber::CordEnsure()
+{
+   if (m_cord != nullptr || !m_set.band || m_set.bandModel == 0.0 || m_bandPosts.size() < 2)
+      return;
+   auto cb = std::make_shared<CordBand>();
+   BandCord::Part &p = cb->part;
+   BandCord::Settings &s = p.set;
+   const double rc = m_radiusSI;
+   s.cordRadius = rc;
+   s.eMpa = m_set.eMpa;
+   s.tanDelta = m_set.tanDelta;
+   s.refHz = m_set.bandRefHz;
+   s.alphaSPerM = m_set.alphaSPerM;
+   s.mu = m_set.mu;
+   s.prestretch = m_set.bandPrestretchPct * 0.01;
+   s.tensionN = s.eMpa * 1e6 * M_PI * rc * rc * s.prestretch;
+   s.sling = m_set.sling;
+   s.switchGapM = m_set.sling.switchGapMm * 1e-3;
+   BandCord::Geometry &g = p.geo;
+   const int np = std::min((int)m_bandPosts.size(), (int)BandCord::kMaxPosts);
+   double area = 0.0;
+   for (int i = 0; i < np; i++)
+      area += m_bandPosts[i].x * m_bandPosts[(i + 1) % np].y - m_bandPosts[(i + 1) % np].x * m_bandPosts[i].y;
+   g.nPosts = np;
+   for (int i = 0; i < np; i++)
+   {
+      const BandPost &bp = m_bandPosts[area < 0.0 ? np - 1 - i : i];
+      g.posts[i] = BandCord::Circle { BandCord::V2(bp.x * U, bp.y * U), bp.r * U };
+   }
+   // the posts behind the band (band_stops): "x,y,r" in VPX units, or a table object by name
+   {
+      const std::string &rest = m_set.bandStops;
+      size_t pos = 0;
+      while (pos < rest.size() && g.nStops < BandCord::kMaxStops)
+      {
+         size_t bar = rest.find('|', pos);
+         if (bar == std::string::npos)
+            bar = rest.size();
+         const std::string item = rest.substr(pos, bar - pos);
+         double a = 0, b = 0, c = 0;
+         if (sscanf(item.c_str(), " %lf , %lf , %lf", &a, &b, &c) == 3 && c > 0.0)
+            g.stops[g.nStops++] = BandCord::Circle { BandCord::V2(a * U, b * U), c * U + rc };
+         else if (!Trim(item).empty() && m_stopResolver)
+         {
+            std::string nm = Trim(item);
+            bool hasR = false;
+            double rIn = 0.0, x = 0, y = 0, r = 0;
+            const size_t comma = nm.find(',');
+            if (comma != std::string::npos)
+            {
+               hasR = sscanf(nm.c_str() + comma + 1, " %lf", &rIn) == 1;
+               nm = Trim(nm.substr(0, comma));
+            }
+            if (m_stopResolver(nm, hasR, rIn, x, y, r) && r > 0.0)
+               g.stops[g.nStops++] = BandCord::Circle { BandCord::V2(x * U, y * U), r * U + rc };
+         }
+         pos = bar + 1;
+      }
+   }
+   // the plate and its switches, as the sling's own setup measured them (SlingPlace)
+   const int n = (int)m_pts.size() - 1;
+   if (m_slingPlate != nullptr && m_plateGeomValid && m_slingSpan >= 0 && n >= 4)
+   {
+      const BandSpan &sp = m_bandSpans[m_slingSpan];
+      const Vertex3Ds &A = m_pts[((sp.first % n) + n) % n], &B = m_pts[((sp.last % n) + n) % n];
+      const BandCord::V2 a(A.x * U, A.y * U), bb(B.x * U, B.y * U);
+      g.hasPlate = true;
+      BandCord::PlateGeom &pg = g.plate;
+      pg.A = a;
+      pg.B = bb;
+      pg.n = BandCord::V2(m_slingNx, m_slingNy);
+      pg.originN = m_plateOriginN;
+      pg.a = m_plateA;
+      pg.h = m_plateH;
+      pg.rest = m_plateRest;
+      pg.f0 = m_plateF0;
+      pg.f1 = m_plateF1;
+   }
+   g.nSwitches = 0;
+   for (const BandSwitch &sw : m_switches)
+      if (sw.span >= 0 && sw.span < (int)m_bandSpans.size() && g.nSwitches < BandCord::kMaxSwitches && n >= 4)
+      {
+         const BandSpan &sp = m_bandSpans[sw.span];
+         const Vertex3Ds &A = m_pts[((sp.first % n) + n) % n], &B = m_pts[((sp.last % n) + n) % n];
+         BandCord::SwitchSpec &ss = g.sw[g.nSwitches++];
+         ss.P = BandCord::V2((A.x + (B.x - A.x) * sw.f) * U, (A.y + (B.y - A.y) * sw.f) * U);
+         ss.b = BandCord::V2(sw.bx, sw.by);
+         ss.coil = sw.coil;
+      }
+   p.Configure();
+   if (m_set.bandRingIn > 0.0)   // the stretch at rest from the ring, the tension from the rubber
+   {
+      const double L = p.Length(), Lring = M_PI * (m_set.bandRingIn * 25.4e-3 + 2.0 * rc);
+      s.prestretch = L / Lring - 1.0;
+      if (s.prestretch <= 0.0)
+      {
+         PLOGW << "Band " << m_name << ": a " << m_set.bandRingIn << " in ring is longer than the loop on its posts (" << L * 1e3 << " mm): no stretch";
+         s.prestretch = 0.001;
+      }
+      s.tensionN = s.eMpa * 1e6 * M_PI * rc * rc * s.prestretch;
+      p.Configure();
+   }
+   double zc = 0.0;
+   for (const Vertex3Ds &v : m_pts)
+      zc += v.z;
+   zc = m_pts.empty() ? 0.0 : zc / (double)m_pts.size();
+   p.frame.O = BandCord::V3(0.0, 0.0, zc * U);
+   s.playfieldWorldZ = 0.0;
+   m_cord = cb;
+   m_cordFired = 0;
+   PLOGI << "Band " << m_name << ": cord model, " << np << " posts, " << g.nStops << " stops, " << (g.hasPlate ? "plate, " : "") << g.nSwitches << " switches, cord "
+         << 2e3 * rc << " mm, E " << s.eMpa << " MPa, loop " << p.Length() * 1e3 << " mm, stretch " << s.prestretch * 100.0 << " %, tension " << s.tensionN << " N";
+}
+
+void HitRubber::CordBegin()
+{
+   BandCord::Part &p = m_cord->part;
+   if (!m_slingEnabled)
+      p.driver.Cancel();
+   if (p.geo.hasPlate)
+   {
+      if (m_slingEnabled && m_slingTriggerReq)
+         p.driver.Trigger();
+      m_slingTriggerReq = false;
+   }
+   if (m_slingEnabled)
+      p.CycleBegin();
+   else
+   {
+      const bool keep = false;
+      (void)keep;
+   }
+}
+
+void HitRubber::CordFinish(const float /*dtime*/)
+{
+   BandCord::Part &p = m_cord->part;
+   std::vector<std::pair<int, bool>> changes;
+   const int ns = std::min((int)m_switches.size(), p.geo.nSwitches);
+   bool anyClosed = false;
+   for (int i = 0; i < ns; i++)
+   {
+      BandSwitch &sw = m_switches[i];
+      sw.dispM = m_cord->attached ? p.SwitchPush(i) : 0.0;
+      const bool closed = p.SwitchIsClosed(i);
+      if (closed != sw.closed)
+         changes.emplace_back(i, closed);
+      sw.closed = closed;
+      anyClosed = anyClosed || (closed && sw.coil);
+   }
+   if (m_editable != nullptr)
+      for (const auto &c : changes)
+         static_cast<Rubber *>(m_editable)->FireVoidEventParm(c.second ? DISPID_RubberEvents_SwitchClosed : DISPID_RubberEvents_SwitchOpened, c.first);
+   if (m_slingPlate != nullptr && p.geo.hasPlate)
+   {
+      m_plate.st.phi = p.phi;
+      m_plate.st.omega = p.omega;
+      m_slingAnyClosed = anyClosed;
+      if (p.driver.fired != m_cordFired)
+      {
+         m_cordFired = p.driver.fired;
+         m_slingInfo.fireTimeMs = (int)g_pplayer->m_time_msec;
+         static_cast<Rubber *>(m_editable)->FireGroupEvent(DISPID_RubberEvents_SlingFire);
+      }
+      SlingFinish();
+   }
+   else if (!m_switches.empty())
+      SwitchesFinish();
+}
+
+void HitRubber::CordSolveFailed(const char *why)
+{
+   PLOGW << "Band " << m_name << ": " << why;
+   if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+      g_pplayer->m_liveUI->PushNotification("Band " + m_name + ": " + why, 5000);
+   m_cord->attached = false;
+   m_cord->slots.clear();
+   BandReleaseAll("solve failed");
+   m_bandCooldownUntilMs = (uint32_t)g_pplayer->m_time_msec + 20;
 }
 
 // ---- One cycle of the band, in phases ----

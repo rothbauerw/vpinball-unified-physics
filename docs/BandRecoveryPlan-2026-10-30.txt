@@ -1,0 +1,66 @@
+BAND RECOVERY PLAN (2026-10-30, proposed, not approved yet)
+==========================================================
+Goal: tables that play right again, and a finished cord band proved before it reaches a table.
+
+
+WHERE WE ARE
+------------
+Measured:
+- band_model defaults to 1 (contacthost.h) and no table ini sets it, so every band and sling on every table moved to the cord at once.
+- The last bench proof before that (proof 4, notes-group-band-proof4-2026-10-30.md) failed 54 of 341 one-ball runs and 34 of 66 multi-ball runs, with losses on. Failures: solver, far side, through. No energy failures inside the solve.
+- In play: 10 of 51 sling contacts end in a failed solve; 5 of those 10 then hit stock and speed up, gains up to 1469 mJ (GroupStepDesign 12.2).
+- The energy proof covers only steps inside the group. The engine has no whole-ball energy check (to-do 1.6, ModelStandards 2b: not built).
+- Nothing has been committed since 2026-10-27 (f2114ea17): 39 changed files, 20 new source and design files.
+Not known:
+- Whether the bad feel on all tables is the cord. Friction (0.9 -> 0.8) and damping (10-29) also changed on every table. Nobody has compared.
+
+Done on the cord: energy exact inside the solve; grip and twist; capstan; playfield under the cord; exact path solve; bench that saves its data.
+Not done: see stage 3. ModelStandards section 7 is not met: not on the shared loop or its guards, snapshot, matrix rows, stress-table cost within budget, past launch cases.
+
+
+STAGE 0: GET THE TABLES BACK
+----------------------------
+1. Checkpoint commit of the current state, local only (needs the user's word).
+2. Default band_model = 0. The cord runs only on a table whose ini says band_model = 1.
+3. User plays one table three ways: the 10-27 build (build-bgfx/Release/VPinballX_BGFX64_1026_0953.exe); today's build with the old band; today's build with the cord.
+   This decides whether the cord is the cause.
+Gate: a table the user is happy with. If the old band on today's build still feels wrong, the cause is outside the cord and stage 1 starts there.
+What breaks: the old band makes energy (to-do 1.3) and has its own stock trips: it is the known baseline, not a finished model. The old band has not been run since the host split; this step checks it. The 10-27 build also lacks later flipper and disc work, so it is not a pure band comparison. Cord-only keys (band_ring_in, sling_coil_delay_ms) do nothing on the old band.
+
+
+STAGE 1: SEE EVERY ENERGY GAIN
+------------------------------
+Build the whole-ball energy check in the engine: each cycle, per ball, motion + spin + height against gravity and the named drives. A rise raises a notification and a WARN naming the ball, the part and the path (rule 8).
+It sees stock hits, hand-overs and script moves, which the group's books cannot.
+Gate: it flags the five known launches on replay, and stays quiet on a resting and a rolling ball.
+What breaks: stored energy in a contact and a moving part's work must be counted or it false-alarms; flippers, bumpers, slings and discs each need their drive named. Cost measured.
+
+
+STAGE 2: ONE TEST SET, RUN ON EVERY BUILD
+-----------------------------------------
+Scripted in the engine, run by Sonnet, one report on disk. Rolling balls with real spin, 0.5 / 1 / 2 / 3 m/s, at: end post, between end post and span, mid span, stop post, sling at several cord heights, two balls, flipper next to a sling.
+Limits agreed with the user before the first run: energy never rises except by a named drive; zero solver failures; zero stock hits on a cord; rise limit; rebound targets (to-do 1.21); cost.
+The user gets no build until it passes. Play is the last check, not the test.
+
+
+STAGE 3: FINISH THE MODEL, ONE ITEM AT A TIME, AGAINST THE TEST SET
+-------------------------------------------------------------------
+a. Solver failures and the four routes to stock, together: a hard step recovers inside the contact system. Failure records say what stopped the solve.
+b. Cost go / no-go with the user, once a is done: engine cost not measured; bench sling 88 us per contact ms against a 30 us budget. Decide before polishing.
+c. Hand-over between the group and the shared loop; flippers and gates in the group (treated as still today).
+d. Sling lift (model fault: cord dragged to the playfield).
+e. Dead areas: between end post and span, around the stop post.
+f. Multi-ball, ball-pair state, false "through" notice, unexplained Rubber004 hit, drawn band following the cord.
+
+
+STAGE 4: DONE
+-------------
+ModelStandards section 7 checklist, stress table, user plays, band_model default back to 1 only then, commit on the user's word.
+
+
+WORKING RULES FOR THIS PLAN
+---------------------------
+- Read DevelopmentRules and ModelStandards at the start of every session.
+- Restore point before each stage: snapshot in backups/, plus a commit on the user's word. First snapshot: backups/2026-10-30-before-recovery (taken before stage 0).
+- A stage starts on the user's OK; every Sonnet run is approved.
+- Nothing off this list without the user's OK; new finds go on the to-do.

@@ -2,7 +2,7 @@
 //
 // A moving part of the contact system: the engine-facing interface of anything that has its own bodies and surfaces, is stepped inside the islands of the balls that touch it, and
 // raises its own events. Gates and spinners (HingePart::Part, contacthingepart.h) and the jet bumper (JetBumper::EnginePart, contactbumperpart.h) implement it; the contact system
-// (contactsystem.cpp) and the host (HitRubber, hitrubber.h) know only this interface. A new part (a kicker door, a drop target, a plunger) implements it and nothing else changes.
+// (contactsystem.cpp) and the host (ContactPartHost, contactparthost.h) know only this interface. The turntable disc (TurntableDisc::Part, contactdisc.h) implements it too. A new part (a kicker door, a drop target, a plunger) implements it and nothing else changes.
 //
 // What the engine does with a part, in the order of a physics cycle:
 //   SetGravity       the gravity the part feels (gravity minus the cabinet acceleration, so a nudge acts on it), once per cycle
@@ -18,12 +18,20 @@
 
 #include <cassert>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
 
 #include "physics/rubbercontact.h"
 #include "physics/contactsurface.h"
+
+// Scale on the impact rule of the contact step (omega * h <= 0.2 in the contact system, 0.1 in a part's BallStep): VPX_OMEGAH_SCALE, default 1. A diagnostic knob for the step-size study of 2026-10-27.
+inline double ContactOmegaHScale()
+{
+   static const double s = []() { const char *const e = getenv("VPX_OMEGAH_SCALE"); return e != nullptr && *e ? atof(e) : 1.0; }();
+   return s;
+}
 
 class ContactMovingPart
 {
@@ -32,9 +40,9 @@ public:
 
    struct Event
    {
-      enum Kind { Hit, SwitchClosed, SwitchOpened, LimitEOS, LimitBOS, Spin } kind;
-      int ball = -1;        // Hit: the ball's index as the owner numbers them
-      double value = 0.0;   // Hit: normal approach speed (m/s); Limit: angular speed (deg/s)
+      enum Kind { Hit, SwitchClosed, SwitchOpened, LimitEOS, LimitBOS, Spin, BandHit, SlingFire } kind;
+      int ball = -1;        // Hit, BandHit: the ball's index as the owner numbers them; a band's SwitchClosed / SwitchOpened: the blade's index
+      double value = 0.0;   // Hit: normal approach speed (m/s); Limit: angular speed (deg/s); BandHit: the cord's largest deflection under the ball (m); SlingFire: 1 = the script's trigger
    };
 
    // A saved copy of a part's dynamic state, for rewinding an island (docs/UnifiedContactDesign.txt section 11, point 2): plain bytes, no allocation. A part packs the values that change while it
@@ -82,8 +90,9 @@ public:
    // Save the dynamic state / put it back exactly. Restoring discards the events the part queued since (the replay makes them again) and rebuilds what is derived from the state.
    virtual void SaveState(State &out) const = 0;
    virtual void RestoreState(const State &in) = 0;
-   // The fastest any point of the part's surfaces can move within the next cycle of cycleS seconds (m/s): its present speed plus what its own drive and springs can add in a cycle. Balls are not
-   // counted (their contact is the contact). The engine adds it to the ball's closing speed when it decides to engage a ball and when it decides to let one go (UnifiedContactDesign.txt 11, point 1).
+   // The fastest any point of the part's surfaces can move ALONG ITS OWN NORMAL (toward a ball) within the next cycle of cycleS seconds (m/s): its present speed plus what its own drive and springs
+   // can add in a cycle. Balls are not counted (their contact is the contact). The engine adds it to the ball's closing speed when it decides to engage a ball and when it decides to let one go
+   // (UnifiedContactDesign.txt 11 point 1, 12.1 d). A part may answer its whole point speed (an upper bound); a disc turning about its own axis answers 0 (its surfaces slide along themselves).
    virtual double SurfaceSpeedBound(double cycleS) const = 0;
    // the part's state as a short text for the log (an engagement of a ball with a part that is moving is the case to look at)
    virtual std::string StateNote() const { return std::string(); }

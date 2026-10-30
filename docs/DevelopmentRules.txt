@@ -13,18 +13,23 @@ Set by the project owner. They apply to every change, by a person or an assistan
 
 2. NO HACKS
    A fix names the PHYSICAL LAW behind it. No speed cutoffs, forced stops, position snaps, clamps that hide a symptom, per-scenario constants or special cases per source (bat / band / pair / ...).
-   If a law already exists in the code, find out why it is not acting before adding anything. A safety net (a trip that hands a ball back) is allowed only as a net, never as the fix.
+   If a law already exists in the code, find out why it is not acting before adding anything. A safety net is allowed only as a net, never as the fix, and it recovers inside the contact system.
+   NOTHING IS EVER HANDED BACK TO STOCK IN A NEW MODEL (user, 2026-10-26, repeated 2026-10-30). Stock is only the development fallback for object types not yet converted.
 
 3. GENERAL FIXES, PROVED ON A MATRIX
-   Fix the general rule, grep for every other place with the same special case, and prove it on the scenario matrix (runs/2026-10-09-slow-contact: batch_matrix.ps1, matrix_compare.py) with numeric pass/fail
-   including the cost per cycle. A fix is done when the matrix passes, not the one scene.
+   Fix the general rule, grep for every other place with the same special case, and prove it on the test matrix (docs/TestMatrixDesign.txt: fixed limits per run, cases per model, stress table)
+   with numeric pass/fail including the cost per cycle. A fix is done when the matrix passes, not the one scene. The old scenario matrix (runs/2026-10-09-slow-contact: batch_matrix.ps1,
+   matrix_compare.py) was judged a fail by the user on 2026-10-27 and is not used; until the new one is built, say which checks were run and that the matrix was not.
 
 4. RUNS
    Group several changes before a full regression; the user decides when a matrix is run. Timing and event-timing tests run focused (run.ps1 -Focused) and the user is told first so the machine is idle.
    Always call run.ps1 with explicit full paths and check the ini that was loaded.
 
-5. PERFORMANCE
-   Every model is tuned for speed: measure the cost per cycle (VPX_CONTACT_TIMING), budget 1 ms per cycle, expose knobs. Judge by the worst cycle, not the average.
+5. PERFORMANCE (frame budget updated 2026-10-27, user-approved; detail in docs/ModelStandards.txt section 4)
+   Every model is tuned for speed: measure the cost per cycle (VPX_CONTACT_TIMING), expose knobs.
+   Physics, the table script and the frame preparation share one thread; at 144 Hz a frame (6.9 ms) holds about 7 physics cycles. Budget (proposed, to be
+   confirmed on the stress table): physics over any 7 consecutive cycles <= 3 ms, no single cycle > 1.5 ms; per active object <= 30 us per 1 ms cycle with one
+   ball. Judge by the worst 7-cycle window and the worst single cycle, never the average.
 
 6. DOCUMENTATION AND HISTORY
    Every feature, key, script call and environment variable goes into docs/NewPhysicsReference.txt with a dated change-log entry, in the same change. Names follow the physical part (flipper, sling, rubber), never a table.

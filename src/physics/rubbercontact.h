@@ -64,7 +64,7 @@ namespace RubberContact
       double alphaSPerM = 0.05;      // normal damping; rebound ratio ~ 1 - alpha*v
       double gammaKK = 0.0;          // > 0: viscoelastic (Kuwabara-Kono) normal damping instead of alpha: Fd = gamma a v_n (a = contact radius), N s / m^2. The rebound ratio then falls only as v^(1/5), close to a constant restitution; see CalibrateKK
       double betaLayer = 0.33;       // thin-layer stiffening coefficient (approximation, unchecked)
-      double mu = 0.9;               // rubber / steel friction
+      double mu = 0.8;               // rubber / steel friction (black / white rubber; user, 2026-10-30)
       double shearScale = 1.0;       // multiplier on the shear stiffness
       double shearZeta = 0.2;        // shear damping ratio
       bool twist = true;             // drilling friction on/off
@@ -875,6 +875,7 @@ namespace RubberContact
       std::vector<double> T;       // leg tensions of the last step, N (Count() + 1 legs)
       std::vector<V3> uBuf;        // scratch for Step: leg directions and lengths (kept between calls, so a step does not allocate)
       std::vector<double> lBuf;
+      std::vector<double> mBuf;    // scratch for Add / Remove: the masses before the re-lumping
 
       void Init(const V3 &a, const V3 &b, double tubeRadius, const BandParams &bp)
       {
@@ -1010,6 +1011,9 @@ namespace RubberContact
          for (size_t k = 0; k < nodes.size() && id < 0; k++)
             if (!nodes[k].alive)
                id = (int)k;
+         mBuf.resize(nodes.size() + 1);
+         for (size_t k = 0; k < nodes.size(); k++)
+            mBuf[k] = nodes[k].m;
          if (id < 0)
          {
             nodes.push_back(n);
@@ -1019,6 +1023,18 @@ namespace RubberContact
             nodes[id] = n;
          order.insert(order.begin() + pos, id);
          UpdateMasses();
+         // Re-lumping the cord's mass must not make energy: the nodes that gave mass keep their speed, and the new node moves with the momentum of the mass it took
+         // (never faster than that mass did). Measured 2026-10-29 (runs/2026-10-29-band): re-lumping at the old speeds made energy at merges.
+         double S = 0.0;
+         V3 p;
+         for (const int k : order)
+            if (k != id && nodes[k].m < mBuf[k])
+            {
+               S += mBuf[k] - nodes[k].m;
+               p = p + nodes[k].vp * (mBuf[k] - nodes[k].m);
+            }
+         if (S > 0.0)
+            nodes[id].vp = p / std::max(nodes[id].m, S);
          return id;
       }
 
@@ -1048,6 +1064,11 @@ namespace RubberContact
       {
          if (!nodes[id].alive || Count() <= 1)
             return;
+         mBuf.resize(nodes.size());
+         for (size_t k = 0; k < nodes.size(); k++)
+            mBuf[k] = nodes[k].m;
+         const double mr = nodes[id].m;
+         const V3 vr = nodes[id].vp;
          for (size_t k = 0; k < order.size(); k++)
             if (order[k] == id)
             {
@@ -1057,6 +1078,20 @@ namespace RubberContact
          nodes[id].alive = false;
          nodes[id].vp = V3();
          UpdateMasses();
+         // Re-lumping without making energy: the neighbours take the merged node's mass as a plastic collision (its momentum shared by the mass each takes, never
+         // more than it had), so they slow down to keep momentum; a node that lost mass keeps its speed. (They used to keep their speed at the larger mass: measured
+         // 2026-10-29, runs/2026-10-29-band, +19.7 mJ from merges in one 30 deg hit with no losses.)
+         double S = 0.0;
+         for (const int k : order)
+            if (nodes[k].m > mBuf[k])
+               S += nodes[k].m - mBuf[k];
+         if (S > 0.0)
+            for (const int k : order)
+               if (nodes[k].m > mBuf[k])
+               {
+                  const double dm = nodes[k].m - mBuf[k];
+                  nodes[k].vp = (nodes[k].vp * mBuf[k] + vr * (dm / std::max(S, mr) * mr)) / nodes[k].m;
+               }
       }
 
       // Idle nodes (loaded[id] == 0, not within guardR of a guard point) that lie on the straight line between their neighbours are merged away, one per call.
@@ -1119,6 +1154,13 @@ namespace RubberContact
       }
 
       void StepOnce(const std::vector<V3> &fContact, double dt, double zetaOverride = -1.0)
+      {
+         StepVelocities(fContact, dt, zetaOverride);
+         StepPositions(dt);
+      }
+
+      // StepOnce in its two halves, so a constraint between chains can act on the new velocities before the nodes move (BandPart: two spans of a loop meeting)
+      void StepVelocities(const std::vector<V3> &fContact, double dt, double zetaOverride = -1.0)
       {
          const int M = Count();
          if (M == 0)
@@ -1206,6 +1248,10 @@ namespace RubberContact
                   }
                }
          }
+      }
+      void StepPositions(double dt)
+      {
+         const int M = Count();
          for (int i = 0; i < M; i++)
          {
             Node &n = nodes[order[i]];

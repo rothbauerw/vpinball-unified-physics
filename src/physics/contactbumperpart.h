@@ -142,8 +142,11 @@ namespace JetBumper
          w = V3();
       }
 
-      // The step a ball's contact needs (design 7): the reduced mass of the ball and the surface's effective mass (the ring assembly 105 g, the skirt 7 g, the body fixed), the Hertz
-      // stiffness at the deepest compression the closing speed can reach, ending at the arrival; the ring may be moving to meet the ball (a bound on its speed and acceleration).
+      // The step a ball's contact needs (design 7), by the same rule as every other surface (contactsystem.cpp NextStep): the contact stiffness at the compression it reaches, step = factor / omega,
+      // with the reduced mass of the ball and the surface's effective mass (the ring assembly 105 g, the skirt 7 g, the body fixed). A contact that is slow (ball and surface together under
+      // 0.02 m/s) and not deeper than a few times the compression the ball's weight gives is resting: factor 0.8, the compression of the weight. Anything else is an impact: factor 0.2 at the
+      // compression the closing speed reaches. The closing speed is the ball's, plus the surface's present speed, plus what the surface's own drive can add DURING the step (its acceleration
+      // bound times the step itself, found by iteration), not over the whole cycle. Not touching yet: the step ends at the arrival.
       double BallStep(const V3 &c, const V3 &v, double hMax) const override
       {
          const V3 rel = c - origin;
@@ -154,20 +157,33 @@ namespace JetBumper
          const double mEffSurf = nr.surf == 1 ? model.p.ringMass : nr.surf == 0 ? model.p.skirtMass : 1e3;
          const double mu = 1.0 / (1.0 / ball.m + 1.0 / mEffSurf);
          const double eStar = nr.surf == 1 ? kSteelEstar : model.p.plasticEMpa * 1e6 / (1.0 - model.p.plasticNu * model.p.plasticNu);
-         const double k = (4.0 / 3.0) * eStar * std::sqrt(nr.reff > 0.0 ? nr.reff : ball.R);
-         // closing speed: the ball's, plus the surface's own bound (the ring may already be on its way down at up to ~2 m/s: the coil stroke gives 1 - 1.75 m/s)
-         const double vc = std::max(0.0, -v.Dot(nr.n)) + (nr.surf == 2 ? 0.0 : SurfaceSpeedBound(hMax));
+         const double reffC = nr.reff > 0.0 ? nr.reff : ball.R;
+         const double k = (4.0 / 3.0) * eStar * std::sqrt(reffC);
+         const double vnBall = std::max(0.0, -v.Dot(nr.n));
+         const double vSurf0 = nr.surf == 2 ? 0.0 : SurfaceSpeedBound(0.0);   // the surface's present speed
+         const double aSurf = nr.surf == 2 ? 0.0 : (SurfaceSpeedBound(std::max(hMax, 1e-9)) - vSurf0) / std::max(hMax, 1e-9);   // what its drive can add per second
          const double ac = 9.81 + (nr.surf == 1 ? RingAccelBound() : nr.surf == 0 ? SkirtAccelBound() : 0.0);
          const double delta = -nr.g;
+         constexpr double kRestSpeed = 0.02, kImpactOmegaH = 0.2, kRestOmegaH = 0.8;
+         const double impactFactor = kImpactOmegaH * ContactOmegaHScale();
+         const double dRest = std::pow(ball.m * 9.81 / k, 2.0 / 3.0);   // k delta^1.5 = the ball's weight
+         const bool resting = vnBall + vSurf0 <= kRestSpeed && delta <= 3.0 * dRest;
          auto hContact = [&](double vImpact) {
             const double vi = std::max(vImpact, 0.0);
-            const double dMax = std::max(delta, 0.0) + std::pow(1.25 * mu * vi * vi / k, 0.4);
+            const double dMax = resting ? std::max(delta, dRest) : std::max(delta, 0.0) + std::pow(1.25 * mu * vi * vi / k, 0.4);
             const double kt = 1.5 * k * std::sqrt(std::max(dMax, 1e-12));
-            return 0.1 / std::sqrt(kt / mu);
+            return (resting ? kRestOmegaH : impactFactor) / std::sqrt(kt / mu);
          };
+         const double vc = vnBall + vSurf0;
          double h = hMax;
          if (delta > 0.0)
-            h = std::min(h, hContact(vc));
+         {
+            if (resting)
+               h = std::min(h, hContact(0.0));
+            else
+               for (int it = 0; it < 3; it++)   // the surface's speed gain during the step depends on the step
+                  h = std::min(hMax, hContact(vc + aSurf * h));
+         }
          else
          {
             const double tArr = (-vc + std::sqrt(vc * vc + 4.0 * ac * -delta)) / (2.0 * ac);

@@ -153,6 +153,8 @@ set(VPX_SOURCES
    src/parts/flipper.h
    src/parts/gate.cpp
    src/parts/gate.h
+   src/parts/hingepartadapter.cpp
+   src/parts/hingepartadapter.h
    src/parts/hittarget.cpp
    src/parts/hittarget.h
    src/parts/kicker.cpp
@@ -218,8 +220,17 @@ set(VPX_SOURCES
    src/physics/turntable.h
    src/physics/contactsystem.cpp
    src/physics/contactsystem.h
+   src/physics/testdriver.cpp
+   src/physics/testdriver.h
    src/physics/contactbat.cpp
    src/physics/contactbat.h
+   src/physics/contactbatini.cpp
+   src/physics/contactbatpart.h
+   src/physics/contacthost.cpp
+   src/physics/contacthost.h
+   src/physics/contactparthost.cpp
+   src/physics/contactparthost.h
+   src/physics/contactdisc.h
    src/physics/hitrubber.cpp
    src/physics/hitrubber.h
    src/physics/coilmodel.h

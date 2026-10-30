@@ -12,13 +12,13 @@ namespace ContactProf
    {
       StepBalls, GatherBalls, Regather, RefreshCycle, ApproachSpeed, GatherFree, FindIslands, SetupIsland, Substeps,
       SurfaceForces, SurfProbe, SurfEval, SurfReact, BatForces, BandForces, PairForces, Integrate,
-      WriteBack, ReleaseTest, Finish, EngageNear, EngageImpl, ProbeBody, NextStep, Sources, Count
+      WriteBack, ReleaseTest, Finish, EngageNear, EngageImpl, ProbeBody, NextStep, Sources, PartStep, PartWorld, PartSwitch, Count
    };
    inline const char *Name(int i)
    {
       static const char *const n[Count] = { "StepBalls", "GatherBalls", "  Regather", "  RefreshCycle", "  ApproachSpeed", "GatherFree", "FindIslands", "SetupIsland", "Substeps",
                                             "  SurfaceForces", "    Probe", "    EvaluateTube", "    ApplyReaction", "  BatForces", "  BandForces", "  PairForces", "  Integrate",
-                                            "WriteBack", "  ReleaseTest", "Finish", "EngageNear", "EngageImpl", "  ProbeBody", "  NextStep", "    Sources (gravity, magnet pull, eddy)" };
+                                            "WriteBack", "  ReleaseTest", "Finish", "EngageNear", "EngageImpl", "  ProbeBody", "  NextStep", "    Sources (gravity, magnet pull, eddy)", "  PartStep (the moving parts' own stepping inside the island substeps)", "    PartWorld (a gate / spinner's geometry update, once per island substep)", "    PartSwitch (a gate / spinner's switch update, once per own substep)" };
       return n[i];
    }
    inline bool On()
@@ -51,6 +51,8 @@ namespace ContactProf
    };
    void Dump(const char *why);               // contactsystem.cpp
    void Note(const std::string &what);      // count an event by name
+   bool ProbeTime(const void *surface, uint64_t ticks);   // add the time of one probe of a surface; true the first time a surface is seen
+   void ProbeName(const void *surface, const std::string &name);
    void Cycle();                             // one physics cycle began
    void Split(int cause, bool staticTime, const char *what);   // a cycle was cut short at a hit: the type of the object that ended the sub-step (100 = a flipper stop, 200 = the static-time clamp)
 }

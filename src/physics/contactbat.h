@@ -27,7 +27,7 @@ public:
    std::filesystem::path iniPath;
    std::filesystem::file_time_type iniTime{};
    int iniCheckCounter = 0;
-   // (Re)builds the settings from the ini file (the table's vpx_physics.ini; none = the defaults); the state is left untouched.
+   // (Re)builds the settings from the ini file (the table's vpx_physics.ini; none = the defaults); the state is left untouched. In contactbatini.cpp (VPX side).
    void LoadSettings(const std::string &who, const std::filesystem::path &tableFile, bool force);
 
    // ---- state ----
@@ -43,6 +43,7 @@ public:
    double iLow = 0.0;             // hold coil current (fraction of steady state)
    double lastAlpha = 0.0;        // last flipper angular acceleration, rad/s^2
    bool plungerHitStop = false;   // the plunger reached the coil stopper during the last Step
+   double coilWorkJ = 0.0;        // work the coil has done on the plunger since this was last read (energy books, ModelStandards 2h); a report, not a force
    double hitL = 0.0;             // angular momentum at the last plunger hit on the coil stop, kg m^2/s
    // Dormancy: a bat at rest (coil unchanged, nothing has touched it, the state did not move over a whole physics step) would only repeat the same substeps every
    // millisecond. idle is set after such a step; the substeps are skipped until any part of the state differs from the snapshot taken then.

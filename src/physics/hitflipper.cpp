@@ -403,6 +403,8 @@ void FlipperMoverObject::SetMass(const float m)
 
 void FlipperMoverObject::PreUpdateDisplacements(const float dtime)
 {
+   if (m_part != nullptr)
+      return;   // (a bat that is a moving part is advanced by its host)
    if (m_rbBall != nullptr && FlipperModelEnabled() && !ContactSystem::Unified())   // (unified: the contact system steps the bat with its ball)
       RubberAdvance(dtime);
 }
@@ -411,6 +413,8 @@ void FlipperMoverObject::PreUpdateDisplacements(const float dtime)
 
 void FlipperMoverObject::UpdateDisplacements(const float dtime)
 {
+   if (m_part != nullptr)
+      return;
    if (FlipperModelEnabled())
    {
       UpdateDisplacementsFlipper(dtime);
@@ -475,6 +479,8 @@ void FlipperMoverObject::UpdateDisplacements(const float dtime)
 
 void FlipperMoverObject::UpdateVelocities()
 {
+   if (m_part != nullptr)
+      return;
    if (FlipperModelEnabled())
    {
       // flipper model integrates its own forces inside UpdateDisplacements; here only keep the
@@ -579,6 +585,8 @@ void FlipperMoverObject::ApplyImpulse(const Vertex3Ds& rotI)
 void FlipperMoverObject::SetSolenoidState(const bool s) // true = button pressed, false = released
 {
    m_solState = s;
+   if (m_part != nullptr)
+      SetPartSolenoid(s);   // (the bat's coil input, taken at its next step)
 #ifdef DEBUG_FLIPPERS
    if (m_angleCur == m_angleStart)
       m_startTime = m_physics->GetTimeMsec();
@@ -662,6 +670,7 @@ float FlipperMoverObject::GetHitTime() const
 float HitFlipper::HitTest(const BallS& ball, const float dtime, CollisionEvent& coll) const
 {
    if (!m_flipperMover.m_enabled) return -1;
+   if (m_flipperMover.m_part != nullptr) return -1; // the bat is a moving part of the contact system: its host finds the balls
    if (m_flipperMover.RubberIsEngaged(ball)) return -1; // rubber model owns this ball until it is released
 
    const bool lastface = m_flipperMover.m_lastHitFace;
@@ -1018,10 +1027,15 @@ float HitFlipper::HitTestFlipperFace(const BallS& ball, const float dtime, Colli
 
 void HitFlipper::FireHitEventsAndRumble(const float bnv, const CollisionEvent& coll, const Vertex3Ds& normal, const Vertex3Ds& vB)
 {
+   FireHitEventsAndRumble(bnv, coll.m_hitmoment_bit, -normal.Dot(vB));
+}
+
+void HitFlipper::FireHitEventsAndRumble(const float bnv, const bool hitMomentBit, const float arrival)
+{
    if ((bnv < -0.25f) && (m_physics->GetTimeMsec() - m_last_hittime) > 250) // limit rate to 250 milliseconds per event
    {
       //!! unused const float distance = coll.m_hitmoment;                // moment .... and the flipper response
-      const float flipperHit = /*(distance == 0.0f)*/ coll.m_hitmoment_bit ? -1.0f : -bnv; // move event processing to end of collision handler...
+      const float flipperHit = /*(distance == 0.0f)*/ hitMomentBit ? -1.0f : -bnv; // move event processing to end of collision handler...
       if (flipperHit < 0.f)
          m_flipperMover.m_pflipper->FireGroupEvent(DISPID_HitEvents_Hit); // simple hit event
       else
@@ -1046,7 +1060,6 @@ void HitFlipper::FireHitEventsAndRumble(const float bnv, const CollisionEvent& c
    // is felt through these), later ones only when the sum exceeds what was last played by a unit, up to the
    // saturation of the impact scale, so a hit follows to its full strength through the mixer while a resting
    // ball stays silent.
-   const float arrival = -normal.Dot(vB); // the ball's own speed towards the face, positive when approaching
    if (bnv < -0.25f && arrival > 0.25f)
    {
       const uint32_t now = m_physics->GetTimeMsec();
@@ -1124,10 +1137,8 @@ void HitFlipper::Collide(const CollisionEvent& coll)
    {
       // rubber contact model: no impulse here. The ball is handed to the rubber force model, which is stepped together with
       // the bat (see UpdateDisplacementsFlipper, or ContactSystem when unified: the bat's rubber joins the ball's contact); events and haptics fire once, from this first-touch speed.
-      bool taken = true;
-      if (unified)
-         taken = ContactSystem::EngageBat(&m_flipperMover, pball);
-      else
+      bool taken = !unified;   // (unified: a bat with rubber_contact on is a moving part of the contact system, whose collider never gets here)
+      if (taken)
          m_flipperMover.RubberEngage(pball);
       if (taken)
       {
@@ -1261,6 +1272,8 @@ void HitFlipper::Collide(const CollisionEvent& coll)
 
 void HitFlipper::Contact(CollisionEvent& coll, const float dtime)
 {
+   if (m_flipperMover.m_part != nullptr)
+      return;
    HitBall* const pball = coll.m_ball;
 
    const bool unified = ContactSystem::Unified();
@@ -1269,7 +1282,7 @@ void HitFlipper::Contact(CollisionEvent& coll, const float dtime)
    if (m_flipperMover.RubberWants(pball))
    {
       // resting contact: the rubber force model carries the ball from here on (no events, as before)
-      if (unified ? ContactSystem::EngageBat(&m_flipperMover, pball) : (m_flipperMover.RubberEngage(pball), true))
+      if (!unified && (m_flipperMover.RubberEngage(pball), true))   // (unified: a bat with rubber_contact on is a moving part of the contact system)
          return;
    }
    if (unified)

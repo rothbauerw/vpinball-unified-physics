@@ -15,6 +15,7 @@ struct SlingSettings
 {
    FlipperSettings mech;        // plate, link, coil, spring and stops; the ini keys sling_<flipper key> (sling_r_crank_mm, sling_stop_deg, sling_r_power, ...)
    double pulseMs = 100.0;     // the driver's pulse once the switch has closed, ms (a guess: to be measured)
+   double coilDelayMs = 0.0;   // from the switch closing to the coil's pulse, ms: each sling its own (user, 2026-10-30; two videos: about 20 and 33 - 39 ms to the plate seen moving)
    double minClosedMs = 2.0;   // a switch counts as closed for at least this long, ms (a guess)
    double switchGapMm = 1.5875; // band displacement at a switch that closes it, mm (1/16 in)
    double plateContactZeta = 0.1; // damping ratio of the plate face pressing on the band (a guess: steel on rubber)
@@ -58,16 +59,22 @@ class SlingDriver
 {
 public:
    void SetPulse(double pulseS) { pulse = pulseS; }
+   void SetDelay(double delayS) { delay = delayS; }
    // once per cycle, with whether any switch is closed
    void Update(bool switchClosed)
    {
-      if (remaining <= 0.0 && !switchClosed)
+      if (remaining <= 0.0 && pending <= 0.0 && !switchClosed)
          armed = true;
-      if (armed && switchClosed && remaining <= 0.0)
+      if (armed && switchClosed && remaining <= 0.0 && pending <= 0.0)
       {
-         remaining = pulse;
          armed = false;
-         fired++;
+         if (delay > 0.0)   // on its way: it fires whatever the switch does in the meantime
+            pending = delay;
+         else
+         {
+            remaining = pulse;
+            fired++;
+         }
       }
    }
    // script trigger: a pulse starts now unless one is running (the switches do not matter)
@@ -75,6 +82,7 @@ public:
    {
       if (remaining > 0.0)
          return false;
+      pending = 0.0;
       remaining = pulse;
       armed = false;
       fired++;
@@ -83,6 +91,7 @@ public:
    void Cancel()   // disabled: a running pulse stops, and nothing fires until the switches have been open again
    {
       remaining = 0.0;
+      pending = 0.0;
       armed = false;
    }
    bool Coil() const { return remaining > 0.0; }
@@ -90,10 +99,22 @@ public:
    {
       if (remaining > 0.0)
          remaining = remaining > h ? remaining - h : 0.0;
+      if (pending > 0.0)
+      {
+         pending -= h;
+         if (pending <= 0.0)
+         {
+            pending = 0.0;
+            remaining = pulse;
+            fired++;
+         }
+      }
    }
    double remaining = 0.0;   // s of pulse left
+   double pending = 0.0;     // s until a pulse on its way starts
    int fired = 0;            // pulses started
+   bool armed = true;        // the switches have been open since the last pulse (state: saved with a band part's snapshot)
 private:
    double pulse = 0.03;
-   bool armed = true;
+   double delay = 0.0;
 };

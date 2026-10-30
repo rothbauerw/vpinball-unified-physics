@@ -26,6 +26,7 @@
 #include "physics/contacthingebody.h"
 #include "physics/contactsurface.h"
 #include "physics/contactmovingpart.h"
+#include "physics/contactprof.h"
 
 namespace HingePart
 {
@@ -115,8 +116,11 @@ namespace HingePart
          double tau;
          V3 F;
          body.TakeExternal(tau, F);
-         body.AdvanceWith(h, [this] { UpdateSwitches(); }, tau, F);
-         UpdateWorld();
+         body.AdvanceWith(h, [this] { CPROF(PartSwitch); UpdateSwitches(); }, tau, F);
+         {
+            CPROF(PartWorld);
+            UpdateWorld();
+         }
          steppedThisCycle = true;
          steppedS += h;
       }
@@ -306,9 +310,10 @@ namespace HingePart
       // the step the part needs for itself (the island takes the smaller of this and the ball contacts')
       double ChooseStep(double hMax) const { return body.ChooseStep(hMax); }
 
-      // The step a ball's contact with the part needs (design 6.3): the reduced mass of the ball and the part's effective mass at the contact, the series stiffness
-      // of contact and bend. Before the touch the step ends at the arrival (closing speed plus a bound on the closing acceleration: gravity on the ball and the
-      // part's own angular acceleration).
+      // The step a ball's contact with the part needs (design 6.3), by the same rule as every other surface (contactsystem.cpp NextStep): the reduced mass of the ball and the part's effective mass
+      // at the contact, the series stiffness of contact and bend; resting (closing speed under 0.02 m/s, compression under 3 x the ball's weight compression): omega * h <= 0.8, impact: 0.2 at the
+      // compression the closing speed reaches. Before the touch the step ends at the arrival (closing speed plus a bound on the closing acceleration: gravity on the ball and the part's own
+      // angular acceleration).
       double BallStep(const V3 &c, const V3 &v, double hMax) const override
       {
          if ((c - body.A).Length() > Reach() + ball.R + std::max(v.Length(), 0.1) * hMax)
@@ -326,13 +331,16 @@ namespace HingePart
          const double ac = 9.81 + std::abs(lever) * (body.mp.m * 9.81 * body.PendulumArm() / body.mp.I) + body.omega * body.omega * (pc - body.A).Length();
          const double k = (4.0 / 3.0) * HingeBody::kSteelEstar * std::sqrt(pr.reff > 0.0 ? pr.reff : ball.R);
          const double kb = BendStiffness(pc, n);
+         constexpr double kRestSpeed = 0.02, kImpactOmegaH = 0.2, kRestOmegaH = 0.8;
+         const double dRest = std::pow(ball.m * 9.81 / k, 2.0 / 3.0);   // k delta^1.5 = the ball's weight
+         const bool resting = std::abs(vc) <= kRestSpeed && pr.delta <= 3.0 * dRest;
          auto hContact = [&](double vImpact) {
-            // the contact's stiffness at the deepest compression a Hertz-only impact would reach (an upper bound), in series with the bend
+            // the contact's stiffness at the compression it rests at, or at the deepest a Hertz-only impact would reach (an upper bound), in series with the bend
             const double vi = std::max(vImpact, 0.0);
-            const double dMax = std::max(pr.delta, 0.0) + std::pow(1.25 * mu * vi * vi / k, 0.4);
+            const double dMax = resting ? std::max(pr.delta, dRest) : std::max(pr.delta, 0.0) + std::pow(1.25 * mu * vi * vi / k, 0.4);
             const double kt = 1.5 * k * std::sqrt(std::max(dMax, 1e-12));
             const double ks = std::isfinite(kb) ? 1.0 / (1.0 / kt + 1.0 / kb) : kt;
-            return 0.1 / std::sqrt(ks / mu);
+            return (resting ? kRestOmegaH : kImpactOmegaH * ContactOmegaHScale()) / std::sqrt(ks / mu);
          };
          double h = hMax;
          if (pr.delta > 0.0)

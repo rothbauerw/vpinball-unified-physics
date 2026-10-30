@@ -166,3 +166,183 @@ time-of-impact bisect and the island replay. (6) no-past seat and the reports. (
 two bumpers, Collidable toggled with a ball inside, a ball teleported into a gate, two balls on one gate or spinner.
 Step 5 (replay) check, 2026-10-26: Bumper1 forced-overlap scenario (runs/2026-10-09-slow-contact/bump_late1.vbs, 9 shots, VPX_PREVENT=0): 4 replays, 590-750 us each (unfocused run, so a rough cost), ball engaged at overlap 0. First run gave 24.8 kN / 2.16 m/s: the idle ring was not advanced to the engagement time (see change log); fixed, then no force warning and 0.60-0.96 m/s. NOT checked: two balls on one bumper, ball between two bumpers, Collidable toggled with a ball inside, gates/spinners, focused timing, snapshot self-test after the fix.
 Step 6 (no-past seat and reports) DONE 2026-10-27: EngageImpl 'no past' mode (CheckOverlaps balls with no clean start, and 'near' engagements that find the ball inside a moving part): minimum translation, 8 passes, report WARN + notification (point 5d). Check: Bumper1 9 shots (runs/2026-10-09-slow-contact/bump_nopast.vbs): all seated, ball speeds 0.14-0.75 m/s (before 4-11.6 m/s); gs8 events identical, self-test 0 differences. Open: a ball in a wedge between two faces keeps 9-42 um after 8 passes (a force of about 3-4 kN on Bumper1 while it rolls out); a ball inside a STATIC surface at a 'near' engagement still uses the velocity seat; ball control dragging a ball into a part; ball past a thin sheet.
+
+7. ENGAGED BALLS ON MOVING PARTS (agreed 2026-10-27, not built). Why: a ball already touching a bumper, gate or spinner island is outside points 1-6: the island takes the uniform path (Substeps(), IslandStatic false), steps are
+   planned once per cycle from BallStep, nothing is re-checked inside the cycle, and RwLate ignores contacts that were touching at the start of a substep. Measured: Bumper2 launch 11.4 m/s (5.2 J ball kinetic energy,
+   80 g), Bumper4 3.66 m/s (0.54 J); ESTIMATED upper bound of the AE-23-800 coil work over the 10 mm stroke 0.18 J (28 V, 3.769 ohm, 15.77/5.26 mH, bobbin 35.3 mm, x0 0.3, full current from t=0): the integration created the
+   energy, a real pinch could not.
+   a) Same stepping for every island: bumper, gate, spinner islands use the arrival-stepping loop; the parts step inside it every substep; part state is saved and restored with the ball snapshot (SaveState exists).
+   b) Step size from the RELATIVE velocity: ball velocity minus the part's actual velocity at the contact point, plus both acceleration bounds; a ball held by several contacts uses their stiffnesses summed; the part's mass
+      enters the reduced mass.
+   c) Every contact is checked every substep, not only first contact: depth beyond the impact depth of the relative closing speed triggers a rewind with a finer step (touching contacts included).
+   d) If the depth is still too large at the minimum step, or at the rewind cap (16), the overlap is real: the force law carries it, a notification reports it, no velocity is edited.
+   e) Energy detector (rule 8): per cycle a ball's energy gain must not exceed the work done on it by the part's drive plus its own starting energy; a violation = WARN + notification. Also the pass/fail of the scenario matrix.
+   Before code: replay the recorded launch cycle with finer steps to confirm step size is the cause (ask the user first). Read the friction path (pinch / squirt-out) - not read yet.
+   What it would break / leaves open (rule 7): cost (more substeps for a ball on a part, not measured, matrix includes timing); bats, bands, discs stay excluded (no SaveState, skip warning); friction and squirt-out untested;
+   part event order inside a replay to define; several balls on one part untested; a part faster than its stated bound is only reported; the energy check is only as good as the coil model.
+
+12. FLIPPERS, BANDS AND THE TURNTABLE DISC ON THE SHARED LOOP   (to-do 1.3; designed with the user piece by piece from 2026-10-28; nothing built)
+--------------------------------------------------------------------------------------------------------------------------------------------
+Why. contactsystem.cpp IslandRewindable() sends every island holding a bat, a band or a turntable-disc surface to the fixed-step path (Substeps(): the ini substep_us, 5 us,
+for the whole 1 ms cycle, no arrival steps, no rewind, no depth check), even when the ball only has the disc within reach and touches nothing.
+MEASURED (stress table, run_cost6_p1d: focused BGFX, 6 balls, phase 1, 20,000 cycles, cycles.csv): 1,160 cycles had their slowest island on that path, median 201
+substeps and 176 us; by what that island touched: a flipper about 740, a band about 140, the playfield only or nothing (a ball beside the disc or near a bat) about 80.
+A one-ball island touching only the playfield on the arrival path: median 19 substeps, 9 us. The ball beside the disc is the slowest island of the worst 7-cycle
+window (7089 us from t=13840 ms, limit 3000).
+Goal: each of the three becomes a ContactMovingPart (ModelStandards 2a) and its islands use SubstepsArrival with every shared guard (ModelStandards 2b); the bat,
+band and disc special cases leave contactsystem.cpp. Pieces: 12.1 disc, 12.2 flipper bats, 12.3 bands and slings, 12.4 proof.
+
+12.1 Turntable disc   (approved by the user 2026-10-28; BUILT 2026-10-28, checks in NewPhysicsReference.txt change log 2026-10-28 and below)
+   a. What it is. The disc becomes a moving part like a gate (a host HitRubber with m_part; maths in a pure-SI header, so it joins the offline bench). The contact law
+      stays ContactCore with the disc's surface velocity w x r, called through the part's ContactItem; the reaction is kept by the part.
+   b. Law: Newton's third law at every substep. Inside the island's substeps (StepInIsland) the disc turns with the summed torque of its balls (friction, twist,
+      rolling resistance about the axis), the motor torque and the bearing drag. The motor law is today's (linear torque-speed, Turntables::Step), solved exactly over
+      each substep (the same exponential over h), so the result does not depend on the substep count. Today the disc holds its speed for the 1 ms and gets the balls'
+      angular impulse at the end of the cycle (HitRubber::ApplyReaction -> Turntables::AddImpulse).
+   c. Energy. Only the motor adds energy (its torque times the disc speed); the bearing drag and the contact remove it. Today's hold-then-push can create up to
+      J^2 / 2I per cycle (J = the balls' angular impulse on the disc in the cycle): about 2.7 mJ for a ball landing at 1 m/s on the rim of the stress-table disc
+      (800 g default, 64 mm, I = 1.64e-3 kg m^2) and sliding (CALCULATED, not measured). Stepping the reaction every substep removes that term.
+   d. Closing speed. ContactMovingPart::SurfaceSpeedBound is defined as the fastest any point of the part's surfaces can move ALONG ITS OWN NORMAL (toward a ball),
+      plus what the drive can add in the cycle. A disc turning about its own axis maps its surfaces (top face, rim) onto themselves: no point moves along its normal,
+      so the disc answers 0. Gates, spinners and bumpers keep today's values (their full point speed, an upper bound of the normal speed). Without this the rim speed
+      (2.2 m/s on the stress table: 325 rpm, 64 mm) would shorten arrival steps and widen engagement for no physical reason.
+   e. Rewind. SaveState / RestoreState: disc speed and angle (and the part's stepped time). With no ball within reach the disc moves alone (AdvanceAlone = today's
+      Turntables::Step); within a cycle the contact system and the turntable step share the time as for a gate (steppedS, steppedThisCycle).
+   f. Several balls. Balls with the same disc within reach are one island (FindIslands links them, as for a gate), coupled through the disc. Two or three balls on a
+      disc are common (user, 2026-10-28), so this is a normal case, not an edge case: they share the finest step any of them needs.
+   What it breaks / leaves open (rule 7):
+   - Cost: two or three balls on the disc share one island's finest step. Measured on the stress table with 2 and 3 balls on the spinning disc (12.4); INFERRED cheaper
+     than today's 201 fixed substeps, not measured.
+   - Table restart: the disc part must leave the part registry at table end (trap: turntable slowdown 2026-10-13, a host left across restarts). Checked by the
+     restart case.
+   - A ball over the gap rests on the playfield rim (static) and the disc rim (moving) at once: two surfaces in one contact, handled by the shared loop. Checked by the
+     'ball at the disc edge / gap' case.
+   - The new meaning of SurfaceSpeedBound: no change for gates, spinners and bumpers (INFERRED: their values already bound the normal speed). Checked by their matrix
+     rows and the snapshot self-test.
+   - The speed and angle the script reads (TurntableSpeed, TurntableAngle) and the drawn angle: read at the end of the cycle as now (INFERRED unchanged).
+   - Turntable without playfield_contact = 1: the sections are ignored as today (no disc part is built).
+
+12.2 Flipper bats   (approved by the user 2026-10-28)
+   a. What it is. A model flipper (rubber contact on) becomes a moving part like a gate: a host HitRubber with m_part, its box the swept circle of the bat; the maths in a
+      pure-SI part around ContactBat (contactbat.h is SI already), VPX units only in the adapter. The bat's rubber is one more SurfaceContact of the ball, with today's law
+      (RubberContact::Evaluate on the bat outline) called through the part's ContactItem; its shear state is the item's state, saved with the snapshot like any surface's.
+   b. Engagement. The contact system finds a ball approaching the bat itself (closing speed + SurfaceSpeedBound, point 11.1), as for every surface. Today the stock hit
+      search finds the touch (hitflipper.cpp Collide -> ContactSystem::EngageBat), so every bat contact starts late and SetupBat seats it with a private rewind.
+   c. Law: Newton's third law at every substep. StepInIsland(h): the bat turns with the summed torque of all its balls, its coil (plunger, link, both windings), the return
+      spring and its stops, in its own substeps inside h (today 20 us, ModelStandards 3b). The stops stay as they are (impact law for them is to-do 2.2).
+   d. Step size from the shared rule (NextStep, BallStep): the reduced mass of the ball and the bat's effective mass at the contact (InertiaSI() / lever arm^2) and the
+      rubber's stiffness. Neither the ini substep_us (5 us) nor the bat's own 20 us cap sets the ball's step any more.
+   e. SurfaceSpeedBound (along the normal, 12.1 d): tip speed now + (coil torque at full current + return spring) / smallest inertia x cycle x tip radius + the pivot
+      nudge's present speed.
+   f. Rewind. SaveState / RestoreState: phi, omega, plunger position and speed, both coil currents, lastAlpha, rigid, wasPreEos, coilOffPrev, plungerHitStop, hitL, the
+      idle flag and its snapshot, the nudge pulse (nzActive, nzT, nzA, nzBaseX, nzVelU) and the pivot offset: about 25 values, well inside State's 2048 bytes.
+   g. Removed from contactsystem.cpp: Body::bat, batLive, batRp, batOl, absCorr, pivOff, ctq, hitStop, noPairs; SetupBat (private rewind seat), BatForces (private release
+      counter), StepBats, the loop that steps the bat after a trip, the bat branch of HandBack, DetachBat's own release rule. Their jobs go to the shared rewind (point 11.2),
+      the no-past seat (11.6) and the shared release (release gap + bound x cycle).
+   h. Energy. Only the coil, the return spring's preload and the pivot nudge (a prescribed pivot motion, so a drive) add energy; the contact, the link's free play and the
+      stops remove it.
+   i. Without balls the bat moves alone as now (AdvanceAlone = UpdateDisplacementsFlipper's stepping, idle dormancy kept). EOS / BOS events and the nudge start on the
+      other bat stay where they are: after the step, from the bat's state (plungerHitStop, hitL).
+   What it breaks / leaves open (rule 7):
+   - The flipper's Hit event and rumble fire from the contact system's touch (a part Hit event, after the step), not from the stock collision: timing and speed values
+     change slightly. Scripts that time on them: to check. Ball control's 'last flipper hit' (SetDraggedBall) moves with it.
+   - Flipper ini keys rubber_release_steps and rubber_substep_us lose their role: listed in NewPhysicsReference.txt, notification when set (rule 8).
+   - A ball pinched between a bat and a sling: the island holds a band and stays on the fixed path until 12.3 is built; reported on screen as the other skips (11.5 b).
+   - Table end with balls on a bat: the part's teardown lets go of its balls (trap: crash at play end 2026-10-20, ReleaseBat, to-do 2.6). Checked by the restart case.
+   - Flippers without the model (stock flippers): unchanged, stock until to-do 1.7.
+   - Two balls on a raised bat (to-do 2.5): one island through the part, as today.
+   - Cost: a ball on a moving bat still needs fine steps; the gain is mainly resting balls and balls beside a bat (INFERRED from the code, not measured).
+
+12.3 Bands and slings   (approved by the user 2026-10-28, with the change in g: an out-of-range band is prevented, not handled)
+   a. What it is. Each band becomes one moving part together with its sling plate, coil driver and switch blades (the plate's face and the band's nodes push on each
+      other, so they step together). The maths move out of hitrubber.cpp into a pure-SI file (to-do 3.3; BandChain in rubbercontact.h is SI already), so bands join the
+      offline bench. The ball's contact with the band keeps today's law (BandBallForce), called through the part's ContactItem.
+   b. Law: Newton's third law at every substep. StepInIsland(h): the nodes move with the balls' reactions, the leg tensions and the plate's face; the plate turns with its
+      coil and the band's push back; in the band's own substeps inside h. The node step comes from the shared step rule (ModelStandards 2c): the node's mass and the
+      stiffness acting on it now (its legs' axial stiffness, the tension's geometric stiffness, a ball's contact), recomputed every band substep, not a count fixed once
+      per cycle (m_bc.steps today; to-do 3.2).
+   c. SurfaceSpeedBound (along the normal, 12.1 d): the fastest node now + the plate face's bound (coil torque at full current / plate inertia x cycle x face radius);
+      a ringing node's speed is bounded by the band's stored energy (no node can move faster than that energy and the coil's work in the cycle allow).
+   d. Rewind. SaveState / RestoreState: per chain the node count and order and each node's position, speed, peak, pinned flag and stop; the plate's angle and speed; the coil
+      pulse timer; the switch blades. Nodes are added at engagement and when the band wraps a stop post inside a substep (BandChain::ApplyStops -> BandRebuild), so the count
+      is part of the state. Size: up to kMaxNodes (12) per span, more for fixed nodes (band_node_mm >= 3 mm): about 6 KB for a long band, over the 2048 bytes of
+      ContactMovingPart::State. So every part reports its largest state at table start and the snapshot reserves that once per part; no allocation during play.
+      Gates, spinners and bumpers report theirs; nothing else changes for them.
+   e. Events. The switch events (SwitchesUpdate) and SlingFire fire today from SlingAdvance inside ContactSystem::Step (before the substeps), against the rule that scripts
+      never run inside the step (section 5). They go into the part's event list and are dispatched after the step with the other part events (point 11.2). The sling's
+      own kick is the part's driver (no script), so its timing does not change.
+   f. Energy. Only the sling coil adds energy. Leg tension stores and returns it; the viscous tension term and the contact remove it; a node pinned to a stop post gives
+      its speed into the post. Coming off a post gains nothing (INFERRED; the offline step sweep checks it: energy may only fall unless the coil adds it).
+   g. OUT OF RANGE IS PREVENTED (user, 2026-10-28: as rare as it might be, it is a break). Today a band is out of range when a node is not a number or deflects more than
+      0.4 x its span's chord (BandDiverged, BandSubstepEnd); the band is then reset and its balls handed back untouched (a stock hand-back, not allowed). Two causes, each
+      prevented by construction:
+      1. Numerical (a node step too long for its stiffness: growth, NaN). Prevented by b: every node step is within the stability limit of the stiffness acting on that
+         node at that moment; a ball's contact on a node enters through the reduced mass of ball and node.
+      2. Physical (the ball or the plate really pushes the band past the model's valid range). The deflection a band can reach is bounded by the energy that can enter it:
+         the balls that fit on the band, each at the launch limit (8 m/s, TestMatrixDesign section 1 limit 3), plus the sling coil's full work. At table start the part
+         works out that deflection from its own tension law; if it is beyond the model's valid range the band is refused at load with a notification naming the key to
+         change (rule 8): a check on the settings, not a cut-off in play. Objects behind the band (to-do 3.7) lower the bound further. Before building: find in the code why
+         the valid range is 0.4 x chord (what the model assumes past it), and set the range from that reason.
+      The deflection check stays in play as a safety net only (rule 2): a trip is a WARN + notification and fails the run (TestMatrixDesign limit 5); it retakes the substep
+      with half the step through the shared rewind, and never hands a ball to stock.
+   h. Without balls the band rings down on its own and sleeps at rest (AdvanceAlone; ModelStandards 3c; to-do 3.2). The drawn band (BandPublish, mesh animation) reads the
+      part's state after the step. Band animation is broken today (user, 2026-10-28; to-do 3.9): not fixed by this design, and the band rows cannot be judged by eye until it is.
+   What it breaks / leaves open (rule 7):
+   - Switch and SlingFire script events fire after the step: same cycle, but their order relative to other events changes.
+   - The energy bound in g.2 assumes the launch limit and the ball count on the band; a faster ball (a plunger shot straight into a band) is outside it: the safety net
+     and the fast-ball watchdog report it. The 0.4 x chord reason is not known yet (to find before building).
+   - Snapshot cost grows with the node count; fixed-node bands are the largest. Measured in the snapshot column of the cost log (snap_us).
+   - A ball between a sling and a bat: one island with both parts once 12.2 and 12.3 are built. Two balls on one band: one island, as today.
+   - Tables with unified = 0 keep today's band stepping (BandAdvanceCore) until to-do 10.3 is decided.
+
+12.4 Build order and proof   (approved by the user 2026-10-28)
+   a. Order: 12.1 disc, then 12.2 bats, then 12.3 bands and slings. Each is built and proved before the next starts; each removes its own clause from IslandRewindable().
+      12.1 also brings the new meaning of SurfaceSpeedBound (12.1 d). 12.3 brings the per-part state size (12.3 d).
+   b. When all three pass, the fixed-step path (Substeps() uniform branch, GatherBalls' ini step count, StepBats, the band substep hooks) is deleted: one loop
+      (ModelStandards 2b). The ini keys substep_us and rest_substep_us no longer choose steps; a table that still sets them gets a notification that they are ignored
+      (rule 8). NewPhysicsReference.txt lists the keys that change meaning or go.
+   c. Proof per piece (ModelStandards 5, TestMatrixDesign):
+      1. Offline, the part alone against a 1 us fixed-step reference with a step sweep: energy may only fall unless a drive adds it; exit speed and direction against the
+         reference (TestMatrixDesign section 4 limits).
+      2. Engine: the part's rows in TestMatrixDesign section 4 (the common cases plus 2 flippers, 3 bands and slings, 7 turntable, which now includes 2 and 3 balls on the
+         spinning disc), and the snapshot self-test (VPX_SNAPSHOT_TEST=1) with 0 differences for the part.
+      3. Stress table, focused cost run (user told first): run.ps1 -Focused -Timing -Exe ...\build-bgfx\Release\VPinballX_BGFX64.exe with record 0, inputs
+         drive_stress6_p1 (spread play), _p2 (balls piled on raised bats), _p3 (fast play, slings fired), plus a new disc input that drops 2 and 3 balls on the spinning
+         disc (the existing inputs may not put several balls on it; to check in make_stress_drive.ps1 and add if not).
+   d. Pass (judged per piece on its own islands): no cycle whose slowest island holds a disc, bat or band is stepped by the ini step (cycles.csv why_setting, why_bat,
+      why_band all 0 for those islands); the worst 7-cycle window <= 3 ms and the worst single cycle <= 1.5 ms over the cycles whose slowest island holds the part; every
+      section 1 limit of TestMatrixDesign passes. Baseline: run_cost6_p1d (6 balls, phase 1), 1,160 cycles with the slowest island on the fixed path, median 201 substeps,
+      176 us. Not judged here: the Gate001 worst cycle (to-do 5.10). Ball counts 9 and 13 when the user schedules them.
+   e. What the proof does not cover: a table script's own events and timing (driver runs have no table script); the band's look on screen until its animation is fixed
+      (to-do 3.9); unified = 0 tables.
+
+12.5 Build status
+   12.1 disc: BUILT 2026-10-28 (src/physics/contactdisc.h; turntable.cpp, hitrubber.cpp/.h, contactsystem.cpp). Proved: offline runs/2026-10-28-disc (energy never rises at 1-50 us;
+        the 100 us fail is the 1 m/s impact's own step, same for the old coupling); engine run_disc3 (5 disc cases, snapshot self-test 0 different in 12,001 steps); focused
+        cost run_cost6_p1_disc (no disc-only island on the fixed step; 22 cycles with the disc and band Rubber8 wait for 12.3). The stress table's disc was 300 U out of place
+        (ini typo, fixed by the user 2026-10-28) in every earlier stress run, so run_cost6_p1d is not a like-for-like baseline for the disc.
+        Not checked: a disc standing proud of the playfield, a ccw disc, table restart with a ball on the disc, the matrix (not built).
+   Host split: DONE 2026-10-28 (user OK). ContactHost (contacthost.h/.cpp: settings, registry, reload, the stock hand-over) is the base of HitRubber (rubbers, surfaces, bands) and of
+        ContactPartHost (contactparthost.h/.cpp: any moving part, through ContactMovingPart and a PartAdapter); the adapters live with their table parts (parts/hingepartadapter.cpp for
+        gates and spinners, bumper.cpp, turntable.cpp). Gate, spinner and bumper hold a ContactPartHost*. Proved: balls.csv byte-identical before and after on stress phase 1, phase 3
+        and drive_disc3 (self-test off, same input), driver checks PASS. Snapshot self-test on phase 3 after the split: 60 different of 18,001, nearly all a ball climbing near the
+        flippers (to-do 1.14; not compared with the old build, which was overwritten). Event order not compared (no traced run of the old build): same queue, same order by the code.
+   12.2 bats: BUILT 2026-10-28 (steps 0-4). Step 0: baselines run_bat_base_p2, run_cost6_p2_base. Step 1 (offline) below. Step 2: engine wired (flipper.cpp, hitflippermodel.cpp
+        adapter, contactsystem.cpp bat path removed). Step 3: run_bat_p2_snap and run_bat_flip1 (driver checks PASS, snapshot self-test 0 different), focused cost runs
+        run_cost6_p1_bat2 / run_cost6_p2_bat2 with the coil-state speed bound (phase 2 within both limits and better than before; phase 1 worst windows now bands; mean cycle
+        +9 us phase 1, +20 us phase 2 against the old fixed path: shared-loop work per substep, to profile). The first wiring (full-coil speed bound) had phase 2's worst 7 cycles
+        at 3,621 us: a held bat counted as able to reach 14 m/s at its tip in a cycle. Open: ball control's dragged ball, the ignored-key notification, case 3 energy (2.10).
+        contactbat.cpp is pure SI (the settings file is read in contactbatini.cpp; coilWorkJ counts the coil's work); src/physics/contactbatpart.h is the bat as a ContactMovingPart.
+        Offline runs/2026-10-28-bat (stress-table [Flippers], VPX default left flipper outline ASSUMED), at the steps the engine would choose: cases 1 (flip with a ball
+        resting), 2 (mid-swing hit 1 and 3 m/s), 4 (two balls, release) pass; case 3 (ball on the raised bat, release) makes 20 uJ (to-do 2.10, the law, present at 1 us).
+        Step rule (BallStep), each part found with data: the rubber law's own stiffness (Hertz x (1 + 2 beta (a/h)^3): the thin layer) instead of plain Hertz; the bat's own
+        inertia as its mass at the contact (the plunger only when rigid); omega h <= 0.05 instead of 0.1, because the island's coupling is first order (the bat takes the
+        start-of-substep torque over the substep): case 2 at 1 m/s was 17 % off at 0.1, 0.35 % at 0.05; a predictor-corrector at 0.1 left 2.7 % at twice the force
+        evaluations. Cost of 0.05 offline: 7-37 % more substeps than 0.1, mostly while a ball is near the bat. Rejected with data: ending the substep at the bat's stop
+        impact; the bat's acceleration added to the touching rule.
+        Open from it: the gate's and bumper's BallStep use 0.1 with the same first-order coupling (to check); the shared NextStep's Hertz omits the thin-layer stiffening.
+   12.3 bands: NOT built in the engine. 2026-10-29: step 0 baselines (run_cost6_p1_pre123, run_cost6_p3_pre123); step 1 offline: src/physics/contactbandpart.h + runs/2026-10-29-band.
+        The band's explicit force stepping makes energy (contact, spans touching, merges; see NewPhysicsReference change log 2026-10-29). The 0.4 x chord range has no physical
+        reason (a blow-up detector from the first band model). User 2026-10-29: stop patching; rebuild the band on energy-conserving stepping (ProjectAssessment item 0)
+        as the first model built that way, offline first; 12.3's engine wiring waits for it.
+        2026-10-29: the new band is a massless cord (docs/BandCordDesign.txt, approved): src/physics/bandcord.h + runs/2026-10-29-band-cord, built, offline run pending.

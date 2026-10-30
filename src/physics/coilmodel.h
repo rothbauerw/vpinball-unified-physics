@@ -41,7 +41,7 @@ struct FlipperSettings
    double rubberThicknessMm = 3.2;      // rubber layer thickness
    double rubberAlphaSPerM = 0.05;      // normal damping; rebound ratio ~ 1 - alpha*v
    double rubberBetaLayer = 0.33;       // thin-layer stiffening coefficient
-   double rubberMu = 0.9;               // rubber / steel friction
+   double rubberMu = 0.8;               // rubber / steel friction (black / white rubber; user, 2026-10-30)
    double rubberShearScale = 1.0;       // multiplier on the shear stiffness
    double rubberShearZeta = 0.2;        // shear damping ratio
    bool rubberTwist = true;             // resistance to spin about the contact normal

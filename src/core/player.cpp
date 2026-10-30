@@ -21,6 +21,7 @@
 #include "physics/cabinet/NudgeHandler.h"
 #include "physics/hittimer.h"
 #include "physics/PhysicsEngine.h"
+#include "physics/testdriver.h"
 #include "plugins/ControllerPlugin.h"
 #include "plugins/MsgPlugin.h"
 #include "plugins/VPXPlugin.h"
@@ -2498,6 +2499,7 @@ void Player::PrepareFrame()
    #endif
 
    m_logicProfiler.NewFrame(m_time_msec);
+   TestDriver::FrameStart();   // harness frame timing (docs/TestMatrixDesign.txt section 3 point 9); nothing unless VPX_TEST_INPUT is set
    m_logicProfiler.EnterProfileSection(FrameProfiler::PROFILE_PREPARE_FRAME);
 
    m_overall_frames++; // This causes the next VPinMAME <-> VPX sync to update light status which can be heavy since it needs to perform PWM integration of all lights

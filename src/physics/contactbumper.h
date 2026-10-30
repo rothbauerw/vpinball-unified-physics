@@ -78,6 +78,7 @@ namespace JetBumper
       double skirtKNPerM = 200.0, skirtPreloadN = 0.4, springRadiusMm = 8.0, skirtZeta = 0.3;   // preloads 0.8 / 0.3 N made a ball rolling in from an inch up the 6 deg slope miss; 0.4 / 0.15 N fire it (T11)
       double spoonKNPerM = 100.0, spoonPreloadN = 0.15, spoonZeta = 0.3, spoonTravelMm = 5.0;
       double returnKNPerM = 100.0, returnPreloadN = 1.6, ringViscousNsPerM = 0.5;
+      double ownStepUs = 16.0;             // the step of the bumper's own bodies (skirt, spoon, tip, ring, coil): offline (runs/2026-10-27-tipspoon, no ball) results stay within ~3 % of 1 us up to 24 us and show switch chatter at 32 us; half of that
       // stops [guess]
       double ringStopReffMm = 5.0, ringRestE = 0.4, ringCoilE = 0.3, ringRestEMpa = 30.0;   // ring stops: Hertz contact at this effective radius; rest stop rubber (E), coil stop steel on steel
       double skirtStopKNPerM = 5e5, skirtStopZeta = 0.3, spoonStopKNPerM = 2e5;
@@ -298,7 +299,7 @@ namespace JetBumper
          switchClosed = false; prevClosed = false; t = 0.0; events.clear();
          pulseActive = false; pulseLeftS = 0.0; pulseArmed = true; extOn = false; extVolts = -1.0; extDuty = 1.0; coilCommand = false; coilVolts = 0.0;
          coilOnS = coilOnMaxS = 0.0; wCoil = eDissRing = 0.0; tipOutsideCone = false;
-         m_Qext[0] = m_Qext[1] = m_Qext[2] = 0.0; m_ringExt = 0.0;
+         m_Qext[0] = m_Qext[1] = m_Qext[2] = 0.0; m_ringExt = 0.0; m_stuck = 0;
          gEff = V3(0.0, 0.0, -9.81);
       }
 
@@ -515,11 +516,10 @@ namespace JetBumper
          return n;
       }
       // the step the bumper's own bodies need (s): fine while a ring stop is in contact or about to be, otherwise the skirt / spoon stops and the tip contact set it
+      // the step the bumper's own bodies need (s): the ring's stops no longer set it (impact law); the skirt / spoon stops and the stem tip contact do
       double OwnStep() const
       {
-         const double stroke = p.ringStrokeMm * MM;
-         const bool nearStop = m_inRest || m_inCoilStop || (std::abs(vr) > 0.02 && (dr < 0.3e-3 || dr > stroke - 0.3e-3));
-         return nearStop ? kStepStop : kStepFree;
+         return p.ownStepUs * 1e-6;
       }
       static constexpr double kStepFree = 4e-6, kStepStop = 1e-6;
       // resting: nothing is moving, driven or pressed
@@ -541,6 +541,7 @@ namespace JetBumper
       {
          double zc, thx, thy, vz, wx, wy, ds, vds, dr, vr, iCoil, t;
          bool switchClosed, tipOutsideCone, asleep, collidable, pulseActive, pulseArmed, extOn, coilCommand, prevClosed, inRest, inCoilStop, restActive, coilActive;
+         int stuck;
          V3 gEff;
          double coilOnS, coilOnMaxS, wCoil, eDissRing, pulseLeftS, extVolts, extDuty, coilVolts, Qext[3], ringExt, restStored, coilStored;
          RubberState tip[2];
@@ -549,7 +550,7 @@ namespace JetBumper
       {
          d.zc = zc; d.thx = thx; d.thy = thy; d.vz = vz; d.wx = wx; d.wy = wy; d.ds = ds; d.vds = vds; d.dr = dr; d.vr = vr; d.iCoil = iCoil; d.t = t;
          d.switchClosed = switchClosed; d.tipOutsideCone = tipOutsideCone; d.asleep = asleep; d.collidable = collidable; d.pulseActive = pulseActive; d.pulseArmed = pulseArmed;
-         d.extOn = extOn; d.coilCommand = coilCommand; d.prevClosed = prevClosed; d.inRest = m_inRest; d.inCoilStop = m_inCoilStop; d.restActive = m_restActive; d.coilActive = m_coilActive;
+         d.extOn = extOn; d.coilCommand = coilCommand; d.prevClosed = prevClosed; d.inRest = m_inRest; d.inCoilStop = m_inCoilStop; d.restActive = m_restActive; d.coilActive = m_coilActive; d.stuck = m_stuck;
          d.gEff = gEff;
          d.coilOnS = coilOnS; d.coilOnMaxS = coilOnMaxS; d.wCoil = wCoil; d.eDissRing = eDissRing; d.pulseLeftS = pulseLeftS; d.extVolts = extVolts; d.extDuty = extDuty; d.coilVolts = coilVolts;
          d.Qext[0] = m_Qext[0]; d.Qext[1] = m_Qext[1]; d.Qext[2] = m_Qext[2]; d.ringExt = m_ringExt; d.restStored = m_restStored; d.coilStored = m_coilStored;
@@ -559,7 +560,7 @@ namespace JetBumper
       {
          zc = d.zc; thx = d.thx; thy = d.thy; vz = d.vz; wx = d.wx; wy = d.wy; ds = d.ds; vds = d.vds; dr = d.dr; vr = d.vr; iCoil = d.iCoil; t = d.t;
          switchClosed = d.switchClosed; tipOutsideCone = d.tipOutsideCone; asleep = d.asleep; collidable = d.collidable; pulseActive = d.pulseActive; pulseArmed = d.pulseArmed;
-         extOn = d.extOn; coilCommand = d.coilCommand; prevClosed = d.prevClosed; m_inRest = d.inRest; m_inCoilStop = d.inCoilStop; m_restActive = d.restActive; m_coilActive = d.coilActive;
+         extOn = d.extOn; coilCommand = d.coilCommand; prevClosed = d.prevClosed; m_inRest = d.inRest; m_inCoilStop = d.inCoilStop; m_restActive = d.restActive; m_coilActive = d.coilActive; m_stuck = d.stuck;
          gEff = d.gEff;
          coilOnS = d.coilOnS; coilOnMaxS = d.coilOnMaxS; wCoil = d.wCoil; eDissRing = d.eDissRing; pulseLeftS = d.pulseLeftS; extVolts = d.extVolts; extDuty = d.extDuty; coilVolts = d.coilVolts;
          m_Qext[0] = d.Qext[0]; m_Qext[1] = d.Qext[1]; m_Qext[2] = d.Qext[2]; m_ringExt = d.ringExt; m_restStored = d.restStored; m_coilStored = d.coilStored;
@@ -802,6 +803,9 @@ namespace JetBumper
             coilOnS = 0.0;
       }
 
+      // The ring's two stops are an impact law and a resting constraint, not springs (UnifiedContactDesign.txt, the stiff-spring review of 2026-10-27): the ring reaches a stop within the step,
+      // the momentum law reverses its normal speed by the restitution (ringRestE / ringCoilE, the values the stop springs were calibrated to at 0.5 m/s), the energy (1 - e^2) / 2 m v^2 is counted
+      // as dissipated, and a ring pressed onto a stop by the net force of everything else stays there (a force balance). No stop stiffness enters the step, so the ring needs no fine step near a stop.
       void StepRingAndCoil(double h)
       {
          const double stroke = p.ringStrokeMm * MM, bobbin = p.coil.bobbinMm * MM;
@@ -809,51 +813,59 @@ namespace JetBumper
          const double iNext = CoilModel::NextCurrent(p.coil, coilD, frac, std::max(vr, 0.0), coilCommand ? coilVolts : 0.0, iCoil, h);
          const double fCoil = CoilModel::Force(p.coil, coilD, frac, iCoil);   // down
          const double m = p.ringMass;
-         double f = fCoil + m * 9.81 - (p.returnPreloadN + p.returnKNPerM * dr) - p.ringViscousNsPerM * vr + m_ringExt;
-         double diss = p.ringViscousNsPerM * vr * vr;
-         const double reff = p.ringStopReffMm * MM;
-         if (dr < 0.0)   // rest stop (up): penetration -dr, closing rate -vr
-         {
-            const double dl = -dr, a = std::sqrt(reff * dl);
-            const double fs = std::max(0.0, kRest * dl * std::sqrt(dl) + gRest * a * (-vr));
-            f += fs;
-            if (fs > 0.0) diss += gRest * a * vr * vr;
-            // the viscoelastic force reaches zero before the compression does: the spring energy still stored then is not returned (lost, counted as dissipated)
-            if (m_restActive && fs <= 0.0) eDissRing += 0.4 * kRest * dl * dl * std::sqrt(dl);
-            m_restActive = fs > 0.0;
-            m_restStored = m_restActive ? 0.4 * kRest * dl * dl * std::sqrt(dl) : 0.0;
-            if (!m_inRest) { m_inRest = true; events.push_back({ t, EvRestStop, -vr }); }
-         }
-         else
-         {
-            m_inRest = false;
-            m_restActive = false;
-            m_restStored = 0.0;
-         }
-         if (dr > stroke)   // coil stop (down)
-         {
-            const double dl = dr - stroke, a = std::sqrt(reff * dl);
-            const double fs = std::max(0.0, kCoil * dl * std::sqrt(dl) + gCoil * a * vr);
-            f -= fs;
-            if (fs > 0.0) diss += gCoil * a * vr * vr;
-            if (m_coilActive && fs <= 0.0) eDissRing += 0.4 * kCoil * dl * dl * std::sqrt(dl);
-            m_coilActive = fs > 0.0;
-            m_coilStored = m_coilActive ? 0.4 * kCoil * dl * dl * std::sqrt(dl) : 0.0;
-            if (!m_inCoilStop) { m_inCoilStop = true; events.push_back({ t, EvCoilStop, vr }); }
-         }
-         else
-         {
-            m_inCoilStop = false;
-            m_coilActive = false;
-            m_coilStored = 0.0;
-         }
+         const double f = fCoil + m * 9.81 - (p.returnPreloadN + p.returnKNPerM * dr) - p.ringViscousNsPerM * vr + m_ringExt;   // net force without the stops, down positive
          wCoil += fCoil * vr * h;
-         eDissRing += diss * h;
+         eDissRing += p.ringViscousNsPerM * vr * vr * h;
          m_ringExt = 0.0;
-         vr += f / m * h;
-         dr += vr * h;
          iCoil = iNext;
+         m_restStored = m_coilStored = 0.0;
+         if (m_stuck == -1)
+         {
+            if (f < 0.0) { dr = 0.0; vr = 0.0; return; }   // pressed on the rest stop: a force balance
+            m_stuck = 0;
+            m_inRest = false;
+         }
+         else if (m_stuck == 1)
+         {
+            if (f > 0.0) { dr = stroke; vr = 0.0; return; }   // pressed on the coil stop
+            m_stuck = 0;
+            m_inCoilStop = false;
+         }
+         const double vn = vr + f / m * h, dn = dr + vn * h;
+         if (dn < 0.0 && vn < 0.0)   // reaches the rest stop (up) within this step
+         {
+            const double s = std::min(1.0, std::max(0.0, dr / (dr - dn)));
+            const double vimp = -(vr + f / m * h * s);
+            events.push_back({ t, EvRestStop, vimp });
+            m_inRest = true;
+            eDissRing += 0.5 * m * (1.0 - p.ringRestE * p.ringRestE) * vimp * vimp;
+            const double vAfter = p.ringRestE * vimp, rem = (1.0 - s) * h, aIn = -f / m;   // aIn > 0: the net force pushes it back onto the stop
+            if (aIn > 0.0 && vAfter < aIn * h) { m_stuck = -1; dr = 0.0; vr = 0.0; return; }   // it would be back on the stop within a step: at rest on it
+            vr = vAfter + f / m * rem;
+            dr = vr * rem;
+            if (dr < 0.0) { dr = 0.0; vr = 0.0; m_stuck = -1; }
+            return;
+         }
+         if (dn > stroke && vn > 0.0)   // reaches the coil stop (down)
+         {
+            const double s = std::min(1.0, std::max(0.0, (stroke - dr) / (dn - dr)));
+            const double vimp = vr + f / m * h * s;
+            events.push_back({ t, EvCoilStop, vimp });
+            m_inCoilStop = true;
+            eDissRing += 0.5 * m * (1.0 - p.ringCoilE * p.ringCoilE) * vimp * vimp;
+            const double vAfter = -p.ringCoilE * vimp, rem = (1.0 - s) * h, aIn = f / m;
+            if (aIn > 0.0 && -vAfter < aIn * h) { m_stuck = 1; dr = stroke; vr = 0.0; return; }
+            vr = vAfter + f / m * rem;
+            dr = stroke + vr * rem;
+            if (dr > stroke) { dr = stroke; vr = 0.0; m_stuck = 1; }
+            return;
+         }
+         vr = vn;
+         dr = dn;
+         if (m_inRest && dr > 0.0) m_inRest = false;
+         if (m_inCoilStop && dr < stroke) m_inCoilStop = false;
       }
+      int m_stuck = 0;   // -1 at rest on the rest stop, +1 on the coil stop, 0 free
       bool m_inRest = false, m_inCoilStop = false, m_restActive = false, m_coilActive = false;
       double m_restStored = 0.0, m_coilStored = 0.0;
 

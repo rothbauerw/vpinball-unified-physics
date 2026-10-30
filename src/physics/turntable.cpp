@@ -2,7 +2,8 @@
 
 #include "core/stdafx.h"
 #include "physics/turntable.h"
-#include "physics/hitrubber.h"
+#include "physics/contactparthost.h"
+#include "physics/contactdisc.h"
 #include "physics/physicsini.h"
 #include "physics/physconst.h"
 #include "physics/PhysicsEngine.h"
@@ -51,11 +52,19 @@ namespace Turntables
          bool gapVisible = true;               // visible: a dark ring marks the gap
          std::string marker = "spokes";        // visible: spokes | dot | stripe | none
          double refDeg = 0;                    // angle reference, degrees clockwise from the +x direction (screen right)
-         // derived
-         double I = 0, Ts = 0, kTot = 0, b = 0, wRun = 0;
-         // state
-         double volts = 0, omega = 0, theta = 0, impulse = 0;   // omega, theta: clockwise positive
+         // the disc as a moving part of the contact system (contactdisc.h): motor, bearing, speed and angle (clockwise positive), the script's voltage
+         std::shared_ptr<TurntableDisc::Part> part;
          std::shared_ptr<MeshBuffer> discMesh, markMesh, gapMesh;
+      };
+
+      // The table side of the disc's moving part (UnifiedContactDesign 12.1): the renderer and the script read the part itself, it raises no events, and its settings are
+      // read when the table loads only
+      class DiscAdapter final : public PartAdapter
+      {
+      public:
+         void Publish() override {}
+         void Fire(const std::vector<ContactMovingPart::Event> &) override {}
+         bool FixedSettings() const override { return true; }
       };
 
       std::vector<Turntable> g_tt;
@@ -65,48 +74,21 @@ namespace Turntables
 
       void Derive(Turntable &t)
       {
+         TurntableDisc::Motor &m = t.part->motor;
          const double r = t.radiusMm * 1e-3;
-         t.I = t.inertia > 0 ? t.inertia : 0.5 * t.massG * 1e-3 * r * r;
-         t.wRun = t.freeRpm * 2.0 * PI / 60.0;
-         if (t.stallTorque > 0)
-         {
-            t.Ts = t.stallTorque;
-            t.kTot = std::max(1e-9, (t.Ts - t.frictionNm) / t.wRun);
-         }
-         else
-         {
-            t.kTot = t.I / (t.spinupS / 3.0);   // 95% = 3 time constants
-            t.Ts = t.kTot * t.wRun + t.frictionNm;   // the running speed at supply_volts is max_rpm with the friction included
-         }
-         // viscous drag b such that the unpowered disc, with the friction too, goes from max_rpm to 5% in ramp_down_s:  I dw/dt = -b w - Tf
-         const double w0 = t.wRun, Tf = t.frictionNm;
-         auto coast = [&](double b)
-         {
-            if (Tf <= 0.0)
-               return t.I / b * std::log(20.0);
-            if (b < 1e-12)
-               return 0.95 * w0 * t.I / Tf;
-            return t.I / b * std::log((w0 + Tf / b) / (0.05 * w0 + Tf / b));
-         };
-         double lo = 1e-9, hi = 1e3 * t.I;
-         if (coast(lo) < t.rampDownS)
-            hi = lo;   // the friction alone stops the disc faster than ramp_down_s
-         for (int i = 0; i < 80 && hi > lo; i++)
-         {
-            const double mid = std::sqrt(lo * hi);
-            if (coast(mid) > t.rampDownS)
-               lo = mid;
-            else
-               hi = mid;
-         }
-         t.b = 0.5 * (lo + hi);
-         if (coast(1e-9) < t.rampDownS)
-            PLOGI << "Turntable " << t.name << ": friction_nm alone stops the disc from max_rpm in " << coast(1e-9) << " s, sooner than ramp_down_s " << t.rampDownS << " s: the coast-down is " << coast(1e-9) << " s (lower friction_nm or raise the inertia for a longer one)";
-         if (t.b > t.kTot)
-         {
-            PLOGW << "Turntable " << t.name << ": ramp_down_s is shorter than the bearing drag allows next to ramp_up_s (a motor off cannot stop the disc faster than the motor spins it up); using " << 3.0 * t.I / t.kTot << " s";
-            t.b = t.kTot;
-         }
+         m.I = t.inertia > 0 ? t.inertia : 0.5 * t.massG * 1e-3 * r * r;
+         m.freeRpm = t.freeRpm;
+         m.ratedVolts = t.ratedVolts;
+         m.spinupS = t.spinupS;
+         m.rampDownS = t.rampDownS;
+         m.stallTorque = t.stallTorque;
+         m.frictionNm = t.frictionNm;
+         m.dir = t.clockwise ? 1.0 : -1.0;
+         m.Derive();
+         if (m.frictionFaster)
+            PLOGI << "Turntable " << t.name << ": friction_nm alone stops the disc from max_rpm in " << m.coastFrictionS << " s, sooner than ramp_down_s " << t.rampDownS << " s: the coast-down is " << m.coastFrictionS << " s (lower friction_nm or raise the inertia for a longer one)";
+         if (m.dragClamped)
+            PLOGW << "Turntable " << t.name << ": ramp_down_s is shorter than the bearing drag allows next to ramp_up_s (a motor off cannot stop the disc faster than the motor spins it up); using " << 3.0 * m.I / m.kTot << " s";
       }
 
       void Parse(const std::filesystem::path &file)
@@ -166,10 +148,9 @@ namespace Turntables
          }
       }
 
-      inline double Dir(const Turntable &t) { return t.clockwise ? 1.0 : -1.0; }
    }
 
-   void Setup(PhysicsEngine *const physics, PinTable *const table, std::vector<MoverObject *> &movers, std::vector<HitRubber *> &hosts)
+   void Setup(PhysicsEngine *const physics, PinTable *const table, std::vector<MoverObject *> &movers, std::vector<ContactHost *> &hosts)
    {
       g_tt.clear();
       g_byName.clear();
@@ -194,17 +175,18 @@ namespace Turntables
       for (size_t i = 0; i < g_tt.size(); i++)
       {
          Turntable &t = g_tt[i];
+         t.part = std::make_shared<TurntableDisc::Part>();
          Derive(t);
          g_byName[PhysicsIni::Lower(t.name)] = i;
          const auto pend = g_pending.find(PhysicsIni::Lower(t.name));
          if (pend != g_pending.end())
-            t.volts = pend->second.first ? pend->second.second * t.ratedVolts : pend->second.second;
+            t.part->volts = pend->second.first ? pend->second.second * t.ratedVolts : pend->second.second;
          if (!t.playfieldZSet)
          {
             // the playfield surface under the centre: a mesh playfield's top is not necessarily at 0 (the blank mesh table's is at 0.5 U)
             double zf = 0.0;
             bool any = false;
-            for (HitRubber *const h : HitRubber::AllHosts())
+            for (ContactHost *const h : ContactHost::AllHosts())
             {
                double z;
                if (h->IsPlayfieldKind() && h->SurfaceHeightAt(t.x, t.y, z) && (!any || z > zf))
@@ -221,8 +203,7 @@ namespace Turntables
          const double hole = (t.radiusMm + t.gapMm) * 1e-3;
          g_holes.push_back({ t.x * UM, t.y * UM, hole, t.playfieldZ * UM });
 
-         // the disc: a flat polygon at the top height, plus a skirt down to the playfield when it stands proud of it, as faces of a force-model host
-         auto faces = std::make_shared<RubberSurface>();
+         // the disc: a flat polygon at the top height, plus a skirt down to the playfield when it stands proud of it: the stock colliders that find the ball, and the host's box
          std::vector<Vertex3Ds> top;
          for (int k = 0; k < SEG; k++)
          {
@@ -245,12 +226,25 @@ namespace Turntables
                tris.push_back({ { p0, q1, q0 } });
             }
          }
+         float lo[3] = { tris[0].v[0].x, tris[0].v[0].y, tris[0].v[0].z }, hi[3] = { lo[0], lo[1], lo[2] };
          for (const Tri &tr : tris)
-            faces->Add(tr.v[0], tr.v[1], tr.v[2]);
+            for (const Vertex3Ds &v : tr.v)
+               for (int k = 0; k < 3; k++)
+               {
+                  lo[k] = std::min(lo[k], (&v.x)[k]);
+                  hi[k] = std::max(hi[k], (&v.x)[k]);
+               }
 
-         RubberObjectSettings ps = HitRubber::TurntableSettings(t.mu, t.rollingResistance);
-         HitRubber *const host = new HitRubber(table, faces, ps, file, t.name, "turntable");
-         host->m_turntable = (int)i;
+         // the disc is the host's moving part: it probes its own shape (a flat disc, and its side when it stands proud), turns with the balls in the island substeps (UnifiedContactDesign 12.1);
+         // it takes the host's contact law (material, layer, edge rounding)
+         const RubberObjectSettings ps = ContactHost::TurntableSettings(t.mu, t.rollingResistance);
+         ContactPartHost *const host = new ContactPartHost(table, t.part, std::make_unique<DiscAdapter>(), ps, file, t.name, "turntable", lo, hi);
+         t.part->shape.centre = RubberContact::V3(t.x * UM, t.y * UM, t.z * UM);
+         t.part->shape.R = t.radiusMm * 1e-3;
+         t.part->shape.zBottom = (double)zBottom * UM;
+         t.part->shape.rp = ps.ToParams();
+         t.part->shape.hLayer = host->LayerM();
+         t.part->shape.edgeRhoM = ps.edgeRadiusMm * 1e-3;
          hosts.push_back(host);   // the physics engine owns it and deletes it with itself (the host is in the process-wide registry: a leaked one is tested against every ball in every later session)
          host->CalcHitBBox();
          if (MoverObject *const pmo = host->GetMoverObject(); pmo != nullptr && pmo->AddToList())
@@ -268,36 +262,13 @@ namespace Turntables
             physics->AddCollider(ht, false);
          }
          PLOGI << "Turntable " << t.name << ": centre " << t.x << ", " << t.y << ", top z " << t.z << ", radius " << t.radiusMm << " mm, gap " << t.gapMm << " mm, "
-               << (t.clockwise ? "clockwise" : "counter-clockwise") << ", " << t.freeRpm << " rpm at " << t.ratedVolts << " V, friction " << t.frictionNm << " N m, ramp up " << t.spinupS << " s, ramp down " << t.rampDownS << " s, I " << t.I << " kg m^2, stall torque " << t.Ts
-               << " N m, drag " << t.b << " N m s, mu " << t.mu << ", rolling resistance " << (t.rollingResistance >= 0.0 ? t.rollingResistance : ContactSettings::Get().rollingResistance) << (proud ? ", disc stands proud of the playfield" : ", disc flush with the playfield");
+               << (t.clockwise ? "clockwise" : "counter-clockwise") << ", " << t.freeRpm << " rpm at " << t.ratedVolts << " V, friction " << t.frictionNm << " N m, ramp up " << t.spinupS << " s, ramp down " << t.rampDownS << " s, I " << t.part->motor.I << " kg m^2, stall torque " << t.part->motor.Ts
+               << " N m, drag " << t.part->motor.b << " N m s, mu " << t.mu << ", rolling resistance " << (t.rollingResistance >= 0.0 ? t.rollingResistance : ContactSettings::Get().rollingResistance) << (proud ? ", disc stands proud of the playfield" : ", disc flush with the playfield");
       }
       g_pending.clear();
    }
 
    bool Active() { return !g_tt.empty(); }
-
-   void Step()
-   {
-      for (Turntable &t : g_tt)
-      {
-         const double dt = PHYSICS_STEPTIME_S;
-         const double vEff = t.volts * Dir(t);
-         double wInf = 0.0, k = t.b;
-         if (vEff != 0.0)
-         {
-            wInf = t.Ts * (vEff / t.ratedVolts) / t.kTot;
-            k = t.kTot;
-         }
-         const double wOld = t.omega;
-         t.omega = wInf + (t.omega - wInf) * std::exp(-k * dt / t.I) + t.impulse / t.I;
-         t.impulse = 0.0;
-         // constant friction torque: it slows a moving disc and holds a still one until the push in this step exceeds it
-         const double dwf = t.frictionNm * dt / t.I;
-         t.omega = t.omega > 0 ? std::max(0.0, t.omega - dwf) : std::min(0.0, t.omega + dwf);
-         t.theta += 0.5 * (wOld + t.omega) * dt;
-         t.theta = std::fmod(t.theta, 2.0 * PI);
-      }
-   }
 
    static Turntable *Find(const char *name)
    {
@@ -315,7 +286,7 @@ namespace Turntables
       Turntable *const t = Find(name);
       if (t == nullptr)
          return false;
-      t->volts = volts;
+      t->part->volts = volts;
       return true;
    }
 
@@ -329,7 +300,7 @@ namespace Turntables
       Turntable *const t = Find(name);
       if (t == nullptr)
          return false;
-      t->volts = std::max(-1.0, std::min(1.0, (double)duty)) * t->ratedVolts;
+      t->part->volts = std::max(-1.0, std::min(1.0, (double)duty)) * t->ratedVolts;
       return true;
    }
 
@@ -339,7 +310,7 @@ namespace Turntables
       const Turntable *const t = Find(name);
       if (t == nullptr)
          return false;
-      rpm = (float)(t->omega * 60.0 / (2.0 * PI));   // fixed frame: clockwise seen from above is positive, whatever the direction key
+      rpm = (float)(t->part->omega * 60.0 / (2.0 * PI));   // fixed frame: clockwise seen from above is positive, whatever the direction key
       return true;
    }
 
@@ -349,29 +320,11 @@ namespace Turntables
       const Turntable *const t = Find(name);
       if (t == nullptr)
          return false;
-      double a = std::fmod((t->theta * 180.0 / PI) + t->refDeg, 360.0);   // degrees clockwise from screen right, plus the reference
+      double a = std::fmod((t->part->theta * 180.0 / PI) + t->refDeg, 360.0);   // degrees clockwise from screen right, plus the reference
       if (a < 0)
          a += 360.0;
       deg = (float)a;
       return true;
-   }
-
-   double Omega(const int id) { return id >= 0 && id < (int)g_tt.size() ? g_tt[id].omega : 0.0; }
-
-   void Axis(const int id, double &x, double &y)
-   {
-      x = y = 0.0;
-      if (id >= 0 && id < (int)g_tt.size())
-      {
-         x = g_tt[id].x * UM;
-         y = g_tt[id].y * UM;
-      }
-   }
-
-   void AddImpulse(const int id, const double j)
-   {
-      if (id >= 0 && id < (int)g_tt.size())
-         g_tt[id].impulse += j;
    }
 
    void Holes(const RubberContact::CarvedHole *&holes, int &n)
@@ -477,7 +430,7 @@ namespace Turntables
          }
          if (t.marker != "none")
          {
-            build(v, idx, t.theta + t.refDeg * PI / 180.0, true);
+            build(v, idx, t.part->theta + t.refDeg * PI / 180.0, true);
             if (!v.empty())
             {
                if (!t.markMesh || t.markMesh->m_vb->m_count != (unsigned int)v.size())

@@ -1,8 +1,9 @@
 // license:GPLv3+
 
-#include "core/stdafx.h"
+#include <algorithm>
+#include <cmath>
 
-#include "physics/hitsling.h"
+#include "physics/hitsling.h"   // (pure SI, no VPX types: the offline band tests build it too; the engine's precompiled header is forced in by the build)
 
 SlingSettings::SlingSettings()
 {
