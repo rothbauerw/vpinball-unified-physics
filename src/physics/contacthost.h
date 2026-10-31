@@ -57,6 +57,7 @@ struct RubberObjectSettings
    bool band = false;             // this rubber is a band
    double bandModel = 0.0;        // 0 = the old node band (default until the cord is finished); 1 = the cord in the group step (bandcord.h, GroupStepDesign 8, 11, 12.2: not ready)
    double bandRingIn = 0.0;       // the ring's inner diameter, inches: the stretch at rest comes from it and the posts; 0 = band_prestretch_pct
+   double bandSectionMm = 0.0;     // the cord's section (its diameter), mm; 0 = from the table's rubber thickness. Cord model only
    double bandPrestretchPct = 7.0; // stretch of a span at rest, percent
    double bandTensionN = 0.0;      // rest tension of a span, N; 0 = from the rubber's modulus and the stretch (the cord's EA is then e_mpa x area), > 0 = this tension (EA = tension / stretch)
    double bandRefHz = 20.0;       // frequency at which tan_delta (the rubber's own loss tangent, shared with the rings) applies to the stretch

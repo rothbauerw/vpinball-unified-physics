@@ -2065,6 +2065,11 @@ struct ContactSystemImpl
    }
 
    // the group's balls change between cycles: each cord's own per-ball state follows them
+   // What a ball's state was to double precision when it left a group step, with the floats that state was written as (the rest of the engine keeps floats). While its floats are still those, the doubles go on: a rounded place
+   // would make the cord re-solve its path, and a pulley could change with nothing paying. Keyed by the ball; a ball gone leaves an entry no other ball's floats match.
+   struct KeptDoubles { Vertex3Ds pos, vel, am; V3 c, v, w; };
+   inline static std::unordered_map<const HitBall *, KeptDoubles> g_keptDoubles;
+
    static void CordFollow(CordBand &cb, GroupStep::Group &g, HitBall *const *balls, const int n)
    {
       BandCord::Part &p = cb.part;
@@ -2147,6 +2152,18 @@ struct ContactSystemImpl
          b.c = w.c;
          b.v = w.v;
          b.w = w.w;
+         {
+            HitBall *const pb = w.pb;
+            const auto kd = g_keptDoubles.find(pb);
+            if (kd != g_keptDoubles.end() && kd->second.pos == pb->m_d.m_pos && kd->second.vel == pb->m_d.m_vel && kd->second.am == pb->m_angularmomentum
+               && w.c.x == (double)pb->m_d.m_pos.x * U && w.c.y == (double)pb->m_d.m_pos.y * U && w.c.z == (double)pb->m_d.m_pos.z * U   // (nothing has moved it this cycle before here)
+               && w.v.x == (double)pb->m_d.m_vel.x * VS && w.v.y == (double)pb->m_d.m_vel.y * VS && w.v.z == (double)pb->m_d.m_vel.z * VS)
+            {
+               b.c = kd->second.c;
+               b.v = kd->second.v;
+               b.w = kd->second.w;
+            }
+         }
          b.fExt = V3();
          if (!gSet && w.extBaseVS.Length() > 0.0)
          {
@@ -2346,6 +2363,15 @@ struct ContactSystemImpl
          w.c = g.ball[ib].c;
          w.v = g.ball[ib].v;
          w.w = g.ball[ib].w;   // (a step that could not be solved: what is left of the cycle is not stepped, so nothing is gained: below)
+         {
+            KeptDoubles &kd = g_keptDoubles[w.pb];
+            kd.pos = Vertex3Ds((float)(w.c.x / U), (float)(w.c.y / U), (float)(w.c.z / U));   // (as the cycle's end writes them)
+            kd.vel = Vertex3Ds((float)(w.v.x / VS), (float)(w.v.y / VS), (float)(w.v.z / VS));
+            kd.am = Vertex3Ds((float)(w.w.x * w.lScale), (float)(w.w.y * w.lScale), (float)(w.w.z * w.lScale));
+            kd.c = w.c;
+            kd.v = w.v;
+            kd.w = w.w;
+         }
          ib++;
       }
       // the part's hit events, and what the touches keep
@@ -2468,11 +2494,15 @@ struct ContactSystemImpl
                PLOGW << msg;
                g_pplayer->m_liveUI->PushNotification(msg, 6000);
             }
-            if (g.books.through && !cb.warnedThrough)
+            if (cb.part.books.crossings > cb.crossingsShown)   // each one, on the cord it happened on
             {
-               cb.warnedThrough = true;
-               const std::string msg = "Rubber " + c->Name() + ": a ball went through the cord";
-               PLOGW << msg;
+               cb.crossingsShown = cb.part.books.crossings;
+               const auto &fr = cb.part.frame;
+               const auto &ca = cb.part.books.crossAt;
+               char where[120];
+               snprintf(where, sizeof where, " at (%.1f, %.1f) U, %.2f m/s", (fr.O.x + fr.ex.x * ca.x + fr.ey.x * ca.y + fr.ez.x * ca.z) / U, (fr.O.y + fr.ex.y * ca.x + fr.ey.y * ca.y + fr.ez.y * ca.z) / U, cb.part.books.crossSpeed);
+               const std::string msg = "Rubber " + c->Name() + ": a ball went through the cord" + where;
+               PLOGW << msg << " t=" << g_pplayer->m_time_msec;
                g_pplayer->m_liveUI->PushNotification(msg, 6000);
             }
          }
@@ -3020,8 +3050,8 @@ bool ContactSystemImpl::EngageImpl(ContactHost *const host, HitBall *const pb, c
                continue;
             if (o->IsPlayfield() && InPlayfieldHole(posStart))
                continue;   // no floor over a kicker's hole
-            if (host == nullptr && o->m_set.band)
-               continue;   // a band engagement: the band rubbers are the band model's; as a rigid surface contact they would stop the ball before the band could deflect
+            if (o->m_set.band && (host == nullptr || o->m_set.bandModel != 0.0))
+               continue;   // the band rubbers are the band model's: as a rigid surface contact they would stop the ball before the band could deflect (as Regather). The old node band keeps its rings when a host engages
             const FRect3D &bb = o->m_hitBBox;
             if (posStart.x < bb.left - reach || posStart.x > bb.right + reach || posStart.y < bb.top - reach || posStart.y > bb.bottom + reach
                 || posStart.z < bb.zlow - reach || posStart.z > bb.zhigh + reach)

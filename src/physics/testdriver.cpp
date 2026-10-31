@@ -307,6 +307,18 @@ namespace TestDriver
             b->mass = v[7];
             Create(*b);
          }
+         else if (a.verb == "roll")
+         {
+            TBall *const r = a.args.size() == 1 ? FindBall(a.args[0]) : nullptr;
+            if (r != nullptr && Alive(r->ball))
+            {
+               HitBall &hb = r->ball->m_hitBall;
+               const float L = hb.Inertia() * (float)DEFAULT_STEPTIME_S / (hb.m_d.m_radius * 0.53975e-3f) / (float)kMps;   // (spin = z x v / R; angular momentum = spin x the engine's inertia x its time unit; v in U per 10 ms over kMps)
+               hb.m_angularmomentum = Vertex3Ds(-hb.m_d.m_vel.y * L, hb.m_d.m_vel.x * L, 0.f);
+            }
+            else
+               Warn(at + "no such ball");
+         }
          else if (a.verb == "destroy")
          {
             TBall *const b = a.args.size() == 1 ? FindBall(a.args[0]) : nullptr;

@@ -1989,7 +1989,8 @@ void HitRubber::CordEnsure()
    auto cb = std::make_shared<CordBand>();
    BandCord::Part &p = cb->part;
    BandCord::Settings &s = p.set;
-   const double rc = m_radiusSI;
+   // band_section_mm: the rubber's real section; the post's groove stays where it is, so the circle of the cord's centre moves with the radius. No key: the table's thickness.
+   const double rc = m_set.bandSectionMm > 0.0 ? 0.5e-3 * m_set.bandSectionMm : m_radiusSI, rcDelta = rc - m_radiusSI;
    s.cordRadius = rc;
    s.eMpa = m_set.eMpa;
    s.tanDelta = m_set.tanDelta;
@@ -2011,7 +2012,7 @@ void HitRubber::CordEnsure()
    for (int i = 0; i < np; i++)
    {
       const BandPost &bp = m_bandPosts[area < 0.0 ? np - 1 - i : i];
-      g.posts[i] = BandCord::Circle { BandCord::V2(bp.x * U, bp.y * U), bp.r * U };
+      g.posts[i] = BandCord::Circle { BandCord::V2(bp.x * U, bp.y * U), bp.r * U + rcDelta };
    }
    // the posts behind the band (band_stops): "x,y,r" in VPX units, or a table object by name
    {

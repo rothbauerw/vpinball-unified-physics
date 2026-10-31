@@ -216,6 +216,7 @@ namespace GroupStep
       virtual double ResNorm2(const double *Res, int off) const = 0;
       // > 0: the move x carries a body past a hard stop by this much (the step is shortened to end on it; piece 1 item 7)
       virtual double StopExcess(const double *x, int off) const = 0;
+      virtual bool PinOnStop(const double *, int) { return false; }   // on its hard stop already and the step would take it on past: it stays there. False: nothing changed
       // the step taken (after an Eval at the solution, before the group moves its balls); onStop: it ended on the hard stop. Its drive work and losses of the
       // step, and whether a ball went through it
       virtual void Accept(const double *x, int off, double h, bool onStop, double &driveJ, double &lossJ, bool &through) = 0;
@@ -529,6 +530,7 @@ namespace GroupStep
          return std::max(h, 1e-7);
       }
 
+      static constexpr double kOnStop = 1e-10;   // (rad) a part this close to its hard stop is on it
       // One step of at most hTry (halved while the solve fails; shortened to end on a part's hard stop). Returns the time taken, 0 = failed.
       double Step(double hTry)
       {
@@ -545,6 +547,14 @@ namespace GroupStep
                }
                // the step that ends on the stop (Illinois false position on the step length), then solved again there (its end state is the one taken)
                double zero[kMaxUnk] = {};
+               {
+                  bool pinnedOne = false;
+                  for (int p = 0; p < np; p++)
+                     if (part[p]->StopExcess(x, partOff[p]) > 0.0 && part[p]->StopExcess(zero, partOff[p]) > -kOnStop)
+                        pinnedOne = part[p]->PinOnStop(zero, partOff[p]) || pinnedOne;
+                  if (pinnedOne)
+                     continue;
+               }
                double lo = 0.0, flo = std::min(StopExcess(zero), -1e-30), hi = h, fhi = StopExcess(), hBelow = 0.0;
                int side = 0;
                for (int it = 0; it < 80; it++)
@@ -558,7 +568,7 @@ namespace GroupStep
                   if (f <= 0.0)
                   {
                      hBelow = hm;
-                     if (f > -1e-10)
+                     if (f > -kOnStop)
                         break;
                      lo = hm;
                      flo = f;
@@ -1253,6 +1263,21 @@ namespace GroupStep
                   }
                   for (int p = 0; p < np; p++)
                      part[p]->ScaleSpeeds(s);
+               }
+               if (Energy() - E0 > 1e-9)   // (paid only to rounding: a change too large for the speeds to close)
+               {
+                  Restore();
+                  if (tries < 11)
+                     continue;
+                  for (int i = 0; i < nb; i++)
+                     ball[i].v = ball[i].v * -1.0;
+                  for (int p = 0; p < np; p++)
+                     part[p]->ScaleSpeeds(-1.0);
+                  Done();
+                  books.steps++;
+                  books.energySteps++;
+                  books.energyBounces++;
+                  return hTry;
                }
                const Books after = books;
                books = bk0;

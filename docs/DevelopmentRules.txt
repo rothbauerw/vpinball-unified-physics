@@ -47,3 +47,9 @@ Set by the project owner. They apply to every change, by a person or an assistan
    The user does not read vpinball.log. Whenever the engine detects behaviour that is unwanted or that we track (a leak, a tripped safety net, a hand-back to stock, a budget overrun, a fast ball, an
    ignored ini key), it raises a notification on the playfield (m_liveUI->PushNotification, text says what, where and what to do) AND writes the same text to the log as WARN. The detector is always on
    and cheap (rule 5), never silent. A notification is raised once per cause per table start, not every cycle. Behaviour that is only a diagnostic number stays in the log/CSV.
+
+9. FINISH THE MODEL FIRST (user, 2026-10-31)
+   a. A model still being built: first build what is missing and make each piece of the model do its job. A piece that does not work is model work, not a side issue.
+   b. Other faults may only be a result of the model being incomplete. Note them and recheck them once it is finished, unless one stops the model working.
+   c. Cost is measured and tuned once the model works, unless it stops the model working or is a real question whether the model is feasible.
+   d. The cost in rules 3 and 5 and in ModelStandards section 7 applies when a model is called done, not on each fix.

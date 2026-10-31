@@ -28,7 +28,7 @@ namespace
    struct BoolKey { const char *name; bool RubberObjectSettings::*field; };
    const NumKey NUM_KEYS[] = {
       { "sling_gap_mm", &RubberObjectSettings::slingGapMm },
-      { "band_model", &RubberObjectSettings::bandModel }, { "band_ring_in", &RubberObjectSettings::bandRingIn }, { "ring_model", &RubberObjectSettings::ringModel },
+      { "band_model", &RubberObjectSettings::bandModel }, { "band_ring_in", &RubberObjectSettings::bandRingIn }, { "band_section_mm", &RubberObjectSettings::bandSectionMm }, { "ring_model", &RubberObjectSettings::ringModel },
       { "surface_layer_mm", &RubberObjectSettings::surfaceLayerMm }, { "edge_radius_mm", &RubberObjectSettings::edgeRadiusMm },
       { "e_mpa", &RubberObjectSettings::eMpa }, { "layer_mm", &RubberObjectSettings::layerMm },
       { "alpha_s_per_m", &RubberObjectSettings::alphaSPerM }, { "restitution", &RubberObjectSettings::restitution }, { "plate_areal_density_kg_m2", &RubberObjectSettings::plateArealKgM2 }, { "plate_mass_g", &RubberObjectSettings::plateMassG }, { "plate_clearance_u", &RubberObjectSettings::plateClearanceU }, { "restitution_ref_speed_ms", &RubberObjectSettings::restitutionRefMs }, { "beta_layer", &RubberObjectSettings::betaLayer },
@@ -179,6 +179,7 @@ namespace
       };
       clampKey("e_mpa", s.eMpa, 0.1, eMaxMpa);
       clampKey("layer_mm", s.layerMm, 0.0, 50.0);
+      clampKey("band_section_mm", s.bandSectionMm, 0.0, 25.0);
       clampKey("surface_layer_mm", s.surfaceLayerMm, 0.2, 50.0);
       clampKey("edge_radius_mm", s.edgeRadiusMm, 0.05, 20.0);
       clampKey("alpha_s_per_m", s.alphaSPerM, 0.0, 2.0);

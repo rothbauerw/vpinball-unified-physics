@@ -138,6 +138,9 @@ namespace BandCord
       int maxRounds = 0, switchCloses = 0;
       double maxStretch = 0.0, maxOverlapM = 0.0, hMinUsed = 1.0;
       bool backTouched = false, through = false, failed = false;
+      int crossings = 0;           // balls that have changed sides of the loop under or through the cord
+      V3 crossAt;                  // the last one: where (band coordinates), its speed in plan view
+      double crossSpeed = 0.0;
       double Losses() const { return cordLossJ + backstopLossJ + frictionJ + twistJ + rollJ + plateLossJ + stopJ; }
    };
 
@@ -539,7 +542,7 @@ namespace BandCord
          };
          Move(c, V2()); Move(v, V2()); Move(z, 0.0); Move(w, V3());
          Move(gP, V3()); Move(gTq, V3()); Move(gPrate, V3()); Move(gTqRate, V3()); Move(gFn, V3()); Move(gFnTaken, V3());
-         Move(holdOn, false); Move(mHold, V3(0.0, 0.0, 1.0)); Move(psi, 0.0); Move(kTw, 0.0); Move(cTw, 0.0); Move(gSurfRate, 0.0);
+         Move(holdOn, false); Move(mHold, V3(0.0, 0.0, 1.0)); Move(psi, 0.0); Move(kTw, 0.0); Move(cTw, 0.0); Move(kTwJoin, 0.0);
          Move(gRootOk, false);
          Move(bsZero, BsZero()); Move(bsNew, true); Move(postState, PostStates());
          int newOfOld[kMaxBalls];
@@ -605,10 +608,19 @@ namespace BandCord
             gFnTaken[i] = snap->gFnTaken[i];
             gPrate[i] = snap->gPrate[i];
             gTqRate[i] = snap->gTqRate[i];
-            gSurfRate[i] = snap->gSurfRate[i];
          }
          gAlphaLast = snap->gAlphaLast;
-         books = snap->books;
+         {
+            const int crossings = books.crossings;   // (the step did happen: the ball has changed sides)
+            const V3 crossAt = books.crossAt;
+            const double crossSpeed = books.crossSpeed;
+            const bool through = books.through;
+            books = snap->books;
+            books.crossings = crossings;
+            books.crossAt = crossAt;
+            books.crossSpeed = crossSpeed;
+            books.through = through;
+         }
          gdiag.settleFails = snap->gdiag.settleFails;
       }
       double SwitchPush(int s) const { return SwitchDisp3(s); }
@@ -825,6 +837,7 @@ namespace BandCord
          {
             gP[i] = gTq[i] = gPrate[i] = gTqRate[i] = gFnTaken[i] = V3();
             postState[i] = PostStates();
+            gSide[i] = 0;
          }
          // the cord at rest round its own posts (as Configure's planar rest path), at its height
          groupMode = true;
@@ -989,7 +1002,7 @@ namespace BandCord
                if (holdOn[i])   // the held arc: the ball's turn against the cord's bend round it (GroupStepDesign 11.4)
                {
                   // (the cord's bend and its twist in series, GroupStepDesign 11.28)
-                  const double kl = T * (R + r) * (R + r) * (1.0 / lin + 1.0 / lout), kw = kTw[i] / (r * r), kb = kl * kw * R * R / (kl + kw * (R + r) * (R + r));
+                  const double kl = T * (R + r) * (R + r) * (1.0 / lin + 1.0 / lout), kw = kTw[i] / (r * r), kb = kl * kw * R * R / std::max(kl + kw * (R + r) * (R + r), 1e-30);
                   lim(s.omegaH / std::sqrt(std::max(kb, 1e-30) / Ib), 2);
                }
             }
@@ -1109,7 +1122,6 @@ namespace BandCord
             gNs0[i] = 0.0;
             gMode[i] = 0;
             gTauB[i] = gTauS[i] = 0.0;
-            gSurfImp[i] = gSurfRate[i] * h;   // the surface's friction on a turning arc: warm start
             for (int j = 0; j < NumBackstops(); j++)
                gNs0[i] += SquashF(gDel0[i * kMaxBs + j]);
             gNs0[i] += SquashF(gFloorDel0[i]);
@@ -1311,7 +1323,7 @@ namespace BandCord
                   gdiag.settleFails++;
                   return false;
                }
-               bool lawMet = false;
+               bool lawMet = false, stayStuck[kMaxBalls] = {};
                for (int setPass = 0; setPass < kArcSetPasses && !lawMet; setPass++)
                {
                   int act[kMaxBalls], na = 0;
@@ -1456,11 +1468,12 @@ namespace BandCord
                         const double dp = (gSlideM[i] - kTw[i] * psi[i]) / std::max(0.5 * kTw[i] + cTw[i] / h, 1e-300), slip = S * gBc[i] - r * dp - R * gBb[i];
                         if (slip * gArcDir[i] < 0.0)
                         {
+                           stayStuck[i] = true;
                            gMode[i] = gNs0[i] > 0.0 ? 6 : 2;
                            lawMet = false;
                         }
                      }
-                     else if (std::fabs(Mid(i)) > r * Fric(i))
+                     else if (std::fabs(Mid(i)) > r * Fric(i) && !stayStuck[i])
                      {
                         gMode[i] = 3;
                         gArcDir[i] = Mid(i) >= 0.0 ? 1.0 : -1.0;
@@ -1586,12 +1599,20 @@ namespace BandCord
          if (gPl)   // the cord's energy does not depend on a plate it is not on: as a ball off the cord, it takes none of the correction
          {
             bool onFace = false;
-            for (int k = 0; k < path3.n && !onFace; k++)
-               onFace = path3.e[k].kind == kFace;
-            for (int k = 0; k < gPath1.n && !onFace; k++)
-               onFace = gPath1.e[k].kind == kFace;
-            for (int k = 0; k < pm.n && !onFace; k++)
-               onFace = pm.e[k].kind == kFace;
+            const auto OnPlate = [&](const Path3 &pa, const Config &qc) {
+               for (int k = 0; k < pa.n && !onFace; k++)
+                  if (pa.e[k].kind == kFace)
+                     onFace = true;
+                  else if (pa.e[k].kind == kBall)   // (a ball with the plate in its way: its room moves with the plate)
+                  {
+                     double gp = 0.0;
+                     BallRoom(pa.e[k].id, qc, nullptr, &gp);
+                     onFace = gp != 0.0;
+                  }
+            };
+            OnPlate(path3, gq0);
+            OnPlate(gPath1, q1);
+            OnPlate(pm, qm);
             dqc[iphi] = onFace ? dq[iphi] : 0.0;
          }
          // one scalar over the spans, so one discrete gradient closes the energy exactly: the cord's stored energy change, plus each span's stretch loss written as its
@@ -1896,7 +1917,7 @@ namespace BandCord
                const V3 sl = vm + wm.Cross(rc);
                // the slip and turn rates at the step's start (the ball as it began the step)
                const V3 ws = ToBand(gb[i].w), sls = ToBand(gb[i].v) + ws.Cross(rc);
-               const bool across = !(holdOn[i] && !gStill[i]);   // a held ball: across the cord its held arc grips (11.3); an arc held still: the cord is still
+               const bool across = Find3(path3, kBall, i) < 0 || gStill[i];   // on an arc, across the cord its spring grips; an arc held still: the cord is still
                Grip g;
                g.s1 = sl.Dot(t1);
                g.s2 = across ? sl.Dot(t2) : 0.0;
@@ -1941,24 +1962,23 @@ namespace BandCord
                      gSlideDir[i] = Pn * (1.0 / pl);
                }
                Tq = rc.Cross(Pn) + n3 * Mtw + t2 * Mr;
-               // an arc turning with the ball while pressed onto a surface: the surface's friction on that turn (about the cord's direction, limit mu Ns (R + 2 r)
-               // over the step), stick / slide on the ball's mid-step turn rate without this impulse (free ball: compliance 1 / (2 I))
-               double si = 0.0;
+               // an arc turning with the ball while pressed onto a surface: the surface's friction (limit mu Ns) reaches the ball through the massless cord as a force at the touch, across the cord:
+               // a force and its torque, never a torque alone (Newton's third law on the cord; GroupStepDesign). Stick / slide on the touch point's mid-step rate without this impulse (free ball)
                if (holdOn[i] && !gStill[i] && gNs0[i] > 0.0)
                {
-                  const double ls = set.mu * gNs0[i] * (R + 2.0 * r) * h, u0 = wm.Dot(gT1[i]), uE = u0 - 0.5 * ws.Dot(gT1[i]);
-                  const double sE = std::min(std::max(-2.0 * Ib * uE, -ls), ls);
-                  si = sE * (u0 + sE / (2.0 * Ib)) <= 0.0 ? sE : std::min(std::max(-2.0 * Ib * u0, -ls), ls);
-                  Tq = Tq + gT1[i] * si;
+                  const V3 dS = gT1[i].Cross(rc) * (1.0 / R);
+                  const double ls = set.mu * gNs0[i] * h, kS = 0.5 * (1.0 / m + R * R / Ib), u0 = (vm + wm.Cross(rc)).Dot(dS), uE = u0 - 0.5 * sls.Dot(dS);
+                  const double sE = std::min(std::max(-uE / kS, -ls), ls);
+                  const double pS = sE * (u0 + kS * sE) <= 0.0 ? sE : std::min(std::max(-u0 / kS, -ls), ls);
+                  Pn = Pn + dS * pS;
+                  Tq = rc.Cross(Pn) + n3 * Mtw + t2 * Mr;
                }
-               ch = std::max(ch, std::fabs(si - gSurfImp[i]) / (Ib / R));
-               gSurfImp[i] = si;
                gdiag.gripP1[i] = g.P1 / h;
                gdiag.gripP2[i] = g.P2 / h;
                gdiag.gripRoll[i] = Mr / h;
                gdiag.gripTwist[i] = Mtw / h;
                gdiag.gripLim[i] = set.mu * N;
-               gdiag.gripSurf[i] = si / h;
+               gdiag.gripSurf[i] = 0.0;
                gdiag.gripT1[i] = t1;
                gdiag.gripT2[i] = t2;
                gdiag.gripN[i] = n3;
@@ -1967,8 +1987,6 @@ namespace BandCord
             {
                gdiag.stick[i] = -1;
                gdiag.gripP1[i] = gdiag.gripP2[i] = gdiag.gripRoll[i] = gdiag.gripTwist[i] = gdiag.gripLim[i] = gdiag.gripSurf[i] = 0.0;
-               ch = std::max(ch, std::fabs(gSurfImp[i]) / (Ib / R));
-               gSurfImp[i] = 0.0;
             }
             ch = std::max(ch, std::max((Pn - gP[i]).Length() / m, (Tq - gTq[i]).Length() / (Ib / R)));
             gP[i] = Pn;
@@ -1992,6 +2010,15 @@ namespace BandCord
          return s * s;
       }
       double StopExcess(const double *x, int off) const override { return gPl ? phi + x[off] - PhiStop() : -INFINITY; }
+      bool PinOnStop(const double *, int) override
+      {
+         if (pinned || omega < 0.0)
+            return false;
+         pinned = true;
+         gPinJ += 0.5 * Inertia(phi) * omega * omega;   // (the plunger stops on the steel coil stop: inelastic, as the step that ends there)
+         omega = 0.0;
+         return true;
+      }
 
       void Accept(const double *x, int off, double h, bool onStop, double &driveJ, double &lossJ, bool &through) override
       {
@@ -2007,12 +2034,11 @@ namespace BandCord
             fr += -gP[i].Dot(vm + wm.Cross(rc));
             tw += -gMtw[i] * wm.Dot(gN3[i]);
             ro += -gMr[i] * wm.Dot(gT2[i]);
-            fr += -gSurfImp[i] * wm.Dot(gT1[i]);   // the surface's friction on a turning pressed arc
-            gSurfRate[i] = gSurfImp[i] * (1.0 / h);
             gPrate[i] = gP[i] * (1.0 / h);
             gTqRate[i] = gTq[i] * (1.0 / h);
          }
-         double stopJ = 0.0;
+         double stopJ = gPinJ;
+         gPinJ = 0.0;
          if (gPl)
          {
             const double phi1 = phi + dq[3 * nb], I1 = Inertia(phi1), Jb = 0.5 * (1.0 / gI0 + 1.0 / I1);
@@ -2045,6 +2071,7 @@ namespace BandCord
                mHold[i] = mHold[i] * (1.0 / mHold[i].Length());
             }
          path3 = gPath1;
+         bool released = false, letGo[kMaxBalls] = {};
          for (int i = 0; i < nb; i++)
          {
             const int e = Find3(path3, kBall, i);
@@ -2052,17 +2079,45 @@ namespace BandCord
                mHold[i] = path3.ct[e].m;   // joined: held at the plane it joined in
             gTwJoined[i] = e >= 0 && !holdOn[i];
             psi[i] = e >= 0 && holdOn[i] ? gPsi1[i] : psi[i];
-            if (holdOn[i] && e < 0)   // left the cord: any twist still in it is let go (the friction limit has brought it to almost nothing as the push fell)
+            const bool shortArc = e >= 0 && ArcShort(gG1.wrap[e]);
+            if (holdOn[i] && (e < 0 || shortArc))   // left the cord, or too short to hold: any twist still in it is let go (the friction limit has brought it to almost nothing as the push fell)
             {
                gTwDropJ += 0.5 * kTw[i] * gPsi1[i] * gPsi1[i];
                psi[i] = 0.0;
             }
-            holdOn[i] = e >= 0;
+            letGo[i] = holdOn[i] && shortArc;
+            released = released || letGo[i];
+            if (shortArc)
+               gTwJoined[i] = false;
+            holdOn[i] = e >= 0 && !shortArc;
+         }
+         double vHeld = 0.0;
+         if (released)
+         {
+            double delH[kMaxBalls];
+            FloorState(gPath1, gG1, delH);
+            vHeld = SpanV(sLs1) + FloorVOf(delH);
          }
          Commit3(path3);
+         if (released)
+         {
+            const double vFree = SpanV(spanL) + gFloorV;
+            if (vFree > vHeld + gNoiseE)
+            {
+               for (int i = 0; i < nb; i++)
+                  if (letGo[i])
+                     holdOn[i] = true;
+               Commit3(path3);
+            }
+            else
+               gTwDropJ += vHeld - vFree;
+         }
          for (int i = 0; i < nb; i++)
             if (gTwJoined[i])
                TwistJoin(i);
+         for (int i = 0; i < nb; i++)
+            if (holdOn[i])
+               SetShear(i, gFnTaken[i].Length(), gTwDropJ);
          gPostSlipJ = gTwDropJ;
          gTwDropJ = 0.0;
          PostSlip();
@@ -2122,6 +2177,7 @@ namespace BandCord
       const GroupStep::Ball *gb = nullptr;   // the group's balls at the step's start
       Dofs gd;                               // the planar helpers' layout (2 per ball, the plate): the backstops' gradients
       bool gPl = false, gCoil = false;
+      double gPinJ = 0.0;
       Config gq0;
       double gL0 = 0.0, gI0 = 1.0, gp0 = 0.0, gIHigh1 = 0.0, gI2 = 0.0, gNoiseL = 0.0, gNoiseD = 0.0;
       double gDel0[kMaxBalls * kMaxBs] = {};
@@ -2141,6 +2197,7 @@ namespace BandCord
       double spanS[kMaxPosts] = {}, spanL[kMaxPosts] = {};   // each span's unstretched length (changed only by a slip round a post) and its length now
       double psi[kMaxBalls] = {}, kTw[kMaxBalls] = {}, cTw[kMaxBalls] = {}, gPsi1[kMaxBalls] = {}, gTwM[kMaxBalls] = {}, gSlideF[kMaxBalls] = {}, gSlideM[kMaxBalls] = {}, gRootBb[kMaxBalls] = {}, gRootA[kMaxBalls] = {}, gBc2[kMaxBalls] = {}, gTwDropJ = 0.0;
       bool gTwJoined[kMaxBalls] = {};
+      int gSide[kMaxBalls] = {};   // which side of the loop each ball is on: 1 outside, -1 inside, 0 not known yet
       double gPostSlipJ = 0.0, gNoiseE = 0.0, gFloorTop = -1e30, gFloorV = 0.0, gFloorLoss = 0.0, gFloorDel0[kMaxBalls] = {};
       mutable double linArc[kMaxPath] = {};
       static constexpr int kArcSetPasses = 8, kArcIters = 30;   // the several arcs' solve: how many times which arcs slide may change, and rounds in each
@@ -2150,7 +2207,7 @@ namespace BandCord
       double gBb[kMaxBalls] = {}, gBc[kMaxBalls] = {}, gTqB[kMaxBalls] = {}, gSlideTq[kMaxBalls] = {}, gHoldLoss = 0.0, gN0[kMaxBalls] = {};
       // the surface's grip on a held arc (GroupStepDesign 11.10): the squash force at the step's start (its limit), the two frictions on the arc (N m), the mode
       // (2 the arc turns with the ball, 3 slides on the ball (no surface), 4 held by the surface, 5 slides on both)
-      double gNs0[kMaxBalls] = {}, gTauB[kMaxBalls] = {}, gTauS[kMaxBalls] = {}, gSurfImp[kMaxBalls] = {}, gSurfRate[kMaxBalls] = {};
+      double gNs0[kMaxBalls] = {}, gTauB[kMaxBalls] = {}, gTauS[kMaxBalls] = {};
       int gMode[kMaxBalls] = {};
       bool gStill[kMaxBalls] = {};   // this step: the arc held still by the surface it is pressed onto (its grip the stronger), the ball rubbing on it
       bool gSlid[kMaxBalls] = {};
@@ -2195,8 +2252,16 @@ namespace BandCord
       // tangents, so a pass or a solve only works out what has moved.
       struct Contact3
       {
+         bool heldA = false;
+         V3 msIn, msOut;      // a flat pulley next to a ball: the plane of the ball's arc on that side
+         double rbIn = 0.0, rbOut = 0.0, h0In = 0.0, h0Out = 0.0;   // (signed) the ellipse's radius and its reach along the centres' line
+         bool eOn = false, xOn = false;   // a ball: a neighbour's point is on or inside its sphere, so the run on that side is closed
          V3 E, X, m = V3(0.0, 0.0, 1.0), tOut, tIn;
          double zc = 0.0;
+         V3 hu, hA, hB;              // a held arc: where it crosses the held plane (from the centre); the neighbours' points it was worked out from
+         double cornerM = 0.0, dLdRho = 0.0;   // the corner there along the plane's normal (the pull on the plane's turn); the length's change with the radius
+         double slopeU = 0.0;        // the length's change with the crossing point's place along the plane's circle
+         V3 uB1, uB2;                // the plane's basis it was worked out in
          V3 cOwn, cIn, cOut;
          double rrIn = 0.0, rrOut = 0.0, wr = 0.0;
          bool inOk = false, outOk = false, wrOk = false;
@@ -2229,6 +2294,15 @@ namespace BandCord
       bool groupMode = false;
 
       V2 WallEnd(int id) const { const WallSpec &wl = geo.walls[id / 2]; return id % 2 == 0 ? wl.A : wl.B; }
+      // The radius a ball's sphere has on the cord's path: R + r. A ball pressing the cord onto a surface flattens it there, at that one place (the squash carries the force); the rest of the arc stays where it was.
+      double BallRoom(const int, const Config &, V3 *grad = nullptr, double *gradPhi = nullptr) const
+      {
+         if (grad)
+            *grad = V3();
+         if (gradPhi)
+            *gradPhi = 0.0;
+         return R + r;
+      }
       void Pulley3(const Elem &e, const Config &q, int &type, V3 &cen, double &rho) const
       {
          switch (e.kind)
@@ -2237,16 +2311,59 @@ namespace BandCord
          case kStop: type = kFixed; cen = V3(geo.stops[e.id].c.x, geo.stops[e.id].c.y, 0.0); rho = geo.stops[e.id].r; break;   // the cord pinned on it does not slide up or down it (user, 2026-10-30)
          case kFace: { const V2 f = FacePoint(e.id, q.phi); type = kSlide; cen = V3(f.x, f.y, 0.0); rho = r; break; }
          case kWallEnd: { const V2 f = WallEnd(e.id); type = kSlide; cen = V3(f.x, f.y, 0.0); rho = geo.walls[e.id / 2].halfThick + r; break; }
-         case kBall: type = kSphere; cen = V3(q.c[e.id].x, q.c[e.id].y, q.z[e.id]); rho = -(R + r); break;
+         case kBall: type = kSphere; cen = V3(q.c[e.id].x, q.c[e.id].y, q.z[e.id]); rho = -BallRoom(e.id, q); break;
          default: type = kSphere; cen = V3(q.c[e.id].x, q.c[e.id].y, q.z[e.id]); rho = R + 3.0 * r; break;   // kBallBack
          }
       }
       // One tangent of a pulley in plane m: d the neighbour's centre in the plane, seen from where the run leaves, dr the radii's difference
-      static void Tan3(const V3 &m, const V3 &d, double dr, V3 &t)
+      // A run's length between two circles (D between centres, a the radii's difference or sum): sqrt(g) sqrt(D + a), g = D - a, the gap. Over a gap of one cord radius its start is smooth, with S = sqrt(g) and its slope met at the
+      // top: a cord can't turn from a straight run onto a pulley in less than its own radius. dS: dS/dg.
+      static double SoftS(const double g, const double dl, double &dS)
+      {
+         if (g >= dl)
+         {
+            const double q = std::sqrt(g);
+            dS = 0.5 / q;
+            return q;
+         }
+         if (g <= 0.0)
+         {
+            dS = 0.0;
+            return 0.0;
+         }
+         const double t = g / dl, A = std::sqrt(dl);
+         dS = A * (5.0 * t - 4.5 * t * t) / dl;
+         return A * t * t * (2.5 - 1.5 * t);
+      }
+      static double SoftL(const double g, const double dl, double &dL)
+      {
+         if (g >= dl)
+         {
+            dL = 0.0;
+            return 1.0;
+         }
+         if (g <= 0.0)
+         {
+            dL = 0.0;
+            return 0.0;
+         }
+         const double t = g / dl, q = std::sqrt(t);
+         dL = 3.75 * q * (1.0 - t) / dl;
+         return t * q * (2.5 - 1.5 * t);
+      }
+      static void Tan3(const V3 &m, const V3 &d, double dr, V3 &t, const double soft = 0.0)
       {
          const double D2 = d.Dot(d);
          const V3 mxd = m.Cross(d);
-         if (D2 > dr * dr)
+         if (soft > 0.0 && D2 > 0.0)
+         {
+            const double D = std::sqrt(D2), a = std::fabs(dr), sg = dr >= 0.0 ? 1.0 : -1.0;
+            double dS;
+            const double cs = std::min(SoftS(D - a, soft, dS) * std::sqrt(D + a) / D, 1.0), sn = sg * std::sqrt(1.0 - cs * cs);
+            t = (d * cs + mxd * sn) * (1.0 / D);
+            return;
+         }
+         if (D2 - dr * dr > 1e-12 * D2)   // (two circles that touch: rounding must not make a run of them)
          {
             const double l = std::sqrt(D2 - dr * dr), iD = 1.0 / D2;
             t = V3((d.x * l + mxd.x * dr) * iD, (d.y * l + mxd.y * dr) * iD, (d.z * l + mxd.z * dr) * iD);
@@ -2268,8 +2385,265 @@ namespace BandCord
       // the cosine between the two planes, mA and mB their normals: a run touching both lies in both, so that is how far the other circle reaches sideways of the
       // run, its sign the side seen from this plane); defined when the two circles overlap (a ball squashing the cord onto a post: the run between them has no
       // length; a tangent from a point inside the other circle would not exist). The result: the largest squared move of E or X.
+      // One side of a held arc: from the point P (from the centre) round the sphere of radius rr to its point u (a unit vector): the length, its change with the place of u along h, the touch point, the way
+      // the cord goes there, and how it arrives at u. A point inside the sphere is taken as on it; a u in plain sight from P is reached straight.
+      static constexpr double kOnSphere = 1e-14;
+      struct HeldSide { double len = 0.0, slope = 0.0, wrap = 0.0, a = 0.0, dr = 0.0; V3 touch, t, at; };
+      static HeldSide HeldTo(const V3 &P, const V3 &u, const V3 &h, const double rr)
+      {
+         HeldSide o;
+         const double d = P.Length();
+         const V3 up = P * (1.0 / d);
+         const double ca = std::min(std::max(up.Dot(u), -1.0), 1.0), gam = std::acos(ca), sg = std::sqrt(std::max(1.0 - ca * ca, 0.0));
+         const bool out = d > rr + kOnSphere;   // (a point on the sphere within rounding: acos would turn 1e-16 m of rounding into 1e-7 rad of direction)
+         o.a = out ? std::acos(rr / d) : 0.0;
+         if (gam >= o.a && sg > 1e-12)
+         {
+            const V3 nv = (u - up * ca) * (1.0 / sg);
+            const double l = out ? std::sqrt(d * d - rr * rr) : 0.0;
+            o.wrap = gam - o.a;
+            o.len = l + rr * o.wrap;
+            o.slope = -rr * up.Dot(h) / sg;
+            o.dr = o.wrap;
+            o.touch = out ? (up * std::cos(o.a) + nv * std::sin(o.a)) * rr : P;   // (a point on the sphere, or inside it by rounding: the arc starts at it, with no run)
+            o.t = up * -std::sin(o.a) + nv * std::cos(o.a);
+            o.at = up * -sg + nv * ca;
+         }
+         else
+         {
+            const V3 v = u * rr - P;
+            const double l = v.Length();
+            o.len = l;
+            o.touch = u * rr;
+            o.t = l > 0.0 ? v * (1.0 / l) : h;
+            o.at = o.t;
+            o.slope = rr * o.t.Dot(h);
+            o.dr = o.t.Dot(u);
+         }
+         return o;
+      }
+      // A held arc's touch points (Touch3's job for it): A and B the neighbours' points, m the held plane. The shortest way from A to B that crosses the plane at the point pinned at the arc's middle, seen in the plane: true tangents from each point, one corner there. A search along the plane's circle is not used: on a long arc it can hop to a valley on the ball's far side, with no friction paid (MEASURED: 156 mJ, r5_3).
+      double TouchHeld(const V3 &cen, const double rho, const V3 &A, const V3 &B, const V3 &m, Contact3 &ct) const
+      {
+         const double rr = std::fabs(rho);
+         const auto eq = [](const V3 &a, const V3 &b) { return a.x == b.x && a.y == b.y && a.z == b.z; };
+         if (ct.wrOk && ct.rrIn == rr && eq(cen, ct.cOwn) && eq(A, ct.hA) && eq(B, ct.hB) && eq(m, ct.m))
+            return 0.0;   // (the same inputs give the same answer: a pass only works out what has moved)
+         const V3 PA = A - cen, PB = B - cen;
+         const double dA = PA.Length(), dB = PB.Length();
+         if (!(dA > 0.0 && dB > 0.0))
+            return 0.0;
+         // the crossing point: the middle of the arc seen in the plane, from where it already is (angles from there, so that the arc stays on its side)
+         V3 h1 = ct.hu - m * m.Dot(ct.hu);
+         if (h1.Length() < 1e-12)
+         {
+            h1 = PA * (1.0 / dA) + PB * (1.0 / dB);
+            h1 = h1 - m * m.Dot(h1);
+            if (h1.Length() < 1e-9)
+               h1 = V3(1.0, 0.0, 0.0) - m * m.x;
+         }
+         h1 = h1 * (1.0 / h1.Length());
+         V3 h2 = m.Cross(h1);
+         if (PB.Dot(h2) < PA.Dot(h2))   // (the way from A's side to B's)
+            h2 = h2 * -1.0;
+         const double xA = PA.Dot(h1), yA = PA.Dot(h2), xB = PB.Dot(h1), yB = PB.Dot(h2);
+         const double dpA = std::sqrt(xA * xA + yA * yA), dpB = std::sqrt(xB * xB + yB * yB);
+         const double angA = std::atan2(yA, xA) + (dpA > rr + kOnSphere ? std::acos(rr / dpA) : 0.0), angB = std::atan2(yB, xB) - (dpB > rr + kOnSphere ? std::acos(rr / dpB) : 0.0);
+         const double am = 0.5 * (angA + angB);
+         ct.uB1 = h1;
+         ct.uB2 = h2;
+         const V3 u = h1 * std::cos(am) + h2 * std::sin(am), h = m.Cross(u);
+         const HeldSide sa = HeldTo(PA, u, h, rr), sb = HeldTo(PB, u, h, rr);
+         const V3 E0 = ct.E, X0 = ct.X;
+         ct.heldA = true;
+         ct.E = dA > rr + kOnSphere ? cen + sa.touch : A;
+         ct.X = dB > rr + kOnSphere ? cen + sb.touch : B;
+         ct.eOn = !(dA > rr + kOnSphere);
+         ct.xOn = !(dB > rr + kOnSphere);
+         ct.m = m;
+         ct.cOwn = cen;
+         ct.hA = A;
+         ct.hB = B;
+         ct.rrIn = rr;
+         ct.tIn = sa.t;
+         ct.tOut = sb.t * -1.0;
+         ct.hu = u * rr;
+         ct.cornerM = (sa.at + sb.at).Dot(m);   // (the way it arrives from A, less the way it leaves toward B: minus the way it arrives from B)
+         ct.slopeU = (ct.uB2.Dot(m.Cross(ct.uB1)) >= 0.0 ? 1.0 : -1.0) * (sa.slope + sb.slope);   // (along the way the angle in its basis grows)
+         ct.dLdRho = sa.dr + sb.dr;
+         // the wrap: the cord goes round by this much; if the straight line between the neighbours clears the sphere, it has come off
+         const V3 ab = PB - PA;
+         const double ab2 = ab.Dot(ab), ua = ab2 > 0.0 ? std::min(std::max(-PA.Dot(ab) / ab2, 0.0), 1.0) : 0.0, dLine = (PA + ab * ua).Length();
+         ct.wr = dLine >= rr ? (rr - dLine) / rr : sa.wrap + sb.wrap;
+         ct.wrOk = true;
+         ct.inOk = ct.outOk = false;
+         const V3 e0 = ct.E - E0, x0 = ct.X - X0;
+         return std::max(e0.Dot(e0), x0.Dot(x0));
+      }
+      // A free arc: no plane to cross, so no corner and nothing to search: the shortest way round the sphere, closed form in the plane through A, B and the centre. Its wrap goes below 0 as the straight line clears the sphere.
+      double TouchFree(const V3 &cen, const double rho, const V3 &A, const V3 &B, const V3 &m, Contact3 &ct) const
+      {
+         const double rr = std::fabs(rho);
+         const auto eq = [](const V3 &a, const V3 &b) { return a.x == b.x && a.y == b.y && a.z == b.z; };
+         if (ct.wrOk && ct.rrIn == rr && eq(cen, ct.cOwn) && eq(A, ct.hA) && eq(B, ct.hB) && eq(m, ct.m))
+            return 0.0;
+         const V3 PA = A - cen, PB = B - cen;
+         const double dA = PA.Length(), dB = PB.Length();
+         if (!(dA > 0.0 && dB > 0.0))
+            return 0.0;
+         const V3 e1 = PA * (1.0 / dA), nrm = PA.Cross(PB);
+         const double nl = nrm.Length();
+         const V3 nn = nl > 1e-9 * dA * dB ? nrm * (1.0 / nl) : m, e2 = nn.Cross(e1);
+         const double gam = std::atan2(nl, PA.Dot(PB));
+         const bool outA = dA > rr + kOnSphere, outB = dB > rr + kOnSphere;
+         const double aA = outA ? std::acos(rr / dA) : 0.0, aB = outB ? std::acos(rr / dB) : 0.0, angX = gam - aB;
+         const V3 uE = e1 * std::cos(aA) + e2 * std::sin(aA), uX = e1 * std::cos(angX) + e2 * std::sin(angX);
+         const V3 E0 = ct.E, X0 = ct.X;
+         ct.heldA = false;
+         ct.E = outA ? cen + uE * rr : A;
+         ct.X = outB ? cen + uX * rr : B;
+         ct.eOn = !outA;
+         ct.xOn = !outB;
+         ct.m = m;
+         ct.cOwn = cen;
+         ct.hA = A;
+         ct.hB = B;
+         ct.rrIn = rr;
+         ct.tIn = e1 * -std::sin(aA) + e2 * std::cos(aA);
+         ct.tOut = e1 * -std::sin(angX) + e2 * std::cos(angX);
+         const double angM = 0.5 * (aA + angX);
+         ct.hu = (e1 * std::cos(angM) + e2 * std::sin(angM)) * rr;
+         ct.cornerM = 0.0;
+         ct.slopeU = 0.0;
+         ct.wr = gam - aA - aB;
+         ct.dLdRho = ct.wr;
+         ct.wrOk = true;
+         ct.inOk = ct.outOk = false;
+         const V3 e0 = ct.E - E0, x0 = ct.X - X0;
+         return std::max(e0.Dot(e0), x0.Dot(x0));
+      }
+      // A sliding pulley's height next to a ball: its point P in plan (from the ball's centre, in plan), the far neighbour at height zA and plan distance la, the ball's sphere and where the cord crosses it (unit u):
+      // the shortest way, in the height. One valley: the slope is (z - zA) / run - (the tangent's height part).
+      static double SlideZ(const V3 &cBall, const double rr, const V3 &u, const double px, const double py, const double zA, const double la, double z0)
+      {
+         const auto G = [&](const double z) {
+            const V3 P(px - cBall.x, py - cBall.y, z - cBall.z);
+            const double dz = z - zA, run = std::sqrt(la * la + dz * dz);
+            return (run > 0.0 ? dz / run : 0.0) - HeldTo(P, u, V3(0.0, 0.0, 1.0), rr).t.z;
+         };
+         double g0 = G(z0);
+         if (std::fabs(g0) < 1e-13)
+            return z0;
+         {
+            const double dz0 = z0 - zA, run2 = la * la + dz0 * dz0, run = std::sqrt(run2), dP = std::sqrt((px - cBall.x) * (px - cBall.x) + (py - cBall.y) * (py - cBall.y) + (z0 - cBall.z) * (z0 - cBall.z));
+            double za = z0, ga = g0, zb = z0 - g0 / (la * la / (run * run2) + 1.0 / std::max(dP, rr));
+            for (int it = 0; it < 8; it++)
+            {
+               const double gb = G(zb);
+               if (std::fabs(gb) < 1e-13)
+                  return zb;
+               if (gb == ga)
+                  break;
+               const double zn = zb - gb * (zb - za) / (gb - ga);
+               za = zb;
+               ga = gb;
+               zb = zn;
+            }
+         }
+         double stp = 1e-6, lo = z0, hi = z0, glo = g0, ghi = g0;
+         for (int it = 0; it < 30; it++)
+         {
+            if (g0 > 0.0)
+            {
+               hi = lo;
+               ghi = glo;
+               lo -= stp;
+               glo = G(lo);
+               if (glo <= 0.0)
+                  break;
+            }
+            else
+            {
+               lo = hi;
+               glo = ghi;
+               hi += stp;
+               ghi = G(hi);
+               if (ghi >= 0.0)
+                  break;
+            }
+            stp *= 2.0;
+         }
+         if ((glo <= 0.0) == (ghi <= 0.0))
+            return z0;
+         for (int it = 0; it < 50 && hi - lo > 1e-15; it++)
+         {
+            double t = ghi - glo != 0.0 ? lo - glo * (hi - lo) / (ghi - glo) : 0.5 * (lo + hi);
+            if (!(t > lo + 0.05 * (hi - lo) && t < hi - 0.05 * (hi - lo)))
+               t = 0.5 * (lo + hi);
+            const double gt = G(t);
+            if (std::fabs(gt) < 1e-14)
+               return t;
+            if (gt > 0.0)
+            {
+               hi = t;
+               ghi = gt;
+            }
+            else
+            {
+               lo = t;
+               glo = gt;
+            }
+         }
+         return 0.5 * (lo + hi);
+      }
+      static double SectionR(const double rho, const double dz)
+      {
+         const double r2 = rho * rho - dz * dz;
+         const double a = r2 > 0.0 ? std::sqrt(r2) : 0.0;
+         return rho < 0.0 ? -a : a;
+      }
+      // The tangent from a flat pulley (plane m, radius rho) to a ball's great circle seen from above: an ellipse, radius rb (signed), its plane's normal ms. h is how far it reaches along the run's normal, found with the run (from its last value). d, isIn: as Tan3's.
+      static void TanBall(const V3 &m, const V3 &d, const double rho, const double rb, const V3 &ms, const bool isIn, double &hs, double &h0s, V3 &t, const double soft)
+      {
+         const double R = std::fabs(rb), sg = rb < 0.0 ? -1.0 : 1.0;
+         double h = hs != 0.0 ? std::min(std::fabs(hs), R) : R, hP = 0.0, eP = 0.0, lo = 0.0, hi = R;
+         for (int it = 0; it < 60; it++)
+         {
+            Tan3(m, d, isIn ? sg * h - rho : rho - sg * h, t);
+            const V3 n = m.Cross(t);
+            const double c = ms.Dot(n), e = R * std::sqrt(std::max(1.0 - c * c, 0.0)) - h;
+            if (std::fabs(e) < 1e-15 || hi - lo < 1e-15)
+               break;
+            (e > 0.0 ? lo : hi) = h;
+            double hN = it > 0 && e != eP ? h + e * (h - hP) / (eP - e) : h + e;
+            if (!(hN > lo && hN < hi))
+               hN = 0.5 * (lo + hi);
+            hP = h;
+            eP = e;
+            h = hN;
+         }
+         hs = sg * h;
+         const double D2 = d.Dot(d), D = std::sqrt(D2), c0 = D > 0.0 ? ms.Dot(d) / D : 0.0, h0 = R * std::sqrt(std::max(1.0 - c0 * c0, 0.0));
+         h0s = sg * h0;
+         if (soft > 0.0 && D > 0.0)
+         {
+            const double dr = isIn ? sg * h - rho : rho - sg * h, dr0 = isIn ? sg * h0 - rho : rho - sg * h0, a = std::fabs(dr), sd = dr >= 0.0 ? 1.0 : -1.0;
+            double dL;
+            const double L = SoftL(D - std::fabs(dr0), soft, dL), C = D2 > a * a ? std::sqrt(D2 - a * a) / D : 0.0, cs = std::min(L * C, 1.0), sn = sd * std::sqrt(1.0 - cs * cs);
+            t = (d * cs + m.Cross(d) * sn) * (1.0 / D);
+         }
+      }
+      static bool BallPlane(const V3 &at, const V3 &cBall, const V3 &t, V3 &ms)
+      {
+         ms = (at - cBall).Cross(t);
+         const double l = ms.Length();
+         if (l < 1e-9)
+            return false;
+         ms = ms * (1.0 / l);
+         return true;
+      }
       double Touch3(int type, V3 &cen, double rho, const V3 &A, const V3 &B, const V3 &cA, double rA, const V3 &mA, const V3 &cB, double rB, const V3 &mB, Contact3 &ct,
-                    const V3 *mFix = nullptr) const
+                    const V3 *mFix = nullptr, const bool sphA = false, const bool sphB = false, const V3 *huA = nullptr, const V3 *huB = nullptr, const V3 *tA = nullptr, const V3 *tB = nullptr, const bool heldNA = false, const bool heldNB = false) const
       {
          const bool flat = type != kSphere;
          V3 mm = ct.m;
@@ -2287,26 +2661,57 @@ namespace BandCord
                   mm = nrm * (mm.Dot(nrm) < 0.0 ? -il : il);
                }
             }
+            return mFix ? TouchHeld(cen, rho, A, B, mm, ct) : TouchFree(cen, rho, A, B, mm, ct);
          }
          const auto same = [flat](const V3 &a, const V3 &b) { return a.x == b.x && a.y == b.y && (flat || a.z == b.z); };
          const bool ownSame = same(cen, ct.cOwn) && mm.x == ct.m.x && mm.y == ct.m.y && mm.z == ct.m.z;
-         const double rrI = rA * mm.Dot(mA), rrO = rB * mm.Dot(mB);
+         const bool ptA = flat && sphA && rA > 0.0, ptB = flat && sphB && rB > 0.0;   // (a back span's sphere seen from a flat pulley: the point the cord touches it; a ball's own arc by its section, which holds pressed)
+         const V3 cA1 = ptA ? A : cA, cB1 = ptB ? B : cB;
+         const auto eq = [](const V3 &a, const V3 &b) { return a.x == b.x && a.y == b.y && a.z == b.z; };
+         V3 msA, msB;
+         const bool useMA = heldNA && type == kFixed, useMB = heldNB && type == kFixed;   // (a fixed pulley lies near the held plane; a sliding one's height is free)
+         if (useMA)
+            msA = mA;
+         if (useMB)
+            msB = mB;
+         const bool ellA = flat && sphA && !ptA && tA && (useMA || BallPlane(A, cA, *tA, msA)), ellB = flat && sphB && !ptB && tB && (useMB || BallPlane(B, cB, *tB, msB));
+         const double rrI = ptA ? 0.0 : ellA ? ct.rrIn : flat && sphA ? SectionR(rA, cA.z - cen.z) : rA * mm.Dot(mA), rrO = ptB ? 0.0 : ellB ? ct.rrOut : flat && sphB ? SectionR(rB, cB.z - cen.z) : rB * mm.Dot(mB);
          bool moved = false;
-         if (!(ct.inOk && ownSame && rrI == ct.rrIn && same(cA, ct.cIn)))
+         if (!(ct.inOk && ownSame && rrI == ct.rrIn && same(cA1, ct.cIn) && (!ellA || (eq(msA, ct.msIn) && rA == ct.rbIn))))
          {
-            const V3 u = cA - cen;
-            Tan3(mm, mm * mm.Dot(u) - u, rrI - rho, ct.tIn);
-            ct.cIn = cA;
-            ct.rrIn = rrI;
+            const V3 u = cA1 - cen, d = mm * mm.Dot(u) - u;
+            const double soft = type == kFixed && sphA && !ptA ? 0.1 * r : 0.0;
+            double h = rrI;
+            if (ellA)
+               TanBall(mm, d, rho, rA, msA, true, h, ct.h0In, ct.tIn, soft);
+            else
+            {
+               Tan3(mm, d, rrI - rho, ct.tIn, soft);
+               ct.h0In = rrI;
+            }
+            ct.cIn = cA1;
+            ct.rrIn = h;
+            ct.msIn = msA;
+            ct.rbIn = rA;
             ct.inOk = true;
             moved = true;
          }
-         if (!(ct.outOk && ownSame && rrO == ct.rrOut && same(cB, ct.cOut)))
+         if (!(ct.outOk && ownSame && rrO == ct.rrOut && same(cB1, ct.cOut) && (!ellB || (eq(msB, ct.msOut) && rB == ct.rbOut))))
          {
-            const V3 u = cB - cen;
-            Tan3(mm, u - mm * mm.Dot(u), rho - rrO, ct.tOut);
-            ct.cOut = cB;
-            ct.rrOut = rrO;
+            const V3 u = cB1 - cen, d = u - mm * mm.Dot(u);
+            const double soft = type == kFixed && sphB && !ptB ? 0.1 * r : 0.0;
+            double h = rrO;
+            if (ellB)
+               TanBall(mm, d, rho, rB, msB, false, h, ct.h0Out, ct.tOut, soft);
+            else
+            {
+               Tan3(mm, d, rho - rrO, ct.tOut, soft);
+               ct.h0Out = rrO;
+            }
+            ct.cOut = cB1;
+            ct.rrOut = h;
+            ct.msOut = msB;
+            ct.rbOut = rB;
             ct.outOk = true;
             moved = true;
          }
@@ -2326,6 +2731,13 @@ namespace BandCord
             const double ax = ct.E.x - A.x, ay = ct.E.y - A.y, bx = B.x - ct.X.x, by = B.y - ct.X.y;
             const double la = std::sqrt(ax * ax + ay * ay), lb = std::sqrt(bx * bx + by * by);
             cen.z = la + lb > 0.0 ? A.z + (B.z - A.z) * la / (la + lb) : 0.5 * (A.z + B.z);
+            if (sphB != sphA)   // a ball on one side, its crossing point known: the height directly
+            {
+               const V3 *hu = sphB ? huB : huA;
+               const double hl = hu ? hu->Length() : 0.0;
+               if (hl > 0.0)
+                  cen.z = sphB ? SlideZ(cB, std::fabs(rB), *hu * (1.0 / hl), ct.X.x, ct.X.y, A.z, la, cen.z) : SlideZ(cA, std::fabs(rA), *hu * (1.0 / hl), ct.E.x, ct.E.y, B.z, lb, cen.z);
+            }
             ct.E.z = ct.X.z = cen.z;
             moved = true;
          }
@@ -2365,7 +2777,7 @@ namespace BandCord
          bool conv = false;
          int it = 0;
          double mvPrev = 0.0;
-         for (; it < 400 && !conv; it++)
+         for (; it < 800 && !conv; it++)
          {
             const bool creepPass = it >= 8 && it % 3 == 2;
             if (creepPass)
@@ -2382,7 +2794,8 @@ namespace BandCord
             {
                const int km = k == 0 ? n - 1 : k - 1, kp = k + 1 == n ? 0 : k + 1;
                const V3 *mFix = p.e[k].kind == kBall && q.held[p.e[k].id] ? &q.mh[p.e[k].id] : nullptr;   // a held ball: its plane fixed
-               mv2 = std::max(mv2, Touch3(type[k], g.cen[k], g.rho[k], p.ct[km].X, p.ct[kp].E, g.cen[km], g.rho[km], p.ct[km].m, g.cen[kp], g.rho[kp], p.ct[kp].m, p.ct[k], mFix));
+               V3 huFar[2];
+               mv2 = std::max(mv2, Touch3(type[k], g.cen[k], g.rho[k], p.ct[km].X, p.ct[kp].E, g.cen[km], g.rho[km], p.ct[km].m, g.cen[kp], g.rho[kp], p.ct[kp].m, p.ct[k], mFix, type[km] == kSphere, type[kp] == kSphere, (type[km] == kSphere && !p.ct[km].heldA ? (huFar[0] = p.ct[km].E - g.cen[km], &huFar[0]) : &p.ct[km].hu), (type[kp] == kSphere && !p.ct[kp].heldA ? (huFar[1] = p.ct[kp].X - g.cen[kp], &huFar[1]) : &p.ct[kp].hu), &p.ct[km].tOut, &p.ct[kp].tIn, p.ct[km].heldA, p.ct[kp].heldA));
                if (debugSolve && it >= 394)
                {
                   const Contact3 &c2 = p.ct[k];
@@ -2391,7 +2804,7 @@ namespace BandCord
                }
             }
             const double mv = std::sqrt(mv2);
-            conv = mv <= 2e-14;
+            conv = mv <= (it >= 60 ? 1e-11 : 2e-14);   // (the length's error is second order in the move; a sliding pulley pressed against a ball creeps, its gain near 1)
             // A pair of pulleys pressed together (a ball squashing the cord onto a post: the run between them has almost no length) makes the passes creep: each
             // moves the points by nearly the same step. Once the steps shrink by a steady ratio, the creep is taken to its limit (Aitken), then the passes go on.
             // The same for a pair that swaps between two places (the steps turn back on themselves: a gain near -1, with the same formula half way between them).
@@ -2431,13 +2844,15 @@ namespace BandCord
          {
             const int kp1 = (k + 1) % n;
             V3 d = p.ct[kp1].E - p.ct[k].X;
+            if ((type[kp1] == kSphere && p.ct[kp1].eOn) || (type[k] == kSphere && p.ct[k].xOn))
+               d = V3();
             // two pulleys pressed together (a ball squashing the cord onto a post or the face): the touch points have passed each other along the line of the centres, and the run between them has no
             // length there: what is left of the cord's length is the arcs (the squash carries the force). A height difference between them stays.
             g.gone[k] = false;
             {
                const V3 cd = g.cen[kp1] - g.cen[k];
                const double a = d.Dot(cd), cc = cd.Dot(cd);
-               if (a < 0.0 && cc > 0.0)
+               if (a < 0.0 && cc > 0.0 && type[k] != kSphere && type[kp1] != kSphere)
                {
                   d = d - cd * (a / cc);
                   g.gone[k] = true;
@@ -2445,7 +2860,7 @@ namespace BandCord
             }
             const double l = d.Length();
             g.l[k] = l;
-            g.t[k] = l > 1e-12 ? d * (1.0 / l) : p.ct[k].tOut;
+            g.t[k] = l > 1e-12 ? d * (1.0 / l) : p.e[kp1].kind == kBall || p.e[kp1].kind == kBallBack ? p.ct[kp1].tIn : p.ct[k].tOut;
             g.wrap[k] = WrapOf(p.ct[k], g.rho[k], p.e[k].wrapRef);
             g.L += l + std::fabs(g.rho[k]) * g.wrap[k];
          }
@@ -2464,24 +2879,34 @@ namespace BandCord
       static constexpr int kMaxLinY = 64;
       struct Lin3
       {
-         struct Side { V3 tau, g; double c, s, w; };   // the tangent; dtheta = dd . g + ddr c; m . (neighbour - c); rho (1 - t . tau)
-         struct Un { int k, at; bool slide, frozen; double f, sum, la, lb, dz, nl, sg; V3 ua, ub, da, db; };   // an unknown: a sliding pulley's height, a free ball's plane
+         struct Side { V3 tau, g, tauT, gT, dh; double c, c0, cT, s, w, rr, rr0, D; };   // the tangent; dtheta = dd . g + ddr c; m . (neighbour - c); rho (1 - t . tau)
+         struct Un { int k, at; double f, sum, la, lb, dz; V3 ua, ub; };   // an unknown: a sliding pulley's height
          Side in[kMaxPath], out[kMaxPath];
          Un un[kMaxPath];
+         struct Reach { int k, nb, at, at0; bool isIn; V3 tau, n, dh; double R, h, h0, D, sg; };   // an unknown: how far a ball's ellipse reaches along a flat pulley's run
+         Reach reach[2 * kMaxPath];
+         int nReach;
+         bool heldArc[kMaxPath];
          int nun, ny;
          double A[kMaxLinY][kMaxLinY];   // I - G, factored
          int piv[kMaxLinY];
       };
       mutable Lin3 lin;
       mutable V3 linDc[kMaxPath], linDm[kMaxPath], linDE[kMaxPath], linDX[kMaxPath];
+      mutable double linD0I[kMaxPath] = {}, linD0O[kMaxPath] = {};
+      mutable double linDhI[kMaxPath] = {}, linDhO[kMaxPath] = {}, linThI[kMaxPath] = {}, linThO[kMaxPath] = {};   // the ball's reach seen from each side of a flat pulley: its change; that side's tangent's turn
+      mutable double linDr[kMaxPath] = {};   // the change of a pulley's signed radius (a ball's room)
       // one side of pulley k, seen from its neighbour nbk
       void LinSide(const Path3 &p, const Geom3 &g, int k, int nbk, bool isIn, const V3 &tRun, Lin3::Side &S) const
       {
          const V3 &mk = p.ct[k].m;
-         const V3 u = g.cen[nbk] - g.cen[k];
+         const bool flatK = !(p.e[k].kind == kBall || p.e[k].kind == kBallBack), sphN = p.e[nbk].kind == kBall || p.e[nbk].kind == kBallBack;
+         const bool ptN = flatK && p.e[nbk].kind == kBallBack;
+         const V3 u = (ptN ? (isIn ? p.ct[nbk].X : p.ct[nbk].E) : g.cen[nbk]) - g.cen[k];
          S.s = mk.Dot(u);
          const V3 pu = u - mk * S.s, d = isIn ? pu * -1.0 : pu;
-         const double rr = g.rho[nbk] * mk.Dot(p.ct[nbk].m), dr = isIn ? rr - g.rho[k] : g.rho[k] - rr, D2 = d.Dot(d);
+         const double rr = ptN ? 0.0 : flatK && sphN ? (isIn ? p.ct[k].rrIn : p.ct[k].rrOut) : g.rho[nbk] * mk.Dot(p.ct[nbk].m), dr = isIn ? rr - g.rho[k] : g.rho[k] - rr, D2 = d.Dot(d);
+         S.rr = rr;
          const V3 mxd = mk.Cross(d);
          if (D2 <= 1e-30)
          {
@@ -2489,7 +2914,39 @@ namespace BandCord
             S.g = V3();
             S.c = 0.0;
          }
-         else if (D2 > dr * dr)
+         else if ((p.e[k].kind == kPost || p.e[k].kind == kStop) && sphN && !ptN)
+         {
+            const double D = std::sqrt(D2), a = std::fabs(dr), sg = dr >= 0.0 ? 1.0 : -1.0, rr0 = isIn ? p.ct[k].h0In : p.ct[k].h0Out, dr0 = isIn ? rr0 - g.rho[k] : g.rho[k] - rr0, sg0 = dr0 >= 0.0 ? 1.0 : -1.0;
+            double dLs;
+            const double Ls = SoftL(D - std::fabs(dr0), 0.1 * r, dLs), C = D2 > a * a ? std::sqrt(D2 - a * a) / D : 0.0, cs = std::min(Ls * C, 1.0), sn = std::sqrt(1.0 - cs * cs);
+            const V3 dh = d * (1.0 / D);
+            S.tau = (d * cs + mxd * (sg * sn)) * (1.0 / D);
+            S.rr0 = rr0;
+            S.dh = dh;
+            S.D = D;
+            // d cos = kD dD + kR ddr + kR0 ddr0 (ddr0: of the reach along the centres, with the gap there)
+            const double kD = dLs * C + (Ls > 0.0 && C > 0.0 ? Ls * a * a / (D * D2 * C) : 0.0), kR = Ls > 0.0 && C > 0.0 ? -Ls * a / (D2 * C) * sg : 0.0, kR0 = -dLs * C * sg0;
+            if (sn > 1e-9 * D)
+            {
+               S.g = mxd * (1.0 / D2) - dh * (sg * kD / sn);
+               S.c = -sg * kR / sn;
+               S.c0 = -sg * kR0 / sn;
+            }
+            else
+            {
+               S.g = mxd * (1.0 / D2);
+               S.c = C > 0.0 ? 1.0 / (C * D) : 0.0;
+               S.c0 = 0.0;
+            }
+            const double lT = C * D;
+            S.tauT = lT > 0.0 ? (d * lT + mxd * dr) * (1.0 / D2) : mxd * (sg / D);
+            S.gT = lT > 0.0 ? (mxd - d * (dr / lT)) * (1.0 / D2) : mxd * (1.0 / D2);
+            S.cT = lT > 0.0 ? 1.0 / lT : 0.0;
+            const V3 e0 = tRun - S.tau;
+            S.w = g.rho[k] * 0.5 * e0.Dot(e0);
+            return;
+         }
+         else if (D2 - dr * dr > 1e-12 * D2)
          {
             const double l = std::sqrt(D2 - dr * dr);
             S.tau = (d * l + mxd * dr) * (1.0 / D2);
@@ -2502,8 +2959,35 @@ namespace BandCord
             S.g = mxd * (1.0 / D2);
             S.c = 0.0;
          }
+         S.c0 = 0.0;
+         S.rr0 = S.rr;
+         S.tauT = S.tau;
+         S.gT = S.g;
+         S.cT = S.c;
+         S.dh = V3();
+         S.D = 0.0;
          const V3 e = tRun - S.tau;
          S.w = g.rho[k] * 0.5 * e.Dot(e);
+      }
+      // a held arc's crossing point: its move along the plane's circle
+      double ArcDam(const Path3 &p, const Geom3 &g, const int k) const
+      {
+         const int n = p.n;
+         const Contact3 &ct = p.ct[k];
+         const int km = k == 0 ? n - 1 : k - 1, kp = k + 1 == n ? 0 : k + 1;
+         const V3 &cn = g.cen[k], om = ct.m.Cross(linDm[k]), &dc = linDc[k];
+         const double rr = std::fabs(g.rho[k]), drr = g.rho[k] < 0.0 ? -linDr[k] : linDr[k];
+         const auto DAng = [&](const V3 &P, const V3 &dP, const double sgn) {
+            const double x = P.Dot(ct.uB1), y = P.Dot(ct.uB2), dx = dP.Dot(ct.uB1) + om.Dot(ct.uB1.Cross(P)), dy = dP.Dot(ct.uB2) + om.Dot(ct.uB2.Cross(P)), d2 = x * x + y * y, dp = std::sqrt(d2);
+            double da = d2 > 0.0 ? (x * dy - y * dx) / d2 : 0.0;
+            if (dp > rr + kOnSphere)
+            {
+               const double s = std::sqrt(1.0 - rr * rr / d2);
+               da += sgn * (rr / d2 * (x * dx + y * dy) / dp - drr / dp) / s;
+            }
+            return da;
+         };
+         return 0.5 * (DAng(ct.hA - cn, linDX[km] - dc, 1.0) + DAng(ct.hB - cn, linDE[kp] - dc, -1.0));
       }
       // the length's change, and the touch points' (dE, dX), for centres moving dc and planes turning dm
       double LinSweep(const Path3 &p, const Geom3 &g) const
@@ -2516,23 +3000,105 @@ namespace BandCord
             const Lin3::Side &I = lin.in[k], &O = lin.out[k];
             const V3 &mk = p.ct[k].m, &dm = linDm[k], &dc = linDc[k];
             const double rho = g.rho[k];
+            if (lin.heldArc[k])   // true tangents, so the runs and arcs change only with the centre, the radius and the corner (a shortest way: first order in nothing else)
+            {
+               linDE[k] = linDX[k] = dc;
+               const double dLc = -p.ct[k].cornerM * p.ct[k].hu.Dot(dm) + p.ct[k].dLdRho * (rho < 0.0 ? -linDr[k] : linDr[k]);
+               dL += (p.ct[k].tIn - p.ct[k].tOut).Dot(dc) + dLc;   // (its own tangents: a run with no length has no direction of its own)
+               linArc[k] = dLc;
+               continue;
+            }
             const V3 wI = linDc[km] - dc - dm * I.s, wO = linDc[kp] - dc - dm * O.s;
-            const double thI = -wI.Dot(I.g) + g.rho[km] * (dm.Dot(p.ct[km].m) + mk.Dot(linDm[km])) * I.c;
-            const double thO = wO.Dot(O.g) - g.rho[kp] * (dm.Dot(p.ct[kp].m) + mk.Dot(linDm[kp])) * O.c;
-            const V3 tmI = I.tau.Cross(dm) * rho, tmO = O.tau.Cross(dm) * rho;
+            const double dr = linDr[k];
+            const bool flatK = !(p.e[k].kind == kBall || p.e[k].kind == kBallBack);
+            // what the neighbour's radius seen from here does: its section for a flat pulley, else its plane's cosine
+            const auto DRR = [&](const int nb, const Lin3::Side &Sd) {
+               if (flatK && p.e[nb].kind == kBallBack)
+                  return 0.0;
+               if (flatK && p.e[nb].kind == kBall)
+               {
+                  return &Sd == &I ? linDhI[k] : linDhO[k];
+               }
+               return g.rho[nb] * (dm.Dot(p.ct[nb].m) + mk.Dot(linDm[nb])) + linDr[nb] * mk.Dot(p.ct[nb].m);
+            };
+            // a held arc's ellipse: the reach along the true tangent and along the centres' line, from the plane's turn and the side's own move
+            const auto HeldReach = [&](const int nb, const Lin3::Side &Sd, const bool isIn, const V3 &w, double &drr, double &dr0) {
+               const Contact3 &cb = p.ct[nb];
+               const double rb = g.rho[nb], R = std::fabs(rb), sg = rb < 0.0 ? -1.0 : 1.0, h = std::fabs(Sd.rr), dR = rb < 0.0 ? -linDr[nb] : linDr[nb];
+               const V3 &ms = cb.m, dms = linDm[nb] - ms * ms.Dot(linDm[nb]), n = mk.Cross(Sd.tauT);
+               const double c = ms.Dot(n), kh = h > 1e-12 ? R * R * c / h : 0.0, P = (h > 1e-12 ? h / R * dR : 0.0) - kh * dms.Dot(n), Q = kh * ms.Dot(Sd.tauT);
+               // in: th = T0 + (sg dh - dr) c; out: th = T0 + (dr - sg dh) c; dh = P + Q th
+               const double sd = isIn ? 1.0 : -1.0, T0 = sd * -w.Dot(Sd.gT), den = 1.0 - sd * sg * Q * Sd.cT;
+               const double thT = std::fabs(den) > 1e-300 ? (T0 + sd * (sg * P - dr) * Sd.cT) / den : T0;
+               drr = sg * (P + Q * thT);
+               dr0 = drr;
+               if (Sd.D > 0.0)
+               {
+                  V3 dd = (linDc[nb] - dc) * sd * -1.0;
+                  dd = dd - mk * mk.Dot(dd);
+                  const V3 dw = (dd - Sd.dh * Sd.dh.Dot(dd)) * (1.0 / Sd.D);
+                  const double h0 = std::fabs(Sd.rr0), c0 = ms.Dot(Sd.dh);
+                  dr0 = h0 > 1e-12 ? sg * (h0 / R * dR - R * R * c0 / h0 * (dms.Dot(Sd.dh) + ms.Dot(dw))) : 0.0;
+               }
+            };
+            double drI, drO, d0I = linD0I[k], d0O = linD0O[k];
+            const bool fixedK = p.e[k].kind == kPost || p.e[k].kind == kStop;
+            if (fixedK && p.e[km].kind == kBall && p.ct[km].heldA && std::fabs(I.rr) >= 1e-12)
+               HeldReach(km, I, true, wI, drI, d0I);
+            else
+               drI = DRR(km, I);
+            if (fixedK && p.e[kp].kind == kBall && p.ct[kp].heldA && std::fabs(O.rr) >= 1e-12)
+               HeldReach(kp, O, false, wO, drO, d0O);
+            else
+               drO = DRR(kp, O);
+            const double thI = -wI.Dot(I.g) + (drI - dr) * I.c + (d0I - dr) * I.c0;
+            const double thO = wO.Dot(O.g) + (dr - drO) * O.c + (dr - d0O) * O.c0;
+            linThI[k] = -wI.Dot(I.gT) + (drI - dr) * I.cT;   // (the true tangent's turn: it decides the reach)
+            linThO[k] = wO.Dot(O.gT) + (dr - drO) * O.cT;
+            const V3 tmI = I.tau.Cross(dm) * rho + I.tau.Cross(mk) * dr, tmO = O.tau.Cross(dm) * rho + O.tau.Cross(mk) * dr;
             linDE[k] = dc + I.tau * (rho * thI) + tmI;
             linDX[k] = dc + O.tau * (rho * thO) + tmO;
             const V3 &tin = g.t[km], &tout = g.t[k];
-            dL += (tin - tout).Dot(dc) + thO * O.w - thI * I.w + tin.Dot(tmI) - tout.Dot(tmO);
-            linArc[k] = rho * (thO - thI);
+            const double arcDr = g.wrap[k] * (rho < 0.0 ? -dr : dr);
+            dL += (tin - tout).Dot(dc) + thO * O.w - thI * I.w + tin.Dot(tmI) - tout.Dot(tmO) + arcDr;
+            linArc[k] = rho * (thO - thI) + arcDr;
          }
+         // a held arc's crossing point moves along the plane's circle with its neighbours, the centre and the plane: the middle of the arc seen in the plane (TouchHeld)
+         for (int k = 0; k < n; k++)
+            if (lin.heldArc[k] && p.ct[k].slopeU != 0.0)
+            {
+               const Contact3 &ct = p.ct[k];
+               const double dam = ArcDam(p, g, k);
+               dL += ct.slopeU * dam;
+               linArc[k] += ct.slopeU * dam;
+            }
+         for (int k = 0; k < n; k++)   // a neighbour's point inside the sphere: the rest of its move along the arc's way
+            if (lin.heldArc[k] && (p.ct[k].eOn || p.ct[k].xOn))
+            {
+               const Contact3 &ct = p.ct[k];
+               const int km = k == 0 ? n - 1 : k - 1, kp = k + 1 == n ? 0 : k + 1;
+               const double rr = std::fabs(g.rho[k]);
+               double extra = 0.0;
+               if (ct.eOn)
+               {
+                  const double d = (ct.hA - g.cen[k]).Length();
+                  extra -= d > 0.0 ? (rr / d - 1.0) * ct.tIn.Dot(linDX[km] - linDc[k]) : 0.0;
+               }
+               if (ct.xOn)
+               {
+                  const double d = (ct.hB - g.cen[k]).Length();
+                  extra += d > 0.0 ? (rr / d - 1.0) * ct.tOut.Dot(linDE[kp] - linDc[k]) : 0.0;
+               }
+               dL += extra;
+               linArc[k] += extra;
+            }
          for (int k = 0; k < n; k++)   // (a run with no length changes nothing)
             if (g.gone[k] && g.l[k] <= 1e-12)
                dL -= g.t[k].Dot(linDE[k + 1 == n ? 0 : k + 1] - linDX[k]);
          return dL;
       }
       // what the unknowns come out as from the touch points' changes (the passes' map, linearised)
-      void LinOut(const Path3 &p, double *yo) const
+      void LinOut(const Path3 &p, const Geom3 &g, double *yo) const
       {
          const int n = p.n;
          for (int u = 0; u < lin.nun; u++)
@@ -2540,45 +3106,95 @@ namespace BandCord
             const Lin3::Un &U = lin.un[u];
             const int km = U.k == 0 ? n - 1 : U.k - 1, kp = U.k + 1 == n ? 0 : U.k + 1;
             const V3 &dA = linDX[km], &dB = linDE[kp];
-            if (U.slide)
+            double dz = dA.z * (1.0 - U.f) + dB.z * U.f;
+            if (U.sum > 0.0)
             {
-               double dz = dA.z * (1.0 - U.f) + dB.z * U.f;
-               if (U.sum > 0.0)
-               {
-                  const V3 ea = linDE[U.k] - dA, eb = dB - linDX[U.k];
-                  dz += U.dz * (U.ua.Dot(ea) * U.lb - U.la * U.ub.Dot(eb)) / (U.sum * U.sum);
-               }
-               yo[U.at] = dz;
+               const V3 ea = linDE[U.k] - dA, eb = dB - linDX[U.k];
+               dz += U.dz * (U.ua.Dot(ea) * U.lb - U.la * U.ub.Dot(eb)) / (U.sum * U.sum);
             }
-            else
+            yo[U.at] = dz;
+         }
+         for (int u = 0; u < lin.nReach; u++)
+         {
+            const Lin3::Reach &H = lin.reach[u];
+            const Contact3 &cb = p.ct[H.nb];
+            const V3 &cn = g.cen[H.nb], &dcb = linDc[H.nb];
+            const V3 P = (H.isIn ? p.ct[H.k].E : p.ct[H.k].X) - cn, dp = (H.isIn ? linDE[H.k] : linDX[H.k]) - dcb;
+            V3 ms, dms;
+            bool have = true;
+            if (cb.heldA)   // a sliding pulley: the plane through its point and the arc's crossing point
             {
-               V3 dw;
-               if (!U.frozen)
+               const double rr = std::fabs(g.rho[H.nb]);
+               const V3 v = cb.hu * (1.0 / rr);
+               const double ca = v.Dot(cb.uB1), sa = v.Dot(cb.uB2);
+               const V3 dv = (cb.uB1 * -sa + cb.uB2 * ca) * ArcDam(p, g, H.nb) + cb.m.Cross(linDm[H.nb]).Cross(v);
+               const V3 N = P.Cross(v), dN = dp.Cross(v) + P.Cross(dv);
+               const double nl = N.Length();
+               have = nl > 1e-15;
+               if (have)
                {
-                  const V3 &mk = p.ct[U.k].m, &dc = linDc[U.k];
-                  dw = (dA - dc).Cross(U.db) + U.da.Cross(dB - dc);
-                  dw = (dw - mk * mk.Dot(dw)) * (U.sg / U.nl);
+                  ms = N * (1.0 / nl);
+                  dms = (dN - ms * ms.Dot(dN)) * (1.0 / nl);
                }
-               yo[U.at] = dw.x;
-               yo[U.at + 1] = dw.y;
-               yo[U.at + 2] = dw.z;
+            }
+            else   // the plane through the pulley's point and the arc's other neighbour
+            {
+               const int o = H.isIn ? (H.nb == 0 ? n - 1 : H.nb - 1) : (H.nb + 1 == n ? 0 : H.nb + 1);
+               const V3 v = (H.isIn ? cb.hA : cb.hB) - cn, dv = (H.isIn ? linDX[o] : linDE[o]) - dcb;
+               const V3 N = P.Cross(v), dN = dp.Cross(v) + P.Cross(dv);
+               const double nl = N.Length();
+               have = nl > 1e-15;
+               if (have)
+               {
+                  ms = N * (1.0 / nl);
+                  dms = (dN - ms * ms.Dot(dN)) * (1.0 / nl);
+               }
+            }
+            double dh = 0.0;
+            if (have && H.h > 1e-12)
+            {
+               const double th = H.isIn ? linThI[H.k] : linThO[H.k], dcos = dms.Dot(H.n) - th * ms.Dot(H.tau), dR = g.rho[H.nb] < 0.0 ? -linDr[H.nb] : linDr[H.nb];
+               dh = H.h / H.R * dR - H.R * H.R * ms.Dot(H.n) / H.h * dcos;
+            }
+            yo[H.at] = H.sg * dh;
+            if (H.at0 >= 0)
+            {
+               double dh0 = 0.0;
+               if (have && H.h0 > 1e-12)
+               {
+                  V3 dd = (linDc[H.nb] - linDc[H.k]) * (H.isIn ? -1.0 : 1.0);
+                  const V3 &mk = p.ct[H.k].m;
+                  dd = dd - mk * mk.Dot(dd);
+                  const V3 dw = (dd - H.dh * H.dh.Dot(dd)) * (1.0 / H.D);
+                  const double dR = g.rho[H.nb] < 0.0 ? -linDr[H.nb] : linDr[H.nb];
+                  dh0 = H.h0 / H.R * dR - H.R * H.R * ms.Dot(H.dh) / H.h0 * (dms.Dot(H.dh) + ms.Dot(dw));
+               }
+               yo[H.at0] = H.sg * dh0;
             }
          }
       }
       void LinClear(int n) const
       {
          for (int k = 0; k < n; k++)
+         {
             linDc[k] = linDm[k] = V3();
+            linDr[k] = 0.0;
+            linDhI[k] = linDhO[k] = 0.0;
+            linD0I[k] = linD0O[k] = 0.0;
+         }
       }
       void LinAddY(const double *y) const
       {
          for (int u = 0; u < lin.nun; u++)
          {
             const Lin3::Un &U = lin.un[u];
-            if (U.slide)
-               linDc[U.k].z += y[U.at];
-            else
-               linDm[U.k] = linDm[U.k] + V3(y[U.at], y[U.at + 1], y[U.at + 2]);
+            linDc[U.k].z += y[U.at];
+         }
+         for (int u = 0; u < lin.nReach; u++)
+         {
+            (lin.reach[u].isIn ? linDhI : linDhO)[lin.reach[u].k] += y[lin.reach[u].at];
+            if (lin.reach[u].at0 >= 0)
+               (lin.reach[u].isIn ? linD0I : linD0O)[lin.reach[u].k] += y[lin.reach[u].at0];
          }
       }
       // the path p, solved at q, linearised: every side, and the unknowns' small solve factored
@@ -2592,36 +3208,50 @@ namespace BandCord
             LinSide(p, g, k, km, true, g.t[km], lin.in[k]);
             LinSide(p, g, k, kp, false, g.t[k], lin.out[k]);
             const Elem &e = p.e[k];
-            const bool slide = e.kind == kStop || e.kind == kFace || e.kind == kWallEnd;
-            const bool freeBall = e.kind == kBallBack || (e.kind == kBall && !q.held[e.id]);
-            if (!slide && !freeBall)
+            lin.heldArc[k] = e.kind == kBall || e.kind == kBallBack;
+            const bool slide = e.kind == kFace || e.kind == kWallEnd;   // (a stop is pinned: Pulley3)
+            if (!slide)
                continue;
             Lin3::Un &U = lin.un[lin.nun++];
             U.k = k;
             U.at = lin.ny;
-            U.slide = slide;
-            lin.ny += slide ? 1 : 3;
+            lin.ny += 1;
             const V3 &A = p.ct[km].X, &B = p.ct[kp].E;
-            if (slide)
+            const V3 &E = p.ct[k].E, &X = p.ct[k].X;
+            const V3 ea(E.x - A.x, E.y - A.y, 0.0), eb(B.x - X.x, B.y - X.y, 0.0);
+            U.la = ea.Length();
+            U.lb = eb.Length();
+            U.sum = U.la + U.lb;
+            U.f = U.sum > 0.0 ? U.la / U.sum : 0.5;
+            U.dz = B.z - A.z;
+            U.ua = U.la > 1e-15 ? ea * (1.0 / U.la) : V3();
+            U.ub = U.lb > 1e-15 ? eb * (1.0 / U.lb) : V3();
+         }
+         lin.nReach = 0;
+         for (int k = 0; k < n; k++)
+         {
+            if (p.e[k].kind == kBall || p.e[k].kind == kBallBack)
+               continue;
+            for (int side = 0; side < 2; side++)
             {
-               const V3 &E = p.ct[k].E, &X = p.ct[k].X;
-               const V3 ea(E.x - A.x, E.y - A.y, 0.0), eb(B.x - X.x, B.y - X.y, 0.0);
-               U.la = ea.Length();
-               U.lb = eb.Length();
-               U.sum = U.la + U.lb;
-               U.f = U.sum > 0.0 ? U.la / U.sum : 0.5;
-               U.dz = B.z - A.z;
-               U.ua = U.la > 1e-15 ? ea * (1.0 / U.la) : V3();
-               U.ub = U.lb > 1e-15 ? eb * (1.0 / U.lb) : V3();
-            }
-            else
-            {
-               U.da = A - g.cen[k];
-               U.db = B - g.cen[k];
-               const V3 nrm = U.da.Cross(U.db);
-               U.nl = nrm.Length();
-               U.frozen = !(U.nl > 1e-9 * U.da.Length() * U.db.Length());   // along one line: the plane stays where it was (TouchSphere)
-               U.sg = nrm.Dot(p.ct[k].m) >= 0.0 ? 1.0 : -1.0;
+               const int nbk = side == 0 ? (k == 0 ? n - 1 : k - 1) : (k + 1 == n ? 0 : k + 1);
+               const Lin3::Side &S = side == 0 ? lin.in[k] : lin.out[k];
+               if (p.e[nbk].kind != kBall || std::fabs(S.rr) < 1e-12 || (p.ct[nbk].heldA && (p.e[k].kind == kPost || p.e[k].kind == kStop)))
+                  continue;
+               Lin3::Reach &H = lin.reach[lin.nReach++];
+               H.k = k;
+               H.nb = nbk;
+               H.at = lin.ny++;
+               H.at0 = S.D > 0.0 ? lin.ny++ : -1;
+               H.dh = S.dh;
+               H.D = S.D;
+               H.h0 = std::fabs(S.rr0);
+               H.isIn = side == 0;
+               H.tau = S.tauT;
+               H.n = p.ct[k].m.Cross(S.tauT);
+               H.R = std::fabs(g.rho[nbk]);
+               H.h = std::fabs(S.rr);
+               H.sg = g.rho[nbk] < 0.0 ? -1.0 : 1.0;
             }
          }
          const int ny = lin.ny;
@@ -2639,7 +3269,7 @@ namespace BandCord
             LinAddY(y);
             y[c] = 0.0;
             LinSweep(p, g);
-            LinOut(p, yo);
+            LinOut(p, g, yo);
             for (int r = 0; r < ny; r++)
                lin.A[r][c] = (r == c ? 1.0 : 0.0) - yo[r];
          }
@@ -2673,7 +3303,7 @@ namespace BandCord
             return LinSweep(p, g);
          double y[kMaxLinY];
          LinSweep(p, g);
-         LinOut(p, y);
+         LinOut(p, g, y);
          for (int c = 0; c < ny; c++)   // (the factor's rows carry all the swaps: the right-hand side takes them first)
             std::swap(y[c], y[lin.piv[c]]);
          for (int c = 0; c < ny; c++)
@@ -2789,6 +3419,13 @@ namespace BandCord
                   wmin = g.wrap[k];
                   worst = k;
                }
+            for (int k = 0; k < p.n && worst < 0; k++)
+               if (p.e[k].kind == kBallBack)
+               {
+                  const int own = Find3(p, kBall, p.e[k].id);
+                  if (own >= 0 && !OtherSpan(p, own, k) && !OtherSpan(p, own, (k + p.n - 1) % p.n))
+                     worst = k;
+               }
             if (worst >= 0 && p.n > 2)
             {
                Log('-', p.e[worst], worst, wmin, p.n);
@@ -2816,6 +3453,8 @@ namespace BandCord
                for (int k = 0; k < p.n; k++)
                {
                   if (own >= 0 && (k == own || (k + 1) % p.n == own))   // the runs to its own arc
+                     continue;
+                  if (own >= 0 && !OtherSpan(p, own, k))
                      continue;
                   const V3 P0 = p.ct[k].X;
                   V3 t = g.t[k];
@@ -2903,7 +3542,7 @@ namespace BandCord
                      m0 = nrm * ((rho < 0.0 ? -1.0 : 1.0) / nl);
                }
                tr.ct[at].m = m0;
-               Touch3(type, cen, rho, tr.ct[at - 1].X, tr.ct[(at + 1) % tr.n].E, ca, ra, tr.ct[at - 1].m, cb, rb, tr.ct[(at + 1) % tr.n].m, tr.ct[at], mFix);
+               Touch3(type, cen, rho, tr.ct[at - 1].X, tr.ct[(at + 1) % tr.n].E, ca, ra, tr.ct[at - 1].m, cb, rb, tr.ct[(at + 1) % tr.n].m, tr.ct[at], mFix, ta == kSphere, tb == kSphere);
             }
             if (Solve3(tr, q, sGt) && sGt.wrap[at] > 0.0)
             {
@@ -2915,6 +3554,16 @@ namespace BandCord
             rejected[bestE.kind * 16 + bestE.id] = true;
          }
          return false;
+      }
+      // Run k is on another span of the loop from element own: a post lies between them both ways round.
+      static bool OtherSpan(const Path3 &p, const int own, const int k)
+      {
+         bool ahead = false, behind = false;
+         for (int m = (own + 1) % p.n; m != (k + 1) % p.n; m = (m + 1) % p.n)
+            ahead = ahead || p.e[m].kind == kPost;
+         for (int m = (k + 1) % p.n; m != own; m = (m + 1) % p.n)
+            behind = behind || p.e[m].kind == kPost;
+         return ahead && behind;
       }
       // The path at q in an energy step: a pulley the cord has come off leaves, nothing joins (which of them are on it can go round in a ring: that waits for the next step's solve)
       bool LeaveOnly(Path3 &p, const Config &q, Geom3 &g) const
@@ -2930,6 +3579,13 @@ namespace BandCord
                {
                   wmin = g.wrap[k];
                   worst = k;
+               }
+            for (int k = 0; k < p.n && worst < 0; k++)
+               if (p.e[k].kind == kBallBack)
+               {
+                  const int own = Find3(p, kBall, p.e[k].id);
+                  if (own >= 0 && !OtherSpan(p, own, k) && !OtherSpan(p, own, (k + p.n - 1) % p.n))
+                     worst = k;
                }
             if (worst < 0 || p.n <= 2)
                return true;
@@ -3129,6 +3785,36 @@ namespace BandCord
          }
          return d;
       }
+      bool ArcShort(const double wrap) const
+      {
+         if (wrap <= 0.0)
+            return true;
+         const double E = set.eMpa * 1e6, eStar = E / 0.75, reff = R * r / (R + r);
+         return (R + r) * wrap < 2.0 * std::cbrt(3.0 * Tension() * wrap * reff / (4.0 * eStar));
+      }
+      double kTwJoin[kMaxBalls] = {};
+      // The friction across the cord (one law with every rubber, rubbercontact.h): the shared shear spring between the ball and the cord's crossing point, Mindlin's 8 G* a at the patch of the push N (Hertz: the
+      // ball on the cord's round cross-section) x the rubber's sideways stiffness, in series with the cord's twist (the cross-section rolls: GroupStepDesign 11.28), within mu N. Kept in the twist's terms: f = k xi, xi = r psi.
+      double KShear(const double N) const
+      {
+         const double E = set.eMpa * 1e6, eStar = E / 0.75, Gs = E / 3.0 / 1.5, reff = R * r / (R + r);
+         const double a = N > 0.0 ? std::cbrt(3.0 * N * reff / (4.0 * eStar)) : 0.0;
+         return 8.0 * Gs * a * (set.ringRpSet ? set.ringRp.shearScale : 0.1);
+      }
+      void SetShear(const int i, const double N, double &lost)
+      {
+         double k1 = KShear(N) * r * r;
+         if (k1 > 0.0 && kTwJoin[i] > 0.0)
+            k1 = 1.0 / (1.0 / k1 + 1.0 / kTwJoin[i]);
+         const double k0 = kTw[i];
+         const double held = 0.5 * k0 * psi[i] * psi[i];
+         if (k1 > k0 && k1 > 0.0)
+            psi[i] *= k0 / k1;   // the patch rule: a patch that grows holds the force, one that shrinks holds the stretch; the spring's fall is a loss
+         lost += held - 0.5 * k1 * psi[i] * psi[i];
+         kTw[i] = k1;
+         const double mt = 1.0 / (1.0 / m + R * R / Ib);
+         cTw[i] = (set.tanDelta > 0.0 ? (set.ringRpSet ? set.ringRp.shearTan : 0.05) : 0.0) * std::sqrt(k1 / (r * r) * mt) * r * r;
+      }
       // the cord's twist (GroupStepDesign 11.28): each ball's own, from when it joins the cord; its stiffness fixed for the contact so that its energy is exact
       double TwistV() const
       {
@@ -3141,14 +3827,14 @@ namespace BandCord
       {
          const int e = Find3(path3, kBall, i), pn = path3.n;
          psi[i] = 0.0;
+         kTw[i] = cTw[i] = 0.0;
          if (e < 0)
             return;
          // to the next ball, or part way into the next post (user, 2026-10-30: a twist travels partway into a post, not past it; half its wrap ASSUMED)
          const int em = (e + pn - 1) % pn, ep = (e + 1) % pn;
          const double a1 = path3.e[em].kind == kPost ? 0.5 * std::fabs(G3.rho[em]) * std::max(G3.wrap[em], 0.0) : 0.0, a2 = path3.e[ep].kind == kPost ? 0.5 * std::fabs(G3.rho[ep]) * std::max(G3.wrap[ep], 0.0) : 0.0;
          const double l1 = std::max(G3.l[em] + a1, 1e-3), l2 = std::max(G3.l[e] + a2, 1e-3), G = set.eMpa * 1e6 / 3.0, J = 0.5 * kPi * r * r * r * r;
-         kTw[i] = set.cordTwistScale * G * J * (1.0 / l1 + 1.0 / l2);
-         cTw[i] = kTw[i] * set.tanDelta / (2.0 * kPi * std::max(set.refHz, 1e-3));
+         kTwJoin[i] = set.cordTwistScale * G * J * (1.0 / l1 + 1.0 / l2);
       }
       double SpanT(int j, double L) const { return L > spanS[j] ? EA * (L - spanS[j]) / spanS[j] : 0.0; }
       double SpanV(const double *Ls) const
@@ -3241,22 +3927,40 @@ namespace BandCord
                }
          }
          books.maxStretch = std::max(books.maxStretch, Stretch());
-         // through: a ball not on the cord that cuts into one of its runs deeper than its squash on a backstop there accounts for
+         // through: a ball that has changed sides of the loop, low enough not to have gone over it. A side counts when the centre is at least the ball's radius from the cord in plan view: a ball pressing the
+         // cord has it round its far side and stays on its side, whatever the cord does on top of the ball.
          for (int i = 0; i < nb; i++)
          {
-            if (Find3(p, kBall, i) >= 0)
-               continue;
-            double ov = 0.0;
-            for (int j = 0; j < NumBackstops(); j++)
-               ov = std::max(ov, OverlapRaw(i, j, q, Dofs(), nullptr));
-            const V3 C(c[i].x, c[i].y, z[i]);
+            bool in = false;
+            double best = 1e30, zAt = 0.0;
+            const auto Edge = [&](const V3 &a, const V3 &b) {
+               const double ex = b.x - a.x, ey = b.y - a.y, l2 = ex * ex + ey * ey;
+               const double u = l2 > 0.0 ? std::min(std::max(((c[i].x - a.x) * ex + (c[i].y - a.y) * ey) / l2, 0.0), 1.0) : 0.0;
+               const double dx = c[i].x - a.x - u * ex, dy = c[i].y - a.y - u * ey, dd = dx * dx + dy * dy;
+               if (dd < best)
+               {
+                  best = dd;
+                  zAt = a.z + u * (b.z - a.z);
+               }
+               if ((a.y > c[i].y) != (b.y > c[i].y) && c[i].x < a.x + (c[i].y - a.y) / (b.y - a.y) * ex)
+                  in = !in;
+            };
             for (int k = 0; k < p.n; k++)
             {
-               const V3 dc = C - p.ct[k].X;
-               const double u = std::min(std::max(dc.Dot(G3.t[k]), 0.0), G3.l[k]);
-               if (R + r - (dc - G3.t[k] * u).Length() > ov + 1e-6)
-                  books.through = true;
+               Edge(p.ct[k].E, p.ct[k].X);
+               Edge(p.ct[k].X, p.ct[(k + 1) % p.n].E);
             }
+            if (std::sqrt(best) < R)
+               continue;
+            const int side = in ? -1 : 1;
+            if (gSide[i] != 0 && side != gSide[i] && z[i] - R < zAt + r)
+            {
+               books.through = true;
+               books.crossings++;
+               books.crossAt = V3(c[i].x, c[i].y, z[i]);
+               books.crossSpeed = std::sqrt(v[i].x * v[i].x + v[i].y * v[i].y);
+            }
+            gSide[i] = side;
          }
       }
       // dL/dq at the path p, solved at q (band coordinates: per ball x, y, z, then the plate when pl): the exact derivative of its length (above). Not only
@@ -3281,12 +3985,18 @@ namespace BandCord
             const int e0 = Find3(p, kBall, i), e1 = Find3(p, kBallBack, i);
             if (e0 < 0 && e1 < 0)
                continue;
+            V3 gRoom;
+            if (e0 >= 0)
+               BallRoom(i, q, &gRoom);
             for (int a = 0; a < 3; a++)
             {
                const V3 un(a == 0 ? 1.0 : 0.0, a == 1 ? 1.0 : 0.0, a == 2 ? 1.0 : 0.0);
                LinClear(p.n);
                if (e0 >= 0)
+               {
                   linDc[e0] = un;
+                  linDr[e0] = -gRoom.Dot(un);   // (a ball's signed radius is minus its room)
+               }
                if (e1 >= 0)
                   linDc[e1] = un;
                gl[3 * i + a] = LinDeriv(p, g);
@@ -3306,6 +4016,16 @@ namespace BandCord
                {
                   face = true;
                   linDc[k] = fv;
+               }
+               else if (p.e[k].kind == kBall)
+               {
+                  double gp = 0.0;
+                  BallRoom(p.e[k].id, q, nullptr, &gp);
+                  if (gp != 0.0)
+                  {
+                     face = true;
+                     linDr[k] = -gp;
+                  }
                }
             if (face)
             {
