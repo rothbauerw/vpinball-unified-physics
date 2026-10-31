@@ -14,6 +14,7 @@
 #include "core/VPApp.h"
 #include "core/VPXPluginAPIImpl.h"
 #include "parts/ball.h"
+#include "parts/kicker.h"
 #include "parts/flasher.h"
 #include "parts/light.h"
 #include "parts/primitive.h"
@@ -363,6 +364,8 @@ Player::Player(PinTable *const table, const PlayMode playMode, LoadProgress &loa
    m_loadProgress->SetProgress("Starting..."s, 100);
    m_loadProgress = &m_defaultLoadProgress; // The caller's reporter only lives during construction, later session reloads (table switches) log
 
+   if (BenchMode()) { m_physics->StartPhysics(); SetPlayState(true); return; } // no first frame, no window shown, no foreground lock
+
    // Perform a quick render to avoid displaying a blank screen while starting
    m_renderer->DisableStaticPrePass(true);
    PrepareFrame();
@@ -588,7 +591,7 @@ void Player::InitTableSession(const bool isInitial)
    m_pauseMusicRefCount = 0;
 
    m_tblMirrorEnabled = m_ptable->GetSettings().GetPlayer_Mirror();
-   if (isInitial)
+   if (isInitial && !BenchMode()) // the bench takes no input: keys held on the real keyboard must not mirror the table
    {
       // Flipper buttons held while the table loads: both mirror the table, the left one alone swaps the desktop/FSS view.
       // Pending input events are processed first, so that the buttons of every input device are seen (a joystick is
@@ -645,7 +648,7 @@ void Player::InitTableSession(const bool isInitial)
 
    //----------------------------------------------------------------------------------
 
-   if (isInitial)
+   if (isInitial && !BenchMode()) // the bench draws nothing
    {
       // Preload all textures and images: upload textures that are flagged in the used textures
       // cache, register the other ones for on demand upload (everything is shared between a base
@@ -1512,7 +1515,7 @@ bool Player::ShowStats() const
 
 bool Player::PlayUnfocused()
 {
-   static const bool on = getenv("VPX_PLAY_UNFOCUSED") != nullptr;
+   static const bool on = getenv("VPX_PLAY_UNFOCUSED") != nullptr || BenchMode();
    return on;
 }
 
@@ -1647,6 +1650,9 @@ void Player::DestroyBall(Ball *pBall)
    assert(pBall);
    if (!pBall) return;
 
+   for (IEditable *const part : m_ptable->GetParts())
+      if (part->GetItemType() == eItemKicker)
+         static_cast<Kicker *>(part)->BallGone(&pBall->m_hitBall);
    RemoveFromVectorSingle(m_vball, pBall);
    m_vballDelete.push_back(pBall);
    pBall->PhysicRelease(m_physics, false);
@@ -2251,6 +2257,8 @@ void Player::GameLoop()
    // If we failed to initialize, returns immediately
    if (g_pplayer == nullptr)
       return;
+
+   if (BenchMode()) { BenchLoop(); return; }
 
    #ifdef ENABLE_BGFX
       // Flush any pending frame

@@ -42,6 +42,7 @@ set(VPX_SOURCES
    src/core/main.h
    src/core/player.cpp
    src/core/player.h
+   src/core/playerbench.cpp
    src/core/PropertyDef.h
    src/core/PropertyRegistry.h
    src/core/PropertyStore.h

@@ -1358,6 +1358,8 @@ RenderDevice::RenderDevice(
    }
    if (init.type == bgfx::RendererType::Noop)
       init.type = bgfx::RendererType::Count;
+   if (Player::BenchMode())
+      init.type = bgfx::RendererType::Noop; // no GPU and no window needed (core/playerbench.cpp)
    if (g_pplayer->m_vrDevice == nullptr)
    {
       // Requested only: BGFX may fall back to another backend if the requested one cannot initialize. The

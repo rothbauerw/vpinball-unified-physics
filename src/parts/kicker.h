@@ -126,6 +126,7 @@ public:
    STDMETHOD(KickZ)(float angle, float speed, float inclination, float heightz);
    STDMETHOD(KickXYZ)(float angle, float speed, float inclination, float x, float y, float z);
    //STDMETHOD(DestroyBall)();
+   void BallGone(const HitBall *ball);   // a ball destroyed by anything but this kicker: a kicker that no longer holds a ball is empty
    STDMETHOD(DestroyBall)(/*[out, retval]*/ int *pVal);
    STDMETHOD(CreateBall)(IBall **pBall);
    STDMETHOD(CreateSizedBall)(/*[in]*/float radius, /*out, retval]*/ IBall **pBall);

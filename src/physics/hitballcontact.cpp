@@ -7,6 +7,8 @@
 #include "parts/ball.h"
 #include "parts/pintable.h"
 #include "physics/contactsettings.h"
+#include "physics/rubbercontact.h"
+#include "physics/contactsystem.h"
 #include "physics/magnet.h"
 #include "physics/PhysicsEngine.h"
 
@@ -59,11 +61,11 @@ Vertex3Ds HitBall::ExternalVelocityIncrement(const bool withMagnets) const
    return dv;
 }
 
-// A ball the force-model contact holds on a surface (the playfield, a disc, a rubber) must not be shoved down into it: the surface is stiff (a 40 um overlap is kilonewtons),
-// so a push of a few tenths of a unit from a ball resting on top of it comes back as a launch. The push may still lift it or move it sideways.
+// A shove is a position move: it does no work, so it may store nothing. A ball the force-model contact holds may not be pressed deeper into any surface of its contact (a surface is stiff:
+// a 40 um overlap is kilonewtons, and 1 mm into a wall holds 16 J): that depth is taken back along the surface's normal, the push may still lift the ball or move it along the surface.
 void HitBall::Shove(Vertex3Ds delta)
 {
-   if (delta.z < 0.f && HitRubberContactHolds(this))
-      delta.z = 0.f;
+   if (HitRubberContactHolds(this))
+      ContactSystem::ShoveKeepsOthers(this, delta);
    m_d.m_pos += delta;
 }

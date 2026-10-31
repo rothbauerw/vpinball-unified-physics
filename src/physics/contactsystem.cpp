@@ -144,6 +144,7 @@ struct ContactSystemImpl
       int stepsWhy = TestDriver::ContactCost::kEnd;   // the rule that set steps (test driver cost split, TestMatrixDesign section 3 point 10c)
       bool magnetsOn = false;
       bool extTaken = false;    // Sources::Begin took this cycle's gravity and nudge out of the velocity (they act in the substeps)
+      double endPair = 0.0;     // the energy check: its half of what its ball pairs hold at the island's end
       bool magParts = false;    // the Option A ball-ball force is applied re-aimed at every substep (MagnetPartForces), not as the held increment
       double magAcc = 0.0;      // m/s2: the magnets' acceleration of this ball at the start of the step (the substep bound)
       double eddyRate = -1.0;   // eddy-current braking of the spin across the coil field, 1/s: evaluated once per cycle (negative = not yet); eddyDir = the field direction
@@ -576,8 +577,11 @@ struct ContactSystemImpl
             const double dist = d.Length();
             if (dist < 1e-9)
                continue;
-            const BallPairState &ps = *cy.pst[(size_t)(&p - cpairs.data())];
-            const double closing = std::max(0.0, -(A.v - B.v).Dot(d / dist));
+            BallPairState &ps = *cy.pst[(size_t)(&p - cpairs.data())];
+            const double vn = (A.v - B.v).Dot(d / dist), closing = std::max(0.0, -vn);
+            // resting = slow now and slow a cycle ago: a hit's rebound half recedes and its deepest point falls on a cycle's start now and then; neither is a rest (a long step there gave back up to 14 % more speed than came in)
+            const bool slow = std::max(std::abs(vn), ps.lastSpeed) <= kRestSpeedFree;
+            ps.lastSpeed = std::abs(vn);
             // a pair that cannot touch within this cycle (the gap is more than the closing distance plus a margin for the force's own acceleration) needs no step of its own:
             // it joined the cluster only because it is within reach
             if (!ps.inContact && dist - A.bs.R - B.bs.R > closing * dt * 1.5 + kApproachMarginM)
@@ -586,7 +590,7 @@ struct ContactSystemImpl
             const double dImpact = std::pow(15.0 * mRed * closing * closing / (16.0 * Estar * std::sqrt(reff)), 0.4);
             const double delta = std::max({ ps.lastDelta, dImpact, 1e-6 });
             const double omega = std::sqrt(2.0 * Estar * std::sqrt(reff * delta) / mRed);
-            const double omegaH = closing > kRestSpeedFree ? kImpactOmegaH : kRestOmegaH;
+            const double omegaH = slow ? kRestOmegaH : kImpactOmegaH;
             const double h = std::min(kMaxPairStepS, std::max(cs.ballSubstepUs * 1e-6, omegaH / omega));
             if ((int)std::ceil(dt / h) > steps)
             {
@@ -850,7 +854,8 @@ struct ContactSystemImpl
          BallPairState &ps = *cy.pst[k];
          const V3 d = A.c - B.c;
          const double dist = d.Length();
-         const double delta = A.bs.R + B.bs.R - dist;
+         ps.zero = std::max(0.0, std::min(ps.zero, A.bs.R + B.bs.R - dist));   // (backing out, with nothing stored: the zero follows)
+         const double delta = A.bs.R + B.bs.R - dist - ps.zero;
          if (delta <= 0.0 || dist < 1e-9)
          {
             ps.st.Reset();
@@ -1167,7 +1172,7 @@ struct ContactSystemImpl
    {
       struct Bd { V3 c, v, w; double omega2, deepest, vnLast, peakFn; size_t itemBase; size_t nItems; };
       struct It { V3 xi; bool touching; };
-      struct Pr { V3 xi; bool inContact; double maxDelta, maxFn; };
+      struct Pr { V3 xi; bool inContact; double maxDelta, maxFn, zero; };
       std::vector<Bd> b;
       std::vector<It> it;
       std::vector<Pr> p;
@@ -1217,9 +1222,9 @@ struct ContactSystemImpl
       for (size_t k = 0; k < isl.edges.size(); k++)
       {
          const BallPairState &ps = *cy.pst[k];
-         sn.p.push_back({ ps.st.xi, ps.inContact, ps.maxDelta, ps.maxFn });
+         sn.p.push_back({ ps.st.xi, ps.inContact, ps.maxDelta, ps.maxFn, ps.zero });
          const Body &A = cy.bodies[isl.edges[k].first], &B = cy.bodies[isl.edges[k].second];
-         sn.pairGap.push_back((A.c - B.c).Length() - A.bs.R - B.bs.R);
+         sn.pairGap.push_back((A.c - B.c).Length() - A.bs.R - B.bs.R + ps.zero);
       }
       sn.partHits = cy.partHits.size();
       sn.hitEvents = cy.hitEvents.size();
@@ -1272,6 +1277,7 @@ struct ContactSystemImpl
          ps.inContact = sn.p[k].inContact;
          ps.maxDelta = sn.p[k].maxDelta;
          ps.maxFn = sn.p[k].maxFn;
+         ps.zero = sn.p[k].zero;
       }
       cy.partHits.resize(sn.partHits);
       cy.hitEvents.resize(sn.hitEvents);
@@ -1333,7 +1339,7 @@ struct ContactSystemImpl
       for (size_t k = 0; k < isl.edges.size(); k++)
       {
          const Body &A = cy.bodies[isl.edges[k].first], &B = cy.bodies[isl.edges[k].second];
-         const double gapNow = (A.c - B.c).Length() - A.bs.R - B.bs.R;
+         const double gapNow = (A.c - B.c).Length() - A.bs.R - B.bs.R + cy.pst[k]->zero;
          if (gapNow >= -allowAbs || sn.pairGap[k] <= kTouchM)
             continue;
          // the closing speed of the pair at the snapshot
@@ -1769,6 +1775,37 @@ struct ContactSystemImpl
       return held + 4.0 * Gs * std::sqrt(reff * depth) * rp.shearScale * xi.Dot(xi);
    }
 
+   // what a ball pair holds, by the law of both loops: Hertz on the pair's modulus (cy.rpBall holds it halved), and the shear stretch; its depth counts from its zero
+   static double PairHolds(const Cycle &cy, const Body &A, const Body &B, const BallPairState &ps)
+   {
+      const double depth = A.bs.R + B.bs.R - (A.c - B.c).Length() - ps.zero;
+      if (depth <= 0.0)
+         return 0.0;
+      const double reff = A.bs.R * B.bs.R / (A.bs.R + B.bs.R);
+      const RubberParams &rp = cy.rpBall;
+      const double E = rp.eMpa * 1e6, Es = E / (1.0 - rp.nu * rp.nu), Gs = E / (2.0 * (1.0 + rp.nu)) / (2.0 - rp.nu);
+      return 0.4 * (4.0 / 3.0 * Es * std::sqrt(reff)) * depth * depth * std::sqrt(depth) + 4.0 * Gs * std::sqrt(reff * depth) * rp.shearScale * ps.st.xi.Dot(ps.st.xi);
+   }
+
+   // Between cycles nothing does work on a pair (no step has run), so a pair may not hold more than it did: one found inside that was not inside at the last cycle's end (a ball created, placed or
+   // moved onto another) has stored nothing. Its depth is its zero; the zero only ever comes down as the balls back out, so the pair can give back only what a step stored. No position moves.
+   static void PairFirstSight(Cycle &cy)
+   {
+      for (const auto &p : cy.pairs)
+      {
+         const Body &A = cy.bodies[p.first], &B = cy.bodies[p.second];
+         const double depth = A.bs.R + B.bs.R - (A.c - B.c).Length();
+         BallPairState *const ps = FindPair(A.pb, B.pb);
+         if (ps == nullptr)
+         {
+            if (depth > 0.0)
+               MakePair(A.pb, B.pb).zero = depth;
+         }
+         else if (ps->endDepth <= ps->zero && depth > ps->zero)
+            ps->zero = depth;
+      }
+   }
+
    static double BodyMotion(const Body &w, const V3 &g)
    {
       return 0.5 * w.bs.m * w.v.Dot(w.v) + 0.5 * w.bs.Inertia() * w.w.Dot(w.w) - w.bs.m * g.Dot(w.c);
@@ -1812,6 +1849,24 @@ struct ContactSystemImpl
                EnergyRaise(w.e->endStored >= 0.0 ? "between cycles" : "at first sight", w.pb, where != nullptr ? where->r->Name() : std::string("?"), depth0, depth1, rise);
          }
       }
+      for (const auto &p : cy.pairs)   // what the ball pairs hold, half to each ball
+      {
+         Body &A = cy.bodies[p.first], &B = cy.bodies[p.second];
+         const BallPairState *const ps = FindPair(A.pb, B.pb);
+         if (ps == nullptr)
+            continue;
+         const double held = PairHolds(cy, A, B, *ps);
+         A.eStart += 0.5 * held;
+         B.eStart += 0.5 * held;
+         A.eScale += 0.5 * held;
+         B.eScale += 0.5 * held;
+         const double rise = held - ps->endHeld;
+         if (rise > std::max(1e-3, 0.01 * (A.eScale + B.eScale)))
+         {
+            const double depth = A.bs.R + B.bs.R - (A.c - B.c).Length() - ps->zero;
+            EnergyRaise("between cycles", A.pb, "ball pair", std::max(ps->endDepth - ps->zero, 0.0), depth, rise);
+         }
+      }
    }
 
    // The island's end: the rise across the cycle, and what the contacts hold now for the next cycle's start
@@ -1821,6 +1876,19 @@ struct ContactSystemImpl
       bool driven = false;
       double e0 = 0.0, e1 = 0.0, scale = 0.0, top = -1e300;
       const Body *rose = nullptr;
+      for (const int i : isl.members)
+         cy.bodies[i].endPair = 0.0;
+      for (const auto &p : isl.edges)   // what the ball pairs hold now, half to each ball; and for the next cycle's start
+      {
+         Body &A = cy.bodies[p.first], &B = cy.bodies[p.second];
+         BallPairState *const ps = FindPair(A.pb, B.pb);
+         if (ps == nullptr)
+            continue;
+         ps->endDepth = A.bs.R + B.bs.R - (A.c - B.c).Length();
+         ps->endHeld = PairHolds(cy, A, B, *ps);
+         A.endPair += 0.5 * ps->endHeld;
+         B.endPair += 0.5 * ps->endHeld;
+      }
       for (const int i : isl.members)
       {
          Body &w = cy.bodies[i];
@@ -1836,7 +1904,7 @@ struct ContactSystemImpl
             }
             w.e->endStored = held;
          }
-         const double e = BodyMotion(w, g) + held;
+         const double e = BodyMotion(w, g) + held + w.endPair;
          e0 += w.eStart;
          e1 += e;
          scale += w.eScale;
@@ -2132,6 +2200,11 @@ struct ContactSystemImpl
          const SurfaceShape *const sh = static_cast<const SurfaceShape *>(g.shape[it.s]);
          g.SetShapeItem(k, sh->it->gsTouch, sh->it->gsZero, sh->it->gsXi);
       }
+      for (int k = 0; k < g.ni; k++)   // ... and a ball pair's zero
+         if (g.item[k].b >= 0)
+            if (const BallPairState *const ps = FindPair(balls[g.item[k].a], balls[g.item[k].b]))
+               if (ps->zero > 0.0)
+                  g.SetPairItem(k, ps->zero);
       V3 v0[GroupStep::kMaxBalls];
       for (int i = 0; i < g.nb; i++)
          v0[i] = g.ball[i].v;
@@ -2279,11 +2352,13 @@ struct ContactSystemImpl
       for (int k = 0; k < g.ni; k++)
       {
          const GroupStep::Item &gi = g.item[k];
-         if (ring && gi.b >= 0 && gi.touching)
+         if (gi.b >= 0 && (gi.touching || gi.dZero > 0.0))
          {
             BallPairState &ps = MakePair(balls[gi.a], balls[gi.b]);
-            ps.st.xi = gi.xi;
-            ps.inContact = true;
+            if (ring)
+               ps.st.xi = gi.xi;
+            ps.zero = gi.dZero;
+            ps.inContact = gi.touching;
             ps.used = true;
          }
          if (gi.b >= 0 || gi.s >= nSurf)
@@ -2607,6 +2682,7 @@ void ContactSystemImpl::StepBalls(const float dtime)
    GatherBalls(cy);
    GatherFree(cy);
    FindIslands(cy);
+   PairFirstSight(cy);
    EnergyCheckStart(cy);
    lap(g_last.gatherUs);
    g_last.bodies = (int)cy.bodies.size();
@@ -2896,6 +2972,20 @@ void ContactSystemImpl::SeatKeepsOthers(const std::vector<SurfaceContact> &items
       if (more > 1e-6)
          c = c + p1.normal * more;
    }
+}
+
+void ContactSystem::ShoveKeepsOthers(const HitBall *const pb, Vertex3Ds &delta)
+{
+   if (pb->m_contact == nullptr)
+      return;
+   BallSI bs;
+   bs.R = (double)pb->m_d.m_radius * U;
+   const Vertex3Ds &p = pb->m_d.m_pos;
+   const V3 c0((double)p.x * U, (double)p.y * U, (double)p.z * U);
+   V3 c = c0 + V3((double)delta.x * U, (double)delta.y * U, (double)delta.z * U);
+   for (int pass = 0; pass < 3; pass++)
+      ContactSystemImpl::SeatKeepsOthers(pb->m_contact->items, nullptr, bs, c0, c);
+   delta = Vertex3Ds((float)((c.x - c0.x) / U), (float)((c.y - c0.y) / U), (float)((c.z - c0.z) / U));
 }
 
 void ContactSystem::SeatKeepsOthers(const HitBall *const pb, const ContactSurface *const self, const RubberContact::BallSI &bs, const RubberContact::V3 &c0, RubberContact::V3 &c)
@@ -3524,6 +3614,7 @@ namespace
          f.pairs = FnvV(f.pairs, p.st.xi);
          f.pairs = FnvV(f.pairs, p.inContact);
          f.pairs = FnvV(f.pairs, p.lastDelta);
+         f.pairs = FnvV(f.pairs, p.zero);
       }
       ContactMovingPart::State st;
       for (ContactHost *const o : ContactSystemImpl::Hosts())

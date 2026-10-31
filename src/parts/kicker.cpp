@@ -615,6 +615,12 @@ STDMETHODIMP Kicker::CreateBall(IBall **pResult)
 }
 
 
+void Kicker::BallGone(const HitBall *const ball)
+{
+   if (m_phitkickercircle != nullptr && m_phitkickercircle->m_pHitBall == ball)
+      m_phitkickercircle->m_pHitBall = nullptr;
+}
+
 STDMETHODIMP Kicker::DestroyBall(int *pVal)
 {
    int cnt = 0;

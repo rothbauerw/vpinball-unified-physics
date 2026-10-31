@@ -148,6 +148,8 @@ const ContactSettings& ContactSettings::Get()
          loaded = true;
          ContactSettings s;
          LoadContactSettings(s, path);
+         if (PhysicsIni::Active(path).unified)
+            s.ballContact = true;   // one contact path: on the unified engine a ball pair is never left to the stock collision (ball_contact no longer acts there)
          cur = s;
          PLOGI << "Contact settings loaded from " << path.string() << ": " << (s.enable ? "on" : "off") << ", dynamic ratio " << s.muDynamicRatio
                << ", rolling resistance " << s.rollingResistance << ", twist " << (s.twist ? "on" : "off") << " patch " << s.twistPatchMm << " mm, ball contact " << (s.ballContact ? "on" : "off");

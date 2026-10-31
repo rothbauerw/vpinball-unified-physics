@@ -409,6 +409,20 @@ namespace GroupStep
             it.xi = V3();
       }
 
+      // After Configure: a ball pair found inside with no work done counts from its zero, as a part's own contact does
+      void SetPairItem(const int k, const double zero)
+      {
+         Item &it = item[k];
+         Hit hp;
+         it.dZero = zero;
+         Probe(it, ball, hp);
+         it.touching = hp.delta > 0.0;
+         if (it.touching)
+            TakeLaw(it, hp);
+         else
+            it.xi = V3();
+      }
+
       // What set the last ChooseStep (diagnostics for the offline trace; always kept): the rule (0 hMax, 1 normal stiffness, 2 shear stiffness, 3 arrival,
       // 4 turning, 5 floor 0.1 us, 7 a steady contact's normal stiffness at omegaHRest, 8 a part: partRule is its own), the contact (-1 = none) and that
       // contact's values at the choice
@@ -674,7 +688,7 @@ namespace GroupStep
          const Ball &B = bs[it.b];
          const V3 d = A.c - B.c;
          const double D = d.Length();
-         hp.delta = A.R + B.R - D;
+         hp.delta = A.R + B.R - D - it.dZero;
          hp.n = D > 0.0 ? d * (1.0 / D) : V3(0.0, 0.0, 1.0);
          hp.reff = A.R * B.R / (A.R + B.R);
          hp.curvDist = D;

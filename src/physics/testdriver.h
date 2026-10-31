@@ -16,6 +16,7 @@ namespace TestDriver
    void EndCycle(uint32_t tMs);     // end of the cycle, after PhysicsSimulateCycle
    void LoopEnd();                  // bottom of the physics loop pass
    void FrameStart();               // a new frame has begun (after the frame profiler's NewFrame): records the frame that ended
+   bool Ended();                    // the input file's end was reached and the report is written
 
    // The timed parts of a cycle (section 3 point 10 a, e, f). Each part's time leaves out the script run inside it.
    enum Part

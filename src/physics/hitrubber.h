@@ -157,6 +157,9 @@ struct BallPairState
    bool used = false;
    double maxDelta = 0.0, maxFn = 0.0;   // this cycle (trace)
    double lastDelta = 0.0;               // the compression of the last cycle: the stiffness the next cycle's step is chosen on
+   double lastSpeed = 0.0;               // the normal speed at the last cycle's start, either way: the step rule's "slow"
+   double zero = 0.0;                    // the depth the squash counts from: a pair found inside with no work done has stored nothing (only ever down, as a surface's gsZero)
+   double endDepth = -1.0, endHeld = 0.0;   // at the last cycle's end: how far inside (zero not taken off), and what the pair held
 };
 extern std::vector<BallPairState> g_ballPairs;
 class Primitive;

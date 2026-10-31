@@ -811,6 +811,7 @@
     <ClCompile Include="$(SolutionDir)/../../src/core/pinundo.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/core/VPApp.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/core/player.cpp" />
+    <ClCompile Include="$(SolutionDir)/../../src/core/playerbench.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/core/LayeredINIPropertyStore.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/core/Scriptable.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/core/ScriptGlobalTable.cpp" />

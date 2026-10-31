@@ -614,7 +614,7 @@ namespace TestDriver
          WriteTimes();
          const bool pass = s.skips == 0 && s.fast.n == 0 && s.below.n == 0 && s.outside.n == 0 && s.gone.n == 0 && s.errors.empty() && costPass;
          std::ofstream o(OutPath("report.txt"));
-         o << "Test driver report (docs/TestMatrixDesign.txt)\ninput: " << s.input << "\ncycles: " << s.cycles << " (t 0 to " << t << " ms; time 0 = engine time " << s.t0
+         o << "Test driver report (docs/TestMatrixDesign.txt)\n" << (Player::BenchMode() ? "BENCH RUN: every cost below is bench cost (no frames, no GPU, virtual frames of 7 ms); limit 6 is judged on a focused VPX run\n" : "") << "input: " << s.input << "\ncycles: " << s.cycles << " (t 0 to " << t << " ms; time 0 = engine time " << s.t0
            << " ms, after start-up), balls: " << s.balls.size() << ", respawns: " << s.respawns;
          if (s.respawnZOn)
             o << " (of them " << s.respawnsZ << " for a ball centre below z = " << s.respawnZ << " U)";
@@ -759,6 +759,8 @@ namespace TestDriver
          p.GetPrev(FrameProfiler::PROFILE_PREPARE_FRAME), p.GetPrev(FrameProfiler::PROFILE_MISC), p.GetPrev(FrameProfiler::PROFILE_SLEEP), p.GetPrev(FrameProfiler::PROFILE_FRAME) });
       s.cyclesInFrame = 0;
    }
+
+   bool Ended() { return s.ended; }
 
    ContactCost *Contact() { return s.loopOpen && s.detail ? &s.cc : nullptr; }
 
