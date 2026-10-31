@@ -36,6 +36,9 @@ struct SurfaceContact
    bool touching = false;         // in contact at the last substep (a hit event is a transition to touching)
    bool gsTouch = false;          // the group step (an island with a cord): touching at the cycle's end, and the shear spring's stretch then
    RubberContact::V3 gsXi;
+   double gsZero = 0.0;           // the depth its squash counts from (GroupStep Item dZero)
+   double endDepth = 0.0;         // the energy check: its depth at the end of the last cycle (m)
+   double gsReff = 0.0;           // the effective radius its touch took when it started: held for the life of the touch (ring_model; the law's energy is one function throughout)
    double hcStep = 0.0, hcSpeed = 0.0, hcDelta = 0.0;   // the arrival-time loop's step for this contact and the speed and compression it was computed for (it is reused while they hold)
    double fnLast = 0.0;           // normal force of this contact at the last substep (N): the resting test compares the ball's leftover force with it
    bool hcRest = false;           // hcStep came from the resting rule   // 6-ball stall: hcStep came from the resting (quasi-static) rule
@@ -55,8 +58,11 @@ public:
    virtual void Refresh(SurfaceContact &it, double ballR, double reachM, const RubberContact::V3 &c) const = 0;
    // The nearest point of the surface to a ball at c
    virtual RubberContact::TubeProbe Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const = 0;
+   // The longest step, at most hMax, that brings the ball at most to arriveM of a part of the surface other than the probe's nearest (nearestSeg); a nearest-only surface: hMax. a: the acceleration bound.
+   virtual double ArrivalS(const RubberContact::BallSI & /*bs*/, const SurfaceContact & /*it*/, int /*nearestSeg*/, const RubberContact::V3 & /*c*/, const RubberContact::V3 & /*v*/, double /*a*/, double hMax, double /*touchM*/, double /*arriveM*/) const { return hMax; }
    virtual const RubberObjectSettings *Settings() const { return nullptr; }   // the step and rest settings of a surface that has them (rubber, wall, primitive, ramp, playfield, disc); null = none
    virtual bool IsFloor() const = 0;        // a surface a ball rests on: gravity acts in the contact's substeps while one is in the contact
+   virtual bool GroupModel() const { return false; }   // a ball on it goes through the group step ([Rubbers] ring_model, GroupStepDesign 14)
    virtual bool IsPlayfield() const = 0;
    virtual double ReleaseGapM() const = 0;  // a ball this close to the surface stays engaged (hysteresis)
    // The fastest the surface itself can move toward a ball within a cycle (m/s, ContactMovingPart::SurfaceSpeedBound); 0 for a surface that does not move

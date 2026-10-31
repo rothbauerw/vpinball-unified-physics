@@ -87,6 +87,8 @@ namespace
             s.ballRestSubstepUs = d;
          else if (key == "arrival_step")
             s.arrivalStep = on;
+         else if (key == "static_model")
+            s.staticModel = on;
          else if (key == "arrival_depth_um" && num)
             s.arrivalDepthUm = d;
          else if (key == "ball_reach_mm" && num)

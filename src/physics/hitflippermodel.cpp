@@ -523,7 +523,6 @@ namespace
       s.alphaSPerM = f.rubberAlphaSPerM;
       s.mu = f.rubberMu;
       s.shearScale = f.rubberShearScale;
-      s.shearZeta = f.rubberShearZeta;
       s.twist = f.rubberTwist;
       s.tanDelta = f.rubberTanDelta;
       s.normalLoss = false;   // (MakeRubberParams: the bat rubber keeps its tuned rebound)

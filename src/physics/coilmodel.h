@@ -42,8 +42,7 @@ struct FlipperSettings
    double rubberAlphaSPerM = 0.05;      // normal damping; rebound ratio ~ 1 - alpha*v
    double rubberBetaLayer = 0.33;       // thin-layer stiffening coefficient
    double rubberMu = 0.8;               // rubber / steel friction (black / white rubber; user, 2026-10-30)
-   double rubberShearScale = 1.0;       // multiplier on the shear stiffness
-   double rubberShearZeta = 0.2;        // shear damping ratio
+   double rubberShearScale = 0.33;      // rubber_sideways_stiffness: multiplier on Mindlin's 8 G* a. rubber_e_mpa 12 is the normal stiffness of a thin confined strip; shear is not stiffened by that confinement, so G is the plain rubber's (E about 4, as the rings): 4 / 12. The strip lies on the bat, so nothing softer is in series (a backed layer is at least as stiff as a half-space). Cross-check G pi (a + h/2)^2 / h, a = 2.3 - 3.7 mm: 0.33 - 0.46. Calculated, not measured (runs/2026-10-30-rubber-review/notes.md)
    bool rubberTwist = true;             // resistance to spin about the contact normal
    double rubberTanDelta = 0.05;        // rubber loss tangent for the rolling resistance, 0 = off. PROVISIONAL: starts low on purpose (typical elastomer 0.1-0.3), to be tuned
    double rubberZLoMm = 9.144;          // rubber bottom above the playfield surface (0.36 in)

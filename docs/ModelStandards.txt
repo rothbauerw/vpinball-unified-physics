@@ -28,7 +28,7 @@ b. One loop. Balls touching the model are stepped by the shared loop (SubstepsAr
       depth check          RwLate, every substep, touching contacts included
       rewind               RwTake / RwRestore (needs the model's SaveState)
       overlap at first sight   UnifiedContactDesign.txt section 11
-      energy check         (design 11 point 7e; not built yet - when built, every model gets it)
+      energy check         built 2026-10-31, contactsystem.cpp EnergyCheckStart / End: ball energy with every contact's stored energy; no island with a drive in it yet
       on-screen report     rule 8
    An exception (today: bands; the turntable disc and the flipper bats joined 2026-10-28) goes in the to-do with the missing piece; the model is not called done.
    Once 3.0 is proven the guard list gets shorter; the rule stays: use what the shared loop provides.
@@ -36,6 +36,7 @@ c. One step rule. The substep a contact needs comes from the shared step functio
    see ProjectAssessment-2026-10-27.txt 3.1. Until the shared function exists, a new model calls NextStep's rule, not a copy of it.)
 d. One contact law. A ball touching anything uses ContactCore with the material's parameters. A new law only if the physics differs (name the law), and then in
    rubbercontact.h beside the others, shared.
+   We do not rewrite physics we already have (user, 2026-10-30). A ball pressing a band onto a post, end post or stop post, IS a rubber on a post and uses the same solve as a ring. Between a post and the span a band acts as a span for a short distance, then as a rubber on a post. Band behaviour is judged against a rubber on a post in that region; the rubber-on-post rebound targets are not targets for free spans.
 e. Pure SI maths with no VPX types in the model's header, so the same code runs in the offline test. VPX units only in the adapter.
 f. Events go into the part's event list (or DeferEvent) and are fired after the step. No script runs inside the step.
 g. Settings come from the table's physics ini through the settings reader. Environment variables are for diagnostics only, read once, and listed in
@@ -101,6 +102,11 @@ e. Every matrix run writes its pass/fail report to disk the day it runs.
 - Comment and code disagree (hitrubber.h:57 says rest factor 0.2, hitrubber.cpp sets 0.8), 2026-10-27. Catches it: none yet.
 - A matrix run left no report and was missed, 2026-10-27. Catches it: 5e.
 - A new model kept a route to stock: a failed solve on the cord band set a stock cooldown, ball 1.04 -> 6.15 m/s in play while the offline proof stayed exact, 2026-10-30. Catches it: none yet.
+- A solver's first guess kept between steps: a step taken again from a snapshot differed in the last digits (117 of 2001 steps), 2026-10-30. Catches it: the snapshot self-test (5b).
+- A stretch re-seated at the friction limit with the damper's share in it, which charges the spring with work nobody did: the old loop's ring gains at least 21.9 mJ in a 3 m/s hit (bench, 1 us), a still bat face leaves with 32 % more energy at 6 m/s. First blamed on the spring stiffening with the squash (0.6 mJ at most at 1 m/s, also fixed): measured 2026-10-30 by switching each off, runs/2026-10-30-rubber-review. Catches it: an energy book that counts what the springs hold, 5a.
+- A contact law for a thick solid body used on a thin tube: full Mindlin stiffness gives too much grip, whatever E or mu is (tangential to normal frequency 1.53 for nu 0.5). Catches it: rolling rebound targets on the model, 5a.
+- A seat along a tilted normal pressed the ball 1.95 mm into the playfield: 109 J stored, launch at 34 m/s, 2026-10-30. Catches it: the energy check (between cycles).
+- A probe returns a surface's nearest face only: a ramp's wall was hidden by its floor, the rewinds ran out, launch at 69 m/s, 2026-10-30. Catches it: the energy check (across a cycle), runs/2026-10-30-ring-launch/case_ramp.txt.
 Each trap names the test that now catches it ("none yet" until one exists); the older entries above get theirs as they are reviewed.
 
 

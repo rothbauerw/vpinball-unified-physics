@@ -37,7 +37,7 @@ namespace FlipperModel
       { "rubber_e_mpa", &FlipperSettings::rubberEMpa },
       { "rubber_thickness_mm", &FlipperSettings::rubberThicknessMm }, { "rubber_alpha_s_per_m", &FlipperSettings::rubberAlphaSPerM },
       { "rubber_thin_layer_beta", &FlipperSettings::rubberBetaLayer }, { "rubber_mu", &FlipperSettings::rubberMu },
-      { "rubber_shear_scale", &FlipperSettings::rubberShearScale }, { "rubber_shear_zeta", &FlipperSettings::rubberShearZeta },
+      { "rubber_sideways_stiffness", &FlipperSettings::rubberShearScale },
       { "rubber_z_lo_mm", &FlipperSettings::rubberZLoMm }, { "rubber_height_mm", &FlipperSettings::rubberHeightMm },
       { "rubber_substep_us", &FlipperSettings::rubberSubstepUs }, { "rubber_release_steps", &FlipperSettings::rubberReleaseSteps }, { "rubber_release_gap_mm", &FlipperSettings::rubberReleaseGapMm },
       { "rubber_tan_delta", &FlipperSettings::rubberTanDelta },
@@ -64,6 +64,14 @@ namespace FlipperModel
 
    inline bool ApplyKey(FlipperSettings& s, const std::string& key, const std::string& val)
    {
+      if (key == "rubber_shear_zeta" || key == "rubber_shear_scale")   // keys that no longer act (2026-10-31): the damping comes from rubber_tan_delta, the stiffness from rubber_sideways_stiffness. Old files still load
+      {
+         static bool told = false;
+         if (!told)
+            PLOGW << "Flipper settings: rubber_shear_zeta and rubber_shear_scale no longer act (zeta = rubber_tan_delta / 2; rubber_sideways_stiffness sets the stiffness)";
+         told = true;
+         return true;
+      }
       const std::string v = Lower(val);
       if (key == "wiring")
       {
@@ -156,8 +164,7 @@ namespace FlipperModel
       clampKey("rubber_alpha_s_per_m", s.rubberAlphaSPerM, 0.0, 2.0);
       clampKey("rubber_thin_layer_beta", s.rubberBetaLayer, 0.0, 5.0);
       clampKey("rubber_mu", s.rubberMu, 0.0, 3.0);
-      clampKey("rubber_shear_scale", s.rubberShearScale, 0.01, 100.0);
-      clampKey("rubber_shear_zeta", s.rubberShearZeta, 0.0, 10.0);
+      clampKey("rubber_sideways_stiffness", s.rubberShearScale, 0.01, 100.0);
       clampKey("rubber_z_lo_mm", s.rubberZLoMm, 0.0, 60.0);
       clampKey("rubber_height_mm", s.rubberHeightMm, 1.0, 60.0);
       clampKey("rubber_substep_us", s.rubberSubstepUs, 2.0, 100.0);

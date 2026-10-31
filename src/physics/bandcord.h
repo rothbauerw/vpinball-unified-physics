@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <cstdio>
 #include <cstring>
 
@@ -75,6 +76,8 @@ namespace BandCord
       double layerM = 0.0;                      // rubber thickness of the squash, m; 0 = the cord's diameter (as layer_mm 0)
       double mu = 0.8;                          // ball on cord, and cord on the surfaces behind it (black / white rubber; user, 2026-10-30)
       double playfieldWorldZ = 0.0;             // the playfield's height in the group's world, under the cord
+      RubberContact::RubberParams ringRp;       // a rubber on a post (GroupStepDesign 13): the ring's own values when ringRpSet, else made from the values above
+      bool ringRpSet = false;
       double cordTwistScale = 1.0;              // on the cord's twist stiffness G J (1 / L1 + 1 / L2), G = E / 3, J = pi r^4 / 2, L1 and L2 along the cord to its next post or ball each side (posts ASSUMED to hold the twist)
       double postMu = 0.8;                      // ASSUMED, the ball's: the cord on an own post (capstan friction, GroupStepDesign 11.24)
       double twistRadiusM = 1.0e-3;             // ASSUMED: the contact's radius for the twist torque (limit mu N a)
@@ -227,6 +230,7 @@ namespace BandCord
             driver = SlingDriver();
             driver.SetPulse(set.sling.pulseMs * 1e-3);
             driver.SetDelay(set.sling.coilDelayMs * 1e-3);
+            phiRest = RestPhi();
          }
          for (int s = 0; s < kMaxSwitches; s++)
             switchClosed[s] = false;
@@ -310,6 +314,10 @@ namespace BandCord
          for (int j = 0; j < NumBackstops(); j++)
             if (Overlap(i, j, q, Dofs(), nullptr) > 0.0)
                return true;
+         if (groupMode)
+            for (int j = 0; j < geo.nPosts + geo.nStops; j++)
+               if (OverlapRaw(i, j, q, Dofs(), nullptr) - postState[i].s[j].zero > 0.0)
+                  return true;
          return false;
       }
 
@@ -530,10 +538,10 @@ namespace BandCord
                arr[i] = i < nNew ? t[i] : zero;
          };
          Move(c, V2()); Move(v, V2()); Move(z, 0.0); Move(w, V3());
-         Move(gP, V3()); Move(gTq, V3()); Move(gPrate, V3()); Move(gTqRate, V3()); Move(gFn, V3());
+         Move(gP, V3()); Move(gTq, V3()); Move(gPrate, V3()); Move(gTqRate, V3()); Move(gFn, V3()); Move(gFnTaken, V3());
          Move(holdOn, false); Move(mHold, V3(0.0, 0.0, 1.0)); Move(psi, 0.0); Move(kTw, 0.0); Move(cTw, 0.0); Move(gSurfRate, 0.0);
          Move(gRootOk, false);
-         Move(bsZero, BsZero()); Move(bsNew, true);
+         Move(bsZero, BsZero()); Move(bsNew, true); Move(postState, PostStates());
          int newOfOld[kMaxBalls];
          for (int i = 0; i < kMaxBalls; i++)
             newOfOld[i] = -1;
@@ -556,12 +564,79 @@ namespace BandCord
          path3.n = n;
          nb = nNew;
       }
+      // an energy step (GroupStep::Group::EnergyStep)
+      void SaveState() override
+      {
+         if (!snap)
+            snap = std::make_shared<Part>(*this);
+         else
+            *snap = *this;
+         snap->snap.reset();
+      }
+      void RestoreState() override
+      {
+         const std::shared_ptr<Part> keep = snap;
+         *this = *keep;
+         snap = keep;
+      }
+      void HoldArcs() override   // the held arcs stay where they are, as one held still by a surface (their turn is a solve of its own, and it may have no root either), and no pulley joins in this step (which of them are on it can go round in a ring near a pressed pair: the next step's solve sees to that)
+      {
+         for (int i = 0; i < nb; i++)
+            gStill[i] = holdOn[i];
+         gSamePath = true;
+      }
+      void ExplicitMove(const double *Res, const int off, const double h, double *x) const override
+      {
+         if (gPl)
+            x[off] -= Res[off] * h / (2.0 * gI0);
+      }
+      void BallsMoved(const GroupStep::Ball *b_, const int n_) override   // the last resort of an energy step: the path follows the balls with the elements it has
+      {
+         gSamePath = true;
+         Sync(b_, n_);
+         gSamePath = false;
+      }
+      double KineticJ() const override { return geo.hasPlate ? 0.5 * Inertia(phi) * omega * omega : 0.0; }
+      void ScaleSpeeds(const double s) override { omega *= s; }
+      void AfterEnergyStep() override   // the push and the grip of a step with no solve are nothing to go on from
+      {
+         for (int i = 0; i < kMaxBalls; i++)
+         {
+            gFnTaken[i] = snap->gFnTaken[i];
+            gPrate[i] = snap->gPrate[i];
+            gTqRate[i] = snap->gTqRate[i];
+            gSurfRate[i] = snap->gSurfRate[i];
+         }
+         gAlphaLast = snap->gAlphaLast;
+         books = snap->books;
+         gdiag.settleFails = snap->gdiag.settleFails;
+      }
       double SwitchPush(int s) const { return SwitchDisp3(s); }
       double TwistOf(int i) const { return psi[i]; }
       bool SwitchIsClosed(int s) const { return switchClosed[s]; }
-      bool PlateQuiet() const { return !geo.hasPlate || (std::fabs(phi) < 1e-5 && std::fabs(omega) < 1e-3 && !driver.Coil() && driver.pending <= 0.0); }
+      bool PlateQuiet() const { return !geo.hasPlate || (std::fabs(phi - phiRest) < 1e-5 && std::fabs(omega) < 1e-3 && !driver.Coil() && driver.pending <= 0.0); }
+      // where the plate comes to rest: its return spring's preload balanced by the rest stop (phi below 0, PlateV's slope 0)
+      double RestPhi() const
+      {
+         if (!geo.hasPlate)
+            return 0.0;
+         double lo = -0.2, hi = 0.0;
+         for (int it = 0; it < 40; it++)
+         {
+            const double mid = 0.5 * (lo + hi);
+            (PlateVp(mid) > 0.0 ? hi : lo) = mid;
+         }
+         return 0.5 * (lo + hi);
+      }
       // how far ball i is clear of the cord (the group's release rule): 0 while it is on the cord, less than 0 while it squashes the cord on a post, a stop or the plate's
       // face, whose stored energy is the part's: a ball let go there would lose it. A backstop it was found inside and has not pressed since holds nothing and does not count.
+      // how fast ball i (velocity vw, world) closes on the cord's push on it, from the last step: the speed of a hit
+      double ClosingOnCord(const int i, const GroupStep::V3 &vw) const
+      {
+         const V3 f = gdiag.cordF[i], u = ToBand(vw);
+         const double l = f.Length();
+         return l > 0.0 ? std::max(-u.Dot(f) / l, 0.0) : u.Length();
+      }
       double CordGap(int i) const
       {
          if (Find3(path3, kBall, i) >= 0)
@@ -575,6 +650,13 @@ namespace BandCord
             if (del > 0.0 || bsZero[i].d[j] <= 0.0)
                gap = std::min(gap, -del);
          }
+         if (groupMode)   // its contact on a post, a group contact: as a backstop above
+            for (int j = 0; j < geo.nPosts + geo.nStops; j++)
+            {
+               const double zero = postState[i].s[j].zero, del = OverlapRaw(i, j, q, Dofs(), nullptr) - zero;
+               if (del > 0.0 || zero <= 0.0)
+                  gap = std::min(gap, -del);
+            }
          for (int k = 0; k < path3.n; k++)
          {
             const V3 dc = C - path3.ct[k].X;
@@ -582,6 +664,90 @@ namespace BandCord
             gap = std::min(gap, (dc - G3.t[k] * u).Length() - (R + r));
          }
          return gap;
+      }
+
+      // ---- A ball pressing the cord on an own post or a stop post is a rubber on a post (GroupStepDesign 13, ModelStandards 2d): an ordinary group contact with the ring's law,
+      // shear spring, twist, rolling and step rule, not this part's. The depth is the ring's: R + r less the distance to the cord's centre line at the post. The cord's own force and
+      // grip go on acting: its grip's limit is mu x the cord's push, the contact's is mu x its own, so one Coulomb limit on the whole push. No blend: the force moves over as the squash grows.
+      class PostShape : public GroupStep::Shape
+      {
+      public:
+         const Part *part = nullptr;
+         int j = 0;
+         void Probe(const GroupStep::V3 &cw, double Rb, GroupStep::Hit &h) const override { part->ProbePost(j, cw, Rb, h); }
+      };
+      void ProbePost(const int j, const GroupStep::V3 &cw, const double Rb, GroupStep::Hit &h) const
+      {
+         const bool own = j < geo.nPosts;
+         if (own && geo.postTwin[j])
+         {
+            h.delta = -1.0;
+            h.n = ToWorld(V3(0.0, 0.0, 1.0));
+            h.reff = Rb;
+            h.curvDist = 0.0;
+            return;
+         }
+         const V3 p = ToBand(cw - GroupStep::V3(frame.O.x, frame.O.y, frame.O.z));
+         const Circle &cs = own ? geo.posts[j] : geo.stops[j - geo.nPosts];
+         const V2 dv = V2(p.x, p.y) - cs.c;
+         const double D = dv.Length(), aa = D - cs.r, zz = p.z, dist = std::sqrt(aa * aa + zz * zz);   // the groove at the cord's height, a stop's too: the rubber pinned on it does not slide (user, 2026-10-30)
+         const V2 eh = D > 0.0 ? dv * (1.0 / D) : V2(1.0, 0.0);
+         const double na = dist > 0.0 ? aa / dist : 1.0, nz = dist > 0.0 ? zz / dist : 0.0;
+         h.delta = Rb + r - dist;
+         h.n = ToWorld(V3(eh.x * na, eh.y * na, nz));
+         const double R1 = 1.0 / (1.0 / Rb + 1.0 / r), kLong = RubberContact::TubeAlongCurvature(1.0 / cs.r, r, 1.0);   // the effective radius as ProbeTube
+         h.reff = std::sqrt(R1 / std::max(1.0 / Rb + kLong, 0.05 / Rb));
+         h.curvDist = D;
+      }
+      // Into the group, before its Configure
+      void AddPostShapes(GroupStep::Group &g)
+      {
+         RubberContact::RubberParams rp = set.ringRp;
+         if (!set.ringRpSet)
+         {
+            rp.eMpa = set.eMpa;
+            rp.alphaSPerM = set.alphaSPerM;
+            rp.betaLayer = set.betaLayer;
+            rp.mu = set.mu;
+            rp.tanDelta = set.tanDelta;
+         }
+         postFirst = g.ns;
+         nPostShapes = 0;
+         for (int j = 0; j < geo.nPosts + geo.nStops && g.ns < GroupStep::kMaxShapes; j++)
+         {
+            PostShape &s = postShape[j];
+            s.part = this;
+            s.j = j;
+            s.rp = rp;
+            s.layerM = hL;
+            g.shape[g.ns++] = &s;
+            nPostShapes++;
+         }
+      }
+      // After its Configure, with the part attached: what each ball kept on each post
+      void RestorePostItems(GroupStep::Group &g) const
+      {
+         for (int k = 0; k < g.ni; k++)
+         {
+            const GroupStep::Item &it = g.item[k];
+            if (it.b >= 0 || it.s < postFirst || it.s >= postFirst + nPostShapes)
+               continue;
+            const PostState &st = postState[it.a].s[it.s - postFirst];
+            g.SetShapeItem(k, st.touching, st.zero, st.xi);
+         }
+      }
+      void AfterStep(const GroupStep::Group &g) override
+      {
+         for (int k = 0; k < g.ni; k++)
+         {
+            const GroupStep::Item &it = g.item[k];
+            if (it.b >= 0 || it.s < postFirst || it.s >= postFirst + nPostShapes)
+               continue;
+            PostState &st = postState[it.a].s[it.s - postFirst];
+            st.touching = it.touching;
+            st.xi = it.xi;
+            st.zero = it.dZero;
+         }
       }
 
       // ---- the band in a group's solve (groupstep.h; GroupStepDesign.txt 10, 11) ----
@@ -656,7 +822,10 @@ namespace BandCord
       {
          nb = 0;
          for (int i = 0; i < kMaxBalls; i++)
-            gP[i] = gTq[i] = gPrate[i] = gTqRate[i] = V3();
+         {
+            gP[i] = gTq[i] = gPrate[i] = gTqRate[i] = gFnTaken[i] = V3();
+            postState[i] = PostStates();
+         }
          // the cord at rest round its own posts (as Configure's planar rest path), at its height
          groupMode = true;
          gFloorTop = (V3(0.0, 0.0, set.playfieldWorldZ) - frame.O).Dot(frame.ez) + r;   // where the cord's centre meets the playfield
@@ -738,6 +907,12 @@ namespace BandCord
          wrapDeg = G3.wrap[e] * 180.0 / kPi;
          tiltDeg = std::acos(std::min(1.0, std::fabs(path3.ct[e].m.z))) * 180.0 / kPi;
          return true;
+      }
+      // the force check: the push of the last Eval taken as a step's, so that the grip's limits know it
+      void TakePushForCheck()
+      {
+         for (int i = 0; i < nb; i++)
+            gFnTaken[i] = gFn[i];
       }
       // the force check: ball i's held arc turned by ang (a held grip under load), the path re-solved there
       void TurnHoldForCheck(int i, double ang)
@@ -918,6 +1093,7 @@ namespace BandCord
          FloorState(path3, G3, gFloorDel0);
          gNoiseD = 16.0 * eps * posScale;
          gMemo.ok = gMemoSlide.ok = gGradB0Ok = false;
+         gSamePath = false;
          gNdEv = 0;
          for (int i = 0; i < nb; i++)
             gSlideOn[i] = false;
@@ -929,7 +1105,7 @@ namespace BandCord
             gTq[i] = gTqRate[i] * h;
             gBb[i] = gBc[i] = gTqB[i] = 0.0;
             gSlid[i] = false;
-            gN0[i] = gFn[i].Length();
+            gN0[i] = gFnTaken[i].Length();
             gNs0[i] = 0.0;
             gMode[i] = 0;
             gTauB[i] = gTauS[i] = 0.0;
@@ -1157,6 +1333,8 @@ namespace BandCord
                      res[a] = Res(i);
                   }
                   bool innerOk = Met();
+                  double brP = 0.0, brN = 0.0, resPrev = INFINITY;
+                  bool hasP = false, hasN = false;
                   for (int it = 0; it < kArcIters && !innerOk; it++)
                   {
                      // B dx = -res
@@ -1203,12 +1381,48 @@ namespace BandCord
                      if (big > kArcMaxMoveRad)   // a far guess stays in the arc's neighbourhood
                         for (int a = 0; a < na; a++)
                            dx[a] *= kArcMaxMoveRad / big;
-                     for (int a = 0; a < na; a++)
-                        gBc[act[a]] += dx[a];
-                     if (!BetaPart())
+                     // The pull on an arc rises steeply as its turn crosses the point where the runs are straight (a ball close to a post: a step in the pull over a few um of turn), and a secant can circle such
+                     // a step for ever. The residual is monotone there. One arc: the root stays inside the bracket its signs give. Several: a move that does not lower the residuals is shortened.
+                     if (na == 1)
                      {
-                        gdiag.settleFails++;
-                        return false;
+                        const double ra = res[0], bc0 = gBc[act[0]];
+                        (ra > 0.0 ? brP : brN) = bc0;
+                        (ra > 0.0 ? hasP : hasN) = true;
+                        if (hasP && hasN)
+                        {
+                           const double t = bc0 + dx[0], lo = std::min(brP, brN), hi = std::max(brP, brN);
+                           if (!(t > lo && t < hi) || std::fabs(ra) > 0.5 * resPrev)
+                              dx[0] = 0.5 * (lo + hi) - bc0;
+                        }
+                        resPrev = std::fabs(ra);
+                     }
+                     double n0 = 0.0;
+                     for (int a = 0; a < na; a++)
+                        n0 += res[a] * res[a];
+                     for (int bt = 0;; bt++)
+                     {
+                        for (int a = 0; a < na; a++)
+                           gBc[act[a]] += dx[a];
+                        if (!BetaPart())
+                        {
+                           gdiag.settleFails++;
+                           return false;
+                        }
+                        if (na == 1 || bt >= 6)
+                           break;
+                        double nn = 0.0;
+                        for (int a = 0; a < na; a++)
+                        {
+                           const double rn = Res(act[a]);
+                           nn += rn * rn;
+                        }
+                        if (nn < n0)
+                           break;
+                        for (int a = 0; a < na; a++)
+                        {
+                           gBc[act[a]] -= dx[a];
+                           dx[a] *= 0.5;
+                        }
                      }
                      double dd = 0.0, Bdx[kMaxBalls], dres[kMaxBalls];
                      for (int a = 0; a < na; a++)
@@ -1299,7 +1513,7 @@ namespace BandCord
          Geom3 &Gm = sGm;
          passStats.evals++;
          solveCaller = 1;
-         const bool okEnd = Settle3(gPath1, q1, gG1), okMid = okEnd && Settle3(pm, qm, Gm);
+         const bool okEnd = gSamePath ? LeaveOnly(gPath1, q1, gG1) : Settle3(gPath1, q1, gG1), okMid = okEnd && (gSamePath ? LeaveOnly(pm, qm, Gm) : Settle3(pm, qm, Gm));
          solveCaller = 0;
          if (!okMid)
          {
@@ -1369,8 +1583,17 @@ namespace BandCord
             for (int a = 0; a < 3; a++)
                dqc[3 * i + a] = on ? dq[3 * i + a] : 0.0;
          }
-         if (gPl)
-            dqc[iphi] = dq[iphi];
+         if (gPl)   // the cord's energy does not depend on a plate it is not on: as a ball off the cord, it takes none of the correction
+         {
+            bool onFace = false;
+            for (int k = 0; k < path3.n && !onFace; k++)
+               onFace = path3.e[k].kind == kFace;
+            for (int k = 0; k < gPath1.n && !onFace; k++)
+               onFace = gPath1.e[k].kind == kFace;
+            for (int k = 0; k < pm.n && !onFace; k++)
+               onFace = pm.e[k].kind == kFace;
+            dqc[iphi] = onFace ? dq[iphi] : 0.0;
+         }
          // one scalar over the spans, so one discrete gradient closes the energy exactly: the cord's stored energy change, plus each span's stretch loss written as its
          // frozen rate times its length (its change is the loss itself)
          MakeSpanMap(gPath1, gG1, sMap1);
@@ -1391,6 +1614,29 @@ namespace BandCord
          for (int a = 0; a < nd; a++)
             Fl[a] = -gL[a];
          gCordLoss = dLossS;
+         // The correction's own slope in the Newton matrix. Its force is -(e / qq) W dq, e = df - g . dq, qq = dq^T W dq (e changes only to third order in the move). Left out, a light body (the plate) overshoots
+         // every round when e is large: the row's true slope is 2 I / h + h e / (I qq), the matrix had the first term only.
+         {
+            const double df = SpanV(sLs1) + FloorVOf(del1) - Vb + dLossS + dLossF;
+            double gdq = 0.0, qq = 0.0, Wd[kMaxGD];
+            for (int a = 0; a < nd; a++)
+            {
+               gdq += gPhi[a] * dqc[a];
+               Wd[a] = W[a] * dqc[a];
+               qq += dqc[a] * Wd[a];
+            }
+            if (qq > 1e-300 && std::fabs(df - gdq) > gNoiseE)
+            {
+               const double cf = (df - gdq) / qq;
+               for (int a = 0; a < nd; a++)
+                  if (dqc[a] != 0.0)
+                  {
+                     H[a][a] += h * cf * W[a];
+                     for (int b2 = 0; b2 < nd; b2++)
+                        H[a][b2] -= 2.0 * h * cf / qq * Wd[a] * Wd[b2];
+                  }
+            }
+         }
          // the held balls: the cord's elastic pull on the arc's turn, a torque about the cord's direction; a slid arc's torque is the friction itself, at its limit
          // against the slip (GroupStepDesign 11.19), so its loss is never negative by construction: the search stops where the pull meets that limit, but at a kink
          // in the length (a run squashed to nothing on a post) the pull can jump across it
@@ -1781,6 +2027,8 @@ namespace BandCord
             omega = omega1;
          }
          iHigh = gIHigh1;
+         for (int i = 0; i < nb; i++)
+            gFnTaken[i] = gFn[i];
          // the balls where the group puts them (c + dc, v = 2 dc / h - v)
          for (int i = 0; i < nb; i++)
          {
@@ -1841,6 +2089,7 @@ namespace BandCord
          through = books.through;
       }
 
+      double phiRest = 0.0;   // RestPhi of the settings (Configure)
    private:
       // derived
       double m = 0.08, R = 0.0135, r = 0.0027, Ib = 0.0, EA = 0.0, Lr = 1.0, cv = 0.0, kH = 0.0, hL = 0.0054, cL = 0.0, Lcur = 0.0;
@@ -1863,6 +2112,11 @@ namespace BandCord
       static constexpr int kMaxBs = kMaxPosts + kMaxStops + 1 + kMaxWalls;   // backstops
       struct BsZero { double d[kMaxBs] = {}; };
       BsZero bsZero[kMaxBalls];               // per ball and backstop: the depth its squash counts from (0 unless it was found inside)
+      struct PostState { bool touching = false; GroupStep::V3 xi; double zero = 0.0; };
+      struct PostStates { PostState s[kMaxPosts + kMaxStops]; };
+      PostStates postState[kMaxBalls];         // per ball, what its group contact on each post keeps between cycles
+      PostShape postShape[kMaxPosts + kMaxStops];
+      int postFirst = 0, nPostShapes = 0;      // where the shapes are in the group's list
       bool bsNew[kMaxBalls] = { true, true, true, true };   // the ball has just joined: the next commit sets its zero
       static constexpr int kMaxGD = 3 * kMaxBalls + 1;                       // the band's coordinates in a group step: per ball x, y (its plane) and z (height), the plate
       const GroupStep::Ball *gb = nullptr;   // the group's balls at the step's start
@@ -1873,7 +2127,9 @@ namespace BandCord
       double gDel0[kMaxBalls * kMaxBs] = {};
       // the grip: impulses over the step in the band's frame (friction, its torque with twist and rolling resistance), per unit time for the warm start, and the
       // last UpdateGrip's frame and parts
-      V3 gP[kMaxBalls], gTq[kMaxBalls], gPrate[kMaxBalls], gTqRate[kMaxBalls], gFn[kMaxBalls], gN3[kMaxBalls], gT2[kMaxBalls];
+      std::shared_ptr<Part> snap;   // an energy step's starting state
+      bool gSamePath = false;       // this attempt: the path keeps its elements (HoldArcs)
+      V3 gP[kMaxBalls], gTq[kMaxBalls], gPrate[kMaxBalls], gTqRate[kMaxBalls], gFn[kMaxBalls], gFnTaken[kMaxBalls], gN3[kMaxBalls], gT2[kMaxBalls];   // gFnTaken: the band's push at the end of the last step taken (a failed attempt's push is no measure of anything)
       double gMtw[kMaxBalls] = {}, gMr[kMaxBalls] = {};
       double gCordLoss = 0.0, gBsLoss = 0.0, gMaxOv = 0.0, gPlateLoss = 0.0, gCoilW = 0.0;
       // the held grip across the cord (GroupStepDesign 11.3): per ball on the cord, the plane its arc lies in, fixed to the ball (state, band frame); in a step
@@ -1963,13 +2219,13 @@ namespace BandCord
             return *this;
          }
       };
-      struct Geom3 { V3 t[kMaxPath]; double l[kMaxPath] = {}, wrap[kMaxPath] = {}, rho[kMaxPath] = {}; V3 cen[kMaxPath]; double L = 0.0; int passes = 0; };
+      struct Geom3 { V3 t[kMaxPath]; double l[kMaxPath] = {}, wrap[kMaxPath] = {}, rho[kMaxPath] = {}; V3 cen[kMaxPath]; double L = 0.0; int passes = 0; bool gone[kMaxPath] = {}; };
       Path3 path3, gPath1;   // the cord's path now (group mode); the last Eval's end path
       Geom3 G3, gG1;
       // scratch of a step's evaluation (one group at a time, as the group's Jacobian): held here so that they are not built afresh for every path solve
       mutable Path3 sPb, sPm, sTr;
       mutable Geom3 sGb, sGm, sGt;
-      mutable Contact3 sPrev[kMaxPath];
+      mutable Contact3 sPrev[kMaxPath], sPrev2[kMaxPath], sLast[kMaxPath];
       bool groupMode = false;
 
       V2 WallEnd(int id) const { const WallSpec &wl = geo.walls[id / 2]; return id % 2 == 0 ? wl.A : wl.B; }
@@ -1978,7 +2234,7 @@ namespace BandCord
          switch (e.kind)
          {
          case kPost: type = kFixed; cen = V3(geo.posts[e.id].c.x, geo.posts[e.id].c.y, 0.0); rho = geo.posts[e.id].r; break;
-         case kStop: type = kSlide; cen = V3(geo.stops[e.id].c.x, geo.stops[e.id].c.y, 0.0); rho = geo.stops[e.id].r; break;
+         case kStop: type = kFixed; cen = V3(geo.stops[e.id].c.x, geo.stops[e.id].c.y, 0.0); rho = geo.stops[e.id].r; break;   // the cord pinned on it does not slide up or down it (user, 2026-10-30)
          case kFace: { const V2 f = FacePoint(e.id, q.phi); type = kSlide; cen = V3(f.x, f.y, 0.0); rho = r; break; }
          case kWallEnd: { const V2 f = WallEnd(e.id); type = kSlide; cen = V3(f.x, f.y, 0.0); rho = geo.walls[e.id / 2].halfThick + r; break; }
          case kBall: type = kSphere; cen = V3(q.c[e.id].x, q.c[e.id].y, q.z[e.id]); rho = -(R + r); break;
@@ -2114,7 +2370,13 @@ namespace BandCord
             const bool creepPass = it >= 8 && it % 3 == 2;
             if (creepPass)
                for (int k = 0; k < n; k++)
+               {
+                  sPrev2[k] = sLast[k];
                   sPrev[k] = p.ct[k];
+               }
+            else if (it >= 7 && it % 3 == 1)
+               for (int k = 0; k < n; k++)
+                  sLast[k] = p.ct[k];
             double mv2 = 0.0;
             for (int k = 0; k < n; k++)
             {
@@ -2132,10 +2394,14 @@ namespace BandCord
             conv = mv <= 2e-14;
             // A pair of pulleys pressed together (a ball squashing the cord onto a post: the run between them has almost no length) makes the passes creep: each
             // moves the points by nearly the same step. Once the steps shrink by a steady ratio, the creep is taken to its limit (Aitken), then the passes go on.
+            // The same for a pair that swaps between two places (the steps turn back on themselves: a gain near -1, with the same formula half way between them).
             if (!conv && creepPass && mvPrev > 0.0)
             {
-               const double ratio = mv / mvPrev;
-               if (ratio > 0.5 && ratio < 0.99999)
+               double turn = 0.0;
+               for (int k = 0; k < n; k++)
+                  turn += (p.ct[k].E - sPrev[k].E).Dot(sPrev[k].E - sPrev2[k].E) + (p.ct[k].X - sPrev[k].X).Dot(sPrev[k].X - sPrev2[k].X) + (p.ct[k].zc - sPrev[k].zc) * (sPrev[k].zc - sPrev2[k].zc);
+               const double ratio = (turn < 0.0 ? -1.0 : 1.0) * mv / mvPrev;
+               if ((ratio > 0.5 && ratio < 0.99999) || ratio < -0.5)
                {
                   const double f = ratio / (1.0 - ratio);
                   for (int k = 0; k < n; k++)
@@ -2157,12 +2423,26 @@ namespace BandCord
          if (!conv)
          {
             passStats.fails++;
-            return false;
+            if (!gSamePath)   // (an energy step takes the touch points the passes have reached: the length is measured from them, and the real energy closes the step)
+               return false;
          }
          g.L = 0.0;
          for (int k = 0; k < n; k++)
          {
-            const V3 d = p.ct[(k + 1) % n].E - p.ct[k].X;
+            const int kp1 = (k + 1) % n;
+            V3 d = p.ct[kp1].E - p.ct[k].X;
+            // two pulleys pressed together (a ball squashing the cord onto a post or the face): the touch points have passed each other along the line of the centres, and the run between them has no
+            // length there: what is left of the cord's length is the arcs (the squash carries the force). A height difference between them stays.
+            g.gone[k] = false;
+            {
+               const V3 cd = g.cen[kp1] - g.cen[k];
+               const double a = d.Dot(cd), cc = cd.Dot(cd);
+               if (a < 0.0 && cc > 0.0)
+               {
+                  d = d - cd * (a / cc);
+                  g.gone[k] = true;
+               }
+            }
             const double l = d.Length();
             g.l[k] = l;
             g.t[k] = l > 1e-12 ? d * (1.0 / l) : p.ct[k].tOut;
@@ -2246,6 +2526,9 @@ namespace BandCord
             dL += (tin - tout).Dot(dc) + thO * O.w - thI * I.w + tin.Dot(tmI) - tout.Dot(tmO);
             linArc[k] = rho * (thO - thI);
          }
+         for (int k = 0; k < n; k++)   // (a run with no length changes nothing)
+            if (g.gone[k] && g.l[k] <= 1e-12)
+               dL -= g.t[k].Dot(linDE[k + 1 == n ? 0 : k + 1] - linDX[k]);
          return dL;
       }
       // what the unknowns come out as from the touch points' changes (the passes' map, linearised)
@@ -2633,6 +2916,31 @@ namespace BandCord
          }
          return false;
       }
+      // The path at q in an energy step: a pulley the cord has come off leaves, nothing joins (which of them are on it can go round in a ring: that waits for the next step's solve)
+      bool LeaveOnly(Path3 &p, const Config &q, Geom3 &g) const
+      {
+         for (;;)
+         {
+            if (!Solve3(p, q, g))
+               return false;
+            int worst = -1;
+            double wmin = -1e-12;
+            for (int k = 0; k < p.n; k++)
+               if (g.wrap[k] < wmin)
+               {
+                  wmin = g.wrap[k];
+                  worst = k;
+               }
+            if (worst < 0 || p.n <= 2)
+               return true;
+            for (int k = worst; k + 1 < p.n; k++)
+            {
+               p.e[k] = p.e[k + 1];
+               p.ct[k] = p.ct[k + 1];
+            }
+            p.n--;
+         }
+      }
       // Each span between two own posts has its own unstretched length and so its own tension (GroupStepDesign 11.24). A span is the runs and arcs from post j to post j + 1, and
       // half of each of the two posts' arcs. A post the cord has lifted off (no wrap, so no grip) still marks where its two spans meet: the nearest point of the run passing it.
       struct SpanMap
@@ -2756,7 +3064,7 @@ namespace BandCord
             }
             else
                gs[M.arcSpan[k]][slot] += linArc[k];
-            const double dl = g.t[k].Dot(linDE[kp] - linDX[k]);
+            const double dl = g.gone[k] && g.l[k] <= 1e-12 ? 0.0 : g.t[k].Dot(linDE[kp] - linDX[k]);
             for (int q2 = 0; q2 < M.nPart[k]; q2++)
                gs[M.partSpan[k][q2]][slot] += M.partFrac[k][q2] * dl;
          }
@@ -2914,7 +3222,7 @@ namespace BandCord
             for (int j = 0; j < NumBackstops(); j++)
             {
                const double raw = std::max(OverlapRaw(i, j, q, Dofs(), nullptr), 0.0);
-               bsZero[i].d[j] = bsNew[i] ? raw : std::min(bsZero[i].d[j], raw);
+               bsZero[i].d[j] = bsNew[i] || raw - bsZero[i].d[j] >= hL * (1.0 - 1e-9) ? raw : std::min(bsZero[i].d[j], raw);
             }
             bsNew[i] = false;
          }
@@ -3169,7 +3477,8 @@ namespace BandCord
       void Sync(const GroupStep::Ball *b, int n, bool force = false)
       {
          n = std::min(n, kMaxBalls);
-         bool moved = force || n != nb;
+         force = force || n != nb;
+         bool moved = force;
          nb = n;
          for (int i = 0; i < nb; i++)
          {
@@ -3185,9 +3494,12 @@ namespace BandCord
          {
             const Config q = Now();
             Geom3 g;
-            if (!Settle3(path3, q, g))
+            const bool keep = gSamePath;
+            gSamePath = !force;   // (the passes' touch points as they are reached: no element comes or goes)
+            if (force ? !Settle3(path3, q, g) : !Solve3(path3, q, g))
                gdiag.settleFails++;
             Commit3(path3);
+            gSamePath = keep;
          }
       }
       // the group's move x in the band's coordinates; the number of them
@@ -3653,7 +3965,19 @@ namespace BandCord
       // (the in-plane distance less r off the surface). One law for every surface (GroupStepDesign 11.2).
       // A squash grows from zero: a ball found already inside a backstop (over the top of a stop post, a contact found late) has stored nothing, so that depth is its zero
       // until it has backed out of it (bsZero, Commit3). No energy can appear when a ball joins (GroupStepDesign 12).
-      double Overlap(int i, int j, const Config &q, const Dofs &d, double *gr, double *grz = nullptr) const { return OverlapRaw(i, j, q, d, gr, grz) - bsZero[i].d[j]; }
+      double Overlap(int i, int j, const Config &q, const Dofs &d, double *gr, double *grz = nullptr) const
+      {
+         if (groupMode && j < geo.nPosts + geo.nStops)   // a group contact (AddPostShapes): the plate and the walls stay here
+         {
+            if (gr)
+               for (int a = 0; a < d.n; a++)
+                  gr[a] = 0.0;
+            if (grz)
+               *grz = 0.0;
+            return -1.0;
+         }
+         return OverlapRaw(i, j, q, d, gr, grz) - bsZero[i].d[j];
+      }
       double OverlapRaw(int i, int j, const Config &q, const Dofs &d, double *gr, double *grz = nullptr) const
       {
          if (gr)
@@ -3665,9 +3989,9 @@ namespace BandCord
          double a;      // the ball centre's in-plane distance from where the cord's centre line lies against it
          V2 ga;         // its gradient in the ball's centre
          double gaPhi = 0.0;
-         if (j < geo.nPosts)   // its groove at the cord's height (the path's own post): the 3D distance to the groove's centre line
+         if (j < geo.nPosts || (groupMode && j < geo.nPosts + geo.nStops))   // its groove at the cord's height: the 3D distance to the groove's centre line (ProbePost)
          {
-            const Circle &cs = geo.posts[j];
+            const Circle &cs = j < geo.nPosts ? geo.posts[j] : geo.stops[j - geo.nPosts];
             const V2 dv = cb - cs.c;
             const double D = dv.Length(), aa = D - cs.r, d3 = std::sqrt(aa * aa + q.z[i] * q.z[i]);
             const double fa = d3 > 0.0 ? aa / d3 : 1.0, fz = d3 > 0.0 ? q.z[i] / d3 : 0.0;
@@ -3697,8 +4021,9 @@ namespace BandCord
             double dist;
             if (u > 0.0 && u < 1.0)
             {
-               dist = (cb - F0).Dot(p.n);
-               ga = p.n;
+               const double sd = (cb - F0).Dot(p.n);   // the distance to the plate, from either side: a ball that passes its end from behind meets no step in its depth (a plane's side has one: it is deep inside at once)
+               dist = std::fabs(sd);
+               ga = sd >= 0.0 ? p.n : p.n * -1.0;
             }
             else
             {

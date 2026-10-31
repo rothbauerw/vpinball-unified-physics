@@ -8,13 +8,13 @@
 //    V = kH [0.4 delta^2.5 + beta reff^1.5 W(delta)]. Its losses act on the mid-step compression rate: Hunt-Crossley 1.5 alpha F (or Kuwabara-Kono gamma a), plus the
 //    flat loss tanDelta sqrt(1.5 F m / delta) where normalLoss is on.
 //  - shear: Mindlin's spring kt = 8 G* a shearScale as stored energy 1/2 kt |xi|^2 (xi: the spring's stretch in the contact plane, carried from step to step and turned
-//    with the contact, its length kept); a slip past mu N is a loss; the spring's damping 2 zeta sqrt(kt mt) acts on the mid-step slip rate.
+//    with the contact, its length kept); a slip past mu N is a loss; the spring's damper shearTan sqrt(kt mt) acts on the mid-step slip rate, spring and damper together
+//    within mu N. Mindlin-Deresiewicz: a patch that grows holds the force, one that shrinks holds the stretch (rubbercontact.h ContactCore); what the spring holds only
+//    falls by that, a loss, and no force acts along the compression for it.
 //  - twist and rolling resistance: today's smooth laws (rubbercontact.h ContactCore, EvaluateTube) on the mid-step spin: losses.
 // Step: each ball's move and spin change over the step are the unknowns (6 per ball: the shear spring ties travel and spin). Each stored energy's force is its discrete
-// gradient over the move (Gonzalez: exact differences), every loss acts on mid-step rates, and the shear spring uses the identity
-//    1/2 k1 |xi1|^2 - 1/2 k0 |xi0|^2 = kbar xibar . (xi1 - xi0) + 1/2 mean(|xi|^2) (k1 - k0),
-// the second part acting along the compression with the normal force. Once the step's equations are solved: energy end = start + drive work - losses, at any step
-// size. The step size is set by accuracy only (ChooseStep). A contact's effective radius, layer and material are held for the life of a touch (taken when it starts),
+// gradient over the move (Gonzalez: exact differences), every loss acts on mid-step rates, and the shear spring's force is k1 xibar over the step, at the stiffness of the
+// step's end. Once the step's equations are solved: energy end = start + drive work - losses, at any step size. The step size is set by accuracy only (ChooseStep). A contact's effective radius, layer and material are held for the life of a touch (taken when it starts),
 // so its energy is one function throughout.
 // Moving parts (step 1b, GroupStepDesign.txt 10): a Part describes its own bodies' unknowns (after the balls'), its stored energy, losses, drives and grip, and the
 // group solves it with the balls (the band cord, bandcord.h, is the first).
@@ -180,11 +180,14 @@ namespace GroupStep
       double driveJ = 0.0, normalLossJ = 0.0, slipJ = 0.0, shearDampJ = 0.0, twistJ = 0.0, rollJ = 0.0;
       double partLossJ = 0.0;   // the parts' losses (their own books split them)
       long steps = 0, rounds = 0, halvings = 0, stopSteps = 0, noiseStops = 0;   // noiseStops: steps solved to the forces' noise (Settings::tolNoise)
+      long energySteps = 0, energyBounces = 0, energyFree = 0;   // steps no solve could do: taken on energy alone, of them turned back at a step in the energy too high to pay, moved with no path (Group::EnergyStep)
       int maxRounds = 0;
       double hMinUsed = 1.0, maxDepthM = 0.0;
       bool failed = false, through = false;
       double Losses() const { return normalLossJ + slipJ + shearDampJ + twistJ + rollJ + partLossJ; }
    };
+
+   class Group;
 
    // A moving part of a group (GroupStepDesign.txt piece 1; 10.1): it describes its bodies, stored energy, losses, drives and grip, and the group moves them with
    // the balls in one solve. The unknowns x: per ball the move (3) and the spin change (3), then each part's own (NumDof of them, from off). The balls' residual
@@ -215,6 +218,16 @@ namespace GroupStep
       // the step taken (after an Eval at the solution, before the group moves its balls); onStop: it ended on the hard stop. Its drive work and losses of the
       // step, and whether a ball went through it
       virtual void Accept(const double *x, int off, double h, bool onStop, double &driveJ, double &lossJ, bool &through) = 0;
+      virtual void AfterStep(const Group &) {}   // the step taken and the balls moved: what the part keeps of its own shapes' contacts
+      // an energy step (Group::EnergyStep): the state kept and put back; its bodies' kinetic energy and all their speeds times s; what a step's forces left for the next one is put back
+      virtual void SaveState() {}
+      virtual void RestoreState() {}
+      virtual double KineticJ() const { return 0.0; }
+      virtual void ScaleSpeeds(double) {}
+      virtual void AfterEnergyStep() {}
+      virtual void HoldArcs() {}   // no solve in this attempt: what the part solves within itself stays as it is
+      virtual void BallsMoved(const Ball *, int) {}              // the balls were moved with no step of its own
+      virtual void ExplicitMove(const double *, int, double, double *) const {}   // its own unknowns in an energy step's explicit round
    };
 
    // One contact: ball a on shape s, or ball a on ball b. Its law is taken when a touch starts and held while it lasts.
@@ -223,9 +236,10 @@ namespace GroupStep
       int a = -1, b = -1, s = -1;
       bool touching = false;
       V3 xi;                          // the shear spring's stretch (in the contact plane)
+      double dZero = 0.0;             // the depth its squash counts from: a ball found inside has stored nothing (no energy without the work that stored it; only ever down)
       // the held law
       double kH = 0.0, cL = 0.0, hL = 0.0, reff = 0.0, ktPerA = 0.0, E = 0.0, mRed = 0.0, mt = 0.0;
-      double alpha = 0.0, gammaKK = 0.0, tanDelta = 0.0, shearZeta = 0.0, mu = 0.0, rollingMu = 0.0;
+      double alpha = 0.0, gammaKK = 0.0, tanDelta = 0.0, shearTan = 0.0, mu = 0.0, rollingMu = 0.0;
       bool normalLoss = false, twist = false;
       double W(double d) const   // integral of x^3 / (h - x)^3 from 0 to d; for a shallow squash its series (the closed form cancels to rounding there)
       {
@@ -367,6 +381,33 @@ namespace GroupStep
          return e;
       }
       bool Touching(int k) const { return item[k].touching; }
+      // The first guess starts afresh: a step taken again from a snapshot then gives the same result to the last digit
+      void ClearGuess()
+      {
+         for (int i = 0; i < kMaxBalls; i++)
+            aLast[i] = alphaLast[i] = V3();
+      }
+      // After Configure: a part's own contact goes on as it was kept (touching, stretch, zero); one not touching that is already inside has stored nothing, its depth is its zero
+      void SetShapeItem(const int k, const bool wasTouching, const double zero, const V3 &xi)
+      {
+         Item &it = item[k];
+         Hit hp;
+         it.dZero = 0.0;
+         if (!wasTouching && zero <= 0.0)
+         {
+            Probe(it, ball, hp);
+            it.dZero = std::max(hp.delta, 0.0);
+         }
+         else
+            it.dZero = zero;
+         it.xi = xi;
+         Probe(it, ball, hp);
+         it.touching = hp.delta > 0.0;
+         if (it.touching)
+            TakeLaw(it, hp);
+         else
+            it.xi = V3();
+      }
 
       // What set the last ChooseStep (diagnostics for the offline trace; always kept): the rule (0 hMax, 1 normal stiffness, 2 shear stiffness, 3 arrival,
       // 4 turning, 5 floor 0.1 us, 7 a steady contact's normal stiffness at omegaHRest, 8 a part: partRule is its own), the contact (-1 = none) and that
@@ -489,10 +530,7 @@ namespace GroupStep
                   if (!(hm > lo && hm < hi))
                      hm = 0.5 * (lo + hi);
                   if (!Solve(hm))
-                  {
-                     books.failed = true;
-                     return 0.0;
-                  }
+                     return EnergyStep(hTry);
                   const double f = StopExcess();
                   if (f <= 0.0)
                   {
@@ -515,10 +553,7 @@ namespace GroupStep
                   }
                }
                if (hBelow <= 0.0 || !Solve(hBelow))
-               {
-                  books.failed = true;
-                  return 0.0;
-               }
+                  return EnergyStep(hTry);
                Accept(hBelow, true);
                books.stopSteps++;
                return hBelow;
@@ -547,10 +582,7 @@ namespace GroupStep
             h *= 0.5;
             books.halvings++;
             if (h < set.hMin)
-            {
-               books.failed = true;
-               return 0.0;
-            }
+               return EnergyStep(hTry);
          }
       }
 
@@ -626,6 +658,7 @@ namespace GroupStep
          if (it.b < 0)
          {
             shape[it.s]->Probe(A.c, A.R, hp);
+            hp.delta -= it.dZero;
             return;
          }
          const Ball &B = bs[it.b];
@@ -669,7 +702,7 @@ namespace GroupStep
          it.gammaKK = rp.gammaKK;
          it.tanDelta = rp.tanDelta;
          it.normalLoss = rp.normalLoss;
-         it.shearZeta = rp.shearZeta;
+         it.shearTan = rp.shearTan;
          it.mu = rp.mu;
          it.rollingMu = rp.rollingMu;
          it.twist = rp.twist;
@@ -845,14 +878,19 @@ namespace GroupStep
                const double lp = xp.Length();
                xi0 = lp > 1e-300 ? xp * (l0 / lp) : V3();
             }
-            const double k0 = L.Kt(d0), k1 = L.Kt(d1), kb = 0.5 * (k0 + k1);
+            // the patch rule (rubbercontact.h ContactCore): a patch that grows holds the force, one that shrinks holds the stretch; the spring's fall is a loss
+            const double k0 = L.Kt(d0), k1 = L.Kt(d1);
+            const double held = 0.5 * k0 * xi0.Dot(xi0);
+            if (k1 > k0)
+               xi0 = xi0 * (k0 / k1);
+            e.slip = held - 0.5 * k1 * xi0.Dot(xi0);
             V3 Fs, xi1, FsTr;
-            double ct = 0.0, limS = 0.0, flTr = 0.0;
+            double ct = 0.0, limS = 0.0, flTr = 0.0, dampShare = 1.0;
             bool slipping = false;
-            if (kb > 0.0)
+            if (k1 > 0.0)
             {
                const V3 xtr = xi0 + ut * h;
-               Fs = (xi0 + xtr) * (0.5 * kb);
+               Fs = (xi0 + xtr) * (0.5 * k1);
                FsTr = Fs;
                const double lim = L.mu * N, fl = Fs.Length();
                limS = lim;
@@ -860,28 +898,22 @@ namespace GroupStep
                if (fl > lim)
                {
                   Fs = fl > 0.0 ? Fs * (lim / fl) : V3();
-                  xi1 = Fs * (2.0 / kb) - xi0;
+                  xi1 = Fs * (2.0 / k1) - xi0;
                   slipping = true;
                   e.slipping = true;
-                  e.slip = Fs.Dot(xtr - xi1);
+                  e.slip += Fs.Dot(xtr - xi1);
                }
                else
                {
                   xi1 = xtr;
-                  ct = 2.0 * L.shearZeta * std::sqrt(kb * L.mt);
+                  ct = L.shearTan * std::sqrt(k1 * L.mt);
+                  dampShare = RubberContact::DamperShare(Fs, ut * ct, lim);
                }
             }
             e.xi1 = xi1;
-            const V3 Ft = Fs + ut * ct;
-            e.shearDamp = ct * ut.Dot(ut) * h;
-            // the spring's stiffness change, along the compression
-            double fk = 0.0;
-            {
-               const double mx = 0.25 * (xi0.Dot(xi0) + xi1.Dot(xi1));
-               if (mx > 0.0)
-                  fk = std::fabs(d1 - d0) > 1e-13 ? mx * (k1 - k0) / (d1 - d0) : mx * L.KtSlope(0.5 * (d0 + d1));
-            }
-            const double fN = fe + fd + fk;
+            const V3 Ft = Fs + ut * (ct * dampShare);
+            e.shearDamp = ct * dampShare * ut.Dot(ut) * h;
+            const double fN = fe + fd;
             F[it.a] = F[it.a] - V3(gd[0], gd[1], gd[2]) * fN - Ft;
             M[it.a] = M[it.a] + rA.Cross(Ft * -1.0);
             if (pr)
@@ -944,27 +976,48 @@ namespace GroupStep
                // shear: the tangential force Ft changes with the slip rate ut (dFt/dut = Cm, in the contact plane) and with the depth d1 (dFt/dd1 = fd1).
                // ut = sp (dc_p / h + 1/2 Skew(r_p)^T dw_p) projected, d1 changes by -sq n . dc_q; on ball p the force is -sp Ft at r_p. So, for the residual of p:
                //    d/d dc_q: sp sq [Cm; Skew(r_p) Cm] - h sp sq [fd1; Skew(r_p) fd1] n^T,   d/d dw_q: 1/2 h sp sq [Cm; Skew(r_p) Cm] Skew(r_q)^T
-               // Sticking: Cm = (kb h / 2 + ct) Pt, fd1 = kb'(d1) (xibar + zeta sqrt(mt / kb) ut) with kb' = Kt'(d1) / 2 (ct grows with kb too).
-               // Sliding (Ft = lim f^, f^ along the spring's trial force): Cm = (lim / |trial|) (kb h / 2) (Pt - f^ f^^T), fd1 = mu N'(d1) f^ +
-               // (lim / |trial|) (Pt - f^ f^^T) kb'(d1) xibar_trial, N' = K / 2 + c / h.
+               // The spring's force is k1 xi0 + k1 ut h / 2, and a growing patch holds k1 xi0 (= k0 xi0 before the hold): g = k1'(d1) ((k1 > k0 ? 0 : xi0) + ut h / 2) is its change with d1.
+               // Sticking: Cm = (k1 h / 2 + ct) Pt, fd1 = g + k1' shearTan sqrt(mt / k1) ut / 2 (ct grows with k1 too).
+               // Damper at the limit (Ft = Fs + s D, D = ct ut, |Ft| = lim): with s from that, dFt = P (dFs + s dD) + D lim dlim / (Ft . D), P = I - D Ft^T / (Ft . D).
+               // Sliding (Ft = lim f^, f^ along the spring's trial force): Cm = (lim / |trial|) (k1 h / 2) (Pt - f^ f^^T), fd1 = mu N'(d1) f^ +
+               // (lim / |trial|) (Pt - f^ f^^T) g, N' = K / 2 + c / h.
                const M3 Pt = M3::Tangent(nm);
                const int nbod = pr ? 2 : 1;
                const int bi[2] = { it.a, it.b };
                const V3 rr[2] = { rA, rB };
                const double sg[2] = { 1.0, -1.0 };
-               if (kb > 0.0)
+               if (k1 > 0.0)
                {
                   M3 Cm;
                   V3 fd1;
-                  const double kbp = 0.5 * L.KtSlope(d1);
-                  const V3 xib = xi0 + ut * (0.5 * h);
-                  if (!slipping)
+                  const double kp = L.KtSlope(d1);
+                  const V3 g = ((k1 > k0 ? V3() : xi0) + ut * (0.5 * h)) * kp;
+                  const V3 gc = ut * (0.5 * L.shearTan * std::sqrt(L.mt / k1) * kp);
+                  const double FD = Ft.Dot(ut) * ct;
+                  if (!slipping && dampShare < 1.0 && FD > 1e-30)
                   {
-                     const double C = 0.5 * kb * h + ct;
+                     const V3 D = ut * ct;
+                     const V3 dd = g + gc * dampShare;
+                     const double C = 0.5 * k1 * h + ct * dampShare;
+                     const M3 Q = M3::Outer(D, Ft);
+                     M3 P;
+                     for (int i = 0; i < 3; i++)
+                        for (int j = 0; j < 3; j++)
+                           P.a[i][j] = (i == j ? 1.0 : 0.0) - Q.a[i][j] / FD;
+                     const M3 PPt = P * Pt;
+                     for (int i = 0; i < 3; i++)
+                        for (int j = 0; j < 3; j++)
+                           Cm.a[i][j] = C * PPt.a[i][j];
+                     const double dN = 0.5 * L.K(std::max(std::max(dm, d1), 0.0)) + cD / h;
+                     fd1 = dd + D * ((limS * L.mu * dN - Ft.Dot(dd)) / FD);
+                  }
+                  else if (!slipping)
+                  {
+                     const double C = 0.5 * k1 * h + ct;
                      for (int i = 0; i < 3; i++)
                         for (int j = 0; j < 3; j++)
                            Cm.a[i][j] = C * Pt.a[i][j];
-                     fd1 = (xib + ut * (L.shearZeta * std::sqrt(L.mt / kb))) * kbp;
+                     fd1 = g + gc;
                   }
                   else if (flTr > 0.0)
                   {
@@ -976,10 +1029,9 @@ namespace GroupStep
                         for (int j = 0; j < 3; j++)
                         {
                            Pf.a[i][j] = Pt.a[i][j] - Q.a[i][j];
-                           Cm.a[i][j] = r * 0.5 * kb * h * Pf.a[i][j];
+                           Cm.a[i][j] = r * 0.5 * k1 * h * Pf.a[i][j];
                         }
                      const double dN = 0.5 * L.K(std::max(std::max(dm, d1), 0.0)) + cD / h;
-                     const V3 g = xib * kbp;
                      const V3 Pg(Pf.a[0][0] * g.x + Pf.a[0][1] * g.y + Pf.a[0][2] * g.z, Pf.a[1][0] * g.x + Pf.a[1][1] * g.y + Pf.a[1][2] * g.z,
                                  Pf.a[2][0] * g.x + Pf.a[2][1] * g.y + Pf.a[2][2] * g.z);
                      fd1 = fh * (L.mu * dN) + Pg * r;
@@ -1076,8 +1128,165 @@ namespace GroupStep
          }
       }
 
-      // Solve one step of h from the state now (the end values stay in x and ie[])
-      bool Solve(double h)
+      // A step no solve can do: the implicit equation has no root (the energy has a step in it within the move, so the force that closes the energy grows as e / |dq| however short the step), or a
+      // path that will not form. The same state would fail again for ever, so time goes on with the only law that needs no solve, the energy: every body takes the move the solve would have started
+      // from (its speed and the force at the solve's first guess, one explicit round, stable within the step rule's omega h) with the path's elements kept, and whatever that costs in stored energy and height
+      // is paid by all the speeds together (the discrete gradient's correction: the change acts along the motion). Energy that falls is booked as a loss, so nothing can be gained. What the speeds cannot pay
+      // is taken shorter; speeds too small to pay for any move turn back: no move, no change in energy. The next step starts from a new state and goes back to the solve.
+      double EnergyStep(const double hTry)
+      {
+         const double E0 = Energy();
+         static Ball b0[kMaxBalls];
+         static Item i0[kMaxItems];
+         V3 a0[kMaxBalls], al0[kMaxBalls];
+         const Books bk0 = books;
+         for (int i = 0; i < nb; i++)
+         {
+            b0[i] = ball[i];
+            a0[i] = aLast[i];
+            al0[i] = alphaLast[i];
+         }
+         for (int k = 0; k < ni; k++)
+            i0[k] = item[k];
+         for (int p = 0; p < np; p++)
+            part[p]->SaveState();
+         const auto Restore = [&]() {
+            for (int i = 0; i < nb; i++)
+            {
+               ball[i] = b0[i];
+               aLast[i] = a0[i];
+               alphaLast[i] = al0[i];
+            }
+            for (int k = 0; k < ni; k++)
+               item[k] = i0[k];
+            for (int p = 0; p < np; p++)
+               part[p]->RestoreState();
+            books = bk0;
+            stamp++;
+         };
+         const auto Done = [&]() {
+            for (int p = 0; p < np; p++)
+               part[p]->AfterEnergyStep();
+         };
+         double Res[kMaxUnk];
+         double h = hTry;
+         for (int tries = 0; tries < 12; tries++, h *= 0.5)
+         {
+            partEvalFailed = false;
+            const bool begun = BeginAttempt(h);
+            for (int p = 0; p < np && begun; p++)
+               part[p]->HoldArcs();
+            bool formed = begun && Eval(h, x, Res, nullptr, trialCached);
+            if (formed)   // one explicit round: the force at the guess, the bodies' own masses in place of Newton's matrix
+            {
+               for (int i = 0; i < nb; i++)
+                  for (int a = 0; a < 3; a++)
+                  {
+                     x[6 * i + a] -= Res[6 * i + a] * h / (2.0 * ball[i].m);
+                     x[6 * i + 3 + a] -= Res[6 * i + 3 + a] / ball[i].I();
+                  }
+               for (int p = 0; p < np; p++)
+                  part[p]->ExplicitMove(Res, partOff[p], h, x);
+               formed = InRange(x) && StopExcess() <= 0.0 && Eval(h, x, Res, nullptr, trialCached);
+            }
+            if (formed)
+            {
+               Accept(h, false);
+               const double ex = Energy() - E0;
+               double K = 0.0;
+               for (int i = 0; i < nb; i++)
+                  K += 0.5 * ball[i].m * ball[i].v.Dot(ball[i].v) + 0.5 * ball[i].I() * ball[i].w.Dot(ball[i].w);
+               for (int p = 0; p < np; p++)
+                  K += part[p]->KineticJ();
+               if (!(ex < K) && tries < 11)   // it cannot be paid: shorter (the path keeps its elements, so the energy has no step in it now)
+               {
+                  Restore();
+                  continue;
+               }
+               if (!(ex < K))   // the speeds are too small to pay for any move
+               {
+                  Restore();
+                  for (int i = 0; i < nb; i++)
+                     ball[i].v = ball[i].v * -1.0;
+                  for (int p = 0; p < np; p++)
+                     part[p]->ScaleSpeeds(-1.0);
+                  Done();
+                  books.steps++;
+                  books.energySteps++;
+                  books.energyBounces++;
+                  return hTry;
+               }
+               if (ex > 0.0)
+               {
+                  const double s = std::sqrt(1.0 - ex / K);
+                  for (int i = 0; i < nb; i++)
+                  {
+                     ball[i].v = ball[i].v * s;
+                     ball[i].w = ball[i].w * s;
+                  }
+                  for (int p = 0; p < np; p++)
+                     part[p]->ScaleSpeeds(s);
+               }
+               const Books after = books;
+               books = bk0;
+               books.steps = after.steps;
+               books.hMinUsed = after.hMinUsed;
+               books.maxDepthM = after.maxDepthM;
+               books.through = after.through;
+               books.energySteps++;
+               books.partLossJ += E0 - Energy();   // (only energy that has gone: what the speeds paid is closed to rounding)
+               Done();
+               stamp++;
+               return h;
+            }
+            Restore();
+         }
+         // no move can be formed at any length (a force that cannot be formed at all): the balls go on by their speeds alone, the path follows them, and the same closure applies; what cannot be paid turns back
+         Restore();
+         for (int i = 0; i < nb; i++)
+            ball[i].c = ball[i].c + ball[i].v * hTry;
+         for (int p = 0; p < np; p++)
+            part[p]->BallsMoved(ball, nb);
+         stamp++;
+         {
+            const double ex = Energy() - E0;
+            double K = 0.0;
+            for (int i = 0; i < nb; i++)
+               K += 0.5 * ball[i].m * ball[i].v.Dot(ball[i].v) + 0.5 * ball[i].I() * ball[i].w.Dot(ball[i].w);
+            for (int p = 0; p < np; p++)
+               K += part[p]->KineticJ();
+            if (!(ex < K))
+            {
+               Restore();
+               for (int i = 0; i < nb; i++)
+                  ball[i].v = ball[i].v * -1.0;
+               for (int p = 0; p < np; p++)
+                  part[p]->ScaleSpeeds(-1.0);
+               books.energyBounces++;
+            }
+            else if (ex > 0.0)
+            {
+               const double sf = std::sqrt(1.0 - ex / K);
+               for (int i = 0; i < nb; i++)
+               {
+                  ball[i].v = ball[i].v * sf;
+                  ball[i].w = ball[i].w * sf;
+               }
+               for (int p = 0; p < np; p++)
+                  part[p]->ScaleSpeeds(sf);
+            }
+            books.partLossJ += E0 - Energy();
+         }
+         Done();
+         books.steps++;
+         books.energySteps++;
+         books.energyFree++;
+         stamp++;
+         return hTry;
+      }
+
+      // The start of an attempt: the law of each touch, the first guess
+      bool BeginAttempt(double h)
       {
          const int nU = nUnk = NumUnk();
          for (int k = 0; k < ni; k++)
@@ -1115,6 +1324,15 @@ namespace GroupStep
             for (int a = 0; a < nU; a++)
                x[a] *= 0.5;
          }
+         return true;
+      }
+
+      // Solve one step of h from the state now (the end values stay in x and ie[])
+      bool Solve(double h)
+      {
+         if (!BeginAttempt(h))
+            return false;
+         const int nU = nUnk;
          static double J[kMaxUnk][kMaxUnk];   // (scratch; the offline test and the engine step one group at a time)
          double Res[kMaxUnk], stp[kMaxUnk];
          bool converged = false;
@@ -1358,6 +1576,8 @@ namespace GroupStep
                it.touching = false;
                it.xi = V3();
             }
+            if (it.dZero > 0.0)   // backing out, with nothing stored: the zero follows
+               it.dZero = std::max(0.0, std::min(it.dZero, it.dZero + e.d1));
             books.normalLossJ += e.normalLoss;
             books.slipJ += e.slip;
             books.shearDampJ += e.shearDamp;
@@ -1374,6 +1594,8 @@ namespace GroupStep
          books.rounds += lastRounds;
          books.maxRounds = std::max(books.maxRounds, lastRounds);
          books.hMinUsed = std::min(books.hMinUsed, h);
+         for (int p = 0; p < np; p++)
+            part[p]->AfterStep(*this);
       }
    };
 }

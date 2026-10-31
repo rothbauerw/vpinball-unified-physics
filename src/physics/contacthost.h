@@ -23,6 +23,7 @@ struct RubberObjectSettings
    bool contact = false;          // use the force model for this rubber (else the stock triangle/edge/point colliders are built)
    // Walls and primitives flagged as rubber ([Wall:<name>] / [Primitive:<name>] rubber = 1): the same model on the object's faces. Never set by [Rubbers].
    bool surfaceRubber = false;
+   double ringModel = 1.0;        // 1 = an island with a ball on this rubber surface (ring, wall or primitive with rubber = 1) goes through the group step, the band's solve (groupstep.h, GroupStepDesign 14); 0 = the old loop, which gains energy (14.11; default 1 on the user's word, 2026-10-30, before a stress table)
    double surfaceLayerMm = 5.4;   // layer thickness of a flat rubber face when layer_mm is 0: a typical ring's diameter (5.4 mm on the Gorgar rings)
    double edgeRadiusMm = 1.0;     // convex edges and corners of a rubber face are treated as rounded to this radius (Hertz effective radius)
    double eMpa = 12.0;            // effective Young's modulus
@@ -37,8 +38,8 @@ struct RubberObjectSettings
    double restitutionRefMs = 1.0; // the reference speed, m/s
    double gammaKK = 0.0;          // the calibrated damping coefficient (not an ini key)
    double mu = 0.8;               // rubber / steel friction (black / white rubber; user, 2026-10-30)
-   double shearScale = 1.0;       // multiplier on the shear stiffness
-   double shearZeta = 0.2;        // shear damping ratio
+   double shearScale = 0.1;       // sideways_stiffness: multiplier on Mindlin's 8 G* a. Mindlin assumes a thick solid body; a ring's section also shears and turns on its post, in series with the patch. Rough calculation 0.14 - 0.25 (runs/2026-10-30-rubber-review/notes.md, assumed geometry, not measured); 0.1 fits the user's rebound on a ring at 35 U with mu 0.8. A hard surface sets 1
+   double shearTan = -1.0;        // the sideways spring's loss tangent: < 0 = tan_delta (a rubber: the same material). Not an ini key; hard surfaces, the playfield and the disc set their own (rubbercontact.h RubberParams)
    bool twist = true;             // drilling friction
    double tanDelta = 0.05;        // loss tangent for the rolling resistance, 0 = off
    double rollingMu = 0.0;        // floor of the rolling-resistance coefficient (the playfield: [Contact] rolling_resistance, because the hysteresis law below gives almost nothing on hard wood); 0 = none
@@ -55,14 +56,14 @@ struct RubberObjectSettings
    // Band (a rubber stretched between posts): the posts and free spans are found at load (logged); a ball hitting a free span deflects it
    // (a tensioned cord, see BandChain in rubbercontact.h). Other parts of the rubber (the post wraps, short spans) stay rigid.
    bool band = false;             // this rubber is a band
-   double bandModel = 1.0;        // 1 = the cord in the group step (bandcord.h, GroupStepDesign 8, 11); 0 = the old node band, for comparison only
+   double bandModel = 0.0;        // 0 = the old node band (default until the cord is finished); 1 = the cord in the group step (bandcord.h, GroupStepDesign 8, 11, 12.2: not ready)
    double bandRingIn = 0.0;       // the ring's inner diameter, inches: the stretch at rest comes from it and the posts; 0 = band_prestretch_pct
    double bandPrestretchPct = 7.0; // stretch of a span at rest, percent
    double bandTensionN = 0.0;      // rest tension of a span, N; 0 = from the rubber's modulus and the stretch (the cord's EA is then e_mpa x area), > 0 = this tension (EA = tension / stretch)
    double bandRefHz = 20.0;       // frequency at which tan_delta (the rubber's own loss tangent, shared with the rings) applies to the stretch
    double bandNodeMassG = 0.0;    // moving mass of the deflected span, g; 0 = half the span's mass
    double bandNodeZeta = 0.05;    // damping ratio of the deflected span's own vibration (internal friction, air): how fast the ringing dies out
-   double bandShearZeta = 1.0;    // damping ratio of the sideways (shear) spring of the ball / band contact; < 0 = the same as shear_zeta. 1 = critical: a ball resting on the band does not rock
+   double bandShearZeta = 1.0;    // the old node band only (band_model 0): damping ratio of the sideways spring of the ball / band contact; < 0 = from tan_delta. 1 = critical: a ball resting on the band does not rock. The cord has no such spring on its span, and its posts use the ring's law
    double bandSubstepUs = 20.0;   // step of the band's integration, microseconds; 0 = the same as substep_us. Larger = faster, a little less exact (40 is too coarse)
    bool bandFollow = true;       // a ball rolling along the span loads a new node under itself once it is more than band_follow_mm from its node, and idle nodes that have relaxed onto the line are merged away; false = nodes stay where the ball engaged
    double bandNodeMm = 0.0;       // > 0: a plain band (no sling) gets permanent nodes this far apart along every span, a ball rolls on the polyline they form and loads the legs under it; 0 = nodes are made under the ball (band_follow)
@@ -96,6 +97,8 @@ public:
    // kind: the ini section prefix of the object ("wall", "primitive", "ramp", "playfield", "gate", "spinner", "bumper", "turntable"; empty for a rubber post)
    ContactHost(IEditable *editable, const RubberObjectSettings &settings, const std::filesystem::path &iniPath, const std::string &name, const char *kind);
    ~ContactHost() override;
+
+   virtual class HitRubber *BandHost() { return nullptr; }   // a rubber: itself
 
    // every live host, so a solve can include the surfaces near the ball
    static std::vector<ContactHost *> &Registry();
@@ -145,6 +148,7 @@ public:
    bool IsPlayfield() const override { return IsPlayfieldKind(); }
    bool IsFloor() const override { return m_surfaceKind == "playfield" || m_surfaceKind == "turntable"; }   // a surface a ball rests on: gravity acts in the contact substeps while one is in the contact
    double ReleaseGapM() const override { return m_set.releaseGapMm * 1e-3; }
+   bool GroupModel() const override;
    const RubberObjectSettings *Settings() const override { return &m_set; }
    // The height (VPX units) of the highest upward-facing face of this host at table point (x, y); false if there is none there. Used to seat a turntable in the playfield.
    virtual bool SurfaceHeightAt(double /*xU*/, double /*yU*/, double & /*zU*/) const { return false; }

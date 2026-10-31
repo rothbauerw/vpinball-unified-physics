@@ -28,6 +28,7 @@ struct ContactSettings
    // Arrival-time substeps for islands of static surfaces and balls: a step never carries a ball into a surface (it ends at a small gap when an approach is predicted within it), a contact
    // is stepped by its own stiffness at the depth the impact will reach, and a ball far from every surface takes the rest of the cycle as one step.
    bool arrivalStep = true;          // arrival_step (VPX_ARRIVAL=0/1 overrides it)
+   bool staticModel = false;         // static_model: 1 = every static surface (walls, primitives, ramps, playfield) takes a ball to the group step as a rubber does (ring_model, GroupStepDesign 14); 0 = only rubbers
    double arrivalDepthUm = 2.0;      // arrival_depth_um: the deepest a ball may start a contact before the step is taken again (rewind), um
    static const ContactSettings& Get();   // loads on first use, checks the file for changes about twice a second of game time
    // The friction impulse a contact applies for the impulse `x` that would cancel the slip (signed): inside the static limit it sticks (x); beyond it, it slides at the dynamic limit

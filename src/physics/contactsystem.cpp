@@ -126,6 +126,7 @@ struct ContactSystemImpl
    static void Regather(BallContact &e, const Vertex3Ds &pos, float radiusU);
    static bool EngageImpl(ContactHost *host, HitBall *pb, const char *how);
    static void EngageNear(float dtime);
+   static void CordNear(float dtime);
 
    // A ball in the step: its SI state, the substep's forces, and what the step needs to know about it.
    struct Body
@@ -153,6 +154,7 @@ struct ContactSystemImpl
       std::vector<TubeProbe> probes;   // the probes of this substep's start state, one per surface of the contact (arrival-time substeps: probed once, used for the step and the forces)
       bool probesReady = false;
       double omega2 = 0.0, deepest = 0.0, vnLast = 0.0;
+      double eStart = 0.0, eScale = 0.0;   // the energy check: the ball's energy at the cycle's start, and what the allowance is a share of
       bool tripped = false;
       const char *tripWhy = "";
       int tripStep = 0;
@@ -1059,6 +1061,18 @@ struct ContactSystemImpl
             const double aBound = aBallBound + aSurf;
             const double gap = pr.overlap ? -pr.delta : pr.dist - (w.bs.R + pr.rho);
             const double vn = -w.v.Dot(pr.normal);
+            // The probe sees the nearest part of the surface only: every other part the ball can reach in this step bounds it too (no ball is carried into a part no probe looked at).
+            // Distance cannot shrink faster than the ball moves, so a nearest gap beyond that travel rules out the rest.
+            if (mp == nullptr && gap <= w.v.Length() * h + aBound * h * h)
+            {
+               const double ha = it.r->ArrivalS(w.bs, it, pr.seg, w.c, w.v, aBound, h, kTouchM, kArriveM);
+               if (ha < h)
+               {
+                  h = std::max(ha, kMinStepS);
+                  why = ha < kMinStepS ? CC::kMinimum : CC::kArrival;
+                  arrivals++;
+               }
+            }
             if (gap > kTouchM)
             {
                it.hcStep = 0.0;
@@ -1663,6 +1677,151 @@ struct ContactSystemImpl
       }
    }
 
+   // ---- The whole-ball energy check (ModelStandards 2b, rule 8): always on ----
+   // A ball's energy: motion, spin, height, and what each of its contacts holds (normal, layer, shear stretch; a moving part's or a cord's own books are theirs). Every loss only lowers it, and height is in it, so:
+   //  - between one cycle's end and the next one's start nothing may raise what the contacts hold: nothing but a step does work on them (a seat, a teleport, a face change, a law change);
+   //  - across a cycle the island's energy may not rise, unless a drive is in it (a moving part, a band or cord, a magnet, the nudge).
+   // A rise over 1 % of the energy present or 1 mJ (the test matrix's allowance) is a WARN naming ball, surface and depth, and on screen once per cause per table start.
+   static void EnergyRaise(const char *const kind, const HitBall *const pb, const std::string &surface, const double depth0, const double depth1, const double rise)
+   {
+      static const void *owner = nullptr;
+      static std::map<std::string, int> seen;
+      if (owner != g_pplayer)
+      {
+         owner = g_pplayer;
+         seen.clear();
+      }
+      int &count = seen[std::string(kind) + surface];
+      if (count++ >= 20)
+         return;
+      const char *const name = TestDriver::BallName(pb);
+      const Vertex3Ds &p = pb->m_d.m_pos;
+      std::ostringstream o;
+      o << "Energy check: ball " << (name != nullptr ? name : "") << " at (" << p.x << ", " << p.y << ", " << p.z << ") gained " << rise * 1e3 << " mJ " << kind << ", " << surface << " depth " << depth0 * 1e3 << " -> " << depth1 * 1e3 << " mm, t=" << g_pplayer->m_time_msec;
+      PLOGW << o.str();
+      if (count == 1 && g_pplayer->m_liveUI != nullptr)
+         g_pplayer->m_liveUI->PushNotification(o.str(), 6000);
+   }
+
+   // what one contact holds, by the law its loop uses; depth: the depth it counts
+   static double ContactHolds(const SurfaceContact &it, const BallSI &bs, const V3 &c, const bool group, double &depth)
+   {
+      depth = 0.0;
+      if (it.r->MovingPart() != nullptr || it.NoFaces(c))
+         return 0.0;
+      const TubeProbe pr = it.r->Probe(bs, it, c);
+      if (!pr.overlap)
+         return 0.0;
+      depth = group ? pr.delta - it.gsZero : pr.delta;
+      if (depth <= 0.0)
+         return 0.0;
+      const double reff = group && it.gsReff > 0.0 ? it.gsReff : pr.reff > 0.0 ? pr.reff : bs.R;
+      const RubberParams &rp = it.rp;
+      const double E = rp.eMpa * 1e6, Es = E / (1.0 - rp.nu * rp.nu), Gs = E / (2.0 * (1.0 + rp.nu)) / (2.0 - rp.nu);
+      const double kH = 4.0 / 3.0 * Es * std::sqrt(reff), cL = kH * rp.betaLayer * reff * std::sqrt(reff);
+      double held;
+      if (group && cL > 0.0 && it.hLayer > 0.0)   // the group's law: the layer's thickness left
+      {
+         GroupStep::Item law;
+         law.kH = kH;
+         law.cL = cL;
+         law.hL = it.hLayer;
+         held = law.V(std::min(depth, 0.999 * it.hLayer));
+      }
+      else   // the old loop's: on the full thickness
+         held = 0.4 * kH * depth * depth * std::sqrt(depth) + (it.hLayer > 0.0 ? cL * depth * depth * depth * depth / (4.0 * it.hLayer * it.hLayer * it.hLayer) : 0.0);
+      const V3 &xi = group ? it.gsXi : it.st.xi;
+      return held + 4.0 * Gs * std::sqrt(reff * depth) * rp.shearScale * xi.Dot(xi);
+   }
+
+   static double BodyMotion(const Body &w, const V3 &g)
+   {
+      return 0.5 * w.bs.m * w.v.Dot(w.v) + 0.5 * w.bs.Inertia() * w.w.Dot(w.w) - w.bs.m * g.Dot(w.c);
+   }
+
+   static V3 CheckGravity()   // the table's gravity, m/s2, without the nudge
+   {
+      const Vertex3Ds &gv = g_pplayer->m_physics->GetGravity();
+      return V3(gv.x, gv.y, gv.z) * (VS / DEFAULT_STEPTIME_S);
+   }
+
+   // The cycle's start, every held ball: what its contacts hold against what they held at the last cycle's end
+   static void EnergyCheckStart(Cycle &cy)
+   {
+      const V3 g = CheckGravity();
+      for (Body &w : cy.bodies)
+      {
+         double held = 0.0, worst = 0.0, depth0 = 0.0, depth1 = 0.0;
+         const SurfaceContact *where = nullptr;
+         if (w.e != nullptr)
+            for (const SurfaceContact &it : w.e->items)
+            {
+               double d = 0.0;
+               const double v = w.e->seatPending ? 0.0 : ContactHolds(it, w.bs, w.c, w.e->groupLoop, d);   // (found inside and not seated: it counts from zero)
+               held += v;
+               const double was = w.e->endStored >= 0.0 ? it.endDepth : 0.0;
+               if (d - was > worst)
+               {
+                  worst = d - was;
+                  where = &it;
+                  depth0 = was;
+                  depth1 = d;
+               }
+            }
+         w.eStart = BodyMotion(w, g) + held;
+         w.eScale = 0.5 * w.bs.m * w.v.Dot(w.v) + 0.5 * w.bs.Inertia() * w.w.Dot(w.w) + held;
+         if (w.e != nullptr)
+         {
+            const double rise = held - std::max(w.e->endStored, 0.0);
+            if (rise > std::max(1e-3, 0.01 * w.eScale))
+               EnergyRaise(w.e->endStored >= 0.0 ? "between cycles" : "at first sight", w.pb, where != nullptr ? where->r->Name() : std::string("?"), depth0, depth1, rise);
+         }
+      }
+   }
+
+   // The island's end: the rise across the cycle, and what the contacts hold now for the next cycle's start
+   static void EnergyCheckEnd(Cycle &cy, const ContactSystem::Islands::Island &isl)
+   {
+      const V3 g = CheckGravity();
+      bool driven = false;
+      double e0 = 0.0, e1 = 0.0, scale = 0.0, top = -1e300;
+      const Body *rose = nullptr;
+      for (const int i : isl.members)
+      {
+         Body &w = cy.bodies[i];
+         driven = driven || w.band != nullptr || w.magAcc > 0.0 || w.pb->m_rubberOwner != nullptr
+            || (w.extBaseVS.Length() > 0.0 && (w.extBaseVS * (1.0 / PHYSICS_STEPTIME_S) - g).Length() > 0.02 * g.Length());   // (the nudge)
+         double held = 0.0;
+         if (w.e != nullptr)
+         {
+            for (SurfaceContact &it : w.e->items)
+            {
+               driven = driven || it.r->MovingPart() != nullptr;
+               held += ContactHolds(it, w.bs, w.c, w.e->groupLoop, it.endDepth);
+            }
+            w.e->endStored = held;
+         }
+         const double e = BodyMotion(w, g) + held;
+         e0 += w.eStart;
+         e1 += e;
+         scale += w.eScale;
+         if (e - w.eStart > top)
+         {
+            top = e - w.eStart;
+            rose = &w;
+         }
+      }
+      if (driven || rose == nullptr || e1 - e0 <= std::max(1e-3, 0.01 * scale))
+         return;
+      // the surface it went deepest into, the floor last: the likely cause, for the message
+      const SurfaceContact *where = nullptr;
+      if (rose->e != nullptr)
+         for (const SurfaceContact &it : rose->e->items)
+            if (it.endDepth > 0.0 && (where == nullptr || where->r->IsFloor() || (!it.r->IsFloor() && it.endDepth > where->endDepth)))
+               where = &it;
+      EnergyRaise("across a cycle", rose->pb, where != nullptr ? where->r->Name() : std::string("no surface"), 0.0, where != nullptr ? where->endDepth : 0.0, e1 - e0);
+   }
+
    // The bats that took part: finish the cycle (the pivot's nudge, then UpdateDisplacements only publishes the angle and fires the events)
    // The island's members for the test driver's cost split: its balls (the driver's names), then the surfaces, flippers and bands they touch at the end of the step
    // ---- An island with a cord: one group step for the whole island (docs/GroupStepDesign.txt 8, 11) ----
@@ -1673,15 +1832,37 @@ struct ContactSystemImpl
       const ContactSurface *r = nullptr;
       const SurfaceContact *it = nullptr;
       BallSI bs;
+      double heldReff = 0.0;   // > 0: the radius this touch started with (the group takes a shape's law anew each cycle; a polygon's radius jumps at a corner, the energy must not)
       void Probe(const V3 &c, double R, GroupStep::Hit &h) const override
       {
          const TubeProbe pr = r->Probe(bs, *it, c);
          h.delta = pr.overlap ? pr.delta : (pr.dist > 0.0 ? R + pr.rho - pr.dist : -1.0);
          h.n = pr.normal;
-         h.reff = pr.reff > 0.0 ? pr.reff : R;
+         h.reff = heldReff > 0.0 ? heldReff : pr.reff > 0.0 ? pr.reff : R;
          h.curvDist = pr.reff > 0.0 && pr.reff < 0.999 * R ? pr.dist : 0.0;
       }
    };
+
+   // a ball pair's state between cycles (a < b by address)
+   static BallPairState *FindPair(const HitBall *a, const HitBall *b)
+   {
+      if (b < a)
+         std::swap(a, b);
+      for (BallPairState &p : g_ballPairs)
+         if (p.a == a && p.b == b)
+            return &p;
+      return nullptr;
+   }
+   static BallPairState &MakePair(const HitBall *const a, const HitBall *const b)
+   {
+      if (BallPairState *const p = FindPair(a, b))
+         return *p;
+      g_ballPairs.push_back(BallPairState());
+      BallPairState &p = g_ballPairs.back();
+      p.a = std::min(a, b);
+      p.b = std::max(a, b);
+      return p;
+   }
 
    static bool IslandHasCord(const Cycle &cy, const ContactSystem::Islands::Island &isl)
    {
@@ -1689,6 +1870,95 @@ struct ContactSystemImpl
          if (cy.bodies[i].band != nullptr && cy.bodies[i].band->CordOn())
             return true;
       return false;
+   }
+
+   // An island goes to the group step without a cord ([Rubbers] ring_model, GroupStepDesign 14.1) when a ball can touch a rubber surface within this cycle, or still counts a squash from a
+   // zero only the group knows. An island with a moving part or an old node band stays on the old loop until that part moves over (14.2). One too big for the group stays there whole, with
+   // its contacts intact: nothing is left out (14.8). The reach is the proximity engagement's, so a ball joins before it touches.
+   static bool IslandOnRing(const Cycle &cy, const ContactSystem::Islands::Island &isl)
+   {
+      bool want = false;
+      int shapes = 0;
+      for (const int i : isl.members)
+      {
+         const Body &w = cy.bodies[i];
+         if (w.band != nullptr || w.pb->m_rubberOwner != nullptr)
+            return false;
+         if (w.e == nullptr)
+            continue;
+         shapes += (int)w.e->items.size();
+         for (const SurfaceContact &it : w.e->items)
+         {
+            if (it.r->MovingPart() != nullptr)
+               return false;
+            if (want)
+               continue;
+            if (w.e->groupLoop && it.gsZero > 0.0)
+               want = true;
+            else if (it.r->GroupModel() && !it.NoFaces(w.c))
+            {
+               const TubeProbe pr = it.r->Probe(w.bs, it, w.c);
+               want = pr.overlap || (pr.dist > 0.0 && pr.dist - (w.bs.R + pr.rho) < 2.0 * w.v.Length() * cy.dt + it.r->ReleaseGapM());
+            }
+         }
+      }
+      if (want && ((int)isl.members.size() > GroupStep::kMaxBalls || shapes > GroupStep::kMaxShapes))
+      {
+         static const void *warned = nullptr;
+         if (warned != g_pplayer)
+         {
+            warned = g_pplayer;
+            const std::string msg = "Rubbers: an island of " + std::to_string(isl.members.size()) + " balls and " + std::to_string(shapes) + " surfaces is too big for the group step: it stays on the old loop";
+            PLOGW << msg;
+            g_pplayer->m_liveUI->PushNotification(msg, 6000);
+         }
+         return false;
+      }
+      return want;
+   }
+
+   // A ball coming from the old loop: the same touch, the same stretch, so the same energy; a surface it is found inside has no history and counts from zero (14.4)
+   static void RingHandIn(BallContact &e)
+   {
+      if (e.groupLoop)
+         return;
+      for (SurfaceContact &it : e.items)
+      {
+         it.gsTouch = it.touching && e.dwellS > 0.0;
+         it.gsXi = it.st.xi;
+         it.gsZero = it.gsReff = 0.0;
+      }
+      e.groupLoop = true;
+   }
+
+   // The island stays on (or falls back to) the old loop. The stretch goes back to its copy there. The old loop has no zero: a ball still inside a surface is seated, as it would have been at
+   // engagement; that moves it out and stores nothing.
+   static void RingHandOut(Cycle &cy, const ContactSystem::Islands::Island &isl)
+   {
+      for (const int i : isl.members)
+      {
+         Body &w = cy.bodies[i];
+         if (w.e == nullptr || !(w.e->groupLoop || w.e->seatPending))
+            continue;
+         BallContact &e = *w.e;
+         bool seat = e.seatPending;
+         for (SurfaceContact &it : e.items)
+         {
+            if (e.groupLoop)
+               it.st.xi = it.gsXi;
+            seat = seat || it.gsZero > 0.0;
+            it.gsTouch = false;
+            it.gsZero = it.gsReff = 0.0;
+         }
+         e.groupLoop = e.seatPending = false;
+         if (seat)
+         {
+            V3 c = w.c;
+            double delta0 = 0.0, rewound = 0.0;
+            SeatAtTouch(e.items, w.bs, c, w.v, delta0, rewound);
+            w.c = c;
+         }
+      }
    }
 
    // the group's balls change between cycles: each cord's own per-ball state follows them
@@ -1721,28 +1991,37 @@ struct ContactSystemImpl
       cb.slots.assign(balls, balls + n);
    }
 
-   static bool CordSteps(GroupStep::Group &g, const double dt, double &done)
+   template <class CapStep, class AfterStep>
+   static bool CordSteps(GroupStep::Group &g, const double dt, double &done, const CapStep &capStep, const AfterStep &afterStep)
    {
       done = 0.0;
       int guard = 0;
       while (done < dt - 1e-12)
       {
-         const double h = std::min(g.ChooseStep(), dt - done);
+         const double h = capStep(std::min(g.ChooseStep(), dt - done));
          const double taken = g.Step(h);
          if (g.books.failed || taken <= 0.0 || ++guard > 3000)
             return false;
          done += taken;
+         afterStep();
       }
       return true;
    }
 
-   static void CordIsland(Cycle &cy, const ContactSystem::Islands::Island &isl)
+   // ring: the island has no cord (IslandOnRing). Returns false when a step of such an island could not be solved: nothing has been written, and the cycle is retaken on the old loop, the contact
+   // system's own (GroupStepDesign 14.3; never stock, no hold). A cord island keeps its own rule (15.3) and returns true.
+   static bool CordIsland(Cycle &cy, const ContactSystem::Islands::Island &isl, const bool ring = false)
    {
       static GroupStep::Group g;
       static std::deque<SurfaceShape> shapes;
       shapes.clear();
       g.nb = g.ns = g.np = 0;
       g.set.pair = cy.rpBall;
+      if (ring)   // (cy.rpBall holds the old loop's halved modulus, and the group halves it for a pair itself; its rolling resistance is on the pair's radius, R / 2)
+      {
+         g.set.pair.eMpa = cy.cs->ballEMpa;
+         g.set.pair.rollingMu = 0.5 * cy.cs->ballRollingResistance;
+      }
       g.set.hMin = 2e-6;   // a step that cannot be solved gives up here: in real time it must not spend the frame halving
       HitBall *balls[GroupStep::kMaxBalls];
       std::vector<HitRubber *> cords;
@@ -1778,6 +2057,8 @@ struct ContactSystemImpl
          }
          if (w.band != nullptr && w.band->CordOn() && std::find(cords.begin(), cords.end(), w.band) == cords.end() && (int)cords.size() < GroupStep::kMaxParts)
             cords.push_back(w.band);
+         if (ring && w.e != nullptr)
+            RingHandIn(*w.e);
          if (w.e != nullptr)
             for (SurfaceContact &it : w.e->items)
             {
@@ -1791,30 +2072,93 @@ struct ContactSystemImpl
                sh.rp = it.rp;
                sh.layerM = it.hLayer;
                sh.onlyBall = ib;
+               sh.heldReff = ring && it.gsTouch ? it.gsReff : 0.0;
                g.shape[g.ns++] = &sh;
             }
       }
+      const int nSurf = g.ns;   // the surfaces' shapes; after them each cord's posts (rubbers on posts: GroupStepDesign 13)
       for (HitRubber *const c : cords)
       {
          CordFollow(*c->Cord(), g, balls, g.nb);
          g.part[g.np++] = &c->Cord()->part;
+         c->Cord()->part.AddPostShapes(g);
          c->CordBegin();
          c->m_cordStepped = true;
       }
       g.Configure();
+      for (HitRubber *const c : cords)
+         c->Cord()->part.RestorePostItems(g);
       // what a touch keeps between cycles: the shear spring's stretch
       for (int k = 0; k < g.ni; k++)
       {
          GroupStep::Item &it = g.item[k];
-         if (it.b >= 0)
+         if (it.b >= 0 || it.s >= nSurf)
             continue;
          const SurfaceShape *const sh = static_cast<const SurfaceShape *>(g.shape[it.s]);
-         if (it.touching && sh->it->gsTouch)
-            it.xi = sh->it->gsXi;
+         g.SetShapeItem(k, sh->it->gsTouch, sh->it->gsZero, sh->it->gsXi);
       }
       V3 v0[GroupStep::kMaxBalls];
       for (int i = 0; i < g.nb; i++)
          v0[i] = g.ball[i].v;
+      // ring_model: a touch's hit event at the step it starts in, by the old loop's rule (a hit shorter than a cycle fires too); a ball pair keeps its stretch and fires its hit (14.8). The events wait for
+      // the cycle to be solved: a failed one is retaken.
+      static bool hitOn[GroupStep::kMaxItems];
+      static std::vector<PartHit> ringParts;
+      static std::vector<BallHit> ringPairs;
+      ringParts.clear();
+      ringPairs.clear();
+      V3 vStep[GroupStep::kMaxBalls];
+      if (ring)
+      {
+         g.ClearGuess();
+         std::copy(v0, v0 + g.nb, vStep);
+         for (int k = 0; k < g.ni; k++)
+         {
+            GroupStep::Item &it = g.item[k];
+            if (it.b < 0)
+               hitOn[k] = it.s < nSurf && static_cast<const SurfaceShape *>(g.shape[it.s])->it->touching;
+            else
+            {
+               const BallPairState *const ps = FindPair(balls[it.a], balls[it.b]);
+               hitOn[k] = ps != nullptr && ps->inContact;
+               if (hitOn[k] && it.touching)
+                  it.xi = ps->st.xi;
+            }
+         }
+      }
+      const auto ringStep = [&]() {
+         if (!ring)
+            return;
+         for (int k = 0; k < g.ni; k++)
+         {
+            const GroupStep::Item &gi = g.item[k];
+            if (gi.touching == hitOn[k])
+               continue;
+            hitOn[k] = gi.touching;
+            if (!gi.touching)
+               continue;
+            if (gi.b >= 0)
+            {
+               const V3 d = g.ball[gi.a].c - g.ball[gi.b].c;
+               const double dist = d.Length();
+               const double closing = dist > 1e-12 ? -(vStep[gi.a] - vStep[gi.b]).Dot(d / dist) : 0.0;
+               if (closing / VS > 0.25)   // as the stock collision: only impacts, not resting contact, reach the script
+                  ringPairs.push_back({ balls[gi.a], balls[gi.b], (float)(closing / VS) });
+            }
+            else if (gi.s < nSurf)
+            {
+               const SurfaceShape *const sh = static_cast<const SurfaceShape *>(g.shape[gi.s]);
+               GroupStep::Hit hp;
+               sh->Probe(g.ball[gi.a].c, g.ball[gi.a].R, hp);
+               const float vn = (float)(-vStep[gi.a].Dot(hp.n) / VS);
+               const HitObject *const ho = sh->r->HitEventObject();
+               if ((vn >= cy.hitFloor || (ho != nullptr && ho->m_fe && vn >= ho->m_threshold)) && sh->r->HitEventWanted(hp.n))
+                  ringParts.push_back({ sh->r, balls[gi.a], vn, Vertex3Ds((float)hp.n.x, (float)hp.n.y, (float)hp.n.z) });
+            }
+         }
+         for (int i = 0; i < g.nb; i++)
+            vStep[i] = g.ball[i].v;
+      };
       // VPX_CORD_TRACE=<file>: per cycle the group's energy at its start and end, and what happened to the ball on the cord
       static FILE *const cordTrace = []() -> FILE * {
          const char *const e = getenv("VPX_CORD_TRACE");
@@ -1825,7 +2169,26 @@ struct ContactSystemImpl
       }();
       const double traceE0 = cordTrace != nullptr ? g.Energy() : 0.0;
       double done = 0.0;
-      const bool ok = CordSteps(g, cy.dt, done);
+      // The group's step rule sees a surface's nearest face only, as a probe does: the other faces a ball can reach bound the step too (NextStep's rule). Not for energy, which the solve keeps
+      // at any step: so that a hit on a hidden face is resolved, not one long step into it.
+      const auto ringCap = [&](double h) {
+         if (!ring)
+            return h;
+         const double a = g.set.g.Length();
+         for (int s = 0; s < nSurf; s++)
+         {
+            const SurfaceShape &sh = *static_cast<const SurfaceShape *>(g.shape[s]);
+            if (sh.it->candR < 0.0 || sh.it->NoFaces(g.ball[sh.onlyBall].c))
+               continue;
+            const GroupStep::Ball &b = g.ball[sh.onlyBall];
+            const TubeProbe pr = sh.r->Probe(sh.bs, *sh.it, b.c);
+            const double gap = pr.overlap ? -pr.delta : pr.dist - (b.R + pr.rho);
+            if (gap <= b.v.Length() * h + a * h * h)
+               h = std::max(sh.r->ArrivalS(sh.bs, *sh.it, pr.seg, b.c, b.v, a, h, 1.0e-6, 0.5e-6), std::min(h, 1e-6));
+         }
+         return h;
+      };
+      const bool ok = CordSteps(g, cy.dt, done, ringCap, ringStep);
       if (cordTrace != nullptr)
       {
          const double E1 = g.Energy(), loss = g.books.Losses(), drive = g.books.driveJ;
@@ -1839,10 +2202,30 @@ struct ContactSystemImpl
                     names.clear();
                     for (int k = 0; k < g.ni; k++)
                        if (g.item[k].touching && g.item[k].b < 0)
-                          names += static_cast<const SurfaceShape *>(g.shape[g.item[k].s])->r->Name() + "|";
+                          names += g.item[k].s < nSurf ? static_cast<const SurfaceShape *>(g.shape[g.item[k].s])->r->Name() + "|" : std::string("post|");
                     return names.c_str();
                  }());
          fflush(cordTrace);
+      }
+      if (ring && !ok)   // a net, not the fix: on screen once (rule 8)
+      {
+         static uint32_t lastMs = 0;
+         static long failed = 0;
+         static const void *warned = nullptr;
+         failed++;
+         if (g_pplayer->m_time_msec - lastMs > 500)
+         {
+            lastMs = g_pplayer->m_time_msec;
+            PLOGW << "Ring group failed (" << failed << " in all): why " << g.failWhy << " at " << done * 1e6 << " us of " << cy.dt * 1e6 << " us, balls " << g.nb << ", ball 0 at (" << g.ball[0].c.x / U << ", " << g.ball[0].c.y / U << ", " << g.ball[0].c.z / U << ") v " << g.ball[0].v.Length() << " m/s: the cycle is retaken on the old loop";
+         }
+         if (warned != g_pplayer)
+         {
+            warned = g_pplayer;
+            const std::string msg = "Rubbers: a group step could not be solved: the cycle was retaken on the old loop (see vpinball.log)";
+            PLOGW << msg;
+            g_pplayer->m_liveUI->PushNotification(msg, 6000);
+         }
+         return false;
       }
       int ib = 0;
       for (const int i : isl.members)
@@ -1850,26 +2233,34 @@ struct ContactSystemImpl
          if (ib >= g.nb)
             break;
          Body &w = cy.bodies[i];
+         if (ring && w.e != nullptr)
+            w.e->seatPending = false;   // (a surface it was found inside counted from zero)
          w.c = g.ball[ib].c;
          w.v = g.ball[ib].v;
-         w.w = g.ball[ib].w;
-         if (!ok)   // what is left of the cycle: free flight
-         {
-            const double rem = cy.dt - done;
-            w.c = w.c + w.v * rem;
-            w.v = w.v + g.set.g * rem;
-         }
+         w.w = g.ball[ib].w;   // (a step that could not be solved: what is left of the cycle is not stepped, so nothing is gained: below)
          ib++;
       }
       // the part's hit events, and what the touches keep
       for (int k = 0; k < g.ni; k++)
       {
          const GroupStep::Item &gi = g.item[k];
-         if (gi.b >= 0)
+         if (ring && gi.b >= 0 && gi.touching)
+         {
+            BallPairState &ps = MakePair(balls[gi.a], balls[gi.b]);
+            ps.st.xi = gi.xi;
+            ps.inContact = true;
+            ps.used = true;
+         }
+         if (gi.b >= 0 || gi.s >= nSurf)
             continue;
          const SurfaceShape *const sh = static_cast<const SurfaceShape *>(g.shape[gi.s]);
          SurfaceContact &it = *const_cast<SurfaceContact *>(sh->it);
-         if (gi.touching && !it.touching)
+         if (ring)
+         {
+            it.gsReff = gi.touching ? gi.reff : 0.0;
+            it.touching = hitOn[k];
+         }
+         else if (gi.touching && !it.touching)
          {
             GroupStep::Hit hp;
             sh->Probe(g.ball[gi.a].c, g.ball[gi.a].R, hp);
@@ -1878,20 +2269,88 @@ struct ContactSystemImpl
             if ((vn >= cy.hitFloor || (ho != nullptr && ho->m_fe && vn >= ho->m_threshold)) && it.r->HitEventWanted(hp.n))
                cy.partHits.push_back({ it.r, balls[gi.a], vn, Vertex3Ds((float)hp.n.x, (float)hp.n.y, (float)hp.n.z) });
          }
-         it.touching = gi.touching;
+         if (!ring)
+            it.touching = gi.touching;
          it.gsTouch = gi.touching;
          it.gsXi = gi.xi;
+         it.gsZero = gi.dZero;
+      }
+      for (HitRubber *const c : cords)
+      {
+         CordBand &cb = *c->Cord();
+         std::vector<HitBall *> &on = cb.onCord;
+         for (int i = 0; i < g.nb; i++)
+            if (cb.part.InPath(BandCord::kBall, i) && std::find(on.begin(), on.end(), balls[i]) == on.end())
+               cb.hits.emplace_back(balls[i], (float)(cb.part.ClosingOnCord(i, v0[i]) / VS));
+         on.clear();
+         for (int i = 0; i < g.nb; i++)
+            if (cb.part.InPath(BandCord::kBall, i))
+               on.push_back(balls[i]);
+      }
+      if (ring)
+      {
+         cy.partHits.insert(cy.partHits.end(), ringParts.begin(), ringParts.end());
+         cy.hitEvents.insert(cy.hitEvents.end(), ringPairs.begin(), ringPairs.end());
+         cy.steps = (int)g.books.steps;
+         g_last.substeps += cy.steps;
+         g_last.maxSteps = std::max(g_last.maxSteps, cy.steps);
       }
       if (!ok)
       {
          PLOGW << "Cord group failed: why " << g.failWhy << " at " << done * 1e6 << " us of " << cy.dt * 1e6 << " us, balls " << g.nb << ", ball 0 at (" << g.ball[0].c.x / U << ", " << g.ball[0].c.y / U << ", " << g.ball[0].c.z / U << ") v " << g.ball[0].v.Length() << " m/s, halvings " << g.books.halvings << ", settle fails " << (cords.empty() ? 0 : cords[0]->Cord()->part.gdiag.settleFails) << ", plate " << (cords.empty() ? 0.0 : cords[0]->Cord()->part.PlateDeg()) << " deg";
+         {
+            std::string how;
+            char s[220];
+            for (int a = 0; a < g.nHalveDiag; a++)
+            {
+               const GroupStep::Group::HalveDiag &hd = g.halveDiag[a];
+               snprintf(s, sizeof s, " [%c h %.3g us rounds %d move %.3g rim %.3g slipFlips %d touchFlips %d sliding %d]", hd.why, hd.h * 1e6, hd.rounds, hd.moveC, hd.moveW, hd.slipFlips, hd.touchFlips, hd.maxSliding);
+               how += s;
+            }
+            for (int k = 0; k < g.ni; k++)
+               if (g.item[k].touching)
+               {
+                  snprintf(s, sizeof s, " item a%d b%d s%d%s zero %.3g", g.item[k].a, g.item[k].b, g.item[k].s, g.item[k].b < 0 && g.item[k].s >= nSurf ? " post" : "", g.item[k].dZero);
+                  how += s;
+               }
+            for (int i = 0; i < g.nb; i++)
+            {
+               snprintf(s, sizeof s, " ball%d v (%.4f %.4f %.4f) w (%.2f %.2f %.2f)", i, g.ball[i].v.x, g.ball[i].v.y, g.ball[i].v.z, g.ball[i].w.x, g.ball[i].w.y, g.ball[i].w.z);
+               how += s;
+            }
+            for (HitRubber *const c : cords)
+            {
+               const BandCord::Part &p = c->Cord()->part;
+               snprintf(s, sizeof s, " cord %s plate %.3f omega %.3f tension %.3f on0 %d", c->Name().c_str(), p.PlateDeg(), p.omega, p.Tension(), p.InPath(BandCord::kBall, 0) ? 1 : 0);
+               how += s;
+            }
+            PLOGW << "Cord group how:" << how;
+         }
+         // A hard step (GroupStepDesign 15): the balls stay as they are for the rest of the cycle and the next cycle tries again from the same state: time is lost, no energy can appear,
+         // and nothing goes to stock. If it will not solve for kHeldCycles in a row the cord lets the balls go, which only takes energy away.
+         constexpr int kHeldCycles = 20;
          for (HitRubber *const c : cords)
-            c->CordSolveFailed("the group step could not solve a step: the ball was let go");
+         {
+            CordBand &cb = *c->Cord();
+            if (!cb.warnedHeld)
+            {
+               cb.warnedHeld = true;
+               const std::string msg = "Rubber " + c->Name() + ": a step could not be solved: the ball was held for the rest of the cycle";
+               PLOGW << msg;
+               g_pplayer->m_liveUI->PushNotification(msg, 6000);
+            }
+            if (++cb.heldCycles >= kHeldCycles)
+            {
+               cb.heldCycles = 0;
+               c->CordSolveFailed("the group step could not solve a step for 20 cycles: the ball was let go");
+            }
+         }
       }
       else
          for (HitRubber *const c : cords)
          {
             CordBand &cb = *c->Cord();
+            cb.heldCycles = 0;
             if (cb.part.books.cordOnPlayfield && !cb.warnedFloor)
             {
                cb.warnedFloor = true;
@@ -1908,6 +2367,7 @@ struct ContactSystemImpl
             }
          }
       WriteBack(cy, isl);
+      return true;
    }
 
    // a cord with no ball this cycle: a plate moving by itself, or the path letting go of a ball just gone (GroupStepDesign 8 point 5)
@@ -1933,7 +2393,7 @@ struct ContactSystemImpl
          band->CordBegin();
       g.Configure();
       double done = 0.0;
-      if (!CordSteps(g, dt, done))
+      if (!CordSteps(g, dt, done, [](const double h) { return h; }, []() {}))
          band->CordSolveFailed("the plate's step could not be solved");
    }
 
@@ -2048,6 +2508,8 @@ struct ContactSystemImpl
       return on;
    }
    static void CheckOverlaps(float hittime);
+   static void SeatAtTouch(const std::vector<SurfaceContact> &items, const BallSI &bs, V3 &c, const V3 &v, double &delta0, double &rewound);
+   static void SeatKeepsOthers(const std::vector<SurfaceContact> &items, const ContactSurface *self, const BallSI &bs, const V3 &c0, V3 &c);
    static void DispatchPending()
    {
       if (s_pendingCy != nullptr)
@@ -2110,6 +2572,7 @@ void ContactSystemImpl::StepBalls(const float dtime)
    GatherBalls(cy);
    GatherFree(cy);
    FindIslands(cy);
+   EnergyCheckStart(cy);
    lap(g_last.gatherUs);
    g_last.bodies = (int)cy.bodies.size();
    g_last.islands = (int)cy.islands.count;
@@ -2126,8 +2589,16 @@ void ContactSystemImpl::StepBalls(const float dtime)
       {
          CordIsland(cy, isl);
          lap(g_last.substepUs);
+         EnergyCheckEnd(cy, isl);
          continue;
       }
+      if (IslandOnRing(cy, isl) && CordIsland(cy, isl, true))
+      {
+         lap(g_last.substepUs);
+         EnergyCheckEnd(cy, isl);
+         continue;
+      }
+      RingHandOut(cy, isl);
       SetupIsland(cy, isl);
       lap(g_last.setupUs);
       if (ContactProf::On())
@@ -2156,7 +2627,10 @@ void ContactSystemImpl::StepBalls(const float dtime)
       if (tripped)
          HandBack(cy, isl);
       else
+      {
          WriteBack(cy, isl);
+         EnergyCheckEnd(cy, isl);
+      }
       lap(g_last.writeUs);
       if (s_cc != nullptr)
       {
@@ -2187,8 +2661,48 @@ void ContactSystemImpl::StepBalls(const float dtime)
 // A free ball that can touch a surface this cycle is taken into the contact before the stock hit search runs: the surface is engaged when the ball is within its release gap, or
 // closing on it faster than it can cross the gap in two cycles (reach 2 vn dt + the release gap; a ball released at the gap, receding, is not taken back). The first touch is
 // then found by the substeps, and the part's hit event is queued from there (PartHit).
+// A cord takes a ball before it touches, and the group steps it from there (GroupStepDesign 15): the band is never found by the stock collision, and the ball does not start inside the cord.
+// Every ball, one already held for the playfield included: its contact is handed over to the band.
+void ContactSystemImpl::CordNear(const float dtime)
+{
+   const double dt = (double)dtime * DEFAULT_STEPTIME_S;
+   for (auto *const ball : g_pplayer->m_vball)
+   {
+      HitBall *const pb = &ball->m_hitBall;
+      if (pb->m_bandOwner != nullptr || pb->m_rubberOwner != nullptr || pb->m_d.m_lockedInKicker)
+         continue;
+      const Vertex3Ds &pos = pb->m_d.m_pos;
+      const double speed = std::sqrt((double)pb->m_d.m_vel.Dot(pb->m_d.m_vel)) * VS;
+      BallSI bs;
+      bs.R = (double)pb->m_d.m_radius * U;
+      const V3 c((double)pos.x * U, (double)pos.y * U, (double)pos.z * U);
+      const V3 v((double)pb->m_d.m_vel.x * VS, (double)pb->m_d.m_vel.y * VS, (double)pb->m_d.m_vel.z * VS);
+      for (ContactHost *const o : ContactHost::Registry())
+      {
+         HitRubber *const band = o->m_set.band && o->m_enabled ? o->BandHost() : nullptr;
+         if (band == nullptr || !band->CordModel())
+            continue;
+         // a plate on its way out carries the cord this far past its rest line (as the release rule)
+         const double plateReach = band->CordOn() && !band->Cord()->part.PlateQuiet() ? 0.03 : 0.0;
+         const float reachU = pb->m_d.m_radius + (float)((2.0 * speed * dt + plateReach) / U) + 4.0f;
+         const FRect3D &bb = o->m_hitBBox;
+         if (pos.x < bb.left - reachU || pos.x > bb.right + reachU || pos.y < bb.top - reachU || pos.y > bb.bottom + reachU || pos.z < bb.zlow - reachU || pos.z > bb.zhigh + reachU)
+            continue;
+         SurfaceContact it;
+         it.r = o;
+         const TubeProbe pr = o->Probe(bs, it, c);
+         if (pr.dist <= 0.0)
+            continue;
+         const double gap = pr.dist - (bs.R + pr.rho), rel = o->ReleaseGapM(), closing = -v.Dot(pr.normal);
+         if ((gap <= rel + plateReach || (closing > 0.0 && gap < closing * 2.0 * dt + rel)) && band->BandEngage(pb))
+            break;
+      }
+   }
+}
+
 void ContactSystemImpl::EngageNear(const float dtime)
 {
+   CordNear(dtime);
    CPROF(EngageNear);
    ContactProf::Cycle();
    static const bool on = []()
@@ -2301,6 +2815,60 @@ void ContactSystemImpl::EngageNear(const float dtime)
 }
 
 // ---- Engagement: which balls the contact system holds ----------------------------------------------------------------------------------------------------------------
+// Go back to the instant the ball first touched: along its own velocity, by depth / closing speed, at most one physics step; if it is not closing, to touching distance along the normal.
+void ContactSystemImpl::SeatAtTouch(const std::vector<SurfaceContact> &items, const BallSI &bs, V3 &c, const V3 &v, double &delta0, double &rewound)
+{
+   constexpr double kMaxRewindS = PHYSICS_STEPTIME_S;
+   const V3 c0 = c;
+   for (int pass = 0; pass < 3; pass++)
+      for (const SurfaceContact &it : items)
+      {
+         const TubeProbe p0 = it.r->Probe(bs, it, c);
+         if (!p0.overlap || p0.delta <= 1e-6)
+            continue;
+         delta0 = std::max(delta0, p0.delta);
+         if (ContactTraceOn())
+            PLOGI << "ContactSeat " << it.r->Name() << " pass " << pass << " overlap_um " << p0.delta * 1e6 << " normal " << p0.normal.x << ' ' << p0.normal.y << ' ' << p0.normal.z << " ball " << c.x / U << ' ' << c.y / U << ' ' << c.z / U;
+         const double closing = -v.Dot(p0.normal);
+         if (closing > 0.01)
+         {
+            const double t = std::min(p0.delta / closing, kMaxRewindS);
+            c = c - v * t;
+            rewound = std::max(rewound, t);
+            const TubeProbe p1 = it.r->Probe(bs, it, c);
+            if (p1.overlap && p1.delta > 1e-6)
+               c = c + p1.normal * p1.delta;
+         }
+         else
+            c = c + p0.normal * p0.delta;
+         SeatKeepsOthers(items, it.r, bs, c0, c);
+      }
+}
+
+// A seat is a position move: it does no work, so it may store nothing (no stored energy without the work that stored it). It may not press the ball deeper into any other surface of its contact than
+// it was at c0: that depth is taken back along that surface's normal, and the next pass of the seat goes on along the surface.
+void ContactSystemImpl::SeatKeepsOthers(const std::vector<SurfaceContact> &items, const ContactSurface *const self, const BallSI &bs, const V3 &c0, V3 &c)
+{
+   for (const SurfaceContact &it : items)
+   {
+      if (it.r == self)
+         continue;
+      const TubeProbe p1 = it.r->Probe(bs, it, c);
+      if (!p1.overlap)
+         continue;
+      const TubeProbe p0 = it.r->Probe(bs, it, c0);
+      const double more = p1.delta - (p0.overlap ? p0.delta : 0.0);
+      if (more > 1e-6)
+         c = c + p1.normal * more;
+   }
+}
+
+void ContactSystem::SeatKeepsOthers(const HitBall *const pb, const ContactSurface *const self, const RubberContact::BallSI &bs, const RubberContact::V3 &c0, RubberContact::V3 &c)
+{
+   if (pb->m_contact != nullptr)
+      ContactSystemImpl::SeatKeepsOthers(pb->m_contact->items, self, bs, c0, c);
+}
+
 // A ball enters when a surface's stock collider finds it (the stock impulse is skipped) and leaves when it is clear of every surface and receding.
 bool ContactSystemImpl::EngageImpl(ContactHost *const host, HitBall *const pb, const char *how)
 {
@@ -2394,40 +2962,21 @@ bool ContactSystemImpl::EngageImpl(ContactHost *const host, HitBall *const pb, c
    }
    else if (host != nullptr)
    {
-   constexpr double kMaxRewindS = PHYSICS_STEPTIME_S;
-   const double zBeforeSeat = c.z;
    for (SurfaceContact &it : rb.items)
       it.r->Refresh(it, bs.R, 0.03, c);   // a surface: the faces within 30 mm of the ball
-   for (int pass = 0; pass < 3; pass++)
-      for (const SurfaceContact &it : rb.items)
+   // Found inside a surface going to the group: zero replaces the seat, no position snap (GroupStepDesign 14.4, 14.5); not with a moving part in the set, which stays on the old loop
+   bool zeroNotSeat = false;
+   for (const SurfaceContact &it : rb.items)
+      if (it.r->GroupModel())
       {
          const TubeProbe p0 = it.r->Probe(bs, it, c);
-         if (!p0.overlap || p0.delta <= 1e-6)
-            continue;
-         rb.delta0 = std::max(rb.delta0, p0.delta);
-         if (ContactTraceOn())
-            PLOGI << "ContactSeat " << it.r->Name() << " pass " << pass << " overlap_um " << p0.delta * 1e6 << " normal " << p0.normal.x << ' ' << p0.normal.y << ' ' << p0.normal.z << " ball " << c.x / U << ' ' << c.y / U << ' ' << c.z / U;
-         const double closing = -v.Dot(p0.normal);
-         if (closing > 0.01)
-         {
-            const double t = std::min(p0.delta / closing, kMaxRewindS);
-            c = c - v * t;
-            rb.rewound = std::max(rb.rewound, t);
-            const TubeProbe p1 = it.r->Probe(bs, it, c);
-            if (p1.overlap && p1.delta > 1e-6)
-               c = c + p1.normal * p1.delta;
-         }
-         else
-            c = c + p0.normal * p0.delta;
+         zeroNotSeat = zeroNotSeat || (p0.overlap && p0.delta > 1e-6);
       }
-   // A ball deep inside a rubber (a hit the stock collision missed, or a script placing it there) can be seated along a normal that points down. With the playfield in the
-   // contact that would put it under the floor, beyond what the stock plane can still catch (more than two radii below it): it would fall out of the table. Do not engage then;
-   // the stock collision resolves the overlap the way it always did.
-   if (c.z < zBeforeSeat - 1.0 * U && std::any_of(rb.items.begin(), rb.items.end(), [](const SurfaceContact &it) { return it.r->IsFloor(); }))
-   {
-      PLOGW << "Rubber " << host->m_name << ": the seat of a " << rb.delta0 * 1e3 << " mm overlap would put the ball under the playfield, not engaging (stock collision)";
-      return false;
-   }
+   if (std::any_of(rb.items.begin(), rb.items.end(), [](const SurfaceContact &it) { return it.r->MovingPart() != nullptr; }))
+      zeroNotSeat = false;
+   rb.seatPending = zeroNotSeat;
+   if (!zeroNotSeat)
+      SeatAtTouch(rb.items, bs, c, v, rb.delta0, rb.rewound);
    }
    pb->m_d.m_pos = Vertex3Ds((float)(c.x / U), (float)(c.y / U), (float)(c.z / U));
    rb.vin = v;

@@ -14,8 +14,9 @@
 //             (sphere on a vertical cylinder, circular-patch approximation of the elliptical contact)
 //   normal    F = (4/3) E* a^3/Reff * (1 + beta (a/h)^3) * (1 + 1.5 alpha ddot), never pulling
 //             Hertz + thin bonded layer stiffening + Hunt-Crossley damping (rebound ratio ~ 1 - alpha v)
-//   shear     Mindlin-style spring kt = 8 G* a with damping ratio zeta, Coulomb cap mu*Fn; the spring state xi is
-//             kept in RubberState and re-seated at the cap
+//   shear     Mindlin spring kt = 8 G* a times shearScale (the sideways stiffness: < 1 where the rubber itself gives way, a tube on a post, a strip on a bat), a damper
+//             shearTan sqrt(kt mt), spring and damper together within mu Fn. Mindlin-Deresiewicz: a patch that grows holds the force, one that shrinks holds the stretch.
+//             The stretch xi is kept in RubberState and re-seated at the cap on the spring's force alone
 //   twist     drilling-friction torque (3 pi/16) mu a Fn opposing spin about the contact normal
 //   rolling   hysteresis rolling resistance: a ball rolling on rubber compresses the rubber ahead and the rubber behind
 //             recovers with a lag, which moves the pressure centre ahead of the ball centre. Torque on the ball
@@ -65,8 +66,8 @@ namespace RubberContact
       double gammaKK = 0.0;          // > 0: viscoelastic (Kuwabara-Kono) normal damping instead of alpha: Fd = gamma a v_n (a = contact radius), N s / m^2. The rebound ratio then falls only as v^(1/5), close to a constant restitution; see CalibrateKK
       double betaLayer = 0.33;       // thin-layer stiffening coefficient (approximation, unchecked)
       double mu = 0.8;               // rubber / steel friction (black / white rubber; user, 2026-10-30)
-      double shearScale = 1.0;       // multiplier on the shear stiffness
-      double shearZeta = 0.2;        // shear damping ratio
+      double shearScale = 1.0;       // the sideways stiffness, a multiplier on Mindlin's 8 G* a. 1 = a thick solid body (steel, plastic, wood). Rubbers: [Rubbers] sideways_stiffness, [Flippers] rubber_sideways_stiffness
+      double shearTan = 0.4;         // loss tangent of the sideways spring: damper c = shearTan sqrt(kt mt), a damping ratio of shearTan / 2. A rubber's is its own tan_delta (the same material; for nu 0.5, E = 3 G at every frequency). This default is for contacts that are not rubber (steel, plastic, wood; the old damping ratio 0.2, a guess): it stands in for their micro-slip
       bool twist = true;             // drilling friction on/off
       double tanDelta = 0.0;         // loss tangent for the rolling resistance (0 = off); see the header comment
       double rollingMu = 0.0;        // floor of the rolling-resistance coefficient of a static surface (the playfield: [Contact] rolling_resistance); 0 = none
@@ -233,6 +234,17 @@ namespace RubberContact
       double E = 0.0;        // Young's modulus, Pa
    };
 
+   // How much of a damper's force D goes on top of the spring's force Fs and stays within the limit lim (|Fs| <= lim): the largest s in [0, 1] with |Fs + s D| <= lim.
+   // Taken off the damper, so the spring keeps its own force and the damper can only remove energy.
+   inline double DamperShare(const V3 &Fs, const V3 &D, const double lim)
+   {
+      const V3 sum = Fs + D;
+      if (sum.Dot(sum) <= lim * lim)
+         return 1.0;
+      const double qa = D.Dot(D), qb = 2.0 * Fs.Dot(D), qc = Fs.Dot(Fs) - lim * lim;
+      return qa > 0.0 ? std::min(1.0, std::max(0.0, (-qb + std::sqrt(std::max(0.0, qb * qb - 4.0 * qa * qc))) / (2.0 * qa))) : 1.0;
+   }
+
    // The surface-independent part of the contact law: normal (Hertz + thin layer + Hunt-Crossley), Mindlin shear with the Coulomb cap, twist.
    // The caller supplies the geometry of the touch: n = outward surface normal (surface -> ball centre), delta = compression, reff = Hertz
    // effective radius, h = rubber layer thickness (m), vs = velocity of the surface point. Shared by the flipper (Evaluate) and static rubbers.
@@ -264,16 +276,31 @@ namespace RubberContact
       const double Fn = std::max(0.0, Fe + Fd);
 
       const double kt = 8.0 * Gstar * a * rp.shearScale;
-      st.xi = st.xi - n * st.xi.Dot(n) + vt * dt;
-      const double mt = 1.0 / (1.0 / m + R * R / Ib);          // tangential effective mass (m/3.5 for a solid sphere)
-      const double ct = 2.0 * rp.shearZeta * std::sqrt(kt * mt);
-      V3 Ft = st.xi * (-kt) - vt * ct;
-      const double lim = rp.mu * Fn;
-      const double nt = Ft.Length();
-      if (nt > lim)
+      // Mindlin-Deresiewicz: a patch that grows takes in unstressed rubber at its rim, so the force holds and the stretch falls; a patch that shrinks keeps the stretch. What
+      // the spring holds can then only fall. kt goes as sqrt(delta), and the depth a step ago comes from the closing speed, so no state is kept for it.
+      if (vn < 0.0)
+         st.xi = st.xi * std::sqrt(std::max(delta + vn * dt, 0.0) / delta);
       {
-         Ft = Ft * (lim / nt);
-         st.xi = Ft * (-1.0 / kt);
+         const double l0 = st.xi.Length();
+         const V3 xp = st.xi - n * st.xi.Dot(n);
+         const double lp = xp.Length();
+         st.xi = (lp > 1e-300 ? xp * (l0 / lp) : V3()) + vt * dt;   // turned into the contact plane, its length kept
+      }
+      const double mt = 1.0 / (1.0 / m + R * R / Ib);          // tangential effective mass (m/3.5 for a solid sphere)
+      const double ct = rp.shearTan * std::sqrt(kt * mt);
+      const V3 Fs = st.xi * (-kt);
+      V3 Ft;
+      const double lim = rp.mu * Fn;
+      const double ns = Fs.Length();
+      if (ns > lim)
+      {
+         Ft = Fs * (lim / ns);
+         st.xi = Ft * (-1.0 / kt);   // on the spring's force alone: a damper's share here would charge the spring with work nobody did
+      }
+      else
+      {
+         const V3 D = vt * (-ct);
+         Ft = Fs + D * DamperShare(Fs, D, lim);
       }
 
       const V3 F = n * Fn + Ft;
@@ -770,6 +797,63 @@ namespace RubberContact
       const double R1 = 1.0 / ((1.0 - edgeW) / ball.R + edgeW * (1.0 / ball.R + 1.0 / edgeRho));
       pr.reff = std::sqrt(R1 * ball.R);
       return pr;
+   }
+
+   // A probe reports the surface's nearest point only, so a part of the surface that is not the nearest (a ramp's wall while the ball flies just over its floor) has no say in the step and the
+   // ball can be carried deep into it, with stored energy no work paid for. These give the longest step, at most hMax, that brings the ball no closer than arriveM to any other part of the surface
+   // (the arrival rule, part by part: d <= vc h + a h^2). A part within touchM counts as touching. The nearest part (nearest: the probe's seg) is the caller's.
+   inline double ArrivalStep(const double d, const double vc, const double a, const double h)
+   {
+      if (d > vc * h + a * h * h)
+         return h;
+      const double t = a > 1e-9 ? (-vc + std::sqrt(vc * vc + 4.0 * a * d)) / (2.0 * a) : vc > 1e-12 ? d / vc : h;
+      return std::min(h, t);
+   }
+
+   // a face in the plane of the nearest face has the same gap and closing speed: it is passed over; so is one whose plane the ball cannot reach within the step
+   inline double ArrivalTriangles(const BallSI &ball, const std::vector<SurfaceTri> &tris, const std::vector<int> &cand, const int nearest, const V3 &c, const V3 &v, const double a, const double hMax, const double touchM, const double arriveM)
+   {
+      double h = hMax;
+      const double speed = v.Length();
+      const SurfaceTri *const best = nearest >= 0 ? &tris[nearest] : nullptr;
+      for (const int i : cand)
+      {
+         if (i == nearest)
+            continue;
+         const SurfaceTri &t = tris[i];
+         if (std::abs((c - t.a).Dot(t.n)) - ball.R - touchM > speed * h + a * h * h)
+            continue;
+         if (best != nullptr && std::abs(t.n.Dot(best->n)) > 0.9999 && std::abs((t.a - best->a).Dot(best->n)) < 1e-5)
+            continue;
+         int kind = 0;
+         const V3 dv = c - ClosestOnTriangle(t, c, kind);
+         const double dist = dv.Length();
+         if (dist <= 1e-12 || dist - ball.R <= touchM)
+            continue;
+         h = ArrivalStep(dist - ball.R - arriveM, std::max(-v.Dot(dv) / dist, 0.0), a, h);
+      }
+      return h;
+   }
+
+   // the segments next to the nearest one are passed over: the nearest point runs onto them with no jump in the gap
+   inline double ArrivalTube(const BallSI &ball, const V3 *pts, const int n, const double rho, const TubePre &pre, const int nearest, const V3 &c, const V3 &v, const double a, const double hMax, const double touchM, const double arriveM)
+   {
+      double h = hMax;
+      const double speed = v.Length(), S = ball.R + rho;
+      for (int i = 0; i + 1 < n; i++)
+      {
+         if (std::abs(i - nearest) <= 1 || pre.L2[i] <= 0.0)
+            continue;
+         if ((c - pre.mid[i]).Length() - pre.rad[i] - S - touchM > speed * h + a * h * h)
+            continue;
+         const double s = std::min(std::max((c - pts[i]).Dot(pre.t[i]) / pre.L2[i], 0.0), 1.0);
+         const V3 dv = c - (pts[i] + pre.t[i] * s);
+         const double dist = dv.Length();
+         if (dist <= 1e-12 || dist - S <= touchM)
+            continue;
+         h = ArrivalStep(dist - S - arriveM, std::max(-v.Dot(dv) / dist, 0.0), a, h);
+      }
+      return h;
    }
 
    // Static-surface contact for one step. Same law as Evaluate (ContactCore), plus rolling resistance on the tangential part of the

@@ -9,6 +9,7 @@
 #include <sstream>
 
 #include "physics/contacthost.h"
+#include "physics/contactsettings.h"
 #include "physics/contactsystem.h"
 #include "physics/contactpartsini.h"
 #include "physics/hitball.h"
@@ -27,12 +28,12 @@ namespace
    struct BoolKey { const char *name; bool RubberObjectSettings::*field; };
    const NumKey NUM_KEYS[] = {
       { "sling_gap_mm", &RubberObjectSettings::slingGapMm },
-      { "band_model", &RubberObjectSettings::bandModel }, { "band_ring_in", &RubberObjectSettings::bandRingIn },
+      { "band_model", &RubberObjectSettings::bandModel }, { "band_ring_in", &RubberObjectSettings::bandRingIn }, { "ring_model", &RubberObjectSettings::ringModel },
       { "surface_layer_mm", &RubberObjectSettings::surfaceLayerMm }, { "edge_radius_mm", &RubberObjectSettings::edgeRadiusMm },
       { "e_mpa", &RubberObjectSettings::eMpa }, { "layer_mm", &RubberObjectSettings::layerMm },
       { "alpha_s_per_m", &RubberObjectSettings::alphaSPerM }, { "restitution", &RubberObjectSettings::restitution }, { "plate_areal_density_kg_m2", &RubberObjectSettings::plateArealKgM2 }, { "plate_mass_g", &RubberObjectSettings::plateMassG }, { "plate_clearance_u", &RubberObjectSettings::plateClearanceU }, { "restitution_ref_speed_ms", &RubberObjectSettings::restitutionRefMs }, { "beta_layer", &RubberObjectSettings::betaLayer },
-      { "mu", &RubberObjectSettings::mu }, { "shear_scale", &RubberObjectSettings::shearScale },
-      { "shear_zeta", &RubberObjectSettings::shearZeta }, { "tan_delta", &RubberObjectSettings::tanDelta },
+      { "mu", &RubberObjectSettings::mu }, { "sideways_stiffness", &RubberObjectSettings::shearScale },
+      { "tan_delta", &RubberObjectSettings::tanDelta },
       { "substep_us", &RubberObjectSettings::substepUs }, { "rest_substep_us", &RubberObjectSettings::restSubstepUs }, { "rest_omega_h", &RubberObjectSettings::restOmegaH }, { "rest_speed_mm_s", &RubberObjectSettings::restSpeedMmS }, { "roll_travel_um", &RubberObjectSettings::rollTravelUm }, { "max_ms", &RubberObjectSettings::maxMs }, { "release_gap_mm", &RubberObjectSettings::releaseGapMm },
       { "band_curve_radius_mm", &RubberObjectSettings::bandCurveRadiusMm }, { "band_min_span_mm", &RubberObjectSettings::bandMinSpanMm },
       { "band_prestretch_pct", &RubberObjectSettings::bandPrestretchPct }, { "band_tension_n", &RubberObjectSettings::bandTensionN }, { "band_node_zeta", &RubberObjectSettings::bandNodeZeta },
@@ -75,6 +76,14 @@ namespace
       if (key == "switches")
       {
          s.switches = val;
+         return true;
+      }
+      if (key == "shear_zeta" || key == "shear_scale")   // keys that no longer act (2026-10-31): the damping comes from tan_delta, the stiffness from sideways_stiffness. Old files still load
+      {
+         static bool told = false;
+         if (!told)
+            PLOGW << "Rubber settings: shear_zeta and shear_scale no longer act (zeta = tan_delta / 2; sideways_stiffness sets the stiffness)";
+         told = true;
          return true;
       }
       const std::string v = Lower(val);
@@ -169,8 +178,7 @@ namespace
       clampKey("restitution_ref_speed_ms", s.restitutionRefMs, 0.05, 20.0);
       clampKey("beta_layer", s.betaLayer, 0.0, 5.0);
       clampKey("mu", s.mu, 0.0, 3.0);
-      clampKey("shear_scale", s.shearScale, 0.01, 100.0);
-      clampKey("shear_zeta", s.shearZeta, 0.0, 10.0);
+      clampKey("sideways_stiffness", s.shearScale, 0.01, 100.0);
       clampKey("tan_delta", s.tanDelta, 0.0, 2.0);
       clampKey("substep_us", s.substepUs, 1.0, 100.0);
       clampKey("rest_substep_us", s.restSubstepUs, 0.0, 500.0);
@@ -219,7 +227,7 @@ RubberContact::RubberParams RubberObjectSettings::ToParams() const
    p.betaLayer = betaLayer;
    p.mu = mu;
    p.shearScale = shearScale;
-   p.shearZeta = shearZeta;
+   p.shearTan = shearTan >= 0.0 ? shearTan : tanDelta;
    p.twist = twist;
    p.tanDelta = tanDelta;
    p.rollingMu = rollingMu;
@@ -322,6 +330,8 @@ bool ContactHost::LoadHardSurfaceSettings(RubberObjectSettings &s, const std::fi
    s.betaLayer = 0.0;
    s.alphaSPerM = std::min(2.0, std::max(0.02, 1.1 * (1.0 - elasticity)));   // rebound ratio ~ 1 - alpha v at about 1 m/s: the part's restitution (the stock falloff with speed is not modelled)
    s.tanDelta = 0.05;
+   s.shearScale = 1.0;    // a thick solid body: Mindlin as it stands
+   s.shearTan = 0.4;      // (rubbercontact.h RubberParams: not rubber, value unchanged)
    s.normalLoss = true;   // (the rubber default is off; the right law for hard materials is not measured, to-do 1.21)
    s.mu = friction;
    s.rollingMu = ContactSettings::Get().enable ? ContactSettings::Get().rollingResistance : 0.0;
@@ -367,6 +377,8 @@ bool ContactHost::LoadPlayfieldSettings(RubberObjectSettings &s, const std::file
    s.betaLayer = 0.0;
    s.alphaSPerM = 0.5;
    s.tanDelta = 0.05;
+   s.shearScale = 1.0;    // a thick solid body: Mindlin as it stands
+   s.shearTan = 0.4;      // (rubbercontact.h RubberParams: not rubber, value unchanged)
    s.normalLoss = true;   // (the rubber default is off; wood is not measured, to-do 1.21)
    s.mu = tableMu;
    s.rollingMu = ContactSettings::Get().enable ? ContactSettings::Get().rollingResistance : 0.0;   // a ball rolling on hard wood: the measured coefficient of [Contact], not the rubber hysteresis law
@@ -387,6 +399,8 @@ RubberObjectSettings ContactHost::TurntableSettings(const double mu, const doubl
    s.betaLayer = 0.0;
    s.alphaSPerM = 0.5;
    s.tanDelta = 0.05;
+   s.shearScale = 1.0;
+   s.shearTan = 0.4;
    s.normalLoss = true;   // (as the playfield)
    s.mu = mu;
    s.rollingMu = rollingResistance >= 0.0 ? rollingResistance : (ContactSettings::Get().enable ? ContactSettings::Get().rollingResistance : 0.0);
@@ -524,6 +538,13 @@ void ContactHost::ReloadIfChanged() const
       return;
    m_iniTime = mtime;
    Reload();
+}
+
+bool ContactHost::GroupModel() const
+{
+   if (m_set.band || MovingPart() != nullptr)
+      return false;
+   return ContactSettings::Get().staticModel || (m_set.ringModel != 0.0 && !m_hardSurface && !IsFloor());
 }
 
 double ContactHost::LayerM() const

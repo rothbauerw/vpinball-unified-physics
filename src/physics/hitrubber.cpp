@@ -1007,6 +1007,8 @@ float HitRubber::HitTest(const BallS &ball, const float dtime, CollisionEvent &c
 {
    if (!m_enabled || m_pts.size() < 2)
       return -1.0f;
+   if (CordModel())
+      return -1.0f;   // the cord never meets the stock collision: the contact system takes the ball before it touches (CordNear; GroupStepDesign 15)
    if (BandIsEngaged(ball) || ContactOwns(ball))
       return -1.0f;   // the band or contact model owns this ball until it is released
 
@@ -1328,6 +1330,13 @@ RubberContact::TubeProbe HitRubber::Probe(const RubberContact::BallSI &bs, const
    return RubberContact::ProbeTube(bs, m_ptsSI.data(), (int)m_ptsSI.size(), m_radiusSI, c, &m_tubePre);
 }
 
+double HitRubber::ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, const int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, const double a, const double hMax, const double touchM, const double arriveM) const
+{
+   if (m_surface != nullptr)
+      return RubberContact::ArrivalTriangles(bs, m_surface->tris, it.Faces(c), nearestSeg, c, v, a, hMax, touchM, arriveM);
+   return RubberContact::ArrivalTube(bs, m_ptsSI.data(), (int)m_ptsSI.size(), m_radiusSI, m_tubePre, nearestSeg, c, v, a, hMax, touchM, arriveM);
+}
+
 // ---- Engine-stepped contact ----
 //
 // A ball hitting a static rubber (a post ring, a wall rubber) used to be solved to the end inside the one Collide() call: 900 - 1500 substeps of 5 us
@@ -1409,9 +1418,11 @@ bool HitRubber::BandIsEngaged(const BallS &ball) const
 
 bool HitRubber::BandWants(const HitBall *ball) const
 {
-   return m_set.band && !m_bandSpans.empty() && g_pplayer->m_time_msec >= m_bandCooldownUntilMs
-      && ball->m_bandOwner == nullptr && ball->m_rubberOwner == nullptr   // a contact (the playfield's, above all) is handed over to the band
-      && !g_pplayer->m_physics->FlipperNear(ball->m_d, (float)m_set.bandFlipperMarginU);
+   if (!m_set.band || m_bandSpans.empty() || ball->m_bandOwner != nullptr || ball->m_rubberOwner != nullptr)   // a contact (the playfield's, above all) is handed over to the band
+      return false;
+   if (CordModel())
+      return true;   // no cooling down and no giving way to a flipper: there is no stock collision to leave the ball to
+   return g_pplayer->m_time_msec >= m_bandCooldownUntilMs && !g_pplayer->m_physics->FlipperNear(ball->m_d, (float)m_set.bandFlipperMarginU);
 }
 
 // The deformed centreline: the ring with the span of every chain that has nodes replaced by A - P_1 - ... - P_M - B. Rebuilt whenever a node is added.
@@ -1705,6 +1716,7 @@ bool HitRubber::BandEngage(HitBall *const pb)
    // Nothing is stored as compression.
    constexpr double kMaxRewindS = PHYSICS_STEPTIME_S;
    double rewound = 0.0, delta0 = 0.0;
+   const V3 c0 = c;
    for (int pass = 0; pass < 3; pass++)
    {
       BandSyncPts();
@@ -1722,6 +1734,7 @@ bool HitRubber::BandEngage(HitBall *const pb)
       }
       else
          c = c + p0.normal * p0.delta;
+      ContactSystem::SeatKeepsOthers(pb, this, bs, c0, c);
    }
    pb->m_d.m_pos = Vertex3Ds((float)(c.x / U), (float)(c.y / U), (float)(c.z / U));
 
@@ -1967,6 +1980,8 @@ void HitRubber::CordEnsure()
    s.refHz = m_set.bandRefHz;
    s.alphaSPerM = m_set.alphaSPerM;
    s.mu = m_set.mu;
+   s.ringRp = m_set.ToParams();   // a rubber on a post: the ring's own values (GroupStepDesign 13)
+   s.ringRpSet = true;
    s.prestretch = m_set.bandPrestretchPct * 0.01;
    s.tensionN = s.eMpa * 1e6 * M_PI * rc * rc * s.prestretch;
    s.sling = m_set.sling;
@@ -2090,6 +2105,13 @@ void HitRubber::CordBegin()
 void HitRubber::CordFinish(const float /*dtime*/)
 {
    BandCord::Part &p = m_cord->part;
+   for (const auto &h : m_cord->hits)   // the script's Hit event, as Collide fires it for a stock hit
+      if (m_obj && m_fe && h.second >= m_threshold)
+      {
+         m_obj->m_currentHitThreshold = h.second;
+         FireHitEvent(h.first);
+      }
+   m_cord->hits.clear();
    std::vector<std::pair<int, bool>> changes;
    const int ns = std::min((int)m_switches.size(), p.geo.nSwitches);
    bool anyClosed = false;
@@ -2131,7 +2153,6 @@ void HitRubber::CordSolveFailed(const char *why)
    m_cord->attached = false;
    m_cord->slots.clear();
    BandReleaseAll("solve failed");
-   m_bandCooldownUntilMs = (uint32_t)g_pplayer->m_time_msec + 20;
 }
 
 // ---- One cycle of the band, in phases ----
@@ -2233,8 +2254,9 @@ bool HitRubber::BandCycleBegin(const float dtime)
    BandDyn &d = m_dyn;
    const size_t nc = d.chains.size();
    bc.rp = m_set.ToParams();
+   bc.rp.shearScale = 1.0;   // (the old node band stays as it was)
    if (m_set.bandShearZeta >= 0.0)
-      bc.rp.shearZeta = m_set.bandShearZeta;   // a ball resting on a band must not rock on the shear spring of its contact
+      bc.rp.shearTan = 2.0 * m_set.bandShearZeta;   // a ball resting on a band must not rock on the shear spring of its contact
    bc.fNode.resize(nc);
    if (m_engaged.empty())
    {

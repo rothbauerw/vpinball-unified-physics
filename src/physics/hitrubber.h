@@ -127,6 +127,9 @@ struct BallContact
    uint32_t regatherMs = 0;
    bool regathered = false;
    bool inHole = false;                  // the ball was over a non-legacy kicker's hole when the surfaces were collected: the playfield has no floor there and is left out
+   double endStored = -1.0;              // the energy check: what its contacts held at the end of the last cycle, J (< 0 = no cycle yet)
+   bool groupLoop = false;               // ring_model: the last cycle went through the group step, so the touches' state is in gsTouch, gsXi, gsZero (GroupStepDesign 14.4)
+   bool seatPending = false;             // ring_model: found inside a rubber at engagement and not seated: the group counts it from zero; the old loop seats it if the island goes there (14.5)
 };
 
 // The force-model rubbers around a ball that a flipper's rubber model drives (the cradle: a post and the bat both touch the ball). The flipper's step adds their
@@ -184,6 +187,7 @@ public:
    bool SurfaceHeightAt(double xU, double yU, double &zU) const override;
    // ContactSurface
    void Refresh(SurfaceContact &it, double ballR, double reachM, const RubberContact::V3 &c) const override;   // the faces the ball can reach this cycle
+   double ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, double a, double hMax, double touchM, double arriveM) const override;
    RubberContact::TubeProbe Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const override;   // the nearest point of one surface contact (tube or faces)
    double LayerM() const override;
    // Non-legacy kickers are round holes in the playfield: the playfield host leaves no floor inside them (the ball rests on the rim, or falls in and is captured).
@@ -301,7 +305,9 @@ private:
    void BandBeforeCore(float dtime);   // once per cycle before the band is stepped: the sling's driver and switches
    void BandAfterCore(float dtime);    // once per cycle after: diverged check, switches, the sling's table primitives
    // The cord in the group step (cordband.h; docs/GroupStepDesign.txt 8, 11): the contact system steps it with its balls
+   HitRubber *BandHost() override { return this; }
    bool CordOn() const { return m_cord != nullptr; }
+   bool CordModel() const { return m_set.band && m_set.bandModel != 0.0 && m_bandPosts.size() >= 2; }   // this band runs on the cord: the contact system takes its balls (CordNear), no stock collision
    CordBand *Cord() const { return m_cord.get(); }
    void CordEnsure();                  // the cord from the band's posts, plate and switches (band_model 1)
    void CordBegin();                   // once per cycle, before the step: the script's trigger, the switches, the driver

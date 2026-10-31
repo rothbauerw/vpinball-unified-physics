@@ -1,4 +1,4 @@
-BAND RECOVERY PLAN (2026-10-30, proposed, not approved yet)
+BAND RECOVERY PLAN (2026-10-30. Stage 0 DONE. User: stages 1 and 2 make no sense before the model is finished. Proposed order, awaiting approval: stage 3 first, each item checked on the existing bench and a few engine shots; stages 1 and 2 become the final proof, with stage 4. Do not work from the order below.)
 ==========================================================
 Goal: tables that play right again, and a finished cord band proved before it reaches a table.
 

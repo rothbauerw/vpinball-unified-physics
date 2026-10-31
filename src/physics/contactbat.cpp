@@ -32,9 +32,9 @@ namespace FlipperModel
       p.betaLayer = s.rubberBetaLayer;
       p.mu = s.rubberMu;
       p.shearScale = s.rubberShearScale;
-      p.shearZeta = s.rubberShearZeta;
       p.twist = s.rubberTwist;
       p.tanDelta = s.rubberTanDelta;
+      p.shearTan = s.rubberTanDelta;   // the same material
       p.zLoMm = s.rubberZLoMm;
       p.heightMm = s.rubberHeightMm;
       return p;
