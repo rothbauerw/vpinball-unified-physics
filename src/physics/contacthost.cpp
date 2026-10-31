@@ -44,7 +44,7 @@ namespace
       { "switch_gap_mm", &RubberObjectSettings::switchGapMm }, { "switch_min_closed_ms", &RubberObjectSettings::switchMinClosedMs },
    };
    const BoolKey BOOL_KEYS[] = {
-      { "contact", &RubberObjectSettings::contact }, { "rubber", &RubberObjectSettings::surfaceRubber }, { "normal_loss", &RubberObjectSettings::normalLoss }, { "viscoelastic_damping", &RubberObjectSettings::viscoelastic }, { "slow_contact", &RubberObjectSettings::slowContact }, { "twist", &RubberObjectSettings::twist }, { "band", &RubberObjectSettings::band },
+      { "contact", &RubberObjectSettings::contact }, { "rubber", &RubberObjectSettings::surfaceRubber }, { "normal_loss", &RubberObjectSettings::normalLoss }, { "viscoelastic_damping", &RubberObjectSettings::viscoelastic }, { "twist", &RubberObjectSettings::twist }, { "band", &RubberObjectSettings::band },
       { "band_ringing", &RubberObjectSettings::bandRinging }, { "band_follow", &RubberObjectSettings::bandFollow },      { "band_lock_z", &RubberObjectSettings::bandLockZ },
    };
 
@@ -76,6 +76,14 @@ namespace
       if (key == "switches")
       {
          s.switches = val;
+         return true;
+      }
+      if (key == "slow_contact")   // a key that no longer acts (2026-10-31): a slow touch is on the surface's law like a hit, never the stock contact. Old files still load
+      {
+         static bool told = false;
+         if (!told)
+            PLOGW << "Rubber settings: slow_contact no longer acts (a slow touch always stays on the force model)";
+         told = true;
          return true;
       }
       if (key == "shear_zeta" || key == "shear_scale")   // keys that no longer act (2026-10-31): the damping comes from tan_delta, the stiffness from sideways_stiffness. Old files still load
@@ -411,66 +419,34 @@ RubberObjectSettings ContactHost::TurntableSettings(const double mu, const doubl
    return s;
 }
 
-// A ball that a flipper's rubber model drives is not taken by the contact model. The other way round, a contact-held ball that touches a bat is handed to the flipper at the
-// moment of contact (HitFlipper::Collide / Contact release it: the flipper's step carries the nearby rubbers, so the post stays on the force model).
-bool ContactHost::FlipperBlocks(const HitBall *pball)
-{
-   return pball->m_rubberOwner != nullptr;
-}
-
-// A stock collider of a flagged wall / primitive found the ball: take it into the force model, as Collide() does for a rubber post.
+// A stock collider of a flagged wall / primitive found the ball: take it into the force model, as Collide() does for a rubber post. Every ball on this object's law: the only false
+// is the object not converted (a setting) and the playfield over a kicker's hole (Engage).
 bool ContactHost::SurfaceCollide(HitBall *const pball, const Vertex3Ds &n)
 {
    if (!m_set.contact)
       return false;
-   if (ContactOwns(pball->m_d) || SideHolds(pball))
-      return true;   // already held (by a force-model contact or by the flipper's model, which carries this rubber): another collider of the same hit
-   const float dot = -(n.Dot(pball->m_d.m_vel));
-   if (dot < C_LOWNORMVEL)
-      return false;   // receding or sliding: nothing to solve (a resting ball is the stock contact's)
+   if (ContactOwns(pball->m_d))
+      return true;   // already held: another collider of the same hit
    ReloadIfChanged();
    if (!m_set.contact)
       return false;
-   const bool flipperBusy = FlipperBlocks(pball);
-   if (!flipperBusy && pball->m_bandOwner == nullptr && pball->m_contact == nullptr && g_pplayer->m_time_msec >= m_contactCooldownUntilMs && ContactEngage(pball))
-   {
-      g_pplayer->m_physics->OnBallWallHit(*pball, n, dot);   // the force-model contact is stepped by the engine from here on (no impulse here)
-      return true;
-   }
-   return false;
+   const float dot = -(n.Dot(pball->m_d.m_vel));
+   if (dot < C_LOWNORMVEL)
+      return !(IsPlayfield() && InPlayfieldHole(pball->m_d.m_pos));   // receding or sliding: no closing speed, nothing to solve (the slow pass takes a ball resting or rolling here)
+   if (!ContactEngage(pball))
+      return false;
+   g_pplayer->m_physics->OnBallWallHit(*pball, n, dot);   // the force-model contact is stepped by the engine from here on (no impulse here)
+   return true;
 }
 
 bool ContactHost::SlowContact(HitBall *const pball)
 {
-   if (!m_set.contact || !m_set.slowContact)
+   if (!m_set.contact)
       return false;
-   if (ContactOwns(pball->m_d) || SideHolds(pball))
-      return true;   // already held (by this or another collider of the same touch, or by the flipper's model that carries this rubber)
+   if (ContactOwns(pball->m_d))
+      return true;   // already held (by this or another collider of the same touch)
    ReloadIfChanged();
-   if (!m_set.contact || !m_set.slowContact)
-      return false;
-   const char *why = nullptr;
-   if (pball->m_rubberOwner != nullptr)
-      why = "a flipper's rubber model owns the ball";
-   else if (pball->m_bandOwner != nullptr || pball->m_contact != nullptr)
-      why = "another band / force-model contact owns the ball";
-   else if (g_pplayer->m_time_msec < m_contactCooldownUntilMs)
-      why = "cooldown";
-   else if (ContactEngage(pball, "slow"))
-      return true;
-   else
-      why = "ContactEngage declined";
-   if (ContactTraceOn() && (long long)g_pplayer->m_time_msec - m_slowNoteMs >= 500)
-   {
-      m_slowNoteMs = g_pplayer->m_time_msec;
-      PLOGI << "SlowContact " << m_name << " t=" << g_pplayer->m_time_msec << " refused: " << why;
-   }
-   return false;
-}
-
-bool ContactHost::SideHolds(const HitBall *const pball) const
-{
-   return pball->m_rubberOwner != nullptr && pball->m_rubberOwner->RubberSideHas(this);
+   return m_set.contact && ContactEngage(pball, "slow");
 }
 
 bool ContactHost::ContactOwns(const BallS &ball) const

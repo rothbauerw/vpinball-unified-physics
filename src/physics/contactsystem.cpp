@@ -103,7 +103,7 @@ namespace ContactSystem
 // the stack is the weight plus the pull, with no stock impulse or position push in between.
 //
 // Phases: GatherBalls + GatherFree (SI state of every body) -> FindIslands -> per island: SetupIsland, Substeps (SurfaceForces + PairForces, then Integrate with the Sources),
-// HandBack or WriteBack -> Finish (releases, pair bookkeeping, deferred events).
+// StepFailed or WriteBack -> Finish (releases, pair bookkeeping, deferred events).
 using namespace RubberContact;
 
 // The balls the contact system holds in an engine-stepped contact (a post, a wall rubber, the playfield, a disc): the rubbers each one touches, the shear state and the
@@ -916,8 +916,8 @@ struct ContactSystemImpl
          }
          w.w = w.w + w.Mb * (1.0 / w.bs.Inertia()) * h;
          w.c = w.c + w.v * h;
-         // safety net: a non-finite state, a runaway speed or a ball sunk deep into a rubber means the model left its range (a ball wedged in a loop tighter than
-         // itself, a degenerate rubber). Hand the ball back untouched; the stock collision takes over for a few ms.
+         // a non-finite state, a runaway speed or a ball sunk deep into a surface means the step left the model's range (a ball wedged in a loop tighter than itself, a ball placed
+         // inside a solid). The step is taken again in two; one that still trips stops the ball (StepFailed).
          if (!std::isfinite(w.c.x + w.c.y + w.c.z + w.v.x + w.v.y + w.v.z + w.w.x + w.w.y + w.w.z) || w.v.Length() > w.vCap || w.deepest > 0.8 * w.bs.R)
          {
             w.tripped = true;
@@ -1567,19 +1567,54 @@ struct ContactSystemImpl
       return tripped;
    }
 
-   // The whole island is handed back untouched (nothing was written to the balls)
-   static void HandBack(Cycle &cy, const ContactSystem::Islands::Island &isl)
+   // A step that left the model's range and could not be taken again. Nothing was written, so the island stays at the start of the cycle, and the same state would trip again. A ball that tripped
+   // takes an inelastic stop there, which only takes energy out: pressed too deep, it loses its speed into the surfaces that press it (it goes on along them); after a runaway or a non-finite
+   // step the state cannot be trusted and it loses all its motion. The contacts are let go and start again from zero (nothing stored): the near scan takes the balls back next cycle, on the
+   // same law. Never stock. A run that gets here fails (TestMatrixDesign limit 5).
+   static void StepFailed(Cycle &cy, const ContactSystem::Islands::Island &isl)
    {
       for (const int i : isl.members)
       {
          Body &w = cy.bodies[i];
-         if (w.tripped && w.o != nullptr)
+         if (w.tripped)
          {
-            PLOGW << "Rubber " << w.o->m_name << ": force-model contact left the model's range (" << w.tripWhy << " at substep " << w.tripStep << " of " << cy.steps << ", depth " << w.deepest * 1e3 << " mm, speed " << w.v.Length() << " m/s, cluster " << isl.members.size() << "), using the stock collision";
-            w.o->m_contactCooldownUntilMs = g_pplayer->m_time_msec + 20;
+            const std::string name = w.o != nullptr ? w.o->m_name : w.band != nullptr ? w.band->m_name : std::string("a ball pair");
+            static uint32_t lastMs = 0;
+            if (lastMs == 0 || g_pplayer->m_time_msec - lastMs >= 500)
+            {
+               lastMs = g_pplayer->m_time_msec;
+               PLOGW << "Contact step on " << name << " left the model's range (" << w.tripWhy << " at substep " << w.tripStep << " of " << cy.steps << ", depth " << w.deepest * 1e3 << " mm, speed " << w.v.Length() << " m/s, cluster " << isl.members.size() << "): the ball was stopped at (" << w.posStart.x << ", " << w.posStart.y << ", " << w.posStart.z << ")";
+            }
+            static std::vector<std::string> shown;   // one notification per surface per table start
+            if (g_pplayer->m_liveUI != nullptr && std::find(shown.begin(), shown.end(), name) == shown.end())
+            {
+               shown.push_back(name);
+               g_pplayer->m_liveUI->PushNotification("A contact step on " + name + " left the model's range: the ball was stopped (see vpinball.log)", 8000);
+            }
+            if (w.band != nullptr)
+               w.band->m_bandCooldownUntilMs = g_pplayer->m_time_msec + 20;   // (the old node band's way out: stays with the band work)
+            else
+            {
+               V3 v((double)w.pb->m_d.m_vel.x, (double)w.pb->m_d.m_vel.y, (double)w.pb->m_d.m_vel.z);
+               bool pressed = false;
+               if (std::strcmp(w.tripWhy, "depth") == 0 && w.e != nullptr && w.probesReady)
+                  for (const TubeProbe &pr : w.probes)
+                     if (pr.overlap)
+                     {
+                        pressed = true;
+                        const double vn = v.Dot(pr.normal);
+                        if (vn < 0.0)
+                           v = v - pr.normal * vn;
+                     }
+               if (pressed)
+                  w.pb->m_d.m_vel = Vertex3Ds((float)v.x, (float)v.y, (float)v.z);
+               else
+               {
+                  w.pb->m_d.m_vel = Vertex3Ds(0.f, 0.f, 0.f);
+                  w.pb->m_angularmomentum = Vertex3Ds(0.f, 0.f, 0.f);
+               }
+            }
          }
-         if (w.tripped && w.band != nullptr)
-            w.band->m_bandCooldownUntilMs = g_pplayer->m_time_msec + 20;
          if (w.e != nullptr)
             cy.releases.emplace_back(w.pb, "tripped");
       }
@@ -2625,7 +2660,7 @@ void ContactSystemImpl::StepBalls(const float dtime)
       if (top)
          IslandMembers(cy, isl, s_cc->topMembers);   // (before the write-back, which may release a ball's contact)
       if (tripped)
-         HandBack(cy, isl);
+         StepFailed(cy, isl);
       else
       {
          WriteBack(cy, isl);
@@ -2757,7 +2792,7 @@ void ContactSystemImpl::EngageNear(const float dtime)
       double bestGap = 1e9, pfGap = 1e9, pfClosing = 0.0;
       for (ContactHost *const o : ContactHost::Registry())
       {
-         if (!o->m_enabled || !o->m_set.contact || o->m_set.band || g_pplayer->m_time_msec < o->m_contactCooldownUntilMs)
+         if (!o->m_enabled || !o->m_set.contact || o->m_set.band)
             continue;
          const double vb = PreventOn() ? o->SurfaceSpeedBoundMS(dt) : 0.0;   // the surface's own closing-speed bound (a moving part; 0 for a static surface)
          const float reachHost = reachU + (float)(2.0 * vb * dt / U);
@@ -3113,9 +3148,30 @@ void ContactSystem::EngageNear(const float dtime)
    ContactSystemImpl::EngageNear(dtime);
 }
 
+// A surface's collider, or the slow pass, found the ball: the ball is on this surface's law from now on, whatever holds it. False only for what no surface law covers yet: the playfield
+// over a kicker's hole (the kicker, not converted).
 bool ContactSystem::Engage(ContactHost *const host, HitBall *const pb, const char *how)
 {
-   return ContactSystemImpl::EngageImpl(host, pb, how);
+   if (pb->m_d.m_lockedInKicker)
+      return true;   // the kicker holds it: no surface acts on it, nothing to solve
+   if (pb->m_contact == nullptr)
+      return ContactSystemImpl::EngageImpl(host, pb, how);
+   if (host->IsPlayfield() && InPlayfieldHole(pb->m_d.m_pos))
+      return false;
+   // Already held, and this surface is not in its set (made collidable, or the ball was moved, since the last gather): it joins the set, as Regather would add it
+   std::vector<SurfaceContact> &items = pb->m_contact->items;
+   if (std::none_of(items.begin(), items.end(), [host](const SurfaceContact &it) { return it.r == host; }))
+   {
+      host->ReloadIfChanged();
+      SurfaceContact it;
+      it.r = host;
+      it.rp = host->ContactSettings().ToParams();
+      it.hLayer = host->LayerM();
+      it.st.Reset();
+      it.touching = true;   // the collider that found the ball fires its own hit event
+      items.push_back(std::move(it));
+   }
+   return true;
 }
 
 void ContactSystem::Release(HitBall *const ball, const char *why)

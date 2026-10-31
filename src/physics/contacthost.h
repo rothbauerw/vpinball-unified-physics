@@ -50,7 +50,6 @@ struct RubberObjectSettings
    double restSpeedMmS = 30.0;    // a ball slower than this (start and end of the cycle) counts as at rest
    double rollTravelUm = 50.0;    // a ball rolling or sliding along a surface (normal speed below rest_speed_mm_s) steps at most this far per substep, micrometres; 0 = always substep_us
    double maxMs = 30.0;           // give up after this much simulated contact time
-   bool slowContact = true;       // a ball resting on or rolling along a post / surface rubber (slower than a hit) is carried by the force model too, not the stock contact
    double releaseGapMm = 0.2;     // an engaged ball is released only once it is farther than this from every rubber (and receding): a resting ball must not engage and release over and over
 
    // Band (a rubber stretched between posts): the posts and free spans are found at load (logged); a ball hitting a free span deflects it
@@ -132,13 +131,13 @@ public:
    // The settings file changed (checked at most once a second): read the settings again (Reload: what a host reloads depends on its kind)
    void ReloadIfChanged() const;
 
-   // ---- the ball handed over by the stock engine ----
-   // A stock collider of the object found the ball. True if the force model holds it from now on (the stock impulse is skipped).
+   // ---- the ball found by a stock collider ----
+   // A stock collider of the object found the ball. True if the force model holds it from now on (the stock impulse is skipped). False only for an object not converted (a setting) and the
+   // playfield over a kicker's hole.
    bool SurfaceCollide(HitBall *ball, const Vertex3Ds &n);
    // A resting or slow touch (the engine's contact pass). True if the force model holds the ball from now on (the stock contact is skipped).
    bool SlowContact(HitBall *ball);
    bool ContactOwns(const BallS &ball) const;   // this host is one of the surfaces of a force-model contact that holds the ball
-   bool SideHolds(const HitBall *ball) const;   // a flipper's rubber model drives this ball and has this host in its set: the stock contact stays out
    // Once per physics interval (the host's mover): a moving part advances alone for what the contact system did not step of the interval (ContactPartHost); nothing for a surface.
    virtual void PartAdvance(float /*dtime*/) {}
 
@@ -155,7 +154,6 @@ public:
    virtual double LayerM() const;   // thickness of the compressible layer, m
 
 protected:
-   static bool FlipperBlocks(const HitBall *ball);   // a flipper owns the ball: no force-model contact
    bool ContactEngage(HitBall *ball, const char *how = "hit");
    void ContactReleaseAll(const char *why);
    virtual void Reload() const = 0;
@@ -166,8 +164,6 @@ protected:
    std::string m_surfaceKind;                  // the ini section prefix (see the constructor)
    bool m_hardSurface = false;                 // a part that is a hard surface of the contact model without the rubber flag (unified engine)
    double m_partE = 0.3, m_partMu = 0.3;       // that part's elasticity and friction (for the reload of its settings)
-   uint32_t m_contactCooldownUntilMs = 0;      // after a trip of the contact model, the stock collision for a while
-   mutable long long m_slowNoteMs = -1000000;  // trace: last "slow contact refused" note
 
 private:
    mutable std::filesystem::file_time_type m_iniTime;

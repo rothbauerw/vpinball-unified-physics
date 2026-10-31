@@ -97,9 +97,9 @@ void SlingPlate::Step(const double h, const bool coilOn, const double extTorqueN
       const double iEff = p.iFlipper + s.plungerKg * leverM * leverM;
       const double restT = RestStopTorque(s, st.phi, st.omega, iEff);
       const double net = fCoil * leverM - SpringTorqueK(s, p, kin) - s.bDamping * st.omega + restT + extTorqueNm;
-      const double a = net / iEff;
+      const double a = (net - SlavedInertiaTerm(s, kin, st.omega)) / iEff;
       double omegaNext = st.omega + a * h;
-      double phiNext = st.phi + st.omega * h;
+      double phiNext = st.phi + omegaNext * h;   // (the angle from the new speed, as the bat)
       const Kin kn = Kinematics(s, p, p.theta0 + phiNext);
       st.xp = kn.x;
       st.vp = -kn.lever * omegaNext;

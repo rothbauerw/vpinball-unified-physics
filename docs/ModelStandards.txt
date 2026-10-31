@@ -29,6 +29,7 @@ b. One loop. Balls touching the model are stepped by the shared loop (SubstepsAr
       rewind               RwTake / RwRestore (needs the model's SaveState)
       overlap at first sight   UnifiedContactDesign.txt section 11
       energy check         built 2026-10-31, contactsystem.cpp EnergyCheckStart / End: ball energy with every contact's stored energy; no island with a drive in it yet
+      recovery guard       a step that left the model's range: stop and restart from zero inside the contact system (no stock hand-back, no cooldown); WARN + on-screen report
       on-screen report     rule 8
    An exception (today: bands; the turntable disc and the flipper bats joined 2026-10-28) goes in the to-do with the missing piece; the model is not called done.
    Once 3.0 is proven the guard list gets shorter; the rule stays: use what the shared loop provides.
@@ -107,6 +108,8 @@ e. Every matrix run writes its pass/fail report to disk the day it runs.
 - A contact law for a thick solid body used on a thin tube: full Mindlin stiffness gives too much grip, whatever E or mu is (tangential to normal frequency 1.53 for nu 0.5). Catches it: rolling rebound targets on the model, 5a.
 - A seat along a tilted normal pressed the ball 1.95 mm into the playfield: 109 J stored, launch at 34 m/s, 2026-10-30. Catches it: the energy check (between cycles).
 - A probe returns a surface's nearest face only: a ramp's wall was hidden by its floor, the rewinds ran out, launch at 69 m/s, 2026-10-30. Catches it: the energy check (across a cycle), runs/2026-10-30-ring-launch/case_ramp.txt.
+- A section matched by name made a plain ring a band; the band model refused it for having no span, and it fell to a stock impulse with no notice on screen: seven test tables, a ball's rise 23 mm against 3.4 mm, found 2026-10-31 only by asking what a rise was. A refusal to model something is a route to stock. Catches it: the 'stock collision' log line; none yet that fails a run on it (to-do 1.7: 13 routes remain).
+- A sliding contact's spring set the step though its stiffness is not in the motion: a ring hit took 97 steps where 24 do, and the skid after it 1686 where 300 do, 2026-10-31. Then the same rule on an impact took a steel wall hit from +1.0 % to +7.4 % of its reference, because the shear's short step was also resolving the normal hit: a step rule can be doing a second job. Catches it: what-set-each-step trace plus gs_test's exits at the rule (runs/2026-10-31-ring-cost: trace1.py, suite.py C).
 Each trap names the test that now catches it ("none yet" until one exists); the older entries above get theirs as they are reviewed.
 
 

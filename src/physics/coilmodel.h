@@ -86,13 +86,22 @@ namespace FlipperModel
       return fabs(-s.rCrankMm * sn + (b * s.rCrankMm * cs) / root);
    }
    // slider position and lever arm at the same crank angle: one sin, cos and sqrt for both (what SliderX and LeverMm compute separately)
-   struct Kin { double x, lever; };
+   struct Kin { double x, lever, dLever; };   // dLever: d(lever) / d(theta), mm / rad
    inline Kin Kinematics(const FlipperSettings& s, const FlipperDerived& p, double theta)
    {
       const double sn = sin(theta), cs = cos(theta);
       const double b = p.offsetMm - s.rCrankMm * sn;
       const double root = sqrt(fmax(s.lRodMm * s.lRodMm - b * b, 1e-6));
-      return Kin{ s.rCrankMm * cs + root, fabs(-s.rCrankMm * sn + (b * s.rCrankMm * cs) / root) };
+      const double r = s.rCrankMm, db = -r * cs;
+      const double g = -r * sn + (b * r * cs) / root;
+      const double dg = -r * cs + (db * r * cs - b * r * sn) / root + (b * r * cs) * (b * db) / (root * root * root);
+      return Kin{ r * cs + root, fabs(g), g >= 0.0 ? dg : -dg };
+   }
+   // One rigid body with the plunger slaved through the link: its inertia depends on the angle, so I w' + 1/2 I' w^2 = torque (Lagrange). This is the 1/2 I' w^2 term, N m; without it the
+   // bat's energy changes with no work done.
+   inline double SlavedInertiaTerm(const FlipperSettings& s, const Kin& k, double omega)
+   {
+      return s.plungerKg * (k.lever / 1000.0) * (k.dLever / 1000.0) * omega * omega;
    }
    inline void SolveAB(double larm, double lair, double x0, double& a, double& b)
    {
@@ -108,10 +117,11 @@ namespace FlipperModel
       while (phi > 0.0)
       {
          const double theta = p.theta0 + phi;
-         const double leverM = LeverMm(s, p, theta) / 1000.0;
-         const double force = s.preloadN + kSpring * (p.xRest - SliderX(s, p, theta));
+         const Kin k = Kinematics(s, p, theta);
+         const double leverM = k.lever / 1000.0;
+         const double force = s.preloadN + kSpring * (p.xRest - k.x);
          const double iEff = p.iFlipper + s.plungerKg * leverM * leverM;
-         omega += (-force * leverM / iEff) * dt;
+         omega += ((-force * leverM - SlavedInertiaTerm(s, k, omega)) / iEff) * dt;
          phi += omega * dt;
          t += dt;
          if (t > 1.0)

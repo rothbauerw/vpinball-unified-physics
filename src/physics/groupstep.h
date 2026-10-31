@@ -5,7 +5,7 @@
 //
 // Laws (the shared contact law restated as stored energy plus losses, design pieces 4 and 5):
 //  - normal: F = kH [delta^1.5 + beta reff^1.5 delta^3 / (h - delta)^3] (Hertz plus the thin bonded layer at the thickness left; no layer for steel), stored energy
-//    V = kH [0.4 delta^2.5 + beta reff^1.5 W(delta)]. Its losses act on the mid-step compression rate: Hunt-Crossley 1.5 alpha F (or Kuwabara-Kono gamma a), plus the
+//    V = kH [0.4 delta^2.5 + beta reff^1.5 W(delta)]. Its losses act on the mid-step compression rate: Hunt-Crossley 1.5 alpha F with F over the step (or Kuwabara-Kono gamma a), plus the
 //    flat loss tanDelta sqrt(1.5 F m / delta) where normalLoss is on.
 //  - shear: Mindlin's spring kt = 8 G* a shearScale as stored energy 1/2 kt |xi|^2 (xi: the spring's stretch in the contact plane, carried from step to step and turned
 //    with the contact, its length kept); a slip past mu N is a loss; the spring's damper shearTan sqrt(kt mt) acts on the mid-step slip rate, spring and damper together
@@ -154,8 +154,9 @@ namespace GroupStep
       // the step (ChooseStep): accuracy only
       double omegaH = 0.6;                     // h <= omegaH / omega of the stiffest contact (normal, and shear when shearInStep)
       bool shearInStep = true;                 // the shear spring's stiffness counts in the step choice (false: the normal stiffness only; the solve is stable either way)
-      // The step rule by motion (docs/GroupStepDesign.txt 9): a contact that is touching and steady (its compression rate and its slip rate both within vSteady) only
-      // needs its normal stiffness resolved to omegaHRest; an impact, a slide or an arrival keeps the strict rule above. vSteady 0 = every contact strict.
+      bool slideFree = true;                   // a slide at the friction limit counts as steady (docs/GroupStepDesign.txt 16: its force is mu N, the spring's stiffness is not in the motion)
+      // The step rule by motion (docs/GroupStepDesign.txt 9, 16): a contact that is touching and steady (its compression rate within vSteady, its slip rate within vSteady or at the friction limit) only
+      // needs its normal stiffness resolved to omegaHRest; an impact, a slip the spring can still catch or an arrival keeps the strict rule above. vSteady 0 = every contact strict.
       // 0.05 m/s and 2.4 from the 2026-10-29 sweep: every exit as accurate as with the strict rule, resting and pinched balls 3-5x cheaper.
       double vSteady = 0.05;                   // m/s
       double omegaHRest = 2.4;
@@ -301,13 +302,12 @@ namespace GroupStep
       double A(double d) const { return d > 0.0 ? std::sqrt(reff * d) : 0.0; }   // contact patch radius
       double Kt(double d) const { return ktPerA * A(d); }
       double KtSlope(double d) const { return d > 0.0 ? 0.5 * ktPerA * std::sqrt(reff / d) : 0.0; }
-      // the normal damping coefficient at depth d: force = c x compression rate
-      double DampC(double d) const
+      // the normal damping coefficient over a step, mid-step depth d and mean spring force fMean: force = c x compression rate. Hunt-Crossley's 1.5 alpha F is taken over the step, so its loss is
+      // 1.5 alpha x the change in stored energy x the rate, the law's own integral at a steady rate; at the mid-step force alone the loss falls short of it by (omega h)^2 and the rebound comes out high
+      double DampC(const double d, const double fMean) const
       {
-         if (d <= 0.0)
-            return 0.0;
-         double c = gammaKK > 0.0 ? gammaKK * A(d) : 1.5 * alpha * F(d);
-         if (normalLoss && tanDelta > 0.0)
+         double c = gammaKK > 0.0 ? (d > 0.0 ? gammaKK * A(d) : 0.0) : 1.5 * alpha * fMean;
+         if (d > 0.0 && normalLoss && tanDelta > 0.0)
             c += tanDelta * std::sqrt(1.5 * F(d) * mRed / d);
          return c;
       }
@@ -439,15 +439,21 @@ namespace GroupStep
             if (!it.touching)
                TakeLaw(L, hp);
             // the depth this approach reaches (all the closing energy into the squash): the stiffness while it lasts
-            double lo = 0.0, hi = L.cL > 0.0 ? L.hL : A.R;
-            for (int r = 0; r < 50; r++)
+            double lo = std::pow(1.25 * L.mRed * vc * vc / L.kH, 0.4);   // the Hertz spring alone; a layer only makes it shallower
+            if (L.cL > 0.0)
             {
-               const double mid = 0.5 * (lo + hi);
-               (L.V(mid) < 0.5 * L.mRed * vc * vc ? lo : hi) = mid;
+               double hi = std::min(lo, L.hL);
+               lo = 0.0;
+               for (int r = 0; r < 50 && hi - lo > 1e-4 * hi; r++)
+               {
+                  const double mid = 0.5 * (lo + hi);
+                  (L.V(mid) < 0.5 * L.mRed * vc * vc ? lo : hi) = mid;
+               }
             }
             const double dE = std::max(hp.delta, lo);
-            const double omN = std::sqrt(L.K(dE) / L.mRed), omT = std::sqrt(L.Kt(dE) / L.mt);
-            // steady: touching, with its compression rate and the slip rate of its contact point both within vSteady
+            const double ktE = L.Kt(dE);
+            const double omN = std::sqrt(L.K(dE) / L.mRed), omT = std::sqrt(ktE / L.mt);
+            // steady: touching, with its compression rate within vSteady, and the slip rate of its contact point within vSteady or at the friction limit
             bool steady = false;
             if (set.vSteady > 0.0 && hp.delta > 0.0 && std::fabs(dDot) <= set.vSteady)
             {
@@ -456,7 +462,10 @@ namespace GroupStep
                if (it.b >= 0)
                   u = u - (ball[it.b].v + ball[it.b].w.Cross(hp.n * (ball[it.b].R - 0.5 * dmp)));
                const V3 ut = u - hp.n * u.Dot(hp.n);
-               steady = ut.Length() <= set.vSteady;
+               const double slipNow = ut.Length();
+               // At the friction limit (Coulomb): a spring within mu N holds at most (mu N)^2 / (2 kt) of energy, so a slip with more than that in 1/2 mt u^2 cannot be stopped by it: the contact slides,
+               // its force is mu N whatever the spring's stiffness, and the spring's time scale is not in the motion. Below that speed the spring can catch it, and the rule above resolves it again.
+               steady = slipNow <= set.vSteady || (set.slideFree && slipNow * std::sqrt(ktE * L.mt) > L.mu * L.F(dE));
             }
             const double om = steady ? omN : (set.shearInStep ? std::max(omN, omT) : omN);
             const double hs = om > 0.0 ? (steady ? set.omegaHRest : set.omegaH) / om : set.hMax;
@@ -625,6 +634,7 @@ namespace GroupStep
       Hit h1c[kMaxItems], hmc[kMaxItems];
       bool trialCached = false;
       double d0s[kMaxItems];
+      Ball b1r[kMaxBalls], bmr[kMaxBalls];   // InRange's moved balls
       ItemEnd ie[kMaxItems];
       double x[kMaxUnk];         // the unknowns: per ball the move (3) and the spin change (3), then the parts' own
       V3 aLast[kMaxBalls], alphaLast[kMaxBalls];   // each ball's acceleration and spin's over the last step (the next step's first guess)
@@ -711,17 +721,22 @@ namespace GroupStep
       bool InRange(const double *xv)
       {
          trialCached = false;
-         Ball b1[kMaxBalls], bm[kMaxBalls];
-         for (int i = 0; i < nb; i++)
-         {
-            b1[i] = bm[i] = ball[i];
-            const V3 dc(xv[6 * i], xv[6 * i + 1], xv[6 * i + 2]);
-            b1[i].c = ball[i].c + dc;
-            bm[i].c = ball[i].c + dc * 0.5;
-         }
+         bool moved = false;
          for (int k = 0; k < ni; k++)
             if (law[k].cL > 0.0)
             {
+               if (!moved)
+               {
+                  moved = true;
+                  for (int i = 0; i < nb; i++)
+                  {
+                     b1r[i] = bmr[i] = ball[i];
+                     const V3 dc(xv[6 * i], xv[6 * i + 1], xv[6 * i + 2]);
+                     b1r[i].c = ball[i].c + dc;
+                     bmr[i].c = ball[i].c + dc * 0.5;
+                  }
+               }
+               const Ball *const b1 = b1r, *const bm = bmr;
                Hit &h1 = h1c[k], &hm = hmc[k];
                Probe(item[k], b1, h1);
                Probe(item[k], bm, hm);
@@ -857,7 +872,7 @@ namespace GroupStep
             }
             Gonzalez(gm, d1 - d0, noiseD, dq, W, na, gd);
             const double fe = L.Chord(d0, d1);
-            const double cD = L.DampC(dm);
+            const double cD = L.DampC(dm, fe);
             const double fd = cD * (d1 - d0) / h;
             const double N = std::max(0.0, fe + fd);
             e.normalLoss = cD * (d1 - d0) * (d1 - d0) / h;
@@ -957,16 +972,14 @@ namespace GroupStep
             if (J)
             {
                // normal: h dfN/dd1 g g^T on the centres; the chord's exact slope (F(d1) - chord) / (d1 - d0) (K / 2 for a vanishing change), the damping's
-               // c / h and its change with the mid-step depth (Hunt-Crossley 1.5 alpha K, Kuwabara-Kono gamma a'; dm moves half as far as d1)
+               // c / h and its change with the end depth (Hunt-Crossley 1.5 alpha x the chord's slope; Kuwabara-Kono gamma a' at dm, which moves half as far as d1)
                double kc;
                if (std::fabs(d1 - d0) > 1e-13)
                   kc = (L.F(d1) - fe) / (d1 - d0);
                else
                   kc = 0.5 * L.K(std::max(std::max(dm, d1), 0.0));
-               double cDp = 0.0;
-               if (dm > 0.0)
-                  cDp = L.gammaKK > 0.0 ? L.gammaKK * 0.5 * std::sqrt(L.reff / dm) : 1.5 * L.alpha * L.K(dm);
-               const double kn = h * kc + cD + 0.5 * cDp * (d1 - d0);
+               const double cDp = L.gammaKK > 0.0 ? (dm > 0.0 ? 0.5 * L.gammaKK * 0.5 * std::sqrt(L.reff / dm) : 0.0) : 1.5 * L.alpha * kc;
+               const double kn = h * kc + cD + cDp * (d1 - d0);
                for (int p = 0; p < na; p++)
                   for (int q = 0; q < na; q++)
                   {

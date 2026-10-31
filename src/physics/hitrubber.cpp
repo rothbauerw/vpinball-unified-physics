@@ -104,7 +104,19 @@ HitRubber::HitRubber(IEditable *editable, const std::vector<Vertex3Ds> &pts, con
    for (size_t i = 1; i < m_ptsSI.size(); i++)
       m_cumSI[i] = m_cumSI[i - 1] + (m_ptsSI[i] - m_ptsSI[i - 1]).Length();
    if (m_set.band)
+   {
       DetectBand();
+      // A band's law needs a straight span. A rubber without one wraps its post all the way round: it is a ring, and a ball on it takes the ring's law (ModelStandards 2d), never stock.
+      if (m_bandSpans.empty())
+      {
+         const std::string msg = "Rubber " + m_name + ": the physics ini makes it a band or sling, but it has no straight span. Running it as a ring: check the [Sling:] or [Rubber:] section";
+         PLOGW << msg;
+         if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+            g_pplayer->m_liveUI->PushNotification(msg, 5000);
+         m_set.band = false;
+         m_set.slingPlate.clear();
+      }
+   }
 }
 
 void RubberSurface::Add(const Vertex3Ds &a, const Vertex3Ds &b, const Vertex3Ds &c)
@@ -348,6 +360,8 @@ void HitRubber::DetectBand()
 // Sling: the plate and the switch blades are the table's own primitives. Nothing is written to the table file; the plate's pose is changed in memory.
 void HitRubber::SlingAttach(Primitive *const plate, const std::vector<Primitive *> &switches)
 {
+   if (m_bandSpans.empty())
+      return;   // a ring (see the constructor): nothing to put a plate behind
    m_slingPlate = plate;
    m_slingSwitches = switches;
    if (plate == nullptr)
@@ -583,6 +597,8 @@ double HitRubber::SwitchDisplacementM(const BandSwitch &sw) const
 // Switch blades behind the band that only the script reads: collision off, the span they sense and the side they are on found from where they stand.
 void HitRubber::BandSwitchesAttach(const std::vector<Primitive *> &blades)
 {
+   if (m_bandSpans.empty())
+      return;
    for (Primitive *const prim : blades)
    {
       prim->put_Collidable(VARIANT_FALSE);
@@ -1159,6 +1175,11 @@ void HitRubber::Reload() const
       return;
    }
    LoadSettings(s, m_ini, m_name);
+   if (m_bandSpans.empty())   // a rubber with no straight span stays a ring whatever a reloaded section says
+   {
+      s.band = false;
+      s.slingPlate.clear();
+   }
    m_set = s;   // contact on/off is decided when the table is loaded; the values apply immediately
    m_set.contact = true;
    SlingPlace();
@@ -1178,19 +1199,14 @@ void HitRubber::Collide(const CollisionEvent &coll)
       return;   // receding or sliding: nothing to solve (a resting ball is handled by Contact)
 
    ReloadIfChanged();
-   // The solve is blind to a moving bat: during a hit (3 - 9 ms) a flipper tip can travel tens of millimetres. While a flipper owns this ball
-   // (its rubber model is stepping it) or a bat is within reach, use the stock collision until the two can be solved together.
-   const bool flipperBusy = FlipperBlocks(pball);
    const bool bandTook = m_set.band && BandEngage(pball);   // checks for a flipper itself (band_flipper_margin_u)
    if (m_set.band && !bandTook)
       BandNote(pball);
-   if (bandTook || SideHolds(pball))
-      g_pplayer->m_physics->OnBallWallHit(*pball, n, dot);   // the band's force model (or the flipper's, which carries this rubber) carries the ball from here on (no impulse here)
-   else if (!flipperBusy && pball->m_bandOwner == nullptr && pball->m_contact == nullptr && g_pplayer->m_time_msec >= m_contactCooldownUntilMs && ContactEngage(pball))
+   if (bandTook || (!m_set.band && ContactEngage(pball)))
       g_pplayer->m_physics->OnBallWallHit(*pball, n, dot);   // the force-model contact is stepped by the engine from here on (no impulse here)
    else
    {
-      // no force-model contact now (a flipper or another model owns the ball, or the contact model just left its range): the stock impulse, as for any other rubber
+      // the old node band that could not take the ball (BandNote says why): the stock impulse, until the band work closes it. A post or ring never gets here.
       if (ContactTraceOn())
          PLOGI << "StockImpulse " << m_name << " t=" << g_pplayer->m_time_msec << " held " << (pball->m_contact != nullptr ? 1 : 0) << " owns " << (ContactOwns(pball->m_d) ? 1 : 0) << " dot " << dot;
       pball->Collide3DWall(n, m_elasticity, m_elasticityFalloff, m_friction, m_scatter);

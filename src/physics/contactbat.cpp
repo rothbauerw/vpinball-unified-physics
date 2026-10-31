@@ -42,7 +42,7 @@ namespace FlipperModel
 }
 
 // one SI substep of length h seconds, state at the start of the step used throughout (explicit Euler,
-// same ordering as flipper_model.py)
+// same ordering as flipper_model.py; the rigid one-body mode takes its angle from the new speed)
 void ContactBat::Step(double h, const double extTorqueNm, const bool solenoid)
 {
    using namespace FlipperModel;
@@ -163,9 +163,9 @@ void ContactBat::Step(double h, const double extTorqueNm, const bool solenoid)
       const double iEff = p.iFlipper + s.plungerKg * leverM * leverM;
       const double restT = RestStopTorque(s, phi, omega, iEff);
       const double net = fCoil * leverM - SpringTorqueK(s, p, kin) - s.bDamping * omega + restT + extTorqueNm;
-      const double alpha = net / iEff;
+      const double alpha = (net - SlavedInertiaTerm(s, kin, omega)) / iEff;
       double omegaNext = omega + alpha * h;
-      double phiNext = phi + omega * h;
+      double phiNext = phi + omegaNext * h;   // (the angle from the new speed: a spring cannot pump energy into the bat through the step)
       const double thetaN = p.theta0 + phiNext;
       const Kin kn = Kinematics(s, p, thetaN);
       xp = kn.x;

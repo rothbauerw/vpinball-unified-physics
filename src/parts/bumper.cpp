@@ -209,15 +209,6 @@ void Bumper::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       }
       m_partHost->m_enabled = m_d.m_collidable;
       physics->AddCollider(m_partHost, isUI);
-      static const void *s_noticeTable = nullptr;   // one notice per table start
-      if (s_noticeTable != (const void *)m_ptable)
-      {
-         s_noticeTable = (const void *)m_ptable;
-         const std::string msg = "Physical bumpers are on: the bumper properties Radius, Force, Threshold, Scatter, HeightScale, RingSpeed and RingDropOffset are ignored (see [Bumpers] in vpx_physics.ini; [Features] bumpers = 0 restores the stock bumper).";
-         PLOGW << msg;
-         if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
-            g_pplayer->m_liveUI->PushNotification(msg, 10000);
-      }
       return;
    }
    if (isUI)
