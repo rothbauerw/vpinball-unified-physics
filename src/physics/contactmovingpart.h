@@ -33,6 +33,8 @@ inline double ContactOmegaHScale()
    return s;
 }
 
+namespace GroupStep { class Part; struct Hit; }
+
 class ContactMovingPart
 {
 public:
@@ -96,4 +98,12 @@ public:
    virtual double SurfaceSpeedBound(double cycleS) const = 0;
    // the part's state as a short text for the log (an engagement of a ball with a part that is moving is the case to look at)
    virtual std::string StateNote() const { return std::string(); }
+   // A part on the group step (docs/GroupStepDesign.txt 18): the engine moves it with the balls in one solve and holds its shapes. Null: the part is on the old loop until it moves over. No part implements these yet.
+   virtual GroupStep::Part *GroupPart() { return nullptr; }
+   virtual int GroupSurfaces() const { return 1; }                                                   // its surfaces a ball can meet: one shape per ball and surface, each with its own contact and state
+   virtual void GroupProbe(int, const V3 &, double, const double *, GroupStep::Hit &) const {}       // a surface for a ball centre and radius, its coordinates moved by trial (null = where they are); fills the hit's columns
+   virtual const RubberContact::RubberParams *GroupLaw(int, double &) const { return nullptr; }      // the surface's material and layer; null = the host's
+   virtual void CycleBegin() {}                                                                      // a group holding it is being built this cycle
+   virtual void TouchBegan(int, int, double) {}                                                      // this surface, this ball of the group, closing at vn (m/s): a touch began. A part's Hit is what it decides
+   virtual bool Sleeping() const { return false; }                                                   // no ball near and nothing to step: no group this cycle
 };

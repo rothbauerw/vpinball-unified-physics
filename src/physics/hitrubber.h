@@ -128,7 +128,7 @@ struct BallContact
    bool regathered = false;
    bool inHole = false;                  // the ball was over a non-legacy kicker's hole when the surfaces were collected: the playfield has no floor there and is left out
    double endStored = -1.0;              // the energy check: what its contacts held at the end of the last cycle, J (< 0 = no cycle yet)
-   bool groupLoop = false;               // ring_model: the last cycle went through the group step, so the touches' state is in gsTouch, gsXi, gsZero (GroupStepDesign 14.4)
+   bool groupLoop = false;               // ring_model: the last cycle went through the group step, so the touches' state is in SurfaceContact::gs (GroupStepDesign 14.4)
    bool seatPending = false;             // ring_model: found inside a rubber at engagement and not seated: the group counts it from zero; the old loop seats it if the island goes there (14.5)
 };
 
@@ -158,7 +158,7 @@ struct BallPairState
    double maxDelta = 0.0, maxFn = 0.0;   // this cycle (trace)
    double lastDelta = 0.0;               // the compression of the last cycle: the stiffness the next cycle's step is chosen on
    double lastSpeed = 0.0;               // the normal speed at the last cycle's start, either way: the step rule's "slow"
-   double zero = 0.0;                    // the depth the squash counts from: a pair found inside with no work done has stored nothing (only ever down, as a surface's gsZero)
+   double zero = 0.0;                    // the depth the squash counts from: a pair found inside with no work done has stored nothing (only ever down, as a surface's gs.zero)
    double endDepth = -1.0, endHeld = 0.0;   // at the last cycle's end: how far inside (zero not taken off), and what the pair held
 };
 extern std::vector<BallPairState> g_ballPairs;

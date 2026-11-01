@@ -22,6 +22,7 @@ a. One interface. A part that moves implements ContactMovingPart (contactmovingp
    SaveState / RestoreState, SurfaceSpeedBound. No private stepping path; no special case for the model inside contactsystem.cpp.
    This is the rule until ProjectAssessment 3.0 (energy by construction) is built. The target: a part only describes itself (bodies, masses, springs, contact laws,
    stops, drives) and the engine steps part and balls together; the interface then shrinks to that description.
+   The target's interface exists since 2026-10-31 (GroupStepDesign 18), though no real part uses it yet: a part on the group step implements GroupStep::Part (coordinates, stored energy and its forces, step facts, stop events, Loads) and ContactMovingPart's GroupPart, GroupSurfaces, GroupProbe, GroupLaw, TouchBegan, with Probe, SurfaceSpeedBound, Origin, Reach and SaveState / RestoreState as before. ContactItem, BallStep and StepInIsland are not called for it. A new part goes this way, not the old loop's. A part must keep no shapes of its own, and its AdvanceAlone calls GroupStep::AdvanceAlone.
 b. One loop. Balls touching the model are stepped by the shared loop (SubstepsArrival). It gives the shared guards for free:
       arrival steps        NextStep
       closing speed        relative to the surface, plus SurfaceSpeedBound
@@ -36,6 +37,7 @@ b. One loop. Balls touching the model are stepped by the shared loop (SubstepsAr
    Once 3.0 is proven the guard list gets shorter; the rule stays: use what the shared loop provides.
 c. One step rule. The substep a contact needs comes from the shared step function, never from constants inside the model. (Today the rule exists in four copies:
    see ProjectAssessment-2026-10-27.txt 3.1. Until the shared function exists, a new model calls NextStep's rule, not a copy of it.)
+   On the group step (GroupStepDesign 18.4) a part states facts through StepFactList: a stiffness, an approach, a turn, a time left, a time constant, a field. The factors live in GroupStep::Settings; a private omega-h or share in a part is a fault.
 d. One contact law. A ball touching anything uses ContactCore with the material's parameters. A new law only if the physics differs (name the law), and then in
    rubbercontact.h beside the others, shared.
    We do not rewrite physics we already have (user, 2026-10-30). A ball pressing a band onto a post, end post or stop post, IS a rubber on a post and uses the same solve as a ring. Between a post and the span a band acts as a span for a short distance, then as a rubber on a post. Band behaviour is judged against a rubber on a post in that region; the rubber-on-post rebound targets are not targets for free spans.
@@ -125,6 +127,10 @@ e. Every matrix run writes its pass/fail report to disk the day it runs.
 - A private build linked to older objects: a new virtual crashes at the first gate; a stale object gives old results with no error (the first stock-counter build returned an earlier stage's bytes), 2026-10-31. Catches it: closure.py for the file list; compare a row's bytes to the reference before reading a result.
 - One shot's result depends on the shots before it in the same run: the same exe gave S006 605 U apart after 1.8 s with the earlier shots removed, and a ball moved 24.5 U in its first ms where the full run moved it 0 - 1 U, 2026-10-31. A difference between two builds on one shot can be that, not the law. Catches it: the same shot at a fixed 1 us in the same drive, and the shot alone (runs/2026-10-31-static-group: four_read.py, close.py).
 - A shared file changed and merged with no run on one of its users: fixed arrays became grown ones, one cord path wrote past them, any table with a cord crashed at 3 s; the lead's "no band tests while the band is in flux" had dropped even a run to see that it starts, 2026-10-31. Catches it: one smoke run per user of a changed shared file before a merge, even a model not being judged; direct writes no longer compile.
+- A fixed surface inherited a moving one's columns: hits are kept and reused between cycles, a fixed surface writes no columns, so the count stayed and ChooseStep indexed part -1: a crash, 2026-10-31. Byte comparisons can't see it: no moving part runs on those rows. Catches it: a test part through the engine path (runs/2026-10-31-interface-step/mk_wired.py), not only offline.
+- A part's depth compared with an end depth nobody sets for parts: the zero rule read SurfaceContact::endDepth, 0 for a moving part, so the part's whole squash went into the zero every cycle ("deeper with no step"), 2026-10-31. The per-cycle book closes anyway. Catches it: the same test part; the zero rule's DepthFault lines. Any rule that reads kept state: ask who sets it for every kind of surface.
+- A query that keeps state, called in the wrong order: StopExcess(zero) after StopExcess(x) wipes what a part needs for its pin, 2026-10-31. Found on paper. Catches it: mapping each private copy onto an interface before calling it done.
+- A claim of "just arithmetic every part writes by hand" was wrong for one part: the cord's plate has its own tolerance and stays out of the balls' move, 2026-10-31. Catches it: same bytes after moving code into a shared rule.
 Each trap names the test that now catches it ("none yet" until one exists); the older entries above get theirs as they are reviewed.
 
 

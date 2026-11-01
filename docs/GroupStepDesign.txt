@@ -792,3 +792,21 @@ on a lifted ball (an unbooked energy drop when it lets go).
 17.7 Solver. The round looks at the residual first once a move is below tolCheckMove (tolRes 1e-10, with no factorization); contacts far from touching are skipped and re-checked at the end of the solve (FarStillFar); sparse LU is the only linear solve. EnergyStep's explicit trial may not move a ball further than maxMoveM: its closure kept the energy and moved a ball 4.3 m without that.
 
 17.8 What it leaves open. Stock moves still happen until triggers, kickers, edges and locked balls are converted: reported, nothing stored. A moving part sends its island to the old loop. Fixed-step runs have no arrival rule (gobasic through a surface at 200 us and up): not how it plays. At static_model 0 a few ring shots change from the solver's rules, not traced (notes). Cords run only as a smoke test (no crash, no failed step), not judged. static_model 1 in VPX not yet measured.
+
+18. One interface for moving parts (2026-10-31; CODED, bench only; design runs/2026-10-31-bumper-design/design.md section 2, proof runs/2026-10-31-interface-step/notes.md)
+
+18.1 Columns. A surface carried by a part fills Hit::c: per coordinate, d(depth)/dq, and the contact point's speed and the surface's spin per unit rate of q. At most 7: one rigid body's 6 coordinates and 1 given motion of its frame. A shape names its part (Shape::part) and is probed at Shape::trial, each coordinate's move. It fills the same columns in the same order every time. A fixed surface writes none; Group::Probe clears the count, because hits are kept and reused.
+
+18.2 Coordinates. A coordinate has an unknown or not (DofOf). With one, it is a column of the Jacobian, weight invM in the discrete gradient. Without one, weight 0 and its move is CoordInfo::given: 0 for a body at rest, the stop's move for a driven stop, the frame's for a pivot's nudge. The group books the work a given move does on the balls as a drive. A part books only its own stored energy's change.
+
+18.3 The solver's units. reach turns a rate into a speed; maxMove bounds a Newton round. settle > 0 keeps a coordinate out of the balls' move, with its own tolerance: the cord's plate only, so that the cord's solve did not change.
+
+18.4 Step facts. A part says what it knows (StepFactList: Stiffness, Approach, Arrival, Turn, TimeLeft, TimeConstant, Field). The factors are Settings', in one place. tauShare and fieldShare are the bat's 0.25 and 0.25; no part uses them yet.
+
+18.5 Events of a step (Group::Step). A body with no unknown freed by the step's forces (FreedByStep, reading Loads), or one already on the stop it would pass (PinOnStop, given the solved move, which is the last move StopExcess tested), changes the unknowns and the step is solved again. Otherwise a stop passed shortens the step to end on it (ArrivingAtStop). A failed solve there still goes to EnergyStep, as today.
+
+18.6 One function for a part alone (GroupStep::AdvanceAlone), one book (CycleBook, VPX_GROUP_BOOK), per-surface state (SurfaceContact::gs, gsMore, sized between cycles by GroupSurfaces; a part's surface keeps its own end depth, SurfaceState::endDepth, for the zero rule). stExtra stays with the old bumper path and goes with it.
+
+18.7 What this does not prove. No real part uses it yet: only the cord and rings run on it in the branch, and they do not use columns. Same bytes on the bench rows says nothing about columns. The columns were run on a test part only, never merged: offline (tests/if_test.cpp: energy, Jacobian, stop, pin, free, given move) and through the engine (mk_wired.py, a test arm standing in for a gate on Gorgar: two surfaces, TouchBegan, steppedS, snapshot). That run found two bugs a byte comparison could not (ModelStandards 6). Accuracy on a moving surface is not judged. Not run: a part sharing an island with an old-loop part or a cord. IslandOnRing still sends an island with a moving part to the old loop; the real rule comes with the flipper. Sleeping has no caller yet.
+
+18.8 Left for later steps. BodyPart comes with the gates. Law items (KKStep, kb, tolEndRes) and one hMin are separate steps. Two gate changes to Group::Step stay in the gates' copy because they would change the cord's failure path: halving a failed stop solve instead of EnergyStep, and bisecting when the start is within 1e-12 of the stop.

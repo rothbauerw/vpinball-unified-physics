@@ -949,6 +949,19 @@ namespace BandCord
       }
       int NumDof() const override { return geo.hasPlate && !pinned ? 1 : 0; }
       int MaxDof() const override { return geo.hasPlate ? 1 : 0; }
+      // one coordinate, the plate; the arcs and the balls' paths are its own. Its row is weighed at an arm of 0.05 m (ASSUMED; it only weighs the rows), and its move has its own tolerance
+      int NumCoords() const override { return geo.hasPlate ? 1 : 0; }
+      int DofOf(int) const override { return NumDof() - 1; }
+      GroupStep::CoordInfo Coord(int) const override
+      {
+         GroupStep::CoordInfo q;
+         q.rate = omega;
+         q.invM = 1.0 / Inertia(phi);
+         q.reach = 0.05;
+         q.maxMove = 0.05;
+         q.settle = set.tolW;
+         return q;
+      }
 
       double Energy(const GroupStep::Ball *b, int n) const override
       {
@@ -967,12 +980,9 @@ namespace BandCord
       }
 
       // the step choice (GroupStepDesign 10.3): the planar solve's rules on the 3D state, the steady rule on the squash
-      double ChooseStep(const GroupStep::Ball *b, int n, const GroupStep::Settings &s, int &rule) override
+      void StepFacts(const GroupStep::Ball *b, int n, const GroupStep::Settings &s, GroupStep::StepFactList &f) override
       {
          Sync(b, n);
-         double h = s.hMax;
-         int rl = 0;
-         const auto lim = [&](const double cc, const int r0) { if (cc < h) { h = cc; rl = r0; } };
          const Config q = Now();
          const Dofs d = MakeDofs();
          double sMinS = spanS[0];
@@ -999,12 +1009,12 @@ namespace BandCord
                kStrict += kAx * gk.Dot(gk) + T * (1.0 / lin + 1.0 / lout);   // stretch and bend (in every direction: the cord is free in height)
                const double sp = vb.Length();
                if (sp > 1e-9)
-                  lim(s.turnMaxRad * std::min(lin, lout) / sp, 1);
+                  f.Turn(std::min(lin, lout), sp, 1);
                if (holdOn[i])   // the held arc: the ball's turn against the cord's bend round it (GroupStepDesign 11.4)
                {
                   // (the cord's bend and its twist in series, GroupStepDesign 11.28)
                   const double kl = T * (R + r) * (R + r) * (1.0 / lin + 1.0 / lout), kw = kTw[i] / (r * r), kb = kl * kw * R * R / std::max(kl + kw * (R + r) * (R + r), 1e-30);
-                  lim(s.omegaH / std::sqrt(std::max(kb, 1e-30) / Ib), 2);
+                  f.Stiffness(std::sqrt(std::max(kb, 1e-30) / Ib), false, 2);
                }
             }
             for (int j = 0; j < NumBackstops(); j++)
@@ -1034,7 +1044,7 @@ namespace BandCord
                }
                (steady ? kRest : kStrict) += kExp;
                if (del < 0.0 && dDot > 0.0)   // reached in about two steps, not overshot
-                  lim(std::max(0.5 * -del / dDot, s.omegaH / std::sqrt(kExp / m)), 3);
+                  f.Approach(-del, dDot, std::sqrt(kExp / m), 3);
             }
             {
                // the cord under the ball, against the playfield: as a backstop above, at the rate its lowest point can fall
@@ -1050,13 +1060,13 @@ namespace BandCord
                   const double kExp = SquashK(std::max(del, lo));
                   kStrict += kExp;
                   if (del < 0.0)
-                     lim(std::max(0.5 * -del / vc, s.omegaH / std::sqrt(kExp / m)), 3);
+                     f.Approach(-del, vc, std::sqrt(kExp / m), 3);
                }
             }
             if (kStrict > 0.0)
-               lim(s.omegaH / std::sqrt(kStrict / m), 2);
+               f.Stiffness(std::sqrt(kStrict / m), false, 2);
             if (kRest > 0.0)
-               lim(s.omegaHRest / std::sqrt((kStrict + kRest) / m), 7);
+               f.Stiffness(std::sqrt((kStrict + kRest) / m), true, 7);
          }
          if (geo.hasPlate && !pinned)
          {
@@ -1073,12 +1083,11 @@ namespace BandCord
                }
             k += kAx * dLdphi * dLdphi;
             if (k > 0.0)
-               lim(s.omegaH / std::sqrt(k / I), 4);
+               f.Stiffness(std::sqrt(k / I), false, 4);
             if (std::fabs(omega) > 1e-9)
-               lim(s.turnMaxRad / std::fabs(omega), 5);
+               f.Turn(1.0, std::fabs(omega), 5);
          }
-         groupRule = rule = rl;
-         return std::max(h, 1e-7);
+         groupRule = f.Rule();
       }
 
       bool BeginStep(const GroupStep::Ball *b, int n, double h, double *x, int off) override
@@ -2000,16 +2009,6 @@ namespace BandCord
          return ch;
       }
 
-      double MoveScale(const double *stp, int off) const override { return gPl && std::fabs(stp[off]) > 0.05 ? 0.05 / std::fabs(stp[off]) : 1.0; }
-      bool Settled(const double *stp, int off, double scale, double h) const override { return !gPl || std::fabs(stp[off]) * scale / h <= set.tolW; }
-      // the plate's row (an angular momentum) in the line search's speed units: over its inertia, times an arm of 0.05 m (ASSUMED; it only weighs the rows)
-      double ResNorm2(const double *Res, int off) const override
-      {
-         if (!gPl)
-            return 0.0;
-         const double s = Res[off] / gI0 * 0.05;
-         return s * s;
-      }
       double StopExcess(const double *x, int off) const override { return gPl ? phi + x[off] - PhiStop() : -INFINITY; }
       bool PinOnStop(const double *, int) override
       {

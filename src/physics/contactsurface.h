@@ -15,6 +15,16 @@ class HitObject;
 class ContactMovingPart;
 struct RubberObjectSettings;
 
+// What the group step keeps of a touch between cycles, per surface: touching at the cycle's end, the shear spring's stretch then, the depth its squash counts from (GroupStep Item dZero), and the effective radius it
+// took when it started: held for the life of the touch (ring_model; the law's energy is one function throughout).
+struct SurfaceState
+{
+   bool touching = false;
+   RubberContact::V3 xi;
+   double zero = 0.0, reff = 0.0;
+   double endDepth = 0.0;   // a part's surface: its depth at the cycle's end, from its zero (a fixed surface's is SurfaceContact::endDepth, the energy check's)
+};
+
 // What one ball has with ONE surface: the material parameters, the shear state kept between cycles, and the faces near the ball this cycle.
 struct SurfaceContact
 {
@@ -34,11 +44,11 @@ struct SurfaceContact
    // no face within reach: the surface has nothing to probe this cycle
    bool NoFaces(const RubberContact::V3 &c) const { return candR >= 0.0 && Faces(c).empty(); }
    bool touching = false;         // in contact at the last substep (a hit event is a transition to touching)
-   bool gsTouch = false;          // the group step (an island with a cord): touching at the cycle's end, and the shear spring's stretch then
-   RubberContact::V3 gsXi;
-   double gsZero = 0.0;           // the depth its squash counts from (GroupStep Item dZero)
+   SurfaceState gs;               // the group step's state of this surface; a moving part on the group has one per surface: the first here, the others in gsMore (sized between cycles, GroupSurfaces)
+   std::vector<SurfaceState> gsMore;
+   SurfaceState &Surf(const int s) { return s == 0 ? gs : gsMore[s - 1]; }
+   const SurfaceState &Surf(const int s) const { return s == 0 ? gs : gsMore[s - 1]; }
    double endDepth = 0.0;         // the energy check: its depth at the end of the last cycle (m)
-   double gsReff = 0.0;           // the effective radius its touch took when it started: held for the life of the touch (ring_model; the law's energy is one function throughout)
    double hcStep = 0.0, hcSpeed = 0.0, hcDelta = 0.0;   // the arrival-time loop's step for this contact and the speed and compression it was computed for (it is reused while they hold)
    double fnLast = 0.0;           // normal force of this contact at the last substep (N): the resting test compares the ball's leftover force with it
    bool hcRest = false;           // hcStep came from the resting rule   // 6-ball stall: hcStep came from the resting (quasi-static) rule
