@@ -430,6 +430,34 @@ namespace RubberContact
       double reff = 0.0;     // Hertz effective radius, m
       double rho = 0.0;      // tube radius, m
       int seg = -1;          // segment index of the nearest point
+      double grad = 1.0;     // ProbePatch: the length of the depth's gradient along normal (below 1 where the patch spans a fold)
+   };
+
+   // Two parts of one surface pressing a ball (the arms of a fold, a concave corner of a mesh) are two Hertz contacts: their stored energies add, as one depth d = (dA^2.5 + dB^2.5)^0.4 with gradient
+   // (dA^1.5 nA + dB^1.5 nB) / d^1.5. The share of a part fades as its nearest point nears its end (fit: how much of the patch is on it), so it leaves with no jump.
+   struct FoldSum
+   {
+      double s25 = 0.0;
+      V3 g;
+      void Add(const double d, const double fit, const V3 &n)
+      {
+         const double w = fit * fit * std::sqrt(fit);
+         const double d15 = d * std::sqrt(d);
+         s25 += w * d * d15;
+         g = g + n * (w * d15);
+      }
+      void Finish(TubeProbe &pr, const double zero) const
+      {
+         const double d = std::pow(s25, 0.4);
+         const V3 gr = g / (d * std::sqrt(d));
+         const double gl = gr.Length();
+         pr.delta = d + zero;
+         if (gl > 1e-6)
+         {
+            pr.normal = gr / gl;
+            pr.grad = gl;
+         }
+      }
    };
 
    // Surface curvature along the tube at the contact (signed, 1/m, > 0 convex): for a centreline of curvature k the outer equator gives
@@ -645,6 +673,49 @@ namespace RubberContact
    }
 
 
+   // ProbeTube's result with the other parts of the same tube pressing the ball: a nearest point in the middle of a segment (a local minimum of the distance along the tube)
+   inline void PatchTube(const BallSI &ball, const V3 *pts, const int n, const double rho, const V3 &c, const TubePre &pre, const double zero, TubeProbe &pr)
+   {
+      if (!pr.overlap || pr.seg < 0 || pr.reff <= 0.0)
+         return;
+      if (pr.delta <= zero)
+         return;
+      const double S = ball.R + rho;
+      const double a0 = std::max(std::sqrt(pr.reff * (pr.delta - zero)), 1e-6);
+      const auto fitOn = [&](const int i, const double s) { return std::min(1.0, std::min(s, 1.0 - s) * std::sqrt(pre.L2[i]) / a0); };   // how much of the patch is on this segment
+      const double sb = pre.L2[pr.seg] > 0.0 ? (c - pts[pr.seg]).Dot(pre.t[pr.seg]) / pre.L2[pr.seg] : 0.0;
+      const double fitBest = fitOn(pr.seg, std::min(std::max(sb, 0.0), 1.0));
+      FoldSum sum;
+      bool any = false;
+      for (int i = 0; i + 1 < n; i++)
+      {
+         if (i == pr.seg || pre.L2[i] <= 0.0)
+            continue;
+         const V3 dm = c - pre.mid[i];
+         const double lim = S + pre.rad[i];
+         if (dm.Dot(dm) > lim * lim)
+            continue;
+         const double s = (c - pts[i]).Dot(pre.t[i]) / pre.L2[i];
+         if (s <= 0.0 || s >= 1.0)
+            continue;
+         const V3 dv = c - (pts[i] + pre.t[i] * s);
+         const double dist = dv.Length();
+         if (dist <= 1e-12 || S - dist <= zero)
+            continue;
+         const double fit = std::min(fitBest, fitOn(i, s));
+         if (fit <= 0.0 || (dv / dist - pr.normal).Length() < 1e-9)
+            continue;
+         if (!any)
+         {
+            sum.Add(pr.delta - zero, 1.0, pr.normal);
+            any = true;
+         }
+         sum.Add(S - dist - zero, fit, dv / dist);
+      }
+      if (any)
+         sum.Finish(pr, zero);
+   }
+
    // ---- Rubber faces: walls and primitives flagged as rubber. A triangle soup (world frame, metres); the ball meets a face, an edge or a corner. ----
 
    struct SurfaceTri
@@ -797,6 +868,58 @@ namespace RubberContact
       const double R1 = 1.0 / ((1.0 - edgeW) / ball.R + edgeW * (1.0 / ball.R + 1.0 / edgeRho));
       pr.reff = std::sqrt(R1 * ball.R);
       return pr;
+   }
+
+   // ProbeTriangles' result with the other faces pressing the ball: the nearest point inside a face of another plane (a concave corner of the mesh). A face in a plane already counted adds nothing.
+   inline void PatchTriangles(const BallSI &ball, const std::vector<SurfaceTri> &tris, const std::vector<int> &cand, const V3 &c, const double zero, TubeProbe &pr)
+   {
+      if (!pr.overlap || pr.seg < 0 || pr.reff <= 0.0 || pr.delta <= zero)
+         return;
+      const double a0 = std::max(std::sqrt(pr.reff * (pr.delta - zero)), 1e-6);
+      const auto fitOn = [&](const SurfaceTri &t, const V3 &p) {   // how much of the patch is on this face
+         const auto edge = [&](const V3 &u, const V3 &v) { const V3 e = v - u; const double l = e.Length(); return l > 0.0 ? (p - u).Cross(e).Length() / l : 0.0; };
+         return std::min(1.0, std::min({ edge(t.a, t.b), edge(t.b, t.c), edge(t.c, t.a) }) / a0);
+      };
+      V3 seen[4];
+      int nSeen = 0;
+      FoldSum sum;
+      bool any = false;
+      double fitBest = -1.0;
+      for (const int i : cand)
+      {
+         if (i == pr.seg)
+            continue;
+         const SurfaceTri &t = tris[i];
+         const double h = (c - t.a).Dot(t.n);
+         const double ah = std::abs(h);
+         if (ball.R - ah <= zero || ah <= 1e-12)
+            continue;
+         const V3 ni = h < 0.0 ? t.n * -1.0 : t.n;
+         bool same = (ni - pr.normal).Dot(ni - pr.normal) < 1e-12;
+         for (int k = 0; !same && k < nSeen; k++)
+            same = (ni - seen[k]).Dot(ni - seen[k]) < 1e-12;
+         if (same)
+            continue;
+         int kind = 0;
+         const V3 p = ClosestOnTriangle(t, c, kind);
+         if (kind != 0)
+            continue;
+         if (fitBest < 0.0)
+            fitBest = fitOn(tris[pr.seg], pr.point);
+         const double fit = std::min(fitBest, fitOn(t, p));
+         if (fit <= 0.0)
+            continue;
+         if (nSeen < 4)
+            seen[nSeen++] = ni;
+         if (!any)
+         {
+            sum.Add(pr.delta - zero, 1.0, pr.normal);
+            any = true;
+         }
+         sum.Add(ball.R - ah - zero, fit, ni);
+      }
+      if (any)
+         sum.Finish(pr, zero);
    }
 
    // A probe reports the surface's nearest point only, so a part of the surface that is not the nearest (a ramp's wall while the ball flies just over its floor) has no say in the step and the

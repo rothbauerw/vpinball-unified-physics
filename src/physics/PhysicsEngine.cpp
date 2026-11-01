@@ -7,6 +7,7 @@
 #include <optional>
 
 #include "PhysicsEngine.h"
+#include "physics/stockcount.h"
 
 #include "hitflipper.h"
 #include "hitplunger.h"
@@ -41,6 +42,7 @@ PhysicsEngine::PhysicsEngine(PinTable *const table)
    , m_hitoctree(this)
    , m_hitoctree_dynamic(this)
 {
+   StockCount::SetPlanes(&m_hitPlayfield, &m_hitTopGlass);
    ContactSystem::SetTable(table->m_filename);   // unified or stock for this table: from its physics ini, before any part's PhysicSetup asks
    m_physicsMaxLoops = table->m_PhysicsMaxLoops == 0xFFFFFFFFu ? 0 : table->m_PhysicsMaxLoops * (10000 / PHYSICS_STEPTIME) /*2*/;
    m_contacts.reserve(8);
@@ -1147,7 +1149,9 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
             LogBallContact('C', pball->m_coll);
             if (m_hitSpeedEvents)
                pball->m_hitSpeed = std::max(0.f, -pball->m_coll.m_hitnormal.Dot(pball->m_d.m_vel)); // normal speed at the instant before the impact, whichever model resolves it
+            StockCount::Begin(pho, pball, false);
             pho->Collide(pball->m_coll);                 //!!!!! 3) collision on active ball
+            StockCount::End(i < m_vballs.size() && m_vballs[i] == pball);
             // The playfield (the plane, the implicit mesh or an explicit playfield primitive) has no hit event of its own: the table gets one, for impacts only (not resting or rolling contact)
             if (m_hitSpeedEvents && g_pplayer != nullptr && pball->m_hitSpeed >= m_hitSpeedMin && i < g_pplayer->m_vball.size() && g_pplayer->m_vball[i] == pball->m_pBall
                 && (pho == &m_hitPlayfield || (pho->m_ObjType == ePrimitive && pho->m_obj != nullptr && static_cast<Primitive *>(pho->m_obj)->IsPlayfield())))
@@ -1212,17 +1216,29 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
          {
             CollisionEvent& contact = m_contacts[forward ? i : m_contacts.size() - 1 - i];
             if ((contact.m_obj->GetType() == eBall) == (pass == 0))
+            {
+               StockCount::Begin(contact.m_obj, contact.m_ball, true);
                contact.m_obj->Contact(contact, hittime);
+               StockCount::End(true);
+            }
          }
 #else
       if (rand_mt_01() < 0.5f) // swap order of contact handling randomly
          for (size_t i = 0; i < m_contacts.size(); ++i)
             //if (m_contacts[i].m_hittime <= hittime) // does not happen often, and values then look sane, so do this check //!! why does this break some collisions (MM NZ&TT Reloaded Skitso, also CCC (Saloon))? maybe due to ball colliding with multiple things and then some sideeffect?
+            {
+               StockCount::Begin(m_contacts[i].m_obj, m_contacts[i].m_ball, true);
                m_contacts[i].m_obj->Contact(m_contacts[i], hittime);
+               StockCount::End(true);
+            }
       else
          for (int i = (int)m_contacts.size() - 1; i != -1; --i)
             //if (m_contacts[i].m_hittime <= hittime) // does not happen often, and values then look sane, so do this check //!! why does this break some collisions (MM NZ&TT Reloaded Skitso, also CCC (Saloon))? maybe due to ball colliding with multiple things and then some sideeffect?
+            {
+               StockCount::Begin(m_contacts[i].m_obj, m_contacts[i].m_ball, true);
                m_contacts[i].m_obj->Contact(m_contacts[i], hittime);
+               StockCount::End(true);
+            }
 #endif
 
       m_contacts.clear();

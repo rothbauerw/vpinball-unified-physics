@@ -29,6 +29,7 @@ b. One loop. Balls touching the model are stepped by the shared loop (SubstepsAr
       rewind               RwTake / RwRestore (needs the model's SaveState)
       overlap at first sight   UnifiedContactDesign.txt section 11
       energy check         built 2026-10-31, contactsystem.cpp EnergyCheckStart / End: ball energy with every contact's stored energy; no island with a drive in it yet
+      stock counter        built 2026-10-31, stockcount.cpp: every stock Collide and Contact by object in every driver run; a converted object that uses stock fails the run. The model leaves AllowedStock the day it is converted
       recovery guard       a step that left the model's range: stop and restart from zero inside the contact system (no stock hand-back, no cooldown); WARN + on-screen report
       on-screen report     rule 8
    An exception (today: bands; the turntable disc and the flipper bats joined 2026-10-28) goes in the to-do with the missing piece; the model is not called done.
@@ -112,6 +113,18 @@ e. Every matrix run writes its pass/fail report to disk the day it runs.
 - A sliding contact's spring set the step though its stiffness is not in the motion: a ring hit took 97 steps where 24 do, and the skid after it 1686 where 300 do, 2026-10-31. Then the same rule on an impact took a steel wall hit from +1.0 % to +7.4 % of its reference, because the shear's short step was also resolving the normal hit: a step rule can be doing a second job. Catches it: what-set-each-step trace plus gs_test's exits at the rule (runs/2026-10-31-ring-cost: trace1.py, suite.py C).
 - Stock's ball-ball collision moved a ball by its own last collision record, not the pair's overlap: here the Drain kicker's -8 U, capped at 2.5 U, 1.2 mm into a wall between cycles, 31 J, out at 12 m/s; which ball moved depended on heap addresses, so runs did not repeat, 2026-10-31. Catches it: the energy check (between cycles), two runs of a drive byte-identical (bench).
 - A step rule that read a hit's rebound half as resting: closing = max(0, closing speed) is 0 once the balls recede, so a cycle starting there took a step 4 times too long and the pair rebounded up to 1.14, 2026-10-31. Catches it: the energy check (across a cycle), runs/2026-10-31-pile-energy/bench/pr_rule.cpp (cycle boundary swept across a hit).
+- A closed energy book proves nothing about a state update whose change is booked as a loss: a cord letting go of a ball changed its length 0.35 mm and lost 10 mJ with no force, book at 0.000 uJ, 2026-10-31. Catches it: V after each state update against V before at the same position (runs/2026-10-31-cord-rethink/today/p_log.py).
+- A contact could pull: fN = fe + fd with no clamp, damping past the spring at the end of a rebound; a wall set to 0.40 rebounded 0.26 at 3 m/s, 2026-10-31. Energy stayed exact, so no energy test saw it. Catches it: rebound against the law's own integral (runs/2026-10-31-static-group/gs_e.cpp).
+- A rate test reads a hit's turnaround as steady, and an energy test reads a static load as a hit, 2026-10-31. Catches it: real hits replayed against 1 us (run_replay.py).
+- A ball rests exactly where the push direction is ambiguous: a fold of one surface has no root at all for an implicit step, 2026-10-31. Stress tables don't rest balls there. Catches it: a grid of balls left to come to rest (mk_grid.py).
+- The energy step's closure kept the energy and moved the ball 4.3 m, 2026-10-31. Catches it: a position limit in the step; the "no ball outside" check.
+- A depth rise blamed on a missed contact was a stock part moving the ball: a trigger's Collide (collideex.cpp:748) adds STATICTIME * vel at hit time 0, 11 times in one cycle, 0.457 U, 35 um into the playfield, 2026-10-31. Inferred first, and wrong. Catches it: the zero rule's report by cause, then a trace.
+- An exact-state check that compares speed never holds: stock adds gravity between cycles, so the ball moved by its float rounding every cycle (up to 0.13 um at y = 2000 U) and read as a fault, 2026-10-31. Catches it: the zero rule's report (nm lines on a resting ball).
+- State kept between cycles outside the ball is outside its snapshot: the self-test failed on p3 with 6 engaged balls once the exact state moved to a map, 2026-10-31. Catches it: the snapshot self-test (5b).
+- A byte difference is not a logic difference: removing fixed arrays changed the last digits under /fp:fast, and carried exact state amplifies them to another game, 2026-10-31. Catches it: compile both trees at /fp:precise; identical bytes prove no logic changed (bench_build.py, BENCH_FP).
+- A private build linked to older objects: a new virtual crashes at the first gate; a stale object gives old results with no error (the first stock-counter build returned an earlier stage's bytes), 2026-10-31. Catches it: closure.py for the file list; compare a row's bytes to the reference before reading a result.
+- One shot's result depends on the shots before it in the same run: the same exe gave S006 605 U apart after 1.8 s with the earlier shots removed, and a ball moved 24.5 U in its first ms where the full run moved it 0 - 1 U, 2026-10-31. A difference between two builds on one shot can be that, not the law. Catches it: the same shot at a fixed 1 us in the same drive, and the shot alone (runs/2026-10-31-static-group: four_read.py, close.py).
+- A shared file changed and merged with no run on one of its users: fixed arrays became grown ones, one cord path wrote past them, any table with a cord crashed at 3 s; the lead's "no band tests while the band is in flux" had dropped even a run to see that it starts, 2026-10-31. Catches it: one smoke run per user of a changed shared file before a merge, even a model not being judged; direct writes no longer compile.
 Each trap names the test that now catches it ("none yet" until one exists); the older entries above get theirs as they are reviewed.
 
 
@@ -127,6 +140,7 @@ Each trap names the test that now catches it ("none yet" until one exists); the 
     hit while driven (5c)
 [ ] cost of energy-safe stepping: passes per contact, step gained   [ ] new traps added to section 6 with the test that catches them
     (4f)
+[ ] off AllowedStock; no stock use in its driver runs (stock.csv)
 
 
 8. Keeping what we learn

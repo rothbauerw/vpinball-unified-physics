@@ -2,6 +2,7 @@
 
 #include "core/stdafx.h"
 #include "hitball.h"
+#include "physics/stockcount.h"
 #include "physics/hitrubber.h"
 #include "physics/hitflipper.h"
 #include "parts/ball.h"
@@ -54,6 +55,7 @@ const Vertex3Ds& HitBall::GetOldPosition(uint64_t physicsTimeMs) const
 
 void HitBall::Collide3DWall(const Vertex3Ds& hitNormal, float elasticity, const float elastFalloff, const float friction, float scatter_angle)
 {
+   StockCount::Wall();
    //speed normal to wall
    float dot = m_d.m_vel.Dot(hitNormal);
    if (dot < -C_LOWNORMVEL && m_physics)
@@ -360,6 +362,7 @@ void HitBall::Contact(CollisionEvent& coll, const float dtime)
 
 void HitBall::HandleStaticContact(const CollisionEvent& coll, const float friction, const float dtime, const HitBall* const other)
 {
+   StockCount::Static();
    const float normVel = m_d.m_vel.Dot(coll.m_hitnormal); // this should be zero, but only up to +/- C_CONTACTVEL
 #ifdef FIX_PHYSICS
    const Vertex3Ds velBefore = m_d.m_vel;

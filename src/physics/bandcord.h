@@ -725,14 +725,14 @@ namespace BandCord
          }
          postFirst = g.ns;
          nPostShapes = 0;
-         for (int j = 0; j < geo.nPosts + geo.nStops && g.ns < GroupStep::kMaxShapes; j++)
+         for (int j = 0; j < geo.nPosts + geo.nStops; j++)
          {
             PostShape &s = postShape[j];
             s.part = this;
             s.j = j;
             s.rp = rp;
             s.layerM = hL;
-            g.shape[g.ns++] = &s;
+            g.AddShape(&s);
             nPostShapes++;
          }
       }
@@ -948,6 +948,7 @@ namespace BandCord
          fprintf(f, "   L %.6f mm, ball 0 at (%.4f %.4f %.4f) mm\n", Lcur * 1e3, c[0].x * 1e3, c[0].y * 1e3, z[0] * 1e3);
       }
       int NumDof() const override { return geo.hasPlate && !pinned ? 1 : 0; }
+      int MaxDof() const override { return geo.hasPlate ? 1 : 0; }
 
       double Energy(const GroupStep::Ball *b, int n) const override
       {
@@ -1159,7 +1160,7 @@ namespace BandCord
       // turn about the cord's direction over the step (bb, from its mid-step spin); the arc turns with it (bc = bb) while the cord's pull on that turn stays within
       // mu x push x R, else it slides to where the pull is at that limit. The cord's length change is split exactly: the arcs' turn at the start positions
       // (L0 -> Lb: a torque on each held ball), then the move at the turned arcs (Lb -> L1: the forces on the balls and the plate).
-      bool Eval(const double *x, int off, double h, GV3 *F, GV3 *M, double *Res, double (*J)[GroupStep::kMaxUnk]) override
+      bool Eval(const double *x, int off, double h, GV3 *F, GV3 *M, double *Res, GroupStep::Jac J) override
       {
          double dq[kMaxGD];
          const int nd = LocalMove(x, off, dq), iphi = 3 * nb;

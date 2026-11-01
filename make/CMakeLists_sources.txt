@@ -221,6 +221,8 @@ set(VPX_SOURCES
    src/physics/turntable.h
    src/physics/contactsystem.cpp
    src/physics/contactsystem.h
+   src/physics/stockcount.cpp
+   src/physics/stockcount.h
    src/physics/testdriver.cpp
    src/physics/testdriver.h
    src/physics/contactbat.cpp

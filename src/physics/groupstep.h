@@ -23,8 +23,11 @@
 #pragma once
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
+#include <vector>
 
 #include "physics/rubbercontact.h"
 
@@ -33,9 +36,49 @@ namespace GroupStep
    using V3 = RubberContact::V3;
    using RubberContact::RubberParams;
    constexpr double kPi = 3.14159265358979323846;
-   constexpr int kMaxBalls = 8, kMaxShapes = 32, kMaxParts = 4, kMaxPartDof = 2;
-   constexpr int kMaxItems = kMaxBalls * kMaxShapes + kMaxBalls * (kMaxBalls - 1) / 2;
-   constexpr int kMaxUnk = 6 * kMaxBalls + kMaxParts * kMaxPartDof;
+
+   // Storage of a group: grown between cycles (Group::Size, AddShape, AddPart, Configure), never inside a step; an index or a plain pointer to it, as an array
+   template <class T> class Buf
+   {
+   public:
+      void Grow(const size_t n)
+      {
+         if (v.size() < n)
+            v.resize(n);
+      }
+      operator T *() { return v.data(); }
+      operator const T *() const { return v.data(); }
+      template <class I> T &operator[](const I i) { assert((size_t)i < v.size()); return v.data()[i]; }
+      template <class I> const T &operator[](const I i) const { assert((size_t)i < v.size()); return v.data()[i]; }
+
+   private:
+      std::vector<T> v;
+   };
+   // A list only the group adds to (AddShape, AddPart: they size it); to anyone else it reads
+   class Group;
+   template <class T> class AddedList
+   {
+   public:
+      template <class I> const T &operator[](const I i) const { return b[i]; }
+
+   private:
+      friend class Group;
+      Buf<T> b;
+   };
+   // A square matrix by rows, J[r][c]; empty = none wanted
+   class Jac
+   {
+   public:
+      Jac() = default;
+      Jac(std::nullptr_t) {}
+      Jac(double *const data, const int stride) : d(data), n(stride) {}
+      double *operator[](const int r) const { return d + r * n; }
+      explicit operator bool() const { return d != nullptr; }
+
+   private:
+      double *d = nullptr;
+      int n = 0;
+   };
 
    // ---- 3 x 3 helpers ----
    struct M3
@@ -93,6 +136,7 @@ namespace GroupStep
       V3 n;
       double reff = 0.0;
       double curvDist = 0.0;   // > 0: the ball turns round a centre this far away while it rolls along the surface (a post, a tube): the step's turning rule
+      double grad = 1.0;       // the depth's gradient is n x grad (below 1 where the contact patch spans a fold of the surface)
    };
    class Shape
    {
@@ -155,10 +199,11 @@ namespace GroupStep
       double omegaH = 0.6;                     // h <= omegaH / omega of the stiffest contact (normal, and shear when shearInStep)
       bool shearInStep = true;                 // the shear spring's stiffness counts in the step choice (false: the normal stiffness only; the solve is stable either way)
       bool slideFree = true;                   // a slide at the friction limit counts as steady (docs/GroupStepDesign.txt 16: its force is mu N, the spring's stiffness is not in the motion)
-      // The step rule by motion (docs/GroupStepDesign.txt 9, 16): a contact that is touching and steady (its compression rate within vSteady, its slip rate within vSteady or at the friction limit) only
-      // needs its normal stiffness resolved to omegaHRest; an impact, a slip the spring can still catch or an arrival keeps the strict rule above. vSteady 0 = every contact strict.
-      // 0.05 m/s and 2.4 from the 2026-10-29 sweep: every exit as accurate as with the strict rule, resting and pinched balls 3-5x cheaper.
-      double vSteady = 0.05;                   // m/s
+      // The step rule by motion (docs/GroupStepDesign.txt 9, 16, 17): a contact that is steady only needs its normal stiffness resolved to omegaHRest; an impact, a slip the spring can still catch or a fast
+      // arrival keeps the strict rule above. Steady is motion, not load: its closing rate is within vSteady, the net force on its bodies cannot change that rate by more in the contact's own time (at a hit's
+      // turnaround the rate is zero and the net force is the whole contact force; under a pile the net force is near zero whatever the load), and its slip is within vSteady or at the friction limit.
+      // vSteady 0 = every contact strict. 0.02 m/s and 2.4 from 750 real hits against their 1 us runs (runs/2026-10-31-static-group).
+      double vSteady = 0.02;                   // m/s
       double omegaHRest = 2.4;
       double turnMaxRad = 2.0 * kPi / 180.0;   // a ball rolling round a post or another ball turns at most this per step
       double vFloor = 0.01;                    // m/s: the closing speed below which a contact's expected depth is taken at this speed
@@ -166,6 +211,7 @@ namespace GroupStep
       // the solver
       double tolV = 1e-11;                     // solved when a round changes no ball's speed (or its rim speed R w) by more than this, m/s
       double tolNoise = 1e-9;                  // or when the changes stay below this for stallRounds rounds without halving: the forces' own noise (m/s)
+      double tolRes = 1e-10, tolCheckMove = 1e-6;   // the residual in speed units that counts as solved; the move after which a round looks at the residual first, with no factorization (m/s)
       int stallRounds = 6;
       int maxRounds = 60;
       int noProgressRounds = 12;               // an attempt gives up (the step is halved, as at maxRounds) when this many rounds have not halved its best move
@@ -199,6 +245,7 @@ namespace GroupStep
    public:
       virtual ~Part() = default;
       virtual int NumDof() const = 0;
+      virtual int MaxDof() const { return NumDof(); }   // the most its NumDof can be inside a cycle (the group's storage is sized between cycles)
       // the part's stored energy and its own bodies' kinetic energy at the balls' positions b (the balls' own energy is the group's)
       virtual double Energy(const Ball *b, int nb) const = 0;
       // its step choice from the state now (accuracy only; GroupStepDesign 10.3); rule: what set it, for the trace
@@ -207,7 +254,7 @@ namespace GroupStep
       virtual bool BeginStep(const Ball *b, int nb, double h, double *x, int off) = 0;
       virtual bool InRange(const double *x, int off) const = 0;   // the move x may be tried (no layer squashed to nothing)
       // the step's forces at x (see above); with J its entries of the residual's Jacobian (the balls' rows and columns in the group's layout)
-      virtual bool Eval(const double *x, int off, double h, V3 *F, V3 *M, double *Res, double (*J)[kMaxUnk]) = 0;
+      virtual bool Eval(const double *x, int off, double h, V3 *F, V3 *M, double *Res, Jac J) = 0;
       // between the solve's rounds: its grip impulses on the balls from the rates at x; returns their largest change (m/s)
       virtual double UpdateGrip(const double *x, double h) = 0;
       // its share of a Newton move stp: the largest share (<= 1) that may be taken; whether its own unknowns have settled; its rows in the line search's speed units
@@ -220,6 +267,7 @@ namespace GroupStep
       // the step taken (after an Eval at the solution, before the group moves its balls); onStop: it ended on the hard stop. Its drive work and losses of the
       // step, and whether a ball went through it
       virtual void Accept(const double *x, int off, double h, bool onStop, double &driveJ, double &lossJ, bool &through) = 0;
+      virtual double MoveRate(const double *, int, double, double) const { return 0.0; }   // its own unknowns' Newton move in the speed units of the balls' (for checkFirst)
       virtual void AfterStep(const Group &) {}   // the step taken and the balls moved: what the part keeps of its own shapes' contacts
       // an energy step (Group::EnergyStep): the state kept and put back; its bodies' kinetic energy and all their speeds times s; what a step's forces left for the next one is put back
       virtual void SaveState() {}
@@ -297,7 +345,18 @@ namespace GroupStep
             const double a = std::max(d0, 0.0), b = std::max(d1, 0.0);
             hz = 0.4 * kH * (b * b * std::sqrt(b) - a * a * std::sqrt(a)) / (d1 - d0);
          }
-         const double lw = cL > 0.0 ? cL * ((d1 > 0.0 ? W(d1) : 0.0) - (d0 > 0.0 ? W(d0) : 0.0)) / (d1 - d0) : 0.0;
+         double lw = 0.0;
+         if (cL > 0.0)
+         {
+            if (d0 > 0.0 && d1 > 0.0 && std::fabs(d1 - d0) < 0.01 * (hL - std::max(d0, d1)))
+            {
+               const double dm = 0.5 * (d0 + d1), g = 0.3872983346207417 * (d1 - d0);
+               const double q0 = (dm - g) / (hL - dm + g), q1 = dm / (hL - dm), q2 = (dm + g) / (hL - dm - g);
+               lw = cL * (5.0 * q0 * q0 * q0 + 8.0 * q1 * q1 * q1 + 5.0 * q2 * q2 * q2) / 18.0;
+            }
+            else
+               lw = cL * ((d1 > 0.0 ? W(d1) : 0.0) - (d0 > 0.0 ? W(d0) : 0.0)) / (d1 - d0);
+         }
          return hz + lw;
       }
       double A(double d) const { return d > 0.0 ? std::sqrt(reff * d) : 0.0; }   // contact patch radius
@@ -320,14 +379,95 @@ namespace GroupStep
       Settings set;
       Books books;
       int nb = 0, ns = 0, ni = 0, np = 0;
-      Ball ball[kMaxBalls];
-      const Shape *shape[kMaxShapes] = {};
-      Item item[kMaxItems];
-      Part *part[kMaxParts] = {};   // moving parts (the band); they read the balls through the step calls
+      Buf<Ball> ball;
+      AddedList<const Shape *> shape;
+      Buf<Item> item;
+      AddedList<Part *> part;   // moving parts (the band); they read the balls through the step calls
+
+      Group() { Size(8); }
+      // Room for this many balls (before the balls are written, between cycles)
+      void Size(const int balls)
+      {
+         const size_t n = (size_t)balls;
+         ball.Grow(n);
+         b1r.Grow(n);
+         bmr.Grow(n);
+         aLast.Grow(n);
+         alphaLast.Grow(n);
+         fNetS.Grow(n);
+         evF.Grow(n);
+         evM.Grow(n);
+         evDc.Grow(n);
+         evDw.Grow(n);
+         evWm.Grow(n);
+         evB1.Grow(n);
+         evBm.Grow(n);
+         farB1.Grow(n);
+         farBm.Grow(n);
+         esB0.Grow(n);
+         esA0.Grow(n);
+         esAl0.Grow(n);
+      }
+      void AddShape(const Shape *const s)
+      {
+         shape.b.Grow((size_t)ns + 1);
+         shape.b[ns++] = s;
+      }
+      void AddPart(Part *const p)
+      {
+         part.b.Grow((size_t)np + 1);
+         partOff.Grow((size_t)np + 1);
+         part.b[np++] = p;
+      }
 
       // After the balls and shapes are in: the contact list (every ball on every shape, every ball pair), with the touches already present
       void Configure()
       {
+         {
+            size_t n = set.ballPairs ? (size_t)nb * (nb - 1) / 2 : 0;
+            for (int s = 0; s < ns; s++)
+               n += shape[s]->onlyBall >= 0 ? 1 : nb;
+            item.Grow(n);
+            law.Grow(n);
+            hNow.Grow(n);
+            h1c.Grow(n);
+            hmc.Grow(n);
+            d0s.Grow(n);
+            ie.Grow(n);
+            farNow.Grow(n);
+            prevSlipS.Grow(n);
+            prevOnS.Grow(n);
+            esI0.Grow(n);
+            size_t nU = 6 * (size_t)nb;
+            for (int p = 0; p < np; p++)
+               nU += part[p]->MaxDof();
+            x.Grow(nU);
+            resS.Grow(nU);
+            stpS.Grow(nU);
+            xPrevS.Grow(nU);
+            stpPrevS.Grow(nU);
+            trialS.Grow(nU);
+            zeroS.Grow(nU);
+            esRes.Grow(nU);
+            idxS.Grow(nU);
+            if ((int)nU > jStride)
+            {
+               jStride = (int)nU;
+               jStore = Buf<double>();
+               jStore.Grow(nU * nU);
+               jacAnaS = Buf<double>();
+               jacFdS = Buf<double>();
+            }
+            if (set.jacMode != 0)
+            {
+               const size_t nJ = (size_t)jStride;
+               jacAnaS.Grow(nJ * nJ);
+               jacFdS.Grow(nJ * nJ);
+               xpS.Grow(nJ);
+               rpS.Grow(nJ);
+               rmS.Grow(nJ);
+            }
+         }
          ni = 0;
          for (int a = 0; a < nb; a++)
             for (int s = 0; s < ns; s++)
@@ -382,10 +522,11 @@ namespace GroupStep
          return e;
       }
       bool Touching(int k) const { return item[k].touching; }
+      void ProbeItem(const int k, Hit &hp) const { Probe(item[k], ball, hp); }
       // The first guess starts afresh: a step taken again from a snapshot then gives the same result to the last digit
       void ClearGuess()
       {
-         for (int i = 0; i < kMaxBalls; i++)
+         for (int i = 0; i < nb; i++)
             aLast[i] = alphaLast[i] = V3();
       }
       // After Configure: a part's own contact goes on as it was kept (touching, stretch, zero); one not touching that is already inside has stored nothing, its depth is its zero
@@ -439,11 +580,26 @@ namespace GroupStep
       {
          double h = set.hMax;
          StepDiag dg;
+         V3 *const fNet = fNetS;   // the net force on each ball now: gravity, each touching contact's spring and shear stretch
+         for (int i = 0; i < nb; i++)
+            fNet[i] = (set.g * ball[i].m) + ball[i].fExt;
          for (int k = 0; k < ni; k++)
          {
             const Item &it = item[k];
             Hit &hp = hNow[k];   // kept: the step's start probes the same positions
             Probe(it, ball, hp);
+            if (it.touching && hp.delta > 0.0)
+            {
+               const V3 f = hp.n * it.F(hp.delta) - it.xi * it.Kt(hp.delta);
+               fNet[it.a] = fNet[it.a] + f;
+               if (it.b >= 0)
+                  fNet[it.b] = fNet[it.b] - f;
+            }
+         }
+         for (int k = 0; k < ni; k++)
+         {
+            const Item &it = item[k];
+            Hit &hp = hNow[k];
             const Ball &A = ball[it.a];
             const V3 vr = it.b >= 0 ? A.v - ball[it.b].v : A.v;
             const double dDot = -vr.Dot(hp.n);   // closing speed
@@ -454,7 +610,8 @@ namespace GroupStep
             if (!it.touching)
                TakeLaw(L, hp);
             // the depth this approach reaches (all the closing energy into the squash): the stiffness while it lasts
-            double lo = std::pow(1.25 * L.mRed * vc * vc / L.kH, 0.4);   // the Hertz spring alone; a layer only makes it shallower
+            const double eC = 0.5 * L.mRed * vc * vc;
+            double lo = std::pow(2.5 * eC / L.kH, 0.4);   // the Hertz spring alone; a layer only makes it shallower
             if (L.cL > 0.0)
             {
                double hi = std::min(lo, L.hL);
@@ -462,25 +619,32 @@ namespace GroupStep
                for (int r = 0; r < 50 && hi - lo > 1e-4 * hi; r++)
                {
                   const double mid = 0.5 * (lo + hi);
-                  (L.V(mid) < 0.5 * L.mRed * vc * vc ? lo : hi) = mid;
+                  (L.V(mid) < eC ? lo : hi) = mid;
                }
             }
             const double dE = std::max(hp.delta, lo);
             const double ktE = L.Kt(dE);
             const double omN = std::sqrt(L.K(dE) / L.mRed), omT = std::sqrt(ktE / L.mt);
-            // steady: touching, with its compression rate within vSteady, and the slip rate of its contact point within vSteady or at the friction limit
+            // steady (Settings): by the motion, at the contact's own time scale. At the friction limit (Coulomb): a spring within mu N holds at most (mu N)^2 / (2 kt) of energy, so a slip with more than that
+            // in 1/2 mt u^2 cannot be stopped by it: the contact slides, its force is mu N whatever the spring's stiffness, and the spring's time scale is not in the motion.
             bool steady = false;
-            if (set.vSteady > 0.0 && hp.delta > 0.0 && std::fabs(dDot) <= set.vSteady)
+            if (set.vSteady > 0.0)
             {
-               const double dmp = hp.delta;
-               V3 u = A.v + A.w.Cross(hp.n * (-(A.R - 0.5 * dmp)));
-               if (it.b >= 0)
-                  u = u - (ball[it.b].v + ball[it.b].w.Cross(hp.n * (ball[it.b].R - 0.5 * dmp)));
-               const V3 ut = u - hp.n * u.Dot(hp.n);
-               const double slipNow = ut.Length();
-               // At the friction limit (Coulomb): a spring within mu N holds at most (mu N)^2 / (2 kt) of energy, so a slip with more than that in 1/2 mt u^2 cannot be stopped by it: the contact slides,
-               // its force is mu N whatever the spring's stiffness, and the spring's time scale is not in the motion. Below that speed the spring can catch it, and the rule above resolves it again.
-               steady = slipNow <= set.vSteady || (set.slideFree && slipNow * std::sqrt(ktE * L.mt) > L.mu * L.F(dE));
+               if (hp.delta > 0.0)
+               {
+                  V3 u = A.v + A.w.Cross(hp.n * (-(A.R - 0.5 * hp.delta)));
+                  if (it.b >= 0)
+                     u = u - (ball[it.b].v + ball[it.b].w.Cross(hp.n * (ball[it.b].R - 0.5 * hp.delta)));
+                  const V3 ut = u - hp.n * u.Dot(hp.n);
+                  const double slipNow = ut.Length();
+                  V3 aRel = fNet[it.a] * (1.0 / A.m);
+                  if (it.b >= 0)
+                     aRel = aRel - fNet[it.b] * (1.0 / ball[it.b].m);
+                  const double omNow = std::sqrt(L.K(hp.delta) / L.mRed);
+                  steady = std::fabs(dDot) <= set.vSteady && std::fabs(aRel.Dot(hp.n)) <= set.vSteady * omNow && (slipNow <= set.vSteady || (set.slideFree && slipNow * std::sqrt(ktE * L.mt) > L.mu * L.F(dE)));
+               }
+               else
+                  steady = dDot <= set.vSteady;
             }
             const double om = steady ? omN : (set.shearInStep ? std::max(omN, omT) : omN);
             const double hs = om > 0.0 ? (steady ? set.omegaHRest : set.omegaH) / om : set.hMax;
@@ -546,7 +710,7 @@ namespace GroupStep
                   return h;
                }
                // the step that ends on the stop (Illinois false position on the step length), then solved again there (its end state is the one taken)
-               double zero[kMaxUnk] = {};
+               const double *const zero = zeroS;
                {
                   bool pinnedOne = false;
                   for (int p = 0; p < np; p++)
@@ -637,7 +801,8 @@ namespace GroupStep
       RoundDiag roundDiag[kRounds];
       // Settings::jacMode: the solve's own Jacobian and the central-difference one at the last round of the last solve (rows: per ball the momentum residual 3,
       // then the spin residual 3; columns: per ball the move 3, then the spin change 3)
-      double jacAna[kMaxUnk][kMaxUnk] = {}, jacFd[kMaxUnk][kMaxUnk] = {};
+      Jac JacAna() { return Jac(jacAnaS, jStride); }
+      Jac JacFd() { return Jac(jacFdS, jStride); }
       int jacRound = 0;
 
    private:
@@ -649,23 +814,65 @@ namespace GroupStep
          V3 xi1;
          double normalLoss = 0.0, slip = 0.0, shearDamp = 0.0, twist = 0.0, roll = 0.0;
       };
-      Item law[kMaxItems];       // the law each contact uses in this step (held, or taken at the step's start)
+      Buf<Item> law;             // the law each contact uses in this step (held, or taken at the step's start)
       // Probes kept instead of repeated (a tube probe is most of a step's cost): the positions now (ChooseStep; valid while nowStamp == stamp), and the end and
       // mid-step positions of the move the range check accepted (the next Eval looks at the same positions)
-      mutable Hit hNow[kMaxItems];
+      mutable Buf<Hit> hNow;
       mutable long nowStamp = -1;
       long stamp = 0;            // counts changes of the positions (Configure, Accept)
-      Hit h1c[kMaxItems], hmc[kMaxItems];
+      Buf<Hit> h1c, hmc;
       bool trialCached = false;
-      double d0s[kMaxItems];
-      Ball b1r[kMaxBalls], bmr[kMaxBalls];   // InRange's moved balls
-      ItemEnd ie[kMaxItems];
-      double x[kMaxUnk];         // the unknowns: per ball the move (3) and the spin change (3), then the parts' own
-      V3 aLast[kMaxBalls], alphaLast[kMaxBalls];   // each ball's acceleration and spin's over the last step (the next step's first guess)
+      Buf<double> d0s;
+      Buf<Ball> b1r, bmr;        // InRange's moved balls
+      Buf<ItemEnd> ie;
+      Buf<double> x;             // the unknowns: per ball the move (3) and the spin change (3), then the parts' own
+      Buf<V3> aLast, alphaLast;  // each ball's acceleration and spin's over the last step (the next step's first guess)
+      // what each function of a step works in
+      mutable Buf<V3> fNetS;
+      Buf<V3> evF, evM, evDc, evDw, evWm, esA0, esAl0;
+      Buf<Ball> evB1, evBm, farB1, farBm, esB0;
+      Buf<Item> esI0;
+      Buf<double> resS, stpS, xPrevS, stpPrevS, trialS, zeroS, esRes, xpS, rpS, rmS, jStore, jacAnaS, jacFdS;
+      Buf<char> prevSlipS, prevOnS;
+      Buf<int> idxS;
+      int jStride = 0;
       double driveW = 0.0;
-      int partOff[kMaxParts] = {};
+      Buf<int> partOff;
       int nUnk = 0;              // unknowns of the step being solved
       bool partEvalFailed = false;
+      Buf<char> farNow;          // not touching and out of reach in this attempt
+      // out of reach: the gap is more than both bodies' speeds can close in twice the step, with a margin. A body that picks up speed inside the step is what the check after the solve is for
+      bool OutOfReach(const Item &it, const double d0, const double h) const
+      {
+         if (it.touching || d0 > 0.0)
+            return false;
+         double sp = ball[it.a].v.Length();
+         if (it.b >= 0)
+            sp += ball[it.b].v.Length();
+         return -d0 > 2.0 * sp * h + 1e-4;
+      }
+      // After the solve: did a skipped contact get reached after all? Then the attempt runs again with none skipped.
+      bool FarStillFar(const double *xv)
+      {
+         Ball *const b1 = farB1, *const bm = farBm;
+         for (int i = 0; i < nb; i++)
+         {
+            const V3 dc(xv[6 * i], xv[6 * i + 1], xv[6 * i + 2]);
+            b1[i] = bm[i] = ball[i];
+            b1[i].c = ball[i].c + dc;
+            bm[i].c = ball[i].c + dc * 0.5;
+         }
+         for (int k = 0; k < ni; k++)
+            if (farNow[k])
+            {
+               Hit h1, hm;
+               Probe(item[k], b1, h1);
+               Probe(item[k], bm, hm);
+               if (h1.delta > 0.0 || hm.delta > 0.0)
+                  return false;
+            }
+         return true;
+      }
 
       // the number of unknowns (the parts' own placed after the balls')
       int NumUnk()
@@ -699,6 +906,7 @@ namespace GroupStep
          const V3 d = A.c - B.c;
          const double D = d.Length();
          hp.delta = A.R + B.R - D - it.dZero;
+         hp.grad = 1.0;
          hp.n = D > 0.0 ? d * (1.0 / D) : V3(0.0, 0.0, 1.0);
          hp.reff = A.R * B.R / (A.R + B.R);
          hp.curvDist = D;
@@ -747,7 +955,7 @@ namespace GroupStep
          trialCached = false;
          bool moved = false;
          for (int k = 0; k < ni; k++)
-            if (law[k].cL > 0.0)
+            if (!farNow[k] && law[k].cL > 0.0)
             {
                if (!moved)
                {
@@ -788,42 +996,60 @@ namespace GroupStep
          for (int a = 0; a < n; a++)
             out[a] = gm[a] + cf * W[a] * dq[a];
       }
-      static bool SolveLinear(double A[kMaxUnk][kMaxUnk], double *b, int n)
+      // The same elimination over the nonzero entries of each pivot row: a group's bodies touch few others
+      static bool SolveLinear(const Jac A, double *b, int n, int *const idx)
       {
          for (int col = 0; col < n; col++)
          {
             int piv = col;
+            double big = std::fabs(A[col][col]);
             for (int rw = col + 1; rw < n; rw++)
-               if (std::fabs(A[rw][col]) > std::fabs(A[piv][col]))
+            {
+               const double v = std::fabs(A[rw][col]);
+               if (v > big)
+               {
+                  big = v;
                   piv = rw;
-            if (std::fabs(A[piv][col]) < 1e-300)
+               }
+            }
+            if (big < 1e-300)
                return false;
             if (piv != col)
             {
-               for (int k = 0; k < n; k++)
+               for (int k = col; k < n; k++)
                   std::swap(A[col][k], A[piv][k]);
                std::swap(b[col], b[piv]);
             }
+            int nz = 0;
+            const double *const ap = A[col];
+            for (int k = col + 1; k < n; k++)
+               if (ap[k] != 0.0)
+                  idx[nz++] = k;
+            const double ip = 1.0 / ap[col], bc = b[col];
             for (int rw = col + 1; rw < n; rw++)
             {
-               const double f = A[rw][col] / A[col][col];
-               if (f == 0.0)
+               double *const ar = A[rw];
+               if (ar[col] == 0.0)
                   continue;
-               for (int k = col; k < n; k++)
-                  A[rw][k] -= f * A[col][k];
-               b[rw] -= f * b[col];
+               const double f = ar[col] * ip;
+               for (int q = 0; q < nz; q++)
+                  ar[idx[q]] -= f * ap[idx[q]];
+               ar[col] = 0.0;
+               b[rw] -= f * bc;
             }
          }
          for (int rw = n - 1; rw >= 0; rw--)
          {
-            double s = b[rw];
+            double v = b[rw];
+            const double *const ar = A[rw];
             for (int k = rw + 1; k < n; k++)
-               s -= A[rw][k] * b[k];
-            b[rw] = s / A[rw][rw];
+               if (ar[k] != 0.0)
+                  v -= ar[k] * b[k];
+            b[rw] = v / ar[rw];
          }
          return true;
       }
-      static void AddBlock(double J[kMaxUnk][kMaxUnk], int r0, int c0, const M3 &m, double s)
+      static void AddBlock(const Jac J, int r0, int c0, const M3 &m, double s)
       {
          for (int i = 0; i < 3; i++)
             for (int j = 0; j < 3; j++)
@@ -831,11 +1057,11 @@ namespace GroupStep
       }
 
       // Forces of the step at the unknowns xv: the residual R (and the approximate Jacobian J when given), the contacts' end values into ie[]
-      bool Eval(double h, const double *xv, double *Res, double (*J)[kMaxUnk], bool useCache)
+      bool Eval(double h, const double *xv, double *Res, const Jac J, bool useCache)
       {
          const int nU = nUnk;
-         V3 F[kMaxBalls], M[kMaxBalls], dc[kMaxBalls], dw[kMaxBalls], wm[kMaxBalls];
-         Ball b1[kMaxBalls], bm[kMaxBalls];
+         V3 *const F = evF, *const M = evM, *const dc = evDc, *const dw = evDw, *const wm = evWm;
+         Ball *const b1 = evB1, *const bm = evBm;
          double posScale = 0.1;
          for (int i = 0; i < nb; i++)
          {
@@ -863,6 +1089,14 @@ namespace GroupStep
             const Item &it = item[k];
             const Item &L = law[k];
             ItemEnd &e = ie[k];
+            if (farNow[k])
+            {
+               e = ItemEnd();
+               e.active = false;
+               e.d0 = d0s[k];
+               e.d1 = -1.0;
+               continue;
+            }
             e = ItemEnd();
             Hit h1, hm;
             if (useCache && L.cL > 0.0)
@@ -885,7 +1119,7 @@ namespace GroupStep
             const int na = pr ? 6 : 3;
             const V3 &nm = hm.n;
             // the compression's discrete gradient over the move (ball a's centre, then ball b's)
-            double gm[6] = { -nm.x, -nm.y, -nm.z, nm.x, nm.y, nm.z }, dq[6], W[6], gd[6];
+            double gm[6] = { -nm.x * hm.grad, -nm.y * hm.grad, -nm.z * hm.grad, nm.x, nm.y, nm.z }, dq[6], W[6], gd[6];
             const Ball &A = ball[it.a];
             dq[0] = dc[it.a].x; dq[1] = dc[it.a].y; dq[2] = dc[it.a].z;
             W[0] = W[1] = W[2] = 1.0 / A.m;
@@ -898,8 +1132,8 @@ namespace GroupStep
             const double fe = L.Chord(d0, d1);
             const double cD = L.DampC(dm, fe);
             const double fd = cD * (d1 - d0) / h;
-            const double N = std::max(0.0, fe + fd);
-            e.normalLoss = cD * (d1 - d0) * (d1 - d0) / h;
+            const double N = std::max(0.0, fe + fd);   // a contact pushes, it cannot pull (Hertz, no adhesion)
+            e.normalLoss = (N - fe) * (d1 - d0);       // (cD (d1 - d0)^2 / h while it pushes; all the spring's release once damping would make it pull)
 
             // the contact point and the mid-step slip rate
             const double dmp = std::max(dm, 0.0);
@@ -952,12 +1186,11 @@ namespace GroupStep
             e.xi1 = xi1;
             const V3 Ft = Fs + ut * (ct * dampShare);
             e.shearDamp = ct * dampShare * ut.Dot(ut) * h;
-            const double fN = fe + fd;
-            F[it.a] = F[it.a] - V3(gd[0], gd[1], gd[2]) * fN - Ft;
+            F[it.a] = F[it.a] - V3(gd[0], gd[1], gd[2]) * N - Ft;
             M[it.a] = M[it.a] + rA.Cross(Ft * -1.0);
             if (pr)
             {
-               F[it.b] = F[it.b] - V3(gd[3], gd[4], gd[5]) * fN + Ft;
+               F[it.b] = F[it.b] - V3(gd[3], gd[4], gd[5]) * N + Ft;
                M[it.b] = M[it.b] + rB.Cross(Ft);
             }
             // twist and rolling resistance on the mid-step spin (relative to the other ball)
@@ -1003,7 +1236,7 @@ namespace GroupStep
                else
                   kc = 0.5 * L.K(std::max(std::max(dm, d1), 0.0));
                const double cDp = L.gammaKK > 0.0 ? (dm > 0.0 ? 0.5 * L.gammaKK * 0.5 * std::sqrt(L.reff / dm) : 0.0) : 1.5 * L.alpha * kc;
-               const double kn = h * kc + cD + cDp * (d1 - d0);
+               const double kn = fe + fd <= 0.0 ? 0.0 : h * kc + cD + cDp * (d1 - d0);
                for (int p = 0; p < na; p++)
                   for (int q = 0; q < na; q++)
                   {
@@ -1149,7 +1382,8 @@ namespace GroupStep
       void NumericJacobian(double h)
       {
          const int nU = nUnk;
-         double xp[kMaxUnk], rp[kMaxUnk], rm[kMaxUnk];
+         double *const xp = xpS, *const rp = rpS, *const rm = rmS;
+         const Jac jacFd = JacFd();
          for (int c = 0; c < nU; c++)
          {
             for (int a = 0; a < nU; a++)
@@ -1173,9 +1407,9 @@ namespace GroupStep
       double EnergyStep(const double hTry)
       {
          const double E0 = Energy();
-         static Ball b0[kMaxBalls];
-         static Item i0[kMaxItems];
-         V3 a0[kMaxBalls], al0[kMaxBalls];
+         Ball *const b0 = esB0;
+         Item *const i0 = esI0;
+         V3 *const a0 = esA0, *const al0 = esAl0;
          const Books bk0 = books;
          for (int i = 0; i < nb; i++)
          {
@@ -1205,7 +1439,7 @@ namespace GroupStep
             for (int p = 0; p < np; p++)
                part[p]->AfterEnergyStep();
          };
-         double Res[kMaxUnk];
+         double *const Res = esRes;
          double h = hTry;
          for (int tries = 0; tries < 12; tries++, h *= 0.5)
          {
@@ -1224,7 +1458,9 @@ namespace GroupStep
                   }
                for (int p = 0; p < np; p++)
                   part[p]->ExplicitMove(Res, partOff[p], h, x);
-               formed = InRange(x) && StopExcess() <= 0.0 && Eval(h, x, Res, nullptr, trialCached);
+               for (int i = 0; i < nb && formed; i++)
+                  formed = x[6 * i] * x[6 * i] + x[6 * i + 1] * x[6 * i + 1] + x[6 * i + 2] * x[6 * i + 2] <= set.maxMoveM * set.maxMoveM;
+               formed = formed && InRange(x) && StopExcess() <= 0.0 && Eval(h, x, Res, nullptr, trialCached);
             }
             if (formed)
             {
@@ -1349,6 +1585,9 @@ namespace GroupStep
             else
                Probe(item[k], ball, h0);
             d0s[k] = h0.delta;
+            farNow[k] = !farOff && OutOfReach(item[k], h0.delta, h);
+            if (farNow[k])
+               continue;
             law[k] = item[k];
             if (!item[k].touching)
                TakeLaw(law[k], h0);
@@ -1382,17 +1621,34 @@ namespace GroupStep
       // Solve one step of h from the state now (the end values stay in x and ie[])
       bool Solve(double h)
       {
+         farOff = false;
+         if (!SolveOnce(h))
+            return false;
+         if (!FarStillFar(x))
+         {
+            farOff = true;
+            const bool ok = SolveOnce(h);
+            farOff = false;
+            return ok;
+         }
+         return true;
+      }
+      bool farOff = false;
+      bool SolveOnce(double h)
+      {
          if (!BeginAttempt(h))
             return false;
          const int nU = nUnk;
-         static double J[kMaxUnk][kMaxUnk];   // (scratch; the offline test and the engine step one group at a time)
-         double Res[kMaxUnk], stp[kMaxUnk];
+         const Jac J(jStore, jStride);
+         double *const Res = resS, *const stp = stpS;
          bool converged = false;
          int round = 1;
-         bool prevSlip[kMaxItems], prevOn[kMaxItems];
-         double xPrev[kMaxUnk], stpPrev[kMaxUnk], scalePrev = 0.0, rnPrev = INFINITY;
+         char *const prevSlip = prevSlipS, *const prevOn = prevOnS;
+         double *const xPrev = xPrevS, *const stpPrev = stpPrevS;
+         double scalePrev = 0.0, rnPrev = INFINITY;
          int back = 0;
          bool gripMoved = false, endValuesHere = false;
+         double lastCh = INFINITY;
          int stallCount = 0, sinceBest = 0;
          double stallMin = 0.0, bestMove = INFINITY;
          for (; round <= set.maxRounds; round++)
@@ -1400,6 +1656,24 @@ namespace GroupStep
             if (set.jacMode != 0)
                NumericJacobian(h);   // into jacFd (the Eval calls it makes are undone by the Eval below)
             partEvalFailed = false;
+            if (set.jacMode == 0 && round > 1 && lastCh < set.tolCheckMove && !gripMoved && Eval(h, x, Res, nullptr, trialCached))
+            {
+               double rc = 0.0;
+               for (int i = 0; i < nb; i++)
+               {
+                  const double ic = 1.0 / ball[i].m, iw = ball[i].R / ball[i].I();
+                  for (int a = 0; a < 3; a++)
+                     rc += Res[6 * i + a] * Res[6 * i + a] * ic * ic + Res[6 * i + 3 + a] * Res[6 * i + 3 + a] * iw * iw;
+               }
+               for (int p = 0; p < np; p++)
+                  rc += part[p]->ResNorm2(Res, partOff[p]);
+               if (rc <= set.tolRes * set.tolRes)
+               {
+                  converged = true;
+                  endValuesHere = true;
+                  break;
+               }
+            }
             if (!Eval(h, x, Res, J, trialCached))
             {
                failWhy = partEvalFailed ? 'B' : 'N';
@@ -1411,9 +1685,9 @@ namespace GroupStep
                for (int r = 0; r < nU; r++)
                   for (int c = 0; c < nU; c++)
                   {
-                     jacAna[r][c] = J[r][c];
+                     JacAna()[r][c] = J[r][c];
                      if (set.jacMode == 2)
-                        J[r][c] = jacFd[r][c];
+                        J[r][c] = JacFd()[r][c];
                   }
                jacRound = round;
             }
@@ -1474,7 +1748,7 @@ namespace GroupStep
             }
             for (int a = 0; a < nU; a++)
                stp[a] = -Res[a];
-            if (nU > 0 && !SolveLinear(J, stp, nU))
+            if (nU > 0 && !SolveLinear(J, stp, nU, idxS))
             {
                failWhy = 'L';
                lastRounds = round;
@@ -1492,7 +1766,7 @@ namespace GroupStep
             }
             for (int p = 0; p < np; p++)
                scale = std::min(scale, part[p]->MoveScale(stp, partOff[p]));
-            double trial[kMaxUnk];
+            double *const trial = trialS;
             int tries = 0;
             for (; tries < 60; tries++, scale *= 0.5)
             {
@@ -1509,6 +1783,8 @@ namespace GroupStep
             }
             bool moved = true;   // (a Newton move within the tolerance is not taken: the evaluation just made stays the step's end values, no further evaluation)
             double ch = 0.0;
+            for (int p = 0; p < np; p++)
+               ch = std::max(ch, part[p]->MoveRate(stp, partOff[p], scale, h));
             for (int i = 0; i < nb; i++)
             {
                const double sc = std::sqrt(stp[6 * i] * stp[6 * i] + stp[6 * i + 1] * stp[6 * i + 1] + stp[6 * i + 2] * stp[6 * i + 2]) * scale;
@@ -1521,6 +1797,7 @@ namespace GroupStep
             for (int p = 0; p < np; p++)
                settled = settled && part[p]->Settled(stp, partOff[p], scale, h);
             moved = !(ch <= set.tolV && settled);
+            lastCh = ch;
             for (int a = 0; a < nU; a++)
             {
                xPrev[a] = x[a];
@@ -1612,6 +1889,8 @@ namespace GroupStep
          {
             Item &it = item[k];
             const ItemEnd &e = ie[k];
+            if (farNow[k])
+               continue;
             if (e.d1 > 0.0)
             {
                if (!it.touching)

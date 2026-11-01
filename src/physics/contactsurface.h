@@ -58,6 +58,8 @@ public:
    virtual void Refresh(SurfaceContact &it, double ballR, double reachM, const RubberContact::V3 &c) const = 0;
    // The nearest point of the surface to a ball at c
    virtual RubberContact::TubeProbe Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const = 0;
+   // The same, as the group step's law reads it: the ball's contact patch has a size, so a fold under it pushes along the patch's average (rubbercontact.h PatchTube, PatchTriangles)
+   virtual RubberContact::TubeProbe ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const { return Probe(bs, it, c); }
    // The longest step, at most hMax, that brings the ball at most to arriveM of a part of the surface other than the probe's nearest (nearestSeg); a nearest-only surface: hMax. a: the acceleration bound.
    virtual double ArrivalS(const RubberContact::BallSI & /*bs*/, const SurfaceContact & /*it*/, int /*nearestSeg*/, const RubberContact::V3 & /*c*/, const RubberContact::V3 & /*v*/, double /*a*/, double hMax, double /*touchM*/, double /*arriveM*/) const { return hMax; }
    virtual const RubberObjectSettings *Settings() const { return nullptr; }   // the step and rest settings of a surface that has them (rubber, wall, primitive, ramp, playfield, disc); null = none

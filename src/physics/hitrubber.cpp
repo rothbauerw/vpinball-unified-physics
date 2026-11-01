@@ -1346,6 +1346,16 @@ RubberContact::TubeProbe HitRubber::Probe(const RubberContact::BallSI &bs, const
    return RubberContact::ProbeTube(bs, m_ptsSI.data(), (int)m_ptsSI.size(), m_radiusSI, c, &m_tubePre);
 }
 
+RubberContact::TubeProbe HitRubber::ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const
+{
+   RubberContact::TubeProbe pr = Probe(bs, it, c);
+   if (m_surface != nullptr)
+      RubberContact::PatchTriangles(bs, m_surface->tris, it.Faces(c), c, it.gsZero, pr);
+   else
+      RubberContact::PatchTube(bs, m_ptsSI.data(), (int)m_ptsSI.size(), m_radiusSI, c, m_tubePre, it.gsZero, pr);
+   return pr;
+}
+
 double HitRubber::ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, const int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, const double a, const double hMax, const double touchM, const double arriveM) const
 {
    if (m_surface != nullptr)

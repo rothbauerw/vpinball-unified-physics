@@ -191,6 +191,7 @@ public:
    // ContactSurface
    void Refresh(SurfaceContact &it, double ballR, double reachM, const RubberContact::V3 &c) const override;   // the faces the ball can reach this cycle
    double ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, double a, double hMax, double touchM, double arriveM) const override;
+   RubberContact::TubeProbe ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const override;
    RubberContact::TubeProbe Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const override;   // the nearest point of one surface contact (tube or faces)
    double LayerM() const override;
    // Non-legacy kickers are round holes in the playfield: the playfield host leaves no floor inside them (the ball rests on the rim, or falls in and is captured).

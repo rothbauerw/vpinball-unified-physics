@@ -15,6 +15,8 @@
 #include "ui/live/LiveUI.h"
 #include "physics/magnet.h"
 #include "physics/turntable.h"
+#include "physics/stockcount.h"
+#include "physics/contactsystem.h"
 
 // Test driver (docs/TestMatrixDesign.txt section 2; keys and file format in docs/NewPhysicsReference.txt). Harness only: off unless VPX_TEST_INPUT is set.
 // Input file: one action per line, "<t_ms> <action> <args>", '#' starts a comment; actions with the same time run in file order. Time 0 is the first cycle after the
@@ -624,7 +626,8 @@ namespace TestDriver
          std::ostringstream cost;
          const bool costPass = Cost(cost);   // (sets the tick rate the csv uses)
          WriteTimes();
-         const bool pass = s.skips == 0 && s.fast.n == 0 && s.below.n == 0 && s.outside.n == 0 && s.gone.n == 0 && s.errors.empty() && costPass;
+         const bool stockPass = !ContactSystem::Unified() || !StockCount::ConvertedUsed();
+         const bool pass = s.skips == 0 && s.fast.n == 0 && s.below.n == 0 && s.outside.n == 0 && s.gone.n == 0 && s.errors.empty() && costPass && stockPass;
          std::ofstream o(OutPath("report.txt"));
          o << "Test driver report (docs/TestMatrixDesign.txt)\n" << (Player::BenchMode() ? "BENCH RUN: every cost below is bench cost (no frames, no GPU, virtual frames of 7 ms); limit 6 is judged on a focused VPX run\n" : "") << "input: " << s.input << "\ncycles: " << s.cycles << " (t 0 to " << t << " ms; time 0 = engine time " << s.t0
            << " ms, after start-up), balls: " << s.balls.size() << ", respawns: " << s.respawns;
@@ -642,6 +645,8 @@ namespace TestDriver
          for (const string &e : s.errors)
             o << "   " << e << '\n';
          o << cost.str();
+         if (ContactSystem::Unified())
+            StockCount::Report(o, OutPath("stock.csv"));
          o << "\nNOT CHECKED by the driver: limit 1 energy (check not built, to-do 1.6), limit 2 overlap depth, limit 4 ball inside a solid, limit 5 safety nets\n"
               "(look for WARN lines in vpinball.log), limit 6 per object (the report gives the time per kind of object, not per object).\n";
          o << "\nRESULT of the checks above: " << (pass ? "PASS" : "FAIL") << '\n';
@@ -775,6 +780,8 @@ namespace TestDriver
    bool Ended() { return s.ended; }
 
    ContactCost *Contact() { return s.loopOpen && s.detail ? &s.cc : nullptr; }
+
+   uint32_t ReportT() { return s.on ? s.lastT : (g_pplayer != nullptr ? g_pplayer->m_time_msec : 0); }
 
    const char *BallName(const void *hitBall)
    {

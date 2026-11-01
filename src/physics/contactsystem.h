@@ -38,6 +38,7 @@ namespace ContactSystem
 
    // One cycle's step of every ball the contact system holds (dtime in the engine's step units). Its events (ball-ball callbacks, part hits, the parts' own events) are only queued here.
    void Step(float dtime);
+void NotePlaced(const HitBall *ball);   // a script or the driver put this ball where it is: a position move no step did, and no fault (GroupStepDesign 17)
 
    // The state of everything an overlap replay would have to put back (docs/UnifiedContactDesign.txt section 11, point 2), taken at the start of a sub-interval, before Step: every ball's position,
    // velocity and spin, the engaged balls' contacts (shear springs, touching flags, counters), the ball pairs, the saved state of every moving part, the size of the event queue. No allocation after the

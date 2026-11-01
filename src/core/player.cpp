@@ -23,6 +23,8 @@
 #include "physics/hittimer.h"
 #include "physics/PhysicsEngine.h"
 #include "physics/testdriver.h"
+#include "physics/rubbercontact.h"
+#include "physics/contactsystem.h"
 #include "plugins/ControllerPlugin.h"
 #include "plugins/MsgPlugin.h"
 #include "plugins/VPXPlugin.h"
@@ -1631,6 +1633,7 @@ Ball *Player::CreateBall(const float x, const float y, const float z, const floa
    pBall->m_hitBall.m_d.m_mass = mass;
    pBall->m_hitBall.m_d.m_radius = radius;
    pBall->m_hitBall.m_d.m_vel = { vx, vy, vz };
+   ContactSystem::NotePlaced(&pBall->m_hitBall);
    pBall->m_d.m_useTableRenderSettings = true;
    pBall->TimerSetup(m_vht);
    pBall->RenderSetup(m_renderer.get());
