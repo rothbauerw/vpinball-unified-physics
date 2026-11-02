@@ -34,9 +34,8 @@ struct FlipperSettings
    double slopDeg = 6.0, kContactNPerMm = 20.0, contactZeta = 0.1, stiffZeta = 0.12;
    // rigid one-body hand-off
    double rigidMaxRelSpeedMmS = 50.0;   // two-body -> rigid only when the link is taut and slower than this
-   // ball / rubber contact (physics/rubbercontact.h). rubberContact = false keeps the impulse path. All values are
-   // unverified defaults meant to be edited; see MakeRubberParams / ClampRubberSettings in hitflipper.cpp.
-   bool rubberContact = false;          // use the rubber force model for ball contacts on this flipper
+   // ball / rubber contact: the shared rubber law in the group step. All values are unverified defaults meant to be edited; see MakeRubberParams / ClampRubberSettings.
+   bool rubberContact = true;           // rubber_contact: read so a table that sets it to 0 is told it is ignored (a bat has no impulse path, MakePart)
    double rubberEMpa = 12.0;            // effective Young's modulus
    double rubberThicknessMm = 3.2;      // rubber layer thickness
    double rubberAlphaSPerM = 0.05;      // normal damping; rebound ratio ~ 1 - alpha*v
@@ -47,9 +46,7 @@ struct FlipperSettings
    double rubberTanDelta = 0.05;        // rubber loss tangent for the rolling resistance, 0 = off. PROVISIONAL: starts low on purpose (typical elastomer 0.1-0.3), to be tuned
    double rubberZLoMm = 9.144;          // rubber bottom above the playfield surface (0.36 in)
    double rubberHeightMm = 11.176;      // rubber height (0.44 in)
-   double rubberReleaseSteps = 20.0;    // substeps the ball must stay clear of the rubber and receding before the engagement ends
    double rubberReleaseGapMm = 0.2;     // ...and be farther than this from the rubber surface (release hysteresis for a resting ball)
-   double rubberSubstepUs = 10.0;       // substep while a ball is engaged with the rubber (bat and ball step together on this)
    // flipper nudge: when this flipper's plunger hits the coil stop, the named flipper's pivot is displaced along x, away from this one, by a
    // single pulse (fast rise, slow return) of nudgeGain * (angular momentum at the stop, kg m^2/s) millimetres. nudgeGain 0 = off.
    std::string nudgeTarget;             // name of the flipper that is nudged ("" = none)
@@ -103,6 +100,152 @@ namespace FlipperModel
    {
       return s.plungerKg * (k.lever / 1000.0) * (k.dLever / 1000.0) * omega * omega;
    }
+   // The windings over a step of h: the circuit's exponential with L and R + dL/dx v held (the plunger's place at mid-step, by its speed now). From the state at the step's start, so a step taken again is the same.
+   // iHigh, iLow: the currents at the end, fractions of each winding's V / R; i2High, i2Low: their squares' exact means over the step, same units (the force goes as i^2, and its fall is twice as fast as the current's).
+   struct CoilStep { double iHigh = 0.0, iLow = 0.0, i2High = 0.0, i2Low = 0.0; };
+   inline CoilStep CoilAdvance(const FlipperSettings& s, const FlipperDerived& p, const double xM, const double vX, const double iHigh, const double iLow, const bool coilOn, const bool preEos, const bool coilOffPrev, const bool wasPreEos, const double h)
+   {
+      const bool coilOff = !coilOn;
+      double frac = (xM + 0.5 * h * vX - p.xMin * 1e-3) / (s.bobbinMm * 1e-3);
+      frac = fmax(frac, 0.0);
+      const double vClose = fmax(-vX, 0.0);
+      const double dP = p.bP / (s.bobbinMm * Sq(frac + s.x0P)), dH = p.bH / (s.bobbinMm * Sq(frac + s.x0H));
+      const double lP = (p.aP + p.bP / (frac + s.x0P)) * 1e-3, lH = (p.aH + p.bH / (frac + s.x0H)) * 1e-3;
+      const double issP = s.vSupply / s.rP, issH = s.vSupply / s.rH;
+      double iP = iHigh * issP, iH = iLow * issH;
+      const auto Exp = [&](const double i0, const double V, const double R, const double L, double& meanI2) {
+         const double iInf = V / R, d = i0 - iInf, u = h * R / L;
+         const double e1 = exp(-u), m1 = u > 1e-6 ? (1.0 - e1) / u : 1.0 - 0.5 * u, m2 = u > 1e-6 ? (1.0 - e1 * e1) / (2.0 * u) : 1.0 - u;
+         meanI2 = iInf * iInf + 2.0 * iInf * d * m1 + d * d * m2;
+         return iInf + d * e1;
+      };
+      double mP = 0.0, mH = 0.0, iP1, iH1;
+      if (s.single)
+      {
+         iP1 = Exp(iP, coilOff ? 0.0 : s.vSupply, s.rP + dP * vClose, lP, mP);
+         iH1 = 0.0;
+      }
+      else if (s.series)
+      {
+         if (coilOff)
+         {
+            if (!coilOffPrev)
+            {
+               const double iLoop = (preEos && s.eosFlux) ? (lP * iP + lH * iH) / (lP + lH) : iP;
+               iP = iH = iLoop;
+            }
+            else
+               iH = iP;
+            iP1 = iH1 = Exp(iP, 0.0, s.rP + s.rH + (dP + dH) * vClose, lP + lH, mP);
+            mH = mP;
+         }
+         else if (preEos)
+         {
+            iP1 = Exp(iP, s.vSupply, s.rP + dP * vClose, lP, mP);
+            iH1 = Exp(iH, 0.0, s.rH, lH, mH);
+         }
+         else
+         {
+            if (wasPreEos)
+            {
+               const double iLoop = s.eosFlux ? (lP * iP + lH * iH) / (lP + lH) : iP;
+               iP = iH = iLoop;
+            }
+            else
+               iH = iP;
+            iP1 = iH1 = Exp(iP, s.vSupply, s.rP + s.rH + (dP + dH) * vClose, lP + lH, mP);
+            mH = mP;
+         }
+      }
+      else
+      {
+         const double V = coilOff ? 0.0 : 1.0;   // parallel
+         iP1 = Exp(iP, preEos ? V * s.vSupply : 0.0, s.rP + (preEos ? dP * vClose : 0.0), lP, mP);
+         iH1 = Exp(iH, V * s.vSupply, s.rH + dH * vClose, lH, mH);
+      }
+      CoilStep o;
+      o.iHigh = iP1 / issP;
+      o.iLow = iH1 / issH;
+      o.i2High = mP / (issP * issP);
+      o.i2Low = mH / (issH * issH);
+      return o;
+   }
+   // The time constant the windings are changing with now, s; infinite when they are at their targets (for a step's facts)
+   inline double CoilTimeConstant(const FlipperSettings& s, const FlipperDerived& p, const double xM, const double vX, const double iHigh, const double iLow, const bool coilOn, const bool preEos)
+   {
+      const double frac = (xM - p.xMin * 1e-3) / (s.bobbinMm * 1e-3);
+      const double vClose = fmax(-vX, 0.0);
+      const double lP = (p.aP + p.bP / (frac + s.x0P)) * 1e-3, lH = (p.aH + p.bH / (frac + s.x0H)) * 1e-3;
+      const double dP = p.bP / (s.bobbinMm * Sq(frac + s.x0P)), dH = p.bH / (s.bobbinMm * Sq(frac + s.x0H));
+      const double issP = s.vSupply / s.rP, issH = s.vSupply / s.rH;
+      double tau = INFINITY;
+      if (s.single)
+      {
+         if (fabs((coilOn ? 1.0 : 0.0) - iHigh) > 1e-3)
+            tau = lP / (s.rP + dP * vClose);
+      }
+      else if (!coilOn || !preEos)
+      {
+         const double tgt = coilOn ? s.vSupply / (s.rP + s.rH) : 0.0;
+         if (fabs(iHigh * issP - tgt) > 1e-3 * issP * 0.1 || fabs(iLow * issH - tgt) > 1e-3 * issP * 0.1)
+            tau = (lP + lH) / (s.rP + s.rH + (dP + dH) * vClose);
+      }
+      else
+      {
+         if (fabs(1.0 - iHigh) > 1e-3)
+            tau = fmin(tau, lP / (s.rP + dP * vClose));
+         if (iLow > 1e-3)
+            tau = fmin(tau, lH / s.rH);
+      }
+      return tau;
+   }
+   // A given motion: one pulse along an axis, half-cosine rise then half-cosine return (the other bat's strike moving a pivot)
+   struct PivotPulse
+   {
+      bool active = false;
+      double t = 0.0, amp = 0.0, rise = 0.001, fall = 0.008;
+      void Eval(const double at, double& disp, double& vel) const
+      {
+         if (!active || at < 0.0 || at >= rise + fall)
+            disp = vel = 0.0;
+         else if (at < rise)
+         {
+            disp = amp * 0.5 * (1.0 - cos(PI * at / rise));
+            vel = amp * 0.5 * (PI / rise) * sin(PI * at / rise);
+         }
+         else
+         {
+            const double u = at - rise;
+            disp = amp * 0.5 * (1.0 + cos(PI * u / fall));
+            vel = -amp * 0.5 * (PI / fall) * sin(PI * u / fall);
+         }
+      }
+      double Move(const double h) const   // its move over the next h
+      {
+         if (!active)
+            return 0.0;
+         double d0, d1, v;
+         Eval(t, d0, v);
+         Eval(t + h, d1, v);
+         return d1 - d0;
+      }
+      void Start(const double a, const double riseS, const double fallS)
+      {
+         if (active)   // one still running: let it finish
+            return;
+         amp = a;
+         rise = riseS;
+         fall = fallS;
+         t = 0.0;
+         active = true;
+      }
+      void Advance(const double h)
+      {
+         t += h;
+         if (t >= rise + fall)
+            active = false;
+      }
+   };
    inline void SolveAB(double larm, double lair, double x0, double& a, double& b)
    {
       b = (larm - lair) * x0 * (1.0 + x0);
@@ -198,11 +341,6 @@ namespace FlipperModel
       return fmax(0.0, s.restKNmPerRad * penRef * pow(r, s.restN) - c * omega);
    }
 
-   inline double SpringTorque(const FlipperSettings& s, const FlipperDerived& p, double theta)
-   {
-      const double force = s.preloadN + p.kSpringNPerMm * (p.xRest - SliderX(s, p, theta));
-      return force * LeverMm(s, p, theta) / 1000.0;
-   }
    inline double SpringTorqueK(const FlipperSettings& s, const FlipperDerived& p, const Kin& k)
    {
       const double force = s.preloadN + p.kSpringNPerMm * (p.xRest - k.x);

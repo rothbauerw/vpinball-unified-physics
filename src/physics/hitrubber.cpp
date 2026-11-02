@@ -949,65 +949,6 @@ HitObject *HitRubber::HitEventObject() const
    return m_set.band ? nullptr : const_cast<HitRubber *>(this);   // a rubber post / ring fires its own hit event (Collide above)
 }
 
-void HitRubber::SideGather(const BallS &ball, const RubberContact::V3 &c, const double ballR, const double reachM, RubberSideSet &set)
-{
-   static const bool noSide = ContactSystem::EnvVar("VPX_CONTACT_NOSIDE", "VPX_RING_NOSIDE") != nullptr;   // diagnostics: the flipper step without the rubbers around the ball (stock contact for them)
-   if (noSide)
-   {
-      set.items.clear();
-      set.depthM.clear();
-      return;
-   }
-   std::vector<SurfaceContact> items;
-   const float reach = ball.m_radius + 20.0f;   // VPX units, as for a engagement
-   for (ContactHost *const o : Registry())
-   {
-      if (!o->m_enabled || !o->ContactSettings().contact)
-         continue;
-      const FRect3D &bb = o->m_hitBBox;
-      if (ball.m_pos.x < bb.left - reach || ball.m_pos.x > bb.right + reach || ball.m_pos.y < bb.top - reach || ball.m_pos.y > bb.bottom + reach
-          || ball.m_pos.z < bb.zlow - reach || ball.m_pos.z > bb.zhigh + reach)
-         continue;
-      o->ReloadIfChanged();
-      SurfaceContact it;
-      bool known = false;
-      for (const SurfaceContact &old : set.items)
-         if (old.r == o)
-         {
-            it = old;   // the shear state stays
-            known = true;
-            break;
-         }
-      it.r = o;
-      it.rp = o->ContactSettings().ToParams();
-      it.hLayer = o->LayerM();
-      if (!known)
-         it.st.Reset();
-      o->Refresh(it, ballR, reachM, c);
-      items.push_back(std::move(it));
-   }
-   set.items.swap(items);
-   set.depthM.assign(set.items.size(), 0.0);
-}
-
-void HitRubber::SideStep(RubberSideSet &set, const RubberContact::BallSI &bs, const RubberContact::V3 &c, const RubberContact::V3 &v, const RubberContact::V3 &w, const double h,
-                         RubberContact::V3 &F, RubberContact::V3 &Mb)
-{
-   using namespace RubberContact;
-   for (size_t i = 0; i < set.items.size(); i++)
-   {
-      SurfaceContact &it = set.items[i];
-      const TubeProbe pr = it.r->Probe(bs, it, c);
-      const ContactResult r = EvaluateTube(it.rp, bs, pr, it.hLayer, v, w, h, it.st);
-      if (r.inContact)
-      {
-         F = F + r.force;
-         Mb = Mb + r.torqueOnBall;
-         set.depthM[i] = std::max(set.depthM[i], r.delta);
-      }
-   }
-}
-
 double HitRubber::LayerM() const
 {
    if (m_set.layerMm > 0.0 || m_surface != nullptr)
@@ -1103,7 +1044,7 @@ bool PairEligible(const HitBall *x)
 {
    // Every ball takes part in pair contact except one held by a kicker (a state of its own, until the kicker is redesigned). Unified: the bat and the band are stepped
    // with the island, so their balls are members like any other; the legacy engine steps them apart and keeps its balls out.
-   return !x->m_d.m_lockedInKicker && (ContactSystem::Unified() || (x->m_rubberOwner == nullptr && x->m_bandOwner == nullptr));
+   return !x->m_d.m_lockedInKicker && (ContactSystem::Unified() || x->m_bandOwner == nullptr);
 }
 
 bool HitRubber::ContactPairModel(const HitBall *a, const BallS &b)
@@ -1154,7 +1095,7 @@ void HitRubberBandBallDeleted(HitBall *ball)
 
 bool HitRubber::BandWants(const HitBall *ball) const
 {
-   return m_set.band && ball->m_bandOwner == nullptr && ball->m_rubberOwner == nullptr;   // a contact (the playfield's, above all) is handed over to the band. No cooling down and no giving way to a flipper: there is no stock collision to leave the ball to
+   return m_set.band && ball->m_bandOwner == nullptr;   // a contact (the playfield's, above all) is handed over to the band. No cooling down and no giving way to a flipper: there is no stock collision to leave the ball to
 }
 
 bool HitRubber::BandEngage(HitBall *const pb)

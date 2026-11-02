@@ -2286,6 +2286,12 @@ namespace GroupStep
       }
    };
 
+   // VPX_GROUP_HFIX=<us> (a diagnostic, read once): every step of a group holding a part on the group step, and of a part alone, is this long, not the step rule's (the energy's step sweep)
+   inline double GroupFixedStepS()
+   {
+      static const double s = []() { const char *const e = getenv("VPX_GROUP_HFIX"); return e != nullptr && *e ? atof(e) * 1e-6 : 0.0; }();
+      return s;
+   }
    // The one energy book of every group, with or without balls (a diagnostic, read once). VPX_GROUP_BOOK=<file>: one row per cycle: its books, and how much the energy rose over them.
    // VPX_GROUP_BOOK_STEPS=1: the rises per step too (an energy sum per step). A part's own split stays the part's.
    inline FILE *GroupBookFile()
@@ -2353,7 +2359,8 @@ namespace GroupStep
       g.Configure();
       CycleBook book(g);
       double done = 0.0;
-      const bool ok = g.StepsOver(dt, done, [](const double h) { return h; }, [&book]() { book.AfterStep(); });
+      const double hFix = GroupFixedStepS();
+      const bool ok = g.StepsOver(dt, done, [&](const double h) { return hFix > 0.0 ? std::min(hFix, dt - done) : h; }, [&book]() { book.AfterStep(); });
       book.End(tMs, true, dt, !ok);
       if (out != nullptr)
          *out = g.books;

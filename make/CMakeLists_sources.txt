@@ -229,6 +229,7 @@ set(VPX_SOURCES
    src/physics/contactbat.h
    src/physics/contactbatini.cpp
    src/physics/contactbatpart.h
+   src/physics/batgroup.h
    src/physics/contacthost.cpp
    src/physics/contacthost.h
    src/physics/contactparthost.cpp

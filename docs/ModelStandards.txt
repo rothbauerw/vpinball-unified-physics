@@ -131,6 +131,10 @@ e. Every matrix run writes its pass/fail report to disk the day it runs.
 - A part's depth compared with an end depth nobody sets for parts: the zero rule read SurfaceContact::endDepth, 0 for a moving part, so the part's whole squash went into the zero every cycle ("deeper with no step"), 2026-10-31. The per-cycle book closes anyway. Catches it: the same test part; the zero rule's DepthFault lines. Any rule that reads kept state: ask who sets it for every kind of surface.
 - A query that keeps state, called in the wrong order: StopExcess(zero) after StopExcess(x) wipes what a part needs for its pin, 2026-10-31. Found on paper. Catches it: mapping each private copy onto an interface before calling it done.
 - A claim of "just arithmetic every part writes by hand" was wrong for one part: the cord's plate has its own tolerance and stays out of the balls' move, 2026-10-31. Catches it: same bytes after moving code into a shared rule.
+- A constraint decided at the end of a step, after a switch: a coil let go with the link taut stayed on its stop for one 170 us step, took 67 uJ of 211, and a 10 ms tap gave no shot, 2026-10-31. Catches it: a cradle tap at the rule against 1 us.
+- A group's limit on surfaces dropped the ones past it: six balls, ball through the playfield, 2026-10-31 (the limit is gone, GroupStepDesign 17.6). Catches it: driver limit 4, the note on screen.
+- Energy that leaves between cycles booked in a step: a book error with no gain, 2026-10-31. Catches it: E0 against the last E1 in the book file.
+- A slope taken over a move near rounding: a chord (V1 - V0) / move at 1e-9 rad and a gradient at tolerance 1e-17 m carried noise, the solve never settled, a shorter step fell to the clean branch and steps went under 2 us, 2026-11-01. Catches it: same bytes at a 2 us floor and a 10 ns floor.
 Each trap names the test that now catches it ("none yet" until one exists); the older entries above get theirs as they are reviewed.
 
 

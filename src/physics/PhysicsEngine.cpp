@@ -451,14 +451,6 @@ FlipperMoverObject *PhysicsEngine::FindFlipperMover(const std::string& name) con
    return nullptr;
 }
 
-bool PhysicsEngine::FlipperNear(const BallS &ball, const float margin) const
-{
-   for (const HitFlipper *const f : m_vFlippers)
-      if (f->GapToBall(ball) < margin)
-         return true;
-   return false;
-}
-
 // A bat the ball could meet within `horizon` physics steps: the gap to the bat is less than `margin` plus what the nearest bat point and the ball travel in that time.
 // Unlike FlipperNear this ignores a bat that is still or a ball beside the base (which hardly moves), so a rubber next to the base keeps its force model.
 float PhysicsEngine::FlipperClearance(const BallS &ball, const float horizon) const
@@ -482,7 +474,7 @@ float PhysicsEngine::FlipperClearance(const BallS &ball, const float horizon) co
 //   iters         1 ms iterations run this frame (S: frames in the window)
 //   sim_sum_us / sim_max_us      PhysicsSimulateCycle, the collision physics itself (S: sum over the window / longest single iteration)
 //   other_sum_us / other_max_us  the rest of each iteration: script timers, input, nudge, plunger, mover velocities (S: same)
-//   balls, engaged               balls in play, balls currently driven by a flipper rubber (S: engaged = number of slow frames in the window)
+//   balls, engaged               balls in play, balls currently held by the contact system (S: engaged = number of slow frames in the window)
 namespace
 {
    struct PhysTiming
@@ -532,7 +524,7 @@ namespace
          const uint64_t phys = simSum + otherSum;
          uint32_t engaged = 0;
          for (const Ball *const b : g_pplayer->m_vball)
-            engaged += (b->m_hitBall.m_rubberOwner != nullptr) ? 1u : 0u;
+            engaged += (b->m_hitBall.m_contact != nullptr) ? 1u : 0u;
          const bool isSlow = gap > gapThrUs || phys > frameThrUs || simMax > iterThrUs || otherMax > iterThrUs;
          frames++;
          slow += isSlow ? 1u : 0u;
@@ -845,7 +837,7 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
             for (size_t i = 0; i < nb; i++)
             {
                const HitBall &hb = g_pplayer->m_vball[i]->m_hitBall;
-               const unsigned fl = (hb.m_contact != nullptr ? 1u : 0u) | (hb.m_rubberOwner != nullptr ? 2u : 0u) | (hb.m_bandOwner != nullptr ? 4u : 0u) | (hb.m_d.m_lockedInKicker ? 8u : 0u);
+               const unsigned fl = (hb.m_contact != nullptr ? 1u : 0u) | (hb.m_bandOwner != nullptr ? 4u : 0u) | (hb.m_d.m_lockedInKicker ? 8u : 0u);
                hist[i][head] = { hb.m_d.m_pos.x, hb.m_d.m_pos.y, hb.m_d.m_pos.z, hb.m_d.m_vel.x, hb.m_d.m_vel.y, hb.m_d.m_vel.z, fl, g_pplayer->m_time_msec };
                const Vertex3Ds &v = hb.m_d.m_vel;
                if (!hb.m_d.m_lockedInKicker && v.x * v.x + v.y * v.y + v.z * v.z > lim * lim && g_pplayer->m_time_msec - lastWarn[i] > 1000)
@@ -1078,7 +1070,7 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
             what += splitBall->m_contact != nullptr ? " ballheld" : " ballfree";
          if (splitBall != nullptr && splitBall->m_contact == nullptr)
             what += " at " + std::to_string((int)(splitBall->m_d.m_pos.x / 100) * 100) + "," + std::to_string((int)(splitBall->m_d.m_pos.y / 100) * 100) + " z" + std::to_string((int)(splitBall->m_d.m_pos.z / 20) * 20)
-                    + (splitBall->m_d.m_lockedInKicker ? " kickerlocked" : "") + (InPlayfieldHole(splitBall->m_d.m_pos) ? " inhole" : "") + (splitBall->m_bandOwner != nullptr ? " band" : "") + (splitBall->m_rubberOwner != nullptr ? " batowned" : "");
+                    + (splitBall->m_d.m_lockedInKicker ? " kickerlocked" : "") + (InPlayfieldHole(splitBall->m_d.m_pos) ? " inhole" : "") + (splitBall->m_bandOwner != nullptr ? " band" : "");
          ContactProf::Split(splitCause, splitStatic, what.c_str());
       }
       ContactSystem::Step(hittime); // contact-held balls: surface contacts and, for touching balls, ball-to-ball contact, stepped together
@@ -1089,7 +1081,7 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
       {
          const TestDriver::Timed tdMove(TestDriver::kMoveParts);
          for (size_t i = 0; i < m_vmover.size(); i++)
-            m_vmover[i]->PreUpdateDisplacements(hittime); // flippers with a rubber-engaged ball move bat and ball together here
+            m_vmover[i]->PreUpdateDisplacements(hittime); // (the contact system's parts and the bands advance here)
       }
       if (ctLog != nullptr)
       {

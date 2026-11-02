@@ -52,7 +52,6 @@ public:
 
 
    // True if any flipper's bat is within `margin` VPX units of the ball surface (a moving bat can reach the ball within a few ms)
-   bool FlipperNear(const BallS &ball, float margin) const;
    std::string FlipperDebug(const BallS &ball, float horizon) const;
    float FlipperClearance(const BallS &ball, float horizon) const;   // smallest gap to a bat minus what the ball and the bat point nearest it travel in `horizon` steps (VPX units)
 

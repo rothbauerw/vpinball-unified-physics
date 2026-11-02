@@ -24,6 +24,7 @@
 //    ball NAME x y z vx vy vz [radius mass]   create a ball: x, y in VPX units, z = height of the ball's bottom above the playfield (U), velocity in m/s
 //    destroy NAME                             remove the ball
 //    flip PART 1|0                            flipper solenoid on / off (as the script's RotateToEnd / RotateToStart)
+//    enabled PART 1|0                         a flipper's Enabled (as the script's Flipper.Enabled)
 //    sling PART                               fire the sling coil of a rubber band (as Rubber.SlingTrigger)
 //    magnet NAME V                            supply voltage of a [Magnet:NAME] in the physics ini (as the script's Magnet NAME, V; 0 = off)
 //    turntable NAME V                         motor voltage of a [Turntable:NAME] in the physics ini (as the script's Turntable NAME, V; 0 = off)
@@ -55,6 +56,7 @@ namespace TestDriver
          string name;
          Ball *ball = nullptr;   // null when removed
          float x, y, z, vx, vy, vz, radius, mass;   // start state (VPX units; z = centre)
+         float wx = 0.f, wy = 0.f, wz = 0.f;        // start spin, rad/s
          bool respawnDue = false;
       };
 
@@ -254,6 +256,8 @@ namespace TestDriver
       void Create(TBall &b)
       {
          b.ball = g_pplayer->CreateBall(b.x, b.y, b.z - b.radius, b.vx, b.vy, b.vz, b.radius, b.mass);   // CreateBall adds the radius to z
+         if (b.ball != nullptr && (b.wx != 0.f || b.wy != 0.f || b.wz != 0.f))
+            b.ball->m_hitBall.m_angularmomentum = Vertex3Ds(b.wx, b.wy, b.wz) * (b.ball->m_hitBall.Inertia() * (float)DEFAULT_STEPTIME_S);
          b.respawnDue = false;
       }
 
@@ -280,14 +284,14 @@ namespace TestDriver
          const string at = "line " + std::to_string(a.line) + " (" + a.verb + "): ";
          if (a.verb == "ball")
          {
-            float v[8] = { 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, DEFAULT_BALL_SIZE, 1.f };   // DEFAULT_BALL_SIZE is the radius (25 U), as Kicker.CreateBall uses it
+            float v[11] = { 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, DEFAULT_BALL_SIZE, 1.f, 0.f, 0.f, 0.f };   // DEFAULT_BALL_SIZE is the radius (25 U), as Kicker.CreateBall uses it
             const size_t n = a.args.size();
-            bool ok = n == 7 || n == 9;
+            bool ok = n == 7 || n == 9 || n == 12;
             for (size_t i = 1; ok && i < n; i++)
                ok = Num(a, i, v[i - 1]);
             if (!ok)
             {
-               Warn(at + "expected NAME x y z vx vy vz [radius mass]");
+               Warn(at + "expected NAME x y z vx vy vz [radius mass [wx wy wz]]");
                return;
             }
             TBall *b = FindBall(a.args[0]);
@@ -307,6 +311,9 @@ namespace TestDriver
             b->vy = (float)(v[4] * kMps);
             b->vz = (float)(v[5] * kMps);
             b->mass = v[7];
+            b->wx = v[8];
+            b->wy = v[9];
+            b->wz = v[10];
             Create(*b);
          }
          else if (a.verb == "roll")
@@ -338,6 +345,14 @@ namespace TestDriver
                f->RotateToEnd();
             else
                f->RotateToStart();
+         }
+         else if (a.verb == "enabled")
+         {
+            Flipper *const f = a.args.size() == 2 ? static_cast<Flipper *>(FindPart(a.args[0], eItemFlipper)) : nullptr;
+            if (f == nullptr || (a.args[1] != "1" && a.args[1] != "0"))
+               Warn(at + "expected a flipper name and 1 or 0");
+            else
+               f->put_Enabled(a.args[1] == "1" ? VARIANT_TRUE : VARIANT_FALSE);
          }
          else if (a.verb == "sling")
          {

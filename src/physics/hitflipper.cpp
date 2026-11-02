@@ -398,16 +398,8 @@ void FlipperMoverObject::SetMass(const float m)
 #endif
 }
 
-// The two-body flipper model, the flipper nudge and the ball/bat rubber contact are in hitflippermodel.cpp.
+// The bat as a moving part of the contact system and the flipper nudge are in hitflippermodel.cpp.
 
-
-void FlipperMoverObject::PreUpdateDisplacements(const float dtime)
-{
-   if (m_part != nullptr)
-      return;   // (a bat that is a moving part is advanced by its host)
-   if (m_rbBall != nullptr && FlipperModelEnabled() && !ContactSystem::Unified())   // (unified: the contact system steps the bat with its ball)
-      RubberAdvance(dtime);
-}
 
 // Ported at: VisualPinball.Unity/VisualPinball.Unity/VPT/Flipper/FlipperDisplacementSystem.cs
 
@@ -415,11 +407,6 @@ void FlipperMoverObject::UpdateDisplacements(const float dtime)
 {
    if (m_part != nullptr)
       return;
-   if (FlipperModelEnabled())
-   {
-      UpdateDisplacementsFlipper(dtime);
-      return;
-   }
 
    m_angleCur += m_angleSpeed*dtime; // move flipper angle
 
@@ -481,18 +468,6 @@ void FlipperMoverObject::UpdateVelocities()
 {
    if (m_part != nullptr)
       return;
-   if (FlipperModelEnabled())
-   {
-      // flipper model integrates its own forces inside UpdateDisplacements; here only keep the
-      // quantities the collision code reads (inertia) up to date and disable the stock contact logic.
-      FlipperEnsureInit();
-      FlipperUpdateInertia();
-      RubberLogRow();
-      m_angularMomentum = m_inertia * m_angleSpeed;
-      m_isInContact = false;
-      m_contactTorque = 0.f;
-      return;
-   }
 
    //const float springDispl = GetStrokeRatio() * 0.5f + 0.5f; // range: [0.5 .. 1]
    //const float springForce = -0.6f * springDispl * GetStrength();
@@ -568,16 +543,6 @@ void FlipperMoverObject::UpdateVelocities()
 
 void FlipperMoverObject::ApplyImpulse(const Vertex3Ds& rotI)
 {
-   if (FlipperModelEnabled())
-   {
-      // ball impact goes into the flipper body; the link then distributes it to the plunger
-      FlipperEnsureInit();
-      const double dirSign = m_direction ? 1.0 : -1.0;
-      m_bat.omega += dirSign * ((double)rotI.z / (double)m_inertia) / DEFAULT_STEPTIME_S;   // rad/VPT -> rad/s
-      m_angleSpeed = (float)(dirSign * m_bat.omega * DEFAULT_STEPTIME_S);
-      m_angularMomentum = m_inertia * m_angleSpeed;
-      return;
-   }
    m_angularMomentum += rotI.z;                  // only rotation about z axis
    m_angleSpeed = m_angularMomentum / m_inertia; // TODO: figure out moment of inertia
 }
@@ -611,7 +576,7 @@ Vertex3Ds FlipperMoverObject::SurfaceVelocity(const Vertex3Ds& surfP) const
    //const Vertex3Ds angularVelocity(0, 0, m_angleSpeed);
    //return CrossProduct( angularVelocity, surfP );
    // equivalent:
-   return CrossZ(m_angleSpeed, surfP) + Vertex3Ds(m_bat.nzVelU, 0.f, 0.f);   // + pivot velocity (flipper nudge)
+   return CrossZ(m_angleSpeed, surfP);
 }
 
 Vertex3Ds FlipperMoverObject::SurfaceAcceleration(const Vertex3Ds& surfP) const
@@ -626,27 +591,17 @@ Vertex3Ds FlipperMoverObject::SurfaceAcceleration(const Vertex3Ds& surfP) const
    return tangAcc + centrAcc;
 }
 
-// Angle range the ball collision tests may assume the bat reaches. Stock clamps the extrapolated bat angle to the table's
-// Start/End angle because stock has a hard stop exactly there. The flipper model has no such fixed limit: its stroke is stop_deg
-// from the start angle and the bat then overshoots by an amount that depends on load, voltage and link play, and it hands the
-// collision code its true angle and angular speed every step. So with the model on there is nothing to clamp to, and a
-// range taken from the table (or any fixed margin) would put the collision geometry in a different place from the bat.
+// Angle range the ball collision tests may assume the bat reaches: stock clamps the extrapolated bat angle to the table's Start/End angle (a bat that is a moving part has no collider to test, HitTest).
 void FlipperMoverObject::HitTestAngleLimits(float& angleMin, float& angleMax) const
 {
-   if (FlipperModelEnabled())
-   {
-      angleMin = -std::numeric_limits<float>::max();
-      angleMax = std::numeric_limits<float>::max();
-      return;
-   }
    angleMin = min(m_angleStart, m_angleEnd);
    angleMax = max(m_angleStart, m_angleEnd);
 }
 
 float FlipperMoverObject::GetHitTime() const
 {
-   if (FlipperModelEnabled())
-      return -1.0f; // flipper model has no angle clamp to schedule: the stop is the plunger's, handled inside the substeps
+   if (m_part != nullptr)
+      return -1.0f; // a part has no angle clamp to schedule: its stops are in the group step
    if (m_angleSpeed == 0.f)
       return -1.0f;
 
@@ -671,7 +626,6 @@ float HitFlipper::HitTest(const BallS& ball, const float dtime, CollisionEvent& 
 {
    if (!m_flipperMover.m_enabled) return -1;
    if (m_flipperMover.m_part != nullptr) return -1; // the bat is a moving part of the contact system: its host finds the balls
-   if (m_flipperMover.RubberIsEngaged(ball)) return -1; // rubber model owns this ball until it is released
 
    const bool lastface = m_flipperMover.m_lastHitFace;
 
@@ -1130,24 +1084,7 @@ void HitFlipper::Collide(const CollisionEvent& coll)
    if (BallControl* const ballControl = m_physics->GetBallControl())
       ballControl->SetDraggedBall(pball->m_pBall); // Ball control most recently collided with flipper
 
-   const bool unified = ContactSystem::Unified();
-   if (!unified)
-      HitRubberContactRelease(pball, "bat contact");   // the flipper takes over from a force-model contact (its step carries the rubbers around the ball)
-   if (m_flipperMover.RubberWants(pball))
-   {
-      // rubber contact model: no impulse here. The ball is handed to the rubber force model, which is stepped together with
-      // the bat (see UpdateDisplacementsFlipper, or ContactSystem when unified: the bat's rubber joins the ball's contact); events and haptics fire once, from this first-touch speed.
-      bool taken = !unified;   // (unified: a bat with rubber_contact on is a moving part of the contact system, whose collider never gets here)
-      if (taken)
-         m_flipperMover.RubberEngage(pball);
-      if (taken)
-      {
-         FireHitEventsAndRumble(bnv, coll, normal, vB);
-         return;
-      }
-   }
-   if (unified)
-      HitRubberContactRelease(pball, "bat contact");
+   HitRubberContactRelease(pball, "bat contact");   // (only a table with unified off gets here)
 
 #ifdef C_DISP_GAIN
    // correct displacements, mostly from low velocity blindness, an alternative to true acceleration processing
@@ -1276,17 +1213,7 @@ void HitFlipper::Contact(CollisionEvent& coll, const float dtime)
       return;
    HitBall* const pball = coll.m_ball;
 
-   const bool unified = ContactSystem::Unified();
-   if (!unified)
-      HitRubberContactRelease(pball, "bat contact");
-   if (m_flipperMover.RubberWants(pball))
-   {
-      // resting contact: the rubber force model carries the ball from here on (no events, as before)
-      if (!unified && (m_flipperMover.RubberEngage(pball), true))   // (unified: a bat with rubber_contact on is a moving part of the contact system)
-         return;
-   }
-   if (unified)
-      HitRubberContactRelease(pball, "bat contact");
+   HitRubberContactRelease(pball, "bat contact");   // (only a table with unified off gets here)
 
    const Vertex3Ds normal = coll.m_hitnormal;
 

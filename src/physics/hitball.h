@@ -95,7 +95,6 @@ public:
    float m_nearSafeU = -1.f;
    uint32_t m_nearMs = 0;
    struct BallContact *m_contact = nullptr;             // the contact system's engagement that holds this ball (a post, a wall rubber, the playfield, a disc); null = none
-   FlipperMoverObject *m_rubberOwner = nullptr; // model flipper whose rubber contact model currently drives this ball (null = none)
    bool m_magnetic = true;                      // Ball.Magnetic: false = non-magnetic (ceramic): no pull from the magnets, no field of its own
    float m_magPair[3] = { 0.f, 0.f, 0.f };      // magnets: velocity change this physics step from the other balls' induced dipoles (VPX units), set by Magnets::Step
    float m_hitSpeed = 0.f;   // speed along the surface normal just before the latest impact (same units as the velocity), for scripts (Ball.HitSpeed) and the playfield hit event

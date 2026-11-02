@@ -30,8 +30,8 @@ namespace PhysicsIni
    struct Features
    {
       bool unified = false;       // master switch: the table runs on the unified engine (off = stock VPX physics); read by ContactSystem::SetTable
-      bool flippers = true;       // Two-body flipper model (off = the stock flipper)
-      bool flipperRubber = true;  // ball / rubber contact force model on the flipper bats (off = instant impulse)
+      bool flippers = true;       // read so a table that sets it to 0 is told it is ignored (a bat has no stock path, FlipperMoverObject::MakePart)
+      bool flipperRubber = true;  // the same: the bat has no impulse path
       bool rubbers = true;        // force model for ring rubbers (posts, wall rubbers); off = stock collisions
       bool playfieldContact = true; // the playfield (plane) on the force model: one material ([Playfield]); off = the stock plane contact
       bool surfaceRubbers = true; // walls and primitives flagged rubber = 1 in [Wall:<name>] / [Primitive:<name>]; off = stock collisions

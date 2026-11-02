@@ -33,8 +33,6 @@ HitBall::~HitBall()
 {
    if (m_bandOwner != nullptr || m_contact != nullptr)
       HitRubberBandBallDeleted(this); // first: the contact lets go of this ball's bat (unified: the bat may hold other balls too)
-   if (m_rubberOwner != nullptr)
-      m_rubberOwner->RubberRelease(); // a deleted ball must not stay engaged with a flipper (one ball per bat)
    delete m_d.m_vpVolObjs;
 }
 
@@ -687,7 +685,7 @@ void HitBall::UpdateDisplacements(const float dtime)
    if (!m_d.m_lockedInKicker)
    {
       if (m_rubberAdvanced)
-         m_rubberAdvanced = false; // position, velocity and spin were advanced by the rubber model (FlipperMoverObject::RubberAdvance)
+         m_rubberAdvanced = false; // position, velocity and spin were advanced by the contact system
       else
       {
       const Vertex3Ds ds = dtime * m_d.m_vel;

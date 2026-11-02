@@ -39,7 +39,7 @@ namespace FlipperModel
       { "rubber_thin_layer_beta", &FlipperSettings::rubberBetaLayer }, { "rubber_mu", &FlipperSettings::rubberMu },
       { "rubber_sideways_stiffness", &FlipperSettings::rubberShearScale },
       { "rubber_z_lo_mm", &FlipperSettings::rubberZLoMm }, { "rubber_height_mm", &FlipperSettings::rubberHeightMm },
-      { "rubber_substep_us", &FlipperSettings::rubberSubstepUs }, { "rubber_release_steps", &FlipperSettings::rubberReleaseSteps }, { "rubber_release_gap_mm", &FlipperSettings::rubberReleaseGapMm },
+      { "rubber_release_gap_mm", &FlipperSettings::rubberReleaseGapMm },
       { "rubber_tan_delta", &FlipperSettings::rubberTanDelta },
       { "nudge_gain", &FlipperSettings::nudgeGain }, { "nudge_rise_ms", &FlipperSettings::nudgeRiseMs }, { "nudge_fall_ms", &FlipperSettings::nudgeFallMs },
    };
@@ -167,8 +167,6 @@ namespace FlipperModel
       clampKey("rubber_sideways_stiffness", s.rubberShearScale, 0.01, 100.0);
       clampKey("rubber_z_lo_mm", s.rubberZLoMm, 0.0, 60.0);
       clampKey("rubber_height_mm", s.rubberHeightMm, 1.0, 60.0);
-      clampKey("rubber_substep_us", s.rubberSubstepUs, 2.0, 100.0);
-      clampKey("rubber_release_steps", s.rubberReleaseSteps, 1.0, 1000.0);
       clampKey("rubber_release_gap_mm", s.rubberReleaseGapMm, 0.0, 5.0);
       clampKey("rubber_tan_delta", s.rubberTanDelta, 0.0, 2.0);
       clampKey("nudge_gain", s.nudgeGain, 0.0, 10000.0);
@@ -211,8 +209,7 @@ void ContactBat::LoadSettings(const std::string &who, const std::filesystem::pat
    ClampRubberSettings(s, [&who](const char *key, double was, double now) { PLOGW << "Flipper settings (" << who << "): " << key << " = " << was << " is out of range, using " << now; });
    set = s;
    Derive(set, der);
-   idle = false;   // new settings: the old equilibrium no longer holds
    PLOGI << "Flipper settings for " << who << " loaded from " << iniPath.string() << ": " << (s.single ? "single" : (s.series ? "series" : "parallel"))
          << ", K_spring " << der.kSpringNPerMm << " N/mm, preload " << s.preloadN << " N, rest stop K " << s.restKNmPerRad
-         << " zeta " << s.restZeta << " n " << s.restN << ", rubber contact " << (s.rubberContact ? "on" : "off") << ", tan delta " << s.rubberTanDelta;
+         << " zeta " << s.restZeta << " n " << s.restN << ", tan delta " << s.rubberTanDelta;
 }

@@ -18,7 +18,6 @@ class ContactHost;
 class ContactPartHost;
 class HitFlipper;
 namespace BatPart { class Part; }
-struct RubberSideSet;
 
 #include "physics/coilmodel.h"
 #include "physics/contactbat.h"
@@ -47,7 +46,7 @@ public:
    void UpdateInertia();
 #endif
    // Angle range (rad) the ball collision tests may assume the bat reaches. Stock: the table's Start/End angle. With the Flipper
-   // model on there is no fixed limit (its stroke is stop_deg and it overshoots by a load dependent amount), so no limit.
+   // model on the bat has no collider to test (HitTest), so this is the stock flipper's.
    void HitTestAngleLimits(float& angleMin, float& angleMax) const;
 
    void SetStartAngle(const float r);
@@ -65,65 +64,22 @@ public:
 
    void ApplyImpulse(const Vertex3Ds& rotI);
 
-   // Two-body flipper model (unified engine): a plunger body and a
-   // flipper (bat + crank + shaft, one rigid body) coupled through the link's pin slop, with a
-   // power coil, a hold coil and the return spring. Replaces the stock torque model; table
-   // strength/return/mass/sweep are ignored (rothbauerw's real-data values are used instead).
-   void FlipperEnsureInit();
-   void FlipperStep(double h, double extTorqueNm = 0.0);   // extTorqueNm: external torque on the flipper in the closing direction (rubber contact with a ball), 0 = none
-   void FlipperUpdateInertia();
-   void UpdateDisplacementsFlipper(const float dtime);
-   void FlipperReloadSettings(bool force);
 
-   // 3D ball/rubber geometry test (physics/rubbercontact.h): does the ball overlap the rubber surface right now?
-   // Allows overlap, so it also works for a ball that is already engaged. Pure geometry, no state change.
-   RubberContact::Probe RubberProbe(const BallS& ball) const;
-
-   // Engagement of a ball with this flipper's rubber (one ball per flipper, one flipper per ball). While engaged the
-   // ball is driven by the rubber force model and the impulse path is skipped.
-   static bool MultiBall();
-   bool RubberWants(const HitBall *ball) const;   // rubber_contact is on and this ball may engage (else the impulse path runs)
-   bool RubberIsEngaged(const BallS& ball) const;
-   bool RubberSideHas(const ContactHost *r) const;   // the force-model rubbers around the engaged ball (a post beside the bat) are part of this flipper's step
-   std::shared_ptr<RubberSideSet> m_rbSide;        // those rubbers with their shear state, null = none engaged
-   void RubberEngage(HitBall *ball);
-   void RubberRelease();
-   // One substep of release bookkeeping: pass whether the ball is clear of the rubber and moving away. Returns true
-   // (and releases) once that has held for rubber_release_steps substeps in a row.
-   bool RubberReleaseStep(bool clearAndReceding);
-   HitBall *m_rbBall = nullptr;   // engaged ball, null = none
-   int m_rbClearSteps = 0;        // consecutive substeps clear and receding
-   RubberContact::RubberState m_rbState;   // shear spring state of the current engagement
-   double m_rbLastDist = 0.0;     // ball centre to rubber surface distance at the previous substep, m
-   bool m_rbJustEngaged = false;  // the next RubberAdvance is the first of this engagement (checks and seats the starting overlap)
-   uint32_t m_rbCooldownUntilMs = 0;   // after the safety net trips, no new engagement before this game time (the impulse path runs meanwhile)
-   int m_rbLogSteps = 0;          // log only: substeps in contact since the last log row
-   double m_rbLogPeakFn = 0.0, m_rbLogPeakDelta = 0.0;   // log only: peak normal force (N) and compression (m) since the last row
-   void RubberLogRow();           // VPX_RUBBER_LOG: one row per physics step (LeftFlipper only), engaged or not
-   bool m_gAdvanced = false;      // RubberAdvance already moved bat and ball for this cycle; UpdateDisplacements only finishes up
-   bool m_gAdvHitStop = false;    // plunger reached the coil stopper during RubberAdvance
-
-   // Moves the bat and its engaged ball together in substeps (rubber force on the ball, opposite torque on the bat).
-   void PreUpdateDisplacements(const float dtime) override;
-   bool RubberAdvance(const float dtime);
    ~FlipperMoverObject();
 
    // Flipper nudge. The striking flipper (settings nudge_target / nudge_gain) starts a one-shot pulse on the target flipper's pivot: x displacement
    // away from the striker, half-cosine rise then half-cosine return. The pivot (m_hitcircleBase.center.x) follows it, ball contacts on the bat
-   // see the pivot velocity (rubber path in RubberAdvance, impulse path through SurfaceVelocity).
+   // see the pivot velocity (BatGroup::Part).
    void NudgeStart(double dispM, double riseS, double fallS);
-   void NudgeEval(double t, double& dispM, double& velMs) const;
-   void NudgeStep(double dtS);
    FlipperMoverObject *NudgeFindTarget();
    std::string m_nzTargetName;
    FlipperMoverObject *m_nzTarget = nullptr;
 
-   ContactBat m_bat;                 // the bat body: settings, plunger/coil/spring state, the substep and the pivot nudge (contactbat.h)
 
-   // Unified engine, a model flipper with rubber_contact on: the bat is a moving part of the contact system (contactbatpart.h; docs/UnifiedContactDesign.txt 12.2). This mover
-   // and the stock collider then only hold the state the script and the renderer read (angle, speed, solenoid); the part's adapter writes it (hitflippermodel.cpp).
+   // Unified engine: the bat is a moving part of the contact system, on the group step (contactbatpart.h). This mover and the stock collider then only hold the state the script and the
+   // renderer read (angle, speed, solenoid); the part's adapter writes it (hitflippermodel.cpp). There is no other path for the bat on the unified engine.
    std::shared_ptr<BatPart::Part> m_part;
-   // Builds the part and its host when this flipper is one (null otherwise: the flipper keeps its own stepping). zlow, zhigh: the bat's height range (VPX units).
+   // Builds the part and its host. zlow, zhigh: the bat's height range (VPX units).
    ContactPartHost *MakePart(HitFlipper *owner, float zlow, float zhigh);
    void SetPartSolenoid(bool s);   // the coil input of the part (the table set it between cycles)
 
@@ -222,5 +178,3 @@ private:
    float m_rumblePlayed = 0.f; // sum last played, reset when the window runs empty
 };
 
-// The two-body flipper model is on (unified engine; hitflippermodel.cpp)
-bool FlipperModelEnabled();

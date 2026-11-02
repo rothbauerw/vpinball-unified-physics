@@ -33,8 +33,8 @@ Ini values are in the units their names say (mm, ohm, mH, N, kg, degrees, V, mic
 1 mass unit = 80 g (a standard ball).
 
 
-1. FLIPPERS  ([Features] flippers; [Flippers], [Flipper:<name>])
------------------------------------------------------------------
+1. FLIPPERS  ([Flippers], [Flipper:<name>])
+-------------------------------------------
 Two-body model of a real pinball flipper: the bat and crank are one rigid body, the plunger is another, joined by a link with free play. Coil circuit (power and hold
 windings in series or parallel, EOS switch, flux-conserving switch-off), plunger/coil stop, return spring, rubber rest stop, hand-off between two-body and rigid
 one-body states. Wiring series | parallel | single.
@@ -44,18 +44,15 @@ Flipper nudge: when a flipper hits its end of stroke, the other flipper's pivot 
 The drawn flipper follows the pivot. A hit during a running pulse is ignored.
 Status: reference values for a Gorgar (Bally 1979) flipper; tested in play.
 
-2. BALL / RUBBER CONTACT ON THE FLIPPER BAT  ([Features] flipper_rubber; rubber_* keys in [Flippers])
--------------------------------------------------------------------------------------------------
-The ball is pressed into the bat rubber and pushed back out: Hertz-type normal force with thin-layer stiffening, loss (alpha, tan delta), Mindlin-type shear
-spring with friction mu, twist, rolling resistance. Bat and ball step together (rubber_substep_us), with release hysteresis so a resting ball does not engage and
-release repeatedly. Off = the old instant-impulse hit.
-Unified engine (since 2026-10-28; UnifiedContactDesign.txt 12.2): a flipper with rubber_contact on is a moving part of the contact system (src/physics/contactbatpart.h,
-host ContactPartHost, adapter in hitflippermodel.cpp) on the shared arrival-step loop with the rewind. The contact system finds the ball approaching the bat itself (no stock
-flipper collision), the bat turns with the summed torque of all its balls in every island substep, its state is saved with the island's snapshot, and the ball is let go by the
-shared release (rubber_release_gap_mm). The substep a bat contact needs comes from the part's step rule (the rubber law's own stiffness with the thin layer, the bat's own
-inertia as its mass at the contact, omega h <= 0.05), not from rubber_substep_us; rubber_release_steps and rubber_substep_us have no effect there (no notification yet: to-do).
-The flipper's Hit / Collide event and the rumble come from the bat's touch (closing speed), after the step. Ball control does not select a ball the bat hit (to-do).
-Outside the unified engine the old stepping is unchanged.
+2. BALL / RUBBER CONTACT ON THE FLIPPER BAT  (rubber_* keys in [Flippers])
+-------------------------------------------------------------------------
+The ball is pressed into the bat rubber and pushed back out by the shared rubber law of the group step (GroupStepDesign 19). The bat, its coil and its stops are one part of the group (src/physics/batgroup.h, moving-part
+wrapper contactbatpart.h, host ContactPartHost, adapter in hitflippermodel.cpp): balls and bat move in one solve, the contact's reaction on the bat is in that solve, and only the coil and the pivot's nudge add energy.
+An island with a bat always goes to the group: it has no old loop, no impulse and no stock path. Gates, spinners and discs in such an island count as a fixed surface for those cycles (on screen once) until they move over.
+The bat alone is the same group with no balls, asleep while nothing changes. The touch's release gap is rubber_release_gap_mm. The flipper's Hit / Collide event and the rumble come from the bat's touch (closing speed), after the step. Ball control does not select a ball the bat hit (to-do).
+Ignored keys: [Features] flippers = 0, [Features] flipper_rubber = 0 and rubber_contact = 0 are read and ignored, with a notification. rubber_release_steps and rubber_substep_us are gone: each logs "ignored line".
+On screen when it happens (rule 8): a step with a bat could not be solved (the rest of that cycle is lost), a step taken on energy alone, the group gaining over 0.1 mJ beyond its drives in a cycle.
+With [Features] unified off the table is stock and the stock flipper runs.
 
 3. RUBBER RINGS, POSTS, WALL AND PRIMITIVE RUBBERS  ([Features] rubbers, surface_rubbers; [Rubbers], [Rubber:<name>], [Wall:<name>], [Primitive:<name>])
 ---------------------------------------------------------------------------------------------------------------------------------------------------
@@ -286,6 +283,7 @@ VPX_SPEED_WATCH=<m/s>   Fast-ball watchdog, on by default at 8 m/s (0 = off). Wh
                         Legitimate shots can pass 8 m/s (a flipper shot is 5 - 10 m/s): raise the threshold if the log fills with them.
 VPX_GROUP_BOOK=<file>     One row per cycle of every group, with or without balls: steps, rounds, halvings, stop steps, energy steps, failed, energy at start and end, drive, loss, book, cost. Read once. Rows of two islands in one cycle are separate rows.
 VPX_GROUP_BOOK_STEPS=1    The rises per step too (an energy sum per step). Does not change a ball's bytes.
+VPX_GROUP_HFIX=<us>       Every step of a group holding a bat, and of a bat alone, is this long instead of the step rule's (the energy's step sweep; the 1 us reference runs). Read once. A diagnostic: it changes the result.
 VPX_CONTACT_TIMING=<csv>  Per-cycle cost of the contact system (one row per cycle that did work: step_us, bodies, islands, substeps, ...). One file for the whole process, so every Play of an editor
                         session goes into it. tables\VPX editor - Unified timing.bat sets it for the editor.
 VPX_CONTACT_TRACE=1|2   Contact engage / release lines (1) and per-cycle ball data (2, a huge log).
@@ -296,8 +294,8 @@ VPX_CONTACT_PROFILE=1   Scoped timers of the contact system, a table in the log 
                         The timing csv (VPX_CONTACT_TIMING) has a rewinds column: substeps taken again in that cycle.
 VPX_TEST_INPUT=<file>   Test driver (harness only, added 2026-10-27, docs/TestMatrixDesign.txt section 2; code src/physics/testdriver.cpp). Off when unset. The file lists actions
                         by physics millisecond, one per line: '<t_ms> <action> <args>', '#' starts a comment, same-time actions run in file order. Actions: ball NAME x y z vx vy vz
-                        [radius mass] (x, y in U; z = height of the ball's bottom above the playfield in U; velocity in m/s; default radius 25 U, mass 1), destroy NAME, flip
-                        FLIPPER 1|0, sling RUBBER, magnet NAME V and turntable NAME V (supply / motor voltage of a [Magnet:NAME] / [Turntable:NAME] in the physics
+                        [radius mass [wx wy wz]] (x, y in U; z = height of the ball's bottom above the playfield in U; velocity in m/s; default radius 25 U, mass 1; wx wy wz: the ball's spin), destroy NAME, flip
+                        FLIPPER 1|0, enabled FLIPPER 1|0, sling RUBBER, magnet NAME V and turntable NAME V (supply / motor voltage of a [Magnet:NAME] / [Turntable:NAME] in the physics
                         ini, as the script's Magnet / Turntable calls; 0 = off; an unknown name is a WARN; added 2026-10-28), respawn Y (a ball past y = Y toward the drain is created again at its start state), respawn_z Z (a ball whose centre drops below
                         z = Z U is created again at its start state; off by default; for pockets and subways no script kicks out; added 2026-10-28), speed_limit V
                         (m/s, default 8), floor Z (U, ball centre; default -200 since 2026-10-28, was 0: pockets and subways go below the playfield), record N (every N cycles, default 1, 0 = off), end. They are applied at the start of the cycle, before the physics step, so
@@ -824,3 +822,7 @@ notices, minimum centre-to-winding distance 27.9 U for a 25 U ball).
 2026-11-01  The fixed-height cord is the only band (runs/2026-11-01-cord-merge/report.md; the port: runs/2026-11-01-cord-port/results/NOTES.md). The node band and the old cord are out: bandcord.h, contactbandpart.h, BandChain in rubbercontact.h, the node code in hitrubber.cpp and contactsystem.cpp; saved at tag old-bands-2026-11-01. Auto detection (section 4): the band key is gone. Thickness from the editor unless band_section_mm, now for drawing too. Ring from band_ring_in or automatic (section 4). New keys from the port: [Contact] roll_smooth_rad_s (default 2), band_stretch_alpha_s_per_m, band_twist_scale, band_twist_loss. VPX_CORD_TRACE keeps only the columns the cord has.
             Bytes moved on rings under /fp:fast by rounding only: merged against base, no bands in the ini, 0 of 4 runs the same; both compiled /fp:precise, 4 of 4 the same. Old reference hashes no longer match.
 2026-11-01  [Contact] roll_smooth_rad_s defaults to 0.05 (was 2), the user's decision on the bench check runs/2026-11-01-roll-smooth/report.md. The group step's special case for 2 is gone, so the key works the same at any value, 2 included. Bytes change for any table without the key. Other rolling terms outside the group step (old loop) keep their 2.
+2026-11-01  The flipper on the group step is the only flipper; the old bat contact path is out (runs/2026-11-01-flipper/report.md; restore point: tag old-flipper-2026-11-01, backups/2026-11-01-before-flipper-merge). New src/physics/batgroup.h; contactbatpart.h is the wrapper; CoilAdvance, CoilTimeConstant, PivotPulse moved to coilmodel.h. An island with a bat always goes to the group (GroupStepDesign 19). No off switch.
+            Removed: ContactBat's state, step and pulse (ContactBat is the settings file only), the mover's m_rb* and m_bat fields, FlipperModelEnabled and the old flipper stepping, HitBall::m_rubberOwner, HitRubber::SideGather/SideStep/RubberSideSet (with VPX_CONTACT_NOSIDE), PhysicsEngine::FlipperNear, the keys rubber_release_steps and rubber_substep_us (each now logs "ignored line"). [Features] flippers, flipper_rubber and rubber_contact = 0 are ignored with a notification. Gone from the bat's own settings: restOmegaH, fieldForceN, the EOS arrival floor, hMin 1e-8, vRattle: the shared step's rules apply.
+            Convention changes: VPX_PHYS_TIMING's engaged column now counts balls held by the contact system (was: driven by a flipper rubber; S rows unchanged). The ball-history flags no longer have bit 2 (driven by a flipper). New VPX_GROUP_HFIX; driver: ball ... wx wy wz, enabled FLIPPER 1|0. Bytes change on any table with a flipper (measured in the report: shot and rebound within 5 % of 1 us on 73 of 75 cases, the other 2 piles).
+            Gates, spinners, disc and bumpers stay on the old loop, a fixed surface in a bat's island for those cycles. Open from the report: Gorgar pile at roll_smooth_rad_s 0.05 (334 energy steps, worst 7 cycles 126,177 us), a firing bat pressing a ball on a cord (388 energy steps), stuck balls G78 and on Rubber2, G48. Merged build checked by one bench load and one window load each of Gorgar New and Rubber Test only (the left flipper, one ball).

@@ -50,7 +50,7 @@ public:
    virtual void UpdateVelocities() = 0;
 
    PhysicsEngine* m_physics = nullptr;
-   virtual void PreUpdateDisplacements(const float dtime) { } // called on every mover before any UpdateDisplacements of the same cycle (flipper + rubber-engaged ball)
+   virtual void PreUpdateDisplacements(const float dtime) { } // called on every mover before any UpdateDisplacements of the same cycle
 };
 
 // Ported at: VisualPinball.Engine/Math/Functions.cs

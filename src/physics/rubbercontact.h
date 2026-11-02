@@ -1,6 +1,6 @@
 // license:GPLv3+
 //
-// Ball / rubber contact force model for the model flipper (unified engine, rubber_contact=1).
+// Ball / rubber contact force model (unified engine).
 //
 // Pure SI maths with no VPX types, so the same code runs inside VPX and in the standalone test harness
 // (runs/2026-10-04-rubber/rubber_harness.cpp). It is a direct port of the contact loop of

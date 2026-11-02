@@ -111,14 +111,6 @@ struct BallContact
    bool seatPending = false;             // ring_model: found inside a rubber at engagement and not seated: the group counts it from zero; the old loop seats it if the island goes there (14.5)
 };
 
-// The force-model rubbers around a ball that a flipper's rubber model drives (the cradle: a post and the bat both touch the ball). The flipper's step adds their
-// force to its own, so the ball is integrated once; the shear state of each rubber is kept here between cycles.
-struct RubberSideSet
-{
-   std::vector<SurfaceContact> items;
-   std::vector<double> depthM;   // deepest overlap of each item since the last reset, m (log and safety net)
-};
-
 class HitRubber;
 
 // Shared with the contact system (contactsystem.cpp)
@@ -179,12 +171,6 @@ public:
    static void ClearPlayfieldHoles();
    double m_tableMu = 0.3;   // a playfield host: the table's friction (the default mu of its material)
    static bool ContactPairModel(const HitBall *a, const BallS &b);   // both balls are contact-held and [Contact] ball_contact is on: the force model handles the pair, not the stock collision
-   // A ball driven by a flipper's rubber model feels the rubbers around it too (RubberSideSet). SideGather keeps the state of the rubbers that stay near, adds new
-   // ones and drops the rest (c, ballR: ball centre and radius in the world frame, m; reachM: how far the ball can travel this cycle). SideStep is one substep: it adds
-   // the force (N) and the torque on the ball (N m) of every item to F and Mb and records the overlap in set.depthM.
-   static void SideGather(const BallS &ball, const RubberContact::V3 &c, double ballR, double reachM, RubberSideSet &set);
-   static void SideStep(RubberSideSet &set, const RubberContact::BallSI &bs, const RubberContact::V3 &c, const RubberContact::V3 &v, const RubberContact::V3 &w, double h,
-                        RubberContact::V3 &F, RubberContact::V3 &Mb);
 
    float HitTest(const BallS &ball, const float dtime, CollisionEvent &coll) const override;
    BandInfo GetBandInfo() const { return m_info; }
