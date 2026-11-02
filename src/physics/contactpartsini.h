@@ -89,7 +89,8 @@ namespace PartsIni
    }
 
    // Jet bumper settings over `p` (docs/JetBumperDesign.txt section 5): [Bumpers] for all, then [Bumper:<name>]. Lengths in mm, masses in g, spring rates in N/mm unless the key says otherwise.
-   inline void LoadBumper(JetBumper::Params &p, const std::filesystem::path &file, const std::string &name)
+   // ignored: the keys the model on the group step does not have (the old loop's own step, the spoon as a body, the way back to stock), for the caller to tell (rule 8)
+   inline void LoadBumper(JetBumper::Params &p, const std::filesystem::path &file, const std::string &name, std::string *const ignored = nullptr)
    {
       using JetBumper::DriveMode;
       ReadSections(file, "bumpers", "bumper:" + name, [&](const std::string &k, double v, const std::string &lv) {
@@ -112,10 +113,9 @@ namespace PartsIni
          else if (k == "ring_rise_mm") p.ringRiseMm = v;
          else if (k == "ring_mid_rest_mm") p.ringMidRestMm = v;
          else if (k == "ring_stroke_mm") p.ringStrokeMm = v;
-         else if (k == "own_step_us") p.ownStepUs = v;
+         else if (k == "own_step_us" || k == "spoon_mass_g" || k == "spoon_travel_mm" || k == "physical") { if (ignored != nullptr) *ignored += " " + k; }
          else if (k == "skirt_mass_g") p.skirtMass = v * 1e-3;
          else if (k == "ring_assembly_mass_g") p.ringMass = v * 1e-3;
-         else if (k == "spoon_mass_g") p.spoonMass = v * 1e-3;
          else if (k == "skirt_spring_n_per_mm") p.skirtKNPerM = v * 1e3;
          else if (k == "skirt_spring_preload_n") p.skirtPreloadN = v;
          else if (k == "skirt_spring_radius_mm") p.springRadiusMm = v;
@@ -123,7 +123,6 @@ namespace PartsIni
          else if (k == "spoon_spring_n_per_mm") p.spoonKNPerM = v * 1e3;
          else if (k == "spoon_spring_preload_n") p.spoonPreloadN = v;
          else if (k == "spoon_damping_zeta") p.spoonZeta = v;
-         else if (k == "spoon_travel_mm") p.spoonTravelMm = v;
          else if (k == "return_spring_n_per_mm") p.returnKNPerM = v * 1e3;
          else if (k == "return_spring_preload_n") p.returnPreloadN = v;
          else if (k == "ring_friction_ns_per_m") p.ringViscousNsPerM = v;
@@ -147,7 +146,6 @@ namespace PartsIni
          else if (k == "plastic_mu") p.plasticMu = v;
          else if (k == "steel_restitution") p.steelRingE = v;
          else if (k == "steel_mu") p.steelMu = v;
-         else if (k == "physical") {}   // physical = 0 keeps the stock bumper (HitRubber::BumperWanted)
          else PLOGW << "Bumper " << name << ": unknown key '" << k << "' ignored";
       });
    }

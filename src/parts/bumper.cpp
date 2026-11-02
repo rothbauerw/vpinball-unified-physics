@@ -115,24 +115,53 @@ namespace
    class BumperPartAdapter final : public PartAdapter
    {
    public:
-      BumperPartAdapter(Bumper *bumper, JetBumper::EnginePart *model, const std::string &name) : m_bumper(bumper), m_model(model), m_name(name) {}
+      BumperPartAdapter(Bumper *bumper, JetBumper::EnginePart *model, const std::string &name, const std::string &note) : m_bumper(bumper), m_model(model), m_name(name), m_note(note) {}
+      ~BumperPartAdapter() override { PLOGI << "Group step: energy steps alone, table end: " << m_name << " " << m_esSeen; }
 
       void Publish() override
       {
-         const JetBumper::Bumper &b = m_model->model;
+         m_model->Collect();
+         m_model->bookMs = (int)g_pplayer->m_time_msec;
+         const BumperGroup::Part &b = m_model->gp;
          constexpr double U = ContactSystem::kMetresPerUnit;
-         m_bumper->SetPhysicalPose((float)b.RotXDeg(), (float)b.RotYDeg(), (float)(-b.dr / U), (float)((b.zc - b.zRest) / U), (float)(b.zc / U), (float)(b.ds / U), b.switchClosed, (float)b.iCoil);
-         // detector (rule 8): a contact force far above what the part's hits give (a ball found deep inside it)
-         if (!m_model->spikeNote.empty())
+         m_bumper->SetPhysicalPose((float)(b.thx / JetBumper::DEG), (float)(b.thy / JetBumper::DEG), (float)(-b.dr / U), (float)((b.z - b.cfg.zRest) / U), (float)(b.z / U), (float)(b.FollowerD() / U), b.closed, (float)b.iCoil);
+         // VPX_BUMPER_TRACE=<file> (a diagnostic, read once): one row per cycle for every bumper that is not at rest
+         static FILE *const trace = []() -> FILE * {
+            const char *const e = getenv("VPX_BUMPER_TRACE");
+            FILE *const f = e != nullptr && *e ? fopen(e, "w") : nullptr;
+            if (f != nullptr)
+               fprintf(f, "t_ms,bumper,skirtZ_mm,rotX_deg,rotY_deg,follower_mm,dr_mm,vr,ringStop,i_A,closed,pulse,closures,steppedUs,coilJ,ringStopJ,failedAlone\n");
+            return f;
+         }();
+         if (trace != nullptr && !m_model->Sleeping())
          {
-            const std::string msg = "Bumper " + m_name + ": " + m_model->spikeNote;
-            PLOGW << msg;
-            if (!m_spikeShown && g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+            fprintf(trace, "%d,%s,%.5f,%.4f,%.4f,%.5f,%.5f,%.5f,%d,%.4f,%d,%d,%d,%.2f,%.6f,%.6f,%ld\n", m_model->bookMs, m_name.c_str(), b.z * 1e3, b.thx / JetBumper::DEG, b.thy / JetBumper::DEG, b.FollowerD() * 1e3, b.dr * 1e3, b.vr, b.ringStop, b.iCoil, b.closed ? 1 : 0, b.pulseActive ? 1 : 0, b.closures, m_model->steppedS * 1e6, b.bk.coilJ, b.bk.ringStopJ, m_model->failedSteps);
+            fflush(trace);
+         }
+         // what the table asks for and this model does not have, once on screen (rule 8; the log has it from the load)
+         if (!m_note.empty() && g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+         {
+            g_pplayer->m_liveUI->PushNotification(m_note, 8000);
+            m_note.clear();
+         }
+         // detector (rule 8): a step of the part alone was taken on energy (no ball: nothing but the part in the group)
+         if (m_model->energySteps > m_esSeen)
+         {
+            m_esSeen = m_model->energySteps;
+            if (m_esLines < 5)
             {
-               m_spikeShown = true;
-               g_pplayer->m_liveUI->PushNotification("Bumper " + m_name + ": a ball met it with a contact force of kilonewtons (see vpinball.log, 'Bumper " + m_name + "')", 8000);
+               m_esLines++;
+               PLOGW << "Group step: energy step alone, part " << m_name << ", balls 0, t=" << g_pplayer->m_time_msec << " ms, " << m_esSeen << " so far, why not known for a part alone; " << m_model->StateNote() << ". A net, not expected to fire: keep vpinball.log and report it";
             }
-            m_model->spikeNote.clear();
+         }
+         // detector (rule 8): a step of the part alone could not be solved
+         if (m_model->failedSteps > 0 && !m_failShown)
+         {
+            m_failShown = true;
+            const std::string msg = "Bumper " + m_name + ": a step of the part alone could not be solved: the rest of that cycle was lost";
+            PLOGW << msg;
+            if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+               g_pplayer->m_liveUI->PushNotification(msg, 6000);
          }
          // detector (rule 8): the coil energised for a long time (a skirt held down?)
          if (!m_warned && b.coilOnMaxS * 1000.0 > 500.0)
@@ -173,8 +202,10 @@ namespace
    private:
       Bumper *m_bumper;
       JetBumper::EnginePart *m_model;
-      std::string m_name;
-      bool m_warned = false, m_spikeShown = false;
+      std::string m_name, m_note;
+      bool m_warned = false, m_failShown = false;
+      long m_esSeen = 0;
+      int m_esLines = 0;
    };
 }
 
@@ -185,26 +216,36 @@ void Bumper::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 
    const float height = m_ptable->GetSurfaceHeight(m_d.m_szSurface, m_d.m_vCenter.x, m_d.m_vCenter.y);
    const std::filesystem::path ini = ContactHost::IniPathFor(m_ptable->m_filename);
-   if (!isUI && ContactSystem::Unified() && ContactHost::BumperWanted(ini, GetName()))
+   if (!isUI && ContactSystem::Unified())
    {
-      // the physical bumper (docs/JetBumperDesign.txt): no stock collider, no stock ring or skirt animation
+      // the physical bumper (docs/JetBumperDesign.txt): no stock collider, no stock ring or skirt animation. A unified table has no other bumper: what would have asked for stock is ignored, and told
       constexpr double U = ContactSystem::kMetresPerUnit;
       JetBumper::Params prm;
-      PartsIni::LoadBumper(prm, ini, GetName());
+      std::string ignored;
+      PartsIni::LoadBumper(prm, ini, GetName(), &ignored);
+      if (!PhysicsIni::Active(ini).bumpers)
+         ignored += " [Features] bumpers = 0";
+      if (const char *const e = getenv("VPX_BUMPERS"); e != nullptr && atoi(e) == 0)
+         ignored += " VPX_BUMPERS=0";
+      if (!ignored.empty())
+      {
+         ignored = "Bumper " + GetName() + ": ignored on a unified table:" + ignored;
+         PLOGW << ignored;
+      }
       m_bumperModel = std::make_shared<JetBumper::EnginePart>();
       m_bumperModel->Build(prm, RubberContact::V3((double)m_d.m_vCenter.x * U, (double)m_d.m_vCenter.y * U, (double)height * U));
-      m_bumperModel->model.SetCollidable(m_d.m_collidable);
+      m_bumperModel->SetCollidable(m_d.m_collidable);
       const float r = (float)(m_bumperModel->Reach() / U);
       const float lo[3] = { m_d.m_vCenter.x - r, m_d.m_vCenter.y - r, height };
       const float hi[3] = { m_d.m_vCenter.x + r, m_d.m_vCenter.y + r, height + (float)(0.06 / U) };
       RubberObjectSettings hs;   // (the host's own step and rest settings are not used: a moving part sets its own step, ContactMovingPart::BallStep)
       hs.surfaceRubber = true;
       hs.contact = true;
-      m_partHost = new ContactPartHost(this, m_bumperModel, std::make_unique<BumperPartAdapter>(this, m_bumperModel.get(), GetName()), hs, ini, GetName(), "bumper", lo, hi);
+      m_partHost = new ContactPartHost(this, m_bumperModel, std::make_unique<BumperPartAdapter>(this, m_bumperModel.get(), GetName(), ignored), hs, ini, GetName(), "bumper", lo, hi);
       m_partHost->SetHardSurface(0.5, 0.3);
       {
-         const JetBumper::Bumper &b = m_bumperModel->model;
-         PLOGI << "Bumper " << GetName() << ": unified part (skirt " << b.p.skirtMass * 1e3 << " g, ring assembly " << b.p.ringMass * 1e3 << " g, spoon " << b.p.spoonMass * 1e3 << " g, switch closes at "
+         const JetBumper::Bumper &b = m_bumperModel->gp.cfg;
+         PLOGI << "Bumper " << GetName() << ": unified part on the group step (skirt " << b.p.skirtMass * 1e3 << " g, ring assembly " << b.p.ringMass * 1e3 << " g, switch closes at "
                << b.p.switchCloseMm << " mm, drive " << (b.p.mode == JetBumper::DriveMode::Held ? "held" : b.p.mode == JetBumper::DriveMode::External ? "external" : "pulse") << ", supply " << b.p.coil.vSupply << " V)";
       }
       m_partHost->m_enabled = m_d.m_collidable;
@@ -258,7 +299,7 @@ void Bumper::RenderSetup(Renderer *renderer)
    m_drawRotX = m_drawRotY = m_drawRing = m_drawSkirtDrop = 1e9f;
    {
       const std::filesystem::path ini = ContactHost::IniPathFor(m_ptable->m_filename);
-      if (ContactSystem::Unified() && ContactHost::BumperWanted(ini, GetName()))
+      if (ContactSystem::Unified())
       {
          constexpr double U = ContactSystem::kMetresPerUnit;
          JetBumper::Params prm;
@@ -1174,7 +1215,7 @@ STDMETHODIMP Bumper::put_Collidable(VARIANT_BOOL newVal)
    {
       // the physical bumper is not there at all: no contact, no switch, no coil, no events, the parts back at rest
       m_partHost->m_enabled = m_d.m_collidable;
-      m_bumperModel->model.SetCollidable(m_d.m_collidable);
+      m_bumperModel->SetCollidable(m_d.m_collidable);
    }
 
    return S_OK;
@@ -1319,7 +1360,7 @@ STDMETHODIMP Bumper::Solenoid(VARIANT_BOOL enabled, VARIANT volts, VARIANT duty)
    OptionalNumber(volts, v);
    if (OptionalNumber(duty, d))
       d = std::min(1.0, std::max(0.0, d));
-   JetBumper::Bumper &model = m_bumperModel->model;
+   JetBumper::EnginePart &model = *m_bumperModel;
    if (!model.Solenoid(VBTOb(enabled), v, d) && model.collidable)
    {
       static bool warned = false;   // held drive: the call is ignored, once per run

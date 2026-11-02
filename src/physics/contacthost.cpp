@@ -274,22 +274,6 @@ double ContactHost::HardSurfaceE(const HitObject *first)
    return first != nullptr ? (double)ElasticityWithFalloff(first->m_elasticity, first->m_elasticityFalloff, (float)ContactSystem::kVelocityScale > 0.f ? (float)(1.0 / ContactSystem::kVelocityScale) : 18.53f) : 0.3;
 }
 
-bool ContactHost::BumperWanted(const std::filesystem::path &file, const std::string &name)
-{
-   static const bool envOn = []() { const char *const e = getenv("VPX_BUMPERS"); return !(e != nullptr && atoi(e) == 0); }();
-   if (!envOn)
-      return false;
-   if (!PhysicsIni::Active(file).bumpers)   // no file: on with the defaults
-      return false;
-   bool physical = true;   // [Bumper:<name>] physical = 0 keeps the stock bumper for this one
-   if (!file.empty())
-      PartsIni::ReadSections(file, "", "bumper:" + name, [&](const std::string &k, double v, const std::string &) {
-         if (k == "physical")
-            physical = v != 0.0;
-      });
-   return physical;
-}
-
 bool ContactHost::HingeWanted(const std::filesystem::path &file, const char *kind, const std::string &name)
 {
    static const bool envOn = []() { const char *const e = getenv("VPX_HINGES"); return !(e != nullptr && atoi(e) == 0); }();

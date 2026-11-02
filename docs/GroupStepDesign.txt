@@ -822,3 +822,15 @@ on a lifted ball (an unbooked energy drop when it lets go).
 19.4 An island with a group part has no old loop. Whatever else is in it, it goes to the group (IslandHasGroupPart in StepBalls). A step that cannot be solved loses the rest of that cycle, no energy can appear, and says so on screen once. A part still on the old loop (gate, spinner, disc) is a fixed surface at its present pose for those cycles, its reaction left out, on screen once, until it moves over.
 
 19.5 What the bat kept of its own: the 1e-5 rad chord (below it the error is under the rounding), winding settled at 1e-3, the solver's maxMove and reach. Turn 2 deg, coil share 0.25, field share 0.25 are Settings, through StepFacts. All else went to the shared rule, one floor of 2 us (the report's table).
+
+20. The jet bumper on the group step (2026-11-02; MERGED, the only bumper on a unified table; bumpergroup.h, runs/2026-11-02-bumper-group/notes.md, design runs/2026-10-31-bumper-design/design.md)
+
+20.1 A surface's Hit needs the depth's exact gradient. The step's correction is second order in the move only if the Hit's normal and grad are the depth's true gradient. A swept radius that tapers makes the normal alone wrong by the taper, and the correction loads the lightest coordinate (the skirt's tilt) with it. Revolve::Near carries gr, gz for this.
+
+20.2 A seat takes the discrete gradient in its own arguments, not one mass-weighted Discrete. A seat's V is a function of the depth a and the tilt's A2. Its gradient is taken in those two, the mean of the two orders of moving them, then each goes onto the coordinates by its own chord. A Gonzalez over all coordinates spreads V's mismatch by mass weight, and near the seat's onset, where the move is as large as the overlap, the tilt, 3,700 times lighter in the weights, took a steep false force from a z move. Measured: with this, no energy step line on stress p1, which had one on a bumper before (notes, last section); the ball's path changed too, so one run.
+
+20.3 The coil's circuit is solved over the trial move (CoilModel::Over). Current and force are a function of the step's start and the move alone, so a retake is identical and the solve holds them. The force closes supplied - lost in R - change in field = F dx at any step length. The coil is the only drive.
+
+20.4 KKStep. Viscoelastic damping over a step is the law's integral over the move at a steady rate, as Hunt-Crossley already is. At the mid-step depth alone it rises as sqrt(d) from a touch's start, a slope with no bound, where Newton stalls. It changes every group contact with gammaKK above 0.
+
+20.5 Limits. Not run: held and external coil, Collidable switching, two balls on one bumper, two bumpers together. BodyPart stays an exception until the gates. The ring stops' e(v) table is open. Revolve's taper joint has a real gradient jump, not yet a fault: none of the 17 failed solves read on stress p1 sat on it. The launch is not reproduced, so not proved gone. The shared energy check skips an island with a moving part; the group's books and on-screen report cover it. SurfaceContact::stExtra of 18.6 went with the old path.

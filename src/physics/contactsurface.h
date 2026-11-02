@@ -32,7 +32,6 @@ struct SurfaceContact
    RubberContact::RubberParams rp;
    double hLayer = 0.0;
    RubberContact::RubberState st;
-   RubberContact::RubberState stExtra[2];   // a part with several surfaces (the jet bumper's skirt, ring and body) keeps one shear state per surface: st, stExtra[0], stExtra[1]
    std::vector<int> cand;   // a surface of faces: the faces the ball can touch this cycle (those of candV whose box is within the ball's radius plus its reach of the ball)
    std::vector<int> candV;  // the Verlet list: the faces within the reach plus a margin of where the list was built; cand is filtered from it every cycle
    RubberContact::V3 candC;       // where the list was built and how far it reaches: it stays valid while the ball moves less than candR - the reach asked for (a Verlet list)

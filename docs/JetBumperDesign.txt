@@ -70,7 +70,7 @@ Bodies and surfaces (all owned by the engine, none from stock):
     at the apex axis). Because the wall is inclined, the tip pushes the spoon DOWN whenever the stem moves down or sideways away from the axis. Sideways room: the tip may move
     6.35 - 2.38 = about 4 mm before it reaches the rim; the 5 deg tilt of 2.2a gives about 3.9 mm, so the margin is thin: a detector (9.4) reports a tip leaving the cone [user: "the stem tilts and moves down, slides inside the spoon and displaces it
     downward"]. The spoon is a mass on a spring: m_sp d_s'' = F_stem,z - k_sp d_s - c_sp d_s' (+ stop).
-2.4 Switch. Closed when d_s >= switch_close_mm; opens when d_s <= switch_close_mm - switch_hyst_mm. switch_close_mm default 1/16 in = 1.59 mm [user: typical],
+2.4 Switch. Closed when d_s >= switch_close_mm; opens when d_s <= switch_close_mm - switch_hyst_mm. switch_close_mm default 1/32 in = 0.79375 mm [user 2026-11-02; was 1/16 in = 1.59 mm, typical],
     range to 1/8 in = 3.18 mm [user: less sensitive]. The force to reach it is not set: it comes from k_sp and the contact.
 2.5 Coil drive, three modes (key coil_drive) [user]:
       held     the coil is on only while the switch is closed (a hardwired driver; a dragging skirt keeps it energised and burns it out [user]).

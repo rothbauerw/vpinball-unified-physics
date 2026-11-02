@@ -35,7 +35,7 @@ namespace BatPart
       RubberContact::BallSI ball;
       double alphaMax = 0.0;             // the largest angular acceleration the coil and the spring can give the bat, rad/s^2 (Configure)
       double leverMax = 0.0, springMax = 0.0;   // the crank's longest lever (m) and the return spring's largest torque (N m) over the stroke (Configure)
-      long failedSteps = 0, aloneSteps = 0;     // a step of the bat alone could not be solved (the detector: rule 8); steps taken alone (cost)
+      long failedSteps = 0, aloneSteps = 0, energySteps = 0;     // a step of the bat alone could not be solved (the detector: rule 8); steps taken alone (cost); of them taken on energy alone (rule 8)
       int bookMs = 0;                    // the table's time, for the book of a cycle alone
 
       // After a settings change: the group part, the rubber, the release gap and the acceleration bound. The state is kept.
@@ -132,6 +132,7 @@ namespace BatPart
          if (!GroupStep::AdvanceAlone(gp, dt, 2e-6, bookMs, &bk))
             failedSteps++;   // (time is lost, no energy can appear: the next cycle goes on from here)
          aloneSteps += bk.steps;
+         energySteps += bk.energySteps;
          // a whole cycle in which nothing moved that any ball or the table could see (angle, speed, plunger, both coil currents): the bat is at rest
          const double r = TipReach();
          idle = dt >= 0.9e-3 && !gp.hitStopLatch && !gp.pulse.active && std::fabs(gp.phi - phi0) * r < 1e-9 && std::fabs(gp.omega) * r < 1e-6 && std::fabs(gp.xp - xp0) < 1e-9 && std::fabs(gp.vp) < 1e-6

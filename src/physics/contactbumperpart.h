@@ -1,52 +1,119 @@
 // license:GPLv3+
 //
-// The jet bumper (contactbumper.h) as a moving part of the contact system (contactmovingpart.h): one host with three surfaces (skirt, ring, centre body); the engine's per-ball
-// shear states of the host's contact (SurfaceContact::st, stExtra) carry one state per surface.
+// The jet bumper as a moving part of the contact system, on the group step (runs/2026-11-02-bumper-group/notes.md). The skirt, the spoon as a spring on the follower distance, the ring and its coil are
+// BumperGroup::Part (bumpergroup.h): the engine moves them with the balls in one solve, so an island with a bumper always goes to the group. There is no other path: no old-loop contact, no impulse, no stock.
+//
+// What this class adds to the group part: what the engine needs of any moving part (the probe for engagement and the overlap replay, the speed bound, the saved state), its three surfaces, its own steps when no
+// ball is near, the script's commands, and its switch changes as events. Laws: ball contact is the shared law (GroupStep::Item) on each surface at its present pose; the reaction is in the same solve.
+// Energy: only the coil adds energy; the contacts, the seats, the spoon's damper and the ring's stops remove it.
 //
 // World frame in metres, z up; the part is built at the foot of its axis (x, y, playfield height).
 
 #pragma once
 
-#include <cmath>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
 
 #include "physics/contactmovingpart.h"
-#include "physics/contactbumper.h"
+#include "physics/bumpergroup.h"
 
 namespace JetBumper
 {
    class EnginePart : public ContactMovingPart
    {
    public:
-      Bumper model;
-      std::string spikeNote;   // set when a ball's contact force on the bumper exceeds kSpikeN: the host logs it and raises a notification (rule 8)
-      int spikes = 0;
-      V3 origin;               // the foot of the bumper's axis on the playfield, world (m)
+      BumperGroup::Part gp;            // the skirt, the ring and the coil, as a part of the group
+      GroupStep::Settings partSet;     // the gravity the part feels (SetGravity)
+      BumperGroup::RevolveShape ringShape, bodyShape;
+      V3 origin;                       // the foot of the bumper's axis on the playfield, world (m)
       RubberContact::BallSI ball;
+      bool collidable = true;          // false: the bumper is not there at all (no contact, no switch, no coil, no events, parts at rest)
+      long failedSteps = 0, aloneSteps = 0, energySteps = 0;   // a step of the part alone could not be solved (the detector: rule 8); steps taken alone (cost); of them taken on energy alone (rule 8)
+      int bookMs = 0;                  // the table's time, for the book of a cycle alone
 
       void Build(const Params &prm, const V3 &foot)
       {
-         model.Configure(prm);
+         gp.Configure(prm, partSet);
          origin = foot;
          m_reach = 0.5 * prm.skirtOdMm * MM + 2.0e-3;
+         const double edgeMin = prm.edgeMinMm * MM;
+         ringShape.prof = &gp.cfg.ring0;
+         ringShape.edgeMin = edgeMin;
+         ringShape.owner = &gp;
+         bodyShape.prof = &gp.cfg.body0;
+         bodyShape.edgeMin = edgeMin;
       }
 
-      // ---- ContactMovingPart ----
+      // ---- the script ----
+      // Collidable = False takes the bumper out of the world: parts return to rest, coil off, balls pass through, Solenoid ignored. True puts it back at rest.
+      void SetCollidable(const bool c)
+      {
+         if (c == collidable)
+            return;
+         gp.Reset();
+         collidable = c;
+         idle = false;
+      }
+      // Bumper.Solenoid enabled[, volts[, duty]]: external mode sets the coil on/off; pulse mode fires one pulse on True; held mode ignores it (the caller warns once)
+      bool Solenoid(const bool on, const double volts = -1.0, const double duty = 1.0)
+      {
+         if (!collidable || gp.cfg.p.mode == DriveMode::Held)
+            return false;
+         idle = false;
+         if (gp.cfg.p.mode == DriveMode::External)
+         {
+            gp.extOn = on;
+            gp.extVolts = on ? volts : -1.0;
+            gp.extDuty = duty;
+         }
+         else if (on && !gp.pulseActive)
+            gp.FirePulse();
+         return true;
+      }
+      // The switch's changes so far as the part's events, in order: at a closure Hit first (no speed threshold), then the switch. The adapter calls it before the host takes the events.
+      void Collect()
+      {
+         for (const char closed : gp.swLog)
+         {
+            if (closed)
+            {
+               events.push_back({ ContactMovingPart::Event::Hit, -1, 0.0 });
+               events.push_back({ ContactMovingPart::Event::SwitchClosed, -1, 0.0 });
+            }
+            else
+               events.push_back({ ContactMovingPart::Event::SwitchOpened, -1, 0.0 });
+         }
+         gp.swLog.clear();
+      }
+
+      // ---- the moving-part interface (contactmovingpart.h) ----
       void SetBall(const RubberContact::BallSI &b) override { ball = b; }
-      void SetGravity(const V3 &g) override { model.SetGravity(g); }
+      void SetGravity(const V3 &g) override
+      {
+         const bool changed = (g - partSet.g).Length() > 1e-6;
+         partSet.g = g;
+         if (!gravityKnown)   // at rest on the table's own gravity from the start, not settling into it
+         {
+            gravityKnown = true;
+            gp.Reset();
+         }
+         if (changed)
+            idle = false;   // (a nudge wakes it)
+      }
       V3 Origin() const override { return origin; }
       double Reach() const override { return m_reach; }
       // the ring: its speed now plus what the coil at full current in the closed position and the return spring can add in a cycle; the skirt: its speed (the rim moves faster than the centre)
       // plus what its springs can add. The bumper can start at any time (Solenoid), so even asleep the ring's acceleration counts.
       double SurfaceSpeedBound(double cycleS) const override
       {
-         const Params &p = model.p;
-         const double ring = std::abs(model.vr) + RingAccelBound() * cycleS;
-         const double rim = 0.5 * p.skirtOdMm * MM;
-         const double skirt = std::abs(model.vz) + std::sqrt(model.wx * model.wx + model.wy * model.wy) * rim + SkirtAccelBound() * cycleS;
+         const Params &p = gp.cfg.p;
+         const double ringAccel = (gp.cfg.coilD.strength + p.returnPreloadN + p.returnKNPerM * p.ringStrokeMm * MM) / p.ringMass;
+         const double skirtAccel = (p.skirtPreloadN + p.skirtKNPerM * p.skirtClearanceMm * MM) / p.skirtMass;
+         const double ring = std::abs(gp.vr) + ringAccel * cycleS;
+         const double skirt = std::abs(gp.vz) + std::sqrt(gp.wx * gp.wx + gp.wy * gp.wy) * 0.5 * p.skirtOdMm * MM + skirtAccel * cycleS;
          return std::max(ring, skirt);
       }
 
@@ -55,190 +122,158 @@ namespace JetBumper
       {
          RubberContact::TubeProbe pr;
          const V3 rel = c - origin;
-         if (std::sqrt(rel.x * rel.x + rel.y * rel.y) > m_reach + ball.R + 0.05 || rel.z > 0.06 + ball.R)
+         if (!collidable || std::sqrt(rel.x * rel.x + rel.y * rel.y) > m_reach + ball.R + 0.05 || rel.z > 0.06 + ball.R)
          {
             pr.dist = INFINITY;
             pr.delta = -INFINITY;
             return pr;
          }
-         const Nearest nr = model.NearestSurface(rel, ball.R);
-         pr.seg = nr.surf;
-         pr.normal = nr.n;
-         pr.point = nr.point + origin;
-         pr.dist = nr.g + ball.R;
+         GroupStep::Hit best;
+         int surf = -1;
+         for (int sf = 0; sf < kSurfaces; sf++)
+         {
+            GroupStep::Hit h;
+            GroupProbe(sf, c, ball.R, nullptr, h);
+            if (surf < 0 || h.delta > best.delta)
+            {
+               best = h;
+               surf = sf;
+            }
+         }
+         pr.seg = surf;
+         pr.normal = best.n;
+         pr.dist = ball.R - best.delta;
+         pr.point = c - best.n * pr.dist;
          pr.rho = 0.0;
-         pr.delta = -nr.g;
-         pr.overlap = nr.g < 0.0;
-         pr.reff = nr.reff;
+         pr.delta = best.delta;
+         pr.overlap = best.delta > 0.0;
+         pr.reff = best.reff;
          return pr;
       }
 
-      RubberContact::ContactResult ContactItem(int /*ballIndex*/, SurfaceContact &it, const V3 &c, const V3 &v, const V3 &w, double h) override
+      // the surface nearest the point, and how it moves there
+      void SurfaceVelocity(const V3 &point, V3 &v, V3 &w) const override
       {
-         RubberContact::ContactResult r;
-         BallContactState st;
-         st.skirt = it.st;
-         st.ring = it.stExtra[0];
-         st.body = it.stExtra[1];
-         BallLoad L;
-         model.BallForces(ball, c - origin, v, w, h, st, L);
-         it.st = st.skirt;
-         it.stExtra[0] = st.ring;
-         it.stExtra[1] = st.body;
-         const double fn = std::max(L.fnSkirt, std::max(L.fnRing, L.fnBody));
-         if (fn <= 0.0)
-            return r;
-         if (fn > kSpikeBaseN + kSpikePerMps * (v.Length() + SurfaceSpeedBound(0.0)) && spikeNote.empty() && spikes < 20)   // relative closing speed: the ball's plus the moving surface's
+         GroupStep::Hit best;
+         double dBest = INFINITY;
+         for (int sf = 0; sf < kSurfaces; sf++)
          {
-            spikes++;
-            const V3 rel = c - origin;
-            char buf[400];
-            std::snprintf(buf, sizeof buf, "contact force %.0f N (skirt %.0f ring %.0f body %.0f), overlap %.0f um, ball at %.1f mm from the axis, %.1f mm high, speed %.2f m/s; ", fn, L.fnSkirt, L.fnRing, L.fnBody, L.delta * 1e6,
-               std::sqrt(rel.x * rel.x + rel.y * rel.y) * 1e3, rel.z * 1e3, v.Length());
-            spikeNote = std::string(buf) + StateNote();
+            GroupStep::Hit h;
+            GroupProbe(sf, point, 0.0, nullptr, h);
+            if (std::fabs(h.delta) < dBest)
+            {
+               dBest = std::fabs(h.delta);
+               best = h;
+            }
          }
-         r.inContact = true;
-         r.force = L.force;
-         r.torqueOnBall = L.torque;
-         r.fn = fn;
-         r.normal = L.normal;
-         r.delta = L.delta;
-         return r;
+         v = V3();
+         w = V3();
+         for (int j = 0; j < best.nc; j++)
+         {
+            const double rate = gp.Coord(best.c[j].coord).rate;
+            v = v + best.c[j].V() * rate;
+            w = w + best.c[j].W() * rate;
+         }
       }
 
-      std::string StateNote() const override
+      // The old loop's calls: an island with a bumper never goes there (GroupPart)
+      RubberContact::ContactResult ContactItem(int, SurfaceContact &, const V3 &, const V3 &, const V3 &, double) override { assert(false); return RubberContact::ContactResult(); }
+      double BallStep(const V3 &, const V3 &, double hMax) const override { assert(false); return hMax; }
+      void StepInIsland(double) override { assert(false); }
+
+      // ---- the group's calls ----
+      GroupStep::Part *GroupPart() override { return &gp; }
+      int GroupSurfaces() const override { return kSurfaces; }
+      // 0 the skirt, 1 the ring, 2 the centre body (fixed: no columns). Not there: no depth, the same columns
+      void GroupProbe(const int surface, const V3 &c, const double R, const double *const trial, GroupStep::Hit &h) const override
       {
-         char buf[300];
-         std::snprintf(buf, sizeof buf, "bumper: ring %.2f mm down at %.2f m/s, spoon %.2f mm, skirt %.2f mm high tilt %.2f/%.2f deg, switch %d, coil %.2f A, asleep %d", model.dr * 1e3, model.vr, model.ds * 1e3, model.zc * 1e3,
-            model.RotXDeg(), model.RotYDeg(), (int)model.switchClosed, model.iCoil, (int)model.asleep);
-         return buf;
+         const V3 rel = c - origin;
+         h.nc = 0;
+         if (surface == 0)
+            gp.ProbeSkirt(rel, R, trial, h);
+         else if (surface == 1)
+         {
+            ringShape.trial = trial;
+            ringShape.Probe(rel, R, h);
+         }
+         else
+            bodyShape.Probe(rel, R, h);
+         if (!collidable)
+            h.delta = -1.0;
+      }
+      const RubberContact::RubberParams *GroupLaw(const int surface, double &layerM) const override
+      {
+         layerM = 0.0;
+         return surface == 0 ? &gp.cfg.skirtMat : surface == 1 ? &gp.cfg.ringMat : &gp.cfg.bodyMat;
+      }
+      void CycleBegin() override { idle = false; }
+      void TouchBegan(int, int, double) override {}   // (the bumper's Hit is its switch closing, not a touch)
+      bool Sleeping() const override { return idle; }
+
+      // A bumper no ball is near: the same group with no balls, asleep while nothing is driven or moving, its state kept as it is (a part at rest sleeps, ModelStandards 3c)
+      int AdvanceAlone(double dt) override
+      {
+         if (dt <= 0.0 || !collidable)
+            return 0;
+         if (idle && !gp.CoilOn())
+            return 0;
+         const double z0 = gp.z, thx0 = gp.thx, thy0 = gp.thy, dr0 = gp.dr, i0 = gp.iCoil;
+         GroupStep::Books bk;
+         if (!GroupStep::AdvanceAlone(gp, dt, 2e-6, bookMs, &bk))
+            failedSteps++;   // (time is lost, no energy can appear: the next cycle goes on from here)
+         aloneSteps += bk.steps;
+         energySteps += bk.energySteps;
+         // a whole cycle in which nothing moved that any ball or the table could see (the skirt, the ring, the coil's current), and nothing driven
+         const double r = gp.reach;
+         idle = dt >= 0.9e-3 && !gp.CoilOn() && !gp.pulseActive && std::fabs(gp.z - z0) < 1e-9 && (std::fabs(gp.thx - thx0) + std::fabs(gp.thy - thy0)) * r < 1e-9 && std::fabs(gp.dr - dr0) < 1e-9
+                && std::fabs(gp.vz) < 1e-6 && (std::fabs(gp.wx) + std::fabs(gp.wy)) * r < 1e-6 && std::fabs(gp.vr) < 1e-6 && std::fabs(gp.iCoil - i0) < 1e-9;
+         return (int)bk.steps;
       }
 
+      // The dynamic state, plain bytes (the settings and the shapes are not state). Restoring drops the switch changes since: the replay makes them again
+      struct Dyn
+      {
+         BumperGroup::Part::Saved s;
+         double steppedS;
+         bool idle, steppedThisCycle, collidable;
+      };
       void SaveState(State &out) const override
       {
-         out.used = 0;
-         Put(out, steppedThisCycle);
-         Put(out, steppedS);
-         Bumper::Dyn d;
+         Dyn d;
          std::memset(&d, 0, sizeof d);   // (the padding too: saved bytes must be the same for the same state)
-         model.SaveDyn(d);
+         gp.Fill(d.s);
+         d.steppedS = steppedS;
+         d.idle = idle;
+         d.steppedThisCycle = steppedThisCycle;
+         d.collidable = collidable;
+         out.used = 0;
          Put(out, d);
       }
       void RestoreState(const State &in) override
       {
          StateReader r(in);
-         r.Get(steppedThisCycle);
-         r.Get(steppedS);
-         Bumper::Dyn d;
+         Dyn d;
          r.Get(d);
-         model.LoadDyn(d);
+         gp.Load(d.s);
+         gp.swLog.clear();
+         steppedS = d.steppedS;
+         idle = d.idle;
+         steppedThisCycle = d.steppedThisCycle;
+         collidable = d.collidable;
          events.clear();
-         spikeNote.clear();
       }
 
-      void SurfaceVelocity(const V3 &, V3 &v, V3 &w) const override
+      std::string StateNote() const override
       {
-         v = V3();
-         w = V3();
-      }
-
-      // The step a ball's contact needs (design 7), by the same rule as every other surface (contactsystem.cpp NextStep): the contact stiffness at the compression it reaches, step = factor / omega,
-      // with the reduced mass of the ball and the surface's effective mass (the ring assembly 105 g, the skirt 7 g, the body fixed). A contact that is slow (ball and surface together under
-      // 0.02 m/s) and not deeper than a few times the compression the ball's weight gives is resting: factor 0.8, the compression of the weight. Anything else is an impact: factor 0.2 at the
-      // compression the closing speed reaches. The closing speed is the ball's, plus the surface's present speed, plus what the surface's own drive can add DURING the step (its acceleration
-      // bound times the step itself, found by iteration), not over the whole cycle. Not touching yet: the step ends at the arrival.
-      double BallStep(const V3 &c, const V3 &v, double hMax) const override
-      {
-         const V3 rel = c - origin;
-         const double rho = std::sqrt(rel.x * rel.x + rel.y * rel.y);
-         if (rho > m_reach + ball.R + std::max(v.Length(), 0.1) * hMax + 0.01 || rel.z > 0.06 + ball.R)
-            return hMax;
-         const Nearest nr = model.NearestSurface(rel, ball.R);
-         const double mEffSurf = nr.surf == 1 ? model.p.ringMass : nr.surf == 0 ? model.p.skirtMass : 1e3;
-         const double mu = 1.0 / (1.0 / ball.m + 1.0 / mEffSurf);
-         const double eStar = nr.surf == 1 ? kSteelEstar : model.p.plasticEMpa * 1e6 / (1.0 - model.p.plasticNu * model.p.plasticNu);
-         const double reffC = nr.reff > 0.0 ? nr.reff : ball.R;
-         const double k = (4.0 / 3.0) * eStar * std::sqrt(reffC);
-         const double vnBall = std::max(0.0, -v.Dot(nr.n));
-         const double vSurf0 = nr.surf == 2 ? 0.0 : SurfaceSpeedBound(0.0);   // the surface's present speed
-         const double aSurf = nr.surf == 2 ? 0.0 : (SurfaceSpeedBound(std::max(hMax, 1e-9)) - vSurf0) / std::max(hMax, 1e-9);   // what its drive can add per second
-         const double ac = 9.81 + (nr.surf == 1 ? RingAccelBound() : nr.surf == 0 ? SkirtAccelBound() : 0.0);
-         const double delta = -nr.g;
-         constexpr double kRestSpeed = 0.02, kImpactOmegaH = 0.2, kRestOmegaH = 0.8;
-         const double impactFactor = kImpactOmegaH * ContactOmegaHScale();
-         const double dRest = std::pow(ball.m * 9.81 / k, 2.0 / 3.0);   // k delta^1.5 = the ball's weight
-         const bool resting = vnBall + vSurf0 <= kRestSpeed && delta <= 3.0 * dRest;
-         auto hContact = [&](double vImpact) {
-            const double vi = std::max(vImpact, 0.0);
-            const double dMax = resting ? std::max(delta, dRest) : std::max(delta, 0.0) + std::pow(1.25 * mu * vi * vi / k, 0.4);
-            const double kt = 1.5 * k * std::sqrt(std::max(dMax, 1e-12));
-            return (resting ? kRestOmegaH : impactFactor) / std::sqrt(kt / mu);
-         };
-         const double vc = vnBall + vSurf0;
-         double h = hMax;
-         if (delta > 0.0)
-         {
-            if (resting)
-               h = std::min(h, hContact(0.0));
-            else
-               for (int it = 0; it < 3; it++)   // the surface's speed gain during the step depends on the step
-                  h = std::min(hMax, hContact(vc + aSurf * h));
-         }
-         else
-         {
-            const double tArr = (-vc + std::sqrt(vc * vc + 4.0 * ac * -delta)) / (2.0 * ac);
-            if (tArr < h)
-               h = std::max(tArr, hContact(vc + ac * tArr));
-         }
-         return std::max(h, kMinStep);
-      }
-
-      // one island substep h: the balls' reactions of this substep act during all of it, the bumper's bodies advance in their own steps within it
-      void StepInIsland(double h) override
-      {
-         model.StepHeld(h, model.OwnStep());
-         Collect();
-         steppedThisCycle = true;
-         steppedS += h;
-      }
-      // no ball is near: one physics cycle
-      int AdvanceAlone(double dt) override
-      {
-         const int n = model.StepHeld(dt, model.OwnStep());
-         if (n > 0)
-            Collect();
-         return n;
+         char buf[300];
+         std::snprintf(buf, sizeof buf, "bumper: ring %.2f mm down at %.2f m/s, follower %.2f mm, skirt %.2f mm high tilt %.2f/%.2f deg, switch %d, coil %.2f A, asleep %d", gp.dr * 1e3, gp.vr, gp.FollowerD() * 1e3, gp.z * 1e3,
+            gp.thx / DEG, gp.thy / DEG, (int)gp.closed, gp.iCoil, (int)idle);
+         return buf;
       }
 
    private:
-      double RingAccelBound() const
-      {
-         const Params &p = model.p;
-         return (model.coilD.strength + p.returnPreloadN + p.returnKNPerM * p.ringStrokeMm * MM) / p.ringMass;
-      }
-      double SkirtAccelBound() const
-      {
-         const Params &p = model.p;
-         return (p.skirtPreloadN + p.skirtKNPerM * p.skirtClearanceMm * MM) / p.skirtMass;
-      }
+      static constexpr int kSurfaces = 3;
       double m_reach = 0.0;
-      static constexpr double kMinStep = 1e-7;
-      // a ball hitting the steel ring peaks at about 1.45 kN per m/s of closing speed (offline T6: 1.4 kN at 1 m/s, 4.4 kN at 3 m/s); far more than that for the ball's speed is a deep first contact
-      static constexpr double kSpikeBaseN = 500.0, kSpikePerMps = 2500.0;
-
-      // the model's events as the part's (Hit, Switch closed / opened); the pulse and stop events are for the log only
-      void Collect()
-      {
-         for (const JetBumper::Event &e : model.events)
-         {
-            if (e.kind == EvHit)
-               events.push_back({ ContactMovingPart::Event::Hit, -1, e.value });
-            else if (e.kind == EvSwitchClosed)
-               events.push_back({ ContactMovingPart::Event::SwitchClosed, -1, e.value });
-            else if (e.kind == EvSwitchOpened)
-               events.push_back({ ContactMovingPart::Event::SwitchOpened, -1, e.value });
-         }
-         model.events.clear();
-      }
+      bool idle = false, gravityKnown = false;
    };
 }

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <list>
+#include <map>
 #include <sstream>
 
 #include "parts/ball.h"
@@ -33,6 +34,10 @@ namespace
    constexpr double U = ContactSystem::kMetresPerUnit;
    constexpr double VS = ContactSystem::kVelocityScale;
    constexpr double kMassUnitKg = ContactSystem::kMassUnitKg;
+   // Energy steps with a moving part in the group, this table start: per part, and the lines logged so far (rule 8; CordIsland, ReleaseHost)
+   std::map<std::string, long> g_partEnergy;
+   int g_partEnergyLines = 0;
+   bool g_partEnergyTold = false;
 }
 
 namespace ContactSystem
@@ -41,6 +46,9 @@ namespace ContactSystem
 
    void SetTable(const std::filesystem::path &tableFile)
    {
+      g_partEnergy.clear();
+      g_partEnergyLines = 0;
+      g_partEnergyTold = false;
       const std::filesystem::path file = PhysicsIni::FindUnified(tableFile);
       PhysicsIni::Features f;
       const bool found = !file.empty() && PhysicsIni::ReadFeatures(file, f);
@@ -197,7 +205,7 @@ struct ContactSystemImpl
       int stepsPair = 1;                 // the substeps its ball pairs need alone (the arrival-time loop adds the surfaces' own)
       float dtimeF = 0.0f;               // the cycle in engine time units
       std::vector<std::pair<int, int>> links;
-      std::vector<ContactMovingPart *> islandParts;   // the moving parts (gates, spinners, bumpers) the current island steps (contactmovingpart.h)
+      std::vector<ContactMovingPart *> islandParts;   // the moving parts (gates, spinners) the current island steps (contactmovingpart.h)
       std::vector<std::pair<HitBall *, const char *>> bandReleases;   // balls the band lets go of (after the write-back: the release can fire the script)
       // the current island's Option A parts, resolved to its bodies once (MagnetPartForces): ia / ib = body index, -1 = a ball outside the island (held where it began)
       struct MagPartRT { int body = -1, ia = -1, ib = -1; double scale = 0; MagnetBalls::V3 F, u0, n, o, r0, pa0, pb0; bool pair = false; };
@@ -864,7 +872,7 @@ struct ContactSystemImpl
    // by the time the ball needs to get within kArriveM of it (distance, closing speed, and the acceleration it can pick up), and a touching one by its own stiffness at the depth the
    // contact will reach (omega * h limited, Hertz). A ball with nothing near takes the rest of the cycle as one step. The ball pairs keep the step their own rule gives (cy.stepsPair).
 
-   // Islands the arrival loop (with the rewind) can step: balls, static surfaces and moving parts (gates, spinners, bumpers, turntable discs: they step inside the loop and are saved
+   // Islands the arrival loop (with the rewind) can step: balls, static surfaces and moving parts (gates, spinners, turntable discs: they step inside the loop and are saved
    // with the snapshot, UnifiedContactDesign.txt 11 point 7, 12.1). A bat is on the group step, never here. A band keeps the uniform path until it can be saved and restored (12.3).
    static bool IslandRewindable(const Cycle &cy, const ContactSystem::Islands::Island &isl)
    {
@@ -2064,6 +2072,7 @@ struct ContactSystemImpl
    // loop to go to: what is left of the cycle is lost, no energy can appear.
    static bool CordIsland(Cycle &cy, const ContactSystem::Islands::Island &isl, const bool ring = false)
    {
+      static constexpr int kPartEnergyLines = 20;
       static GroupStep::Group g;
       static std::deque<SurfaceShape> shapes;
       shapes.clear();
@@ -2360,7 +2369,80 @@ struct ContactSystemImpl
       // a part's books (always on, rule 8): the group's energy across the cycle against what its drives did and its losses took
       const double partE0 = hasPart ? g.Energy() : 0.0;
       const double hFix = hasPart ? GroupStep::GroupFixedStepS() : 0.0;
-      const bool ok = g.StepsOver(cy.dt, done, [&](const double h) { return hFix > 0.0 ? std::min(hFix, cy.dt - done) : ringCap(h); }, [&]() { ringStep(); book.AfterStep(); });
+      // the group's moving parts and cords by name
+      const auto groupParts = [&]() {
+         std::vector<std::string> names;
+         for (const ContactMovingPart *const mp : parts)
+            for (int s = 0; s < nSurf; s++)
+               if (static_cast<const SurfaceShape *>(g.shape[s])->mp == mp)
+               {
+                  names.push_back(static_cast<const SurfaceShape *>(g.shape[s])->r->Name());
+                  break;
+               }
+         for (HitRubber *const c : cords)
+            names.push_back(c->Name());
+         return names;
+      };
+      // Rule 8: each energy step with a moving part in the group: which parts, where, when, how long and why (why: GroupStep::Group's letters, each attempt of the step). The lines are capped per table start; the totals go at the table's end (ReleaseHost)
+      long esSeen = g.books.energySteps, esBounces = g.books.energyBounces, esFree = g.books.energyFree;
+      double esDone = 0.0;
+      const auto partEnergy = [&]() {
+         const double hTaken = done - esDone;
+         esDone = done;
+         if (!hasPart || g.books.energySteps == esSeen)
+            return;
+         const char *const how = g.books.energyFree > esFree ? "moved with no path" : g.books.energyBounces > esBounces ? "speeds turned back" : "move closed on energy";
+         esSeen = g.books.energySteps;
+         esBounces = g.books.energyBounces;
+         esFree = g.books.energyFree;
+         const std::vector<std::string> names = groupParts();
+         for (const std::string &n : names)
+            g_partEnergy[n]++;
+         if (g_partEnergyLines >= kPartEnergyLines)
+            return;
+         g_partEnergyLines++;
+         char s[260];
+         std::string msg = "Group step: energy step, parts [";
+         for (size_t a = 0; a < names.size(); a++)
+            msg += (a > 0 ? ", " : "") + names[a];
+         msg += "], balls " + std::to_string(g.nb);
+         for (int i = 0; i < g.nb; i++)
+         {
+            snprintf(s, sizeof s, " (%.2f, %.2f, %.2f U, %.3f m/s)", g.ball[i].c.x / U, g.ball[i].c.y / U, g.ball[i].c.z / U, g.ball[i].v.Length());
+            msg += s;
+         }
+         snprintf(s, sizeof s, ", t=%u ms + %.1f us, step %.3f us, %s, why", g_pplayer->m_time_msec, (done - hTaken) * 1e6, hTaken * 1e6, how);
+         msg += s;
+         for (int a = 0; a < g.nHalveDiag; a++)
+         {
+            const GroupStep::Group::HalveDiag &hd = g.halveDiag[a];
+            snprintf(s, sizeof s, " [%c h %.3g us rounds %d]", hd.why, hd.h * 1e6, hd.rounds);
+            msg += s;
+         }
+         snprintf(s, sizeof s, " last %c, touching", g.failWhy);
+         msg += s;
+         for (int k = 0; k < g.ni; k++)
+            if (g.item[k].touching)
+            {
+               GroupStep::Hit hp;
+               if (g.item[k].b >= 0)
+                  snprintf(s, sizeof s, " [ball %d on ball %d]", g.item[k].a, g.item[k].b);
+               else
+               {
+                  g.ProbeItem(k, hp);
+                  const SurfaceShape *const sh = g.item[k].s < nSurf ? static_cast<const SurfaceShape *>(g.shape[g.item[k].s]) : nullptr;
+                  snprintf(s, sizeof s, " [ball %d %s/%d depth %.1f um]", g.item[k].a, sh != nullptr ? sh->r->Name().c_str() : "post", sh != nullptr ? sh->surface : 0, hp.delta * 1e6);
+               }
+               msg += s;
+            }
+         for (const ContactMovingPart *const mp : parts)
+            msg += "; " + mp->StateNote();
+         msg += ". A net, not expected to fire: keep vpinball.log and report it";
+         if (g_partEnergyLines == kPartEnergyLines)
+            msg += " (no more of these lines this table start: the totals come at its end)";
+         PLOGW << msg;
+      };
+      const bool ok = g.StepsOver(cy.dt, done, [&](const double h) { return hFix > 0.0 ? std::min(hFix, cy.dt - done) : ringCap(h); }, [&]() { ringStep(); book.AfterStep(); partEnergy(); });
       if (cordEnergyOn)
       {
          static double worstRise = 1e-9;
@@ -2581,8 +2663,10 @@ struct ContactSystemImpl
          if (g.books.energySteps > 0 && cords.empty() && warnedBook != g_pplayer)
          {
             warnedBook = g_pplayer;
-            const std::string msg = "Group step: a step with a moving part was taken on energy alone (" + std::to_string(g.books.energySteps) + "): it is a net, not expected to fire";
-            PLOGW << msg;
+            std::string msg = "Group step: a step with";
+            for (const std::string &n : groupParts())
+               msg += " " + n;
+            msg += " was taken on energy alone: a net, not expected to fire. Keep vpinball.log and report it";
             g_pplayer->m_liveUI->PushNotification(msg, 6000);
          }
          if (gain > 1e-4 && warnedGain != g_pplayer)
@@ -3378,6 +3462,18 @@ void ContactSystem::Release(HitBall *const ball, const char *why)
 
 void ContactSystem::ReleaseHost(ContactHost *const host)
 {
+   // the first host to go is the table's end: the energy steps with a moving part, per part
+   if (!g_partEnergyTold)
+   {
+      g_partEnergyTold = true;
+      std::string totals;
+      for (const auto &p : g_partEnergy)
+         totals += " " + p.first + " " + std::to_string(p.second);
+      if (totals.empty())
+         PLOGI << "Group step: energy steps with a ball, table end: none";
+      else
+         PLOGW << "Group step: energy steps with a ball, table end, per part in the group:" << totals;
+   }
    // the host is going away: its engagements end without a log line (a ball can outlive the physics engine: it must not keep a pointer to the entry)
    for (BallContact &e : g_engaged)
       if (e.band == host)
@@ -3726,8 +3822,6 @@ namespace
          for (const SurfaceContact &it : e.items)
          {
             f.contacts = FnvV(f.contacts, it.st.xi);
-            f.contacts = FnvV(f.contacts, it.stExtra[0].xi);
-            f.contacts = FnvV(f.contacts, it.stExtra[1].xi);
             f.contacts = FnvV(f.contacts, it.gs.touching);
             f.contacts = FnvV(f.contacts, it.gs.xi);
             f.contacts = FnvV(f.contacts, it.gs.zero);

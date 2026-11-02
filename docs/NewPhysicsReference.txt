@@ -395,12 +395,12 @@ Limits (open): drawn with the stock meshes, which may not match the physical sha
 Cost (Rubber Test 2, 13 shots, focused, per 1 ms physics cycle, contact step + movers): mean 31.7 us (stock 30.8), p99 394 us (326), p99.9 1074 us (683), max 2181 us
 (1485; the largest single cycles are noisy in both).
 
-14. JET BUMPERS  (unified engine; [Features] bumpers; [Bumpers], [Bumper:<name>])   -- added 2026-10-26
-Design: docs/JetBumperDesign.txt. A bumper on a unified table is a physical model unless [Features] bumpers = 0, [Bumper:<name>] physical = 0 (that one bumper stock) or VPX_BUMPERS=0: a skirt that rocks on its
-base rim (3 degrees of freedom, a spring under it), a stem that pushes a spoon switch down, a steel ring on a plunger driven by the coil (AE-23-800 by default), a fixed centre body. The
-ball touches the skirt, the ring and the body with the contact law of every other surface (Hertz + viscoelastic + Mindlin friction + twist); the kick comes out of coil, ring mass and
-contact, nothing is added to the ball. The stock hit circle, ring animation and skirt animation are not used.
-Switch: closed when the spoon is pushed down switch_close_mm (default 1.59 mm = 1/16 in, up to 3.18 mm = 1/8 in = less sensitive); Hit fires when it closes (no speed threshold), then
+14. JET BUMPERS  (unified engine; [Bumpers], [Bumper:<name>])   -- added 2026-10-26, on the group step 2026-11-02
+Design: docs/JetBumperDesign.txt, runs/2026-10-31-bumper-design/design.md, docs/GroupStepDesign.txt section 20. A bumper on a unified table is always this model, moved with the balls in one solve on the group step: no other path, no hand-back to stock. Stock bumpers exist only on a unified = 0 table.
+[Features] bumpers = 0, VPX_BUMPERS=0 and the keys physical, own_step_us, spoon_mass_g, spoon_travel_mm are IGNORED: a WARN in the log and one notification name them.
+A skirt that rocks on its base rim (3 coordinates, a spring under it), a stem whose tip pushes a spoon (a massless spring on the follower distance, not a body), a steel ring on a plunger driven by the coil (AE-23-800 by default), a fixed centre body. The
+ball touches the skirt, the ring and the body with the contact law of every other surface; the kick comes out of coil, ring mass and contact, nothing is added to the ball. Only the coil adds energy. The stock hit circle, ring animation and skirt animation are not used.
+Switch: closed when the follower distance reaches switch_close_mm (default 0.79375 mm = 1/32 in, user 2026-11-02; up to 3.18 mm = 1/8 in = less sensitive); Hit fires when it closes (no speed threshold), then
 Switch(1); Switch(0) when it opens.
 Coil drive (coil_drive): pulse (default, 20 ms per closure, re-armed when the switch has reopened), held (on while the switch is closed), external (only Bumper.Solenoid drives it).
 Script: Bumper.Solenoid enabled[, volts[, duty]] (external: coil on/off; pulse: True fires one pulse; held: ignored with a notification). Read-only: RotX, RotY (skirt tilt, degrees),
@@ -411,24 +411,19 @@ Convention differences from stock: Hit is the switch, not a ball touch; the skir
 Keys ([Bumpers] for all, [Bumper:<name>] for one; mm, g, N/mm unless the name says otherwise; every value not stated by the user is an UNVERIFIED estimate, defaults in contactbumper.h Params):
   geometry   body_dia_mm body_height_mm skirt_dia_mm skirt_inner_dia_mm skirt_t_inner_mm skirt_t_edge_mm skirt_clearance_mm lip_dia_mm stem_length_mm stem_dia_mm stem_tip_radius_mm
              spoon_cone_radius_mm spoon_cone_depth_mm ring_od_mm ring_id_mm ring_thickness_mm ring_rise_mm ring_mid_rest_mm ring_stroke_mm
-  masses     skirt_mass_g (7) ring_assembly_mass_g (105, sets the kick) spoon_mass_g (1)
+  masses     skirt_mass_g (7) ring_assembly_mass_g (105, sets the kick)
   springs    skirt_spring_n_per_mm (0.2) skirt_spring_preload_n (0.4) skirt_spring_radius_mm skirt_damping_zeta, spoon_spring_n_per_mm (0.1) spoon_spring_preload_n (0.15) spoon_damping_zeta
-             spoon_travel_mm, return_spring_n_per_mm (0.1) return_spring_preload_n (1.6) ring_friction_ns_per_m, ring_rest_stop_e ring_coil_stop_e ring_rest_stop_e_mpa
+             return_spring_n_per_mm (0.1) return_spring_preload_n (1.6) ring_friction_ns_per_m, ring_rest_stop_e ring_coil_stop_e ring_rest_stop_e_mpa
   switch     switch_close_mm switch_hyst_mm
   coil       coil (ae-23-800) coil_drive (pulse|held|external) pulse_ms coil_v_supply (28) coil_r_ohm coil_l_air_mh coil_l_arm_mh coil_bobbin_mm coil_x0 (0.3) coil_plunger_closed_frac
   materials  plastic_e_mpa plastic_restitution plastic_mu steel_restitution steel_mu
-Code: src/physics/contactbumper.h (the model, pure SI), contactbumperpart.h (the engine part, implements ContactMovingPart), contactmovingpart.h (the engine's moving-part interface, shared with gates and
-spinners: HingePart::Part in contacthingepart.h), coilmodel.h CoilModel (shared coil law, parameters as input), HitRubber::MakeBumperHost,
-src/parts/bumper.cpp. Offline tests: runs/2026-10-26-bumper (test_bumper.cpp T1-T10, results out_*.txt).
+Code: src/physics/contactbumper.h (settings, shapes, masses, materials, no state), bumpergroup.h (the part on the group step), contactbumperpart.h (the engine part, implements ContactMovingPart), coilmodel.h CoilModel::Over (the circuit and force over a move), src/parts/bumper.cpp.
+Offline test: runs/2026-11-02-bumper-group/bumper_group_test.cpp. runs/2026-10-26-bumper tests the old stepping, now removed, and no longer builds against src.
 Drawing: the stock skirt and ring meshes, sized from the model: outer radius = skirt OD / 2, the skirt's flat top skirt_t_inner_mm thick, the ring's sloped face rising ring_rise_mm with the middle of
 the face at ring_mid_rest_mm at rest; the skirt is tilted about the centre of its flat bottom and lowered with the model, the ring follows the model. Base and cap keep the stock proportions
 (height scale twice the radius) and are not tied to body_dia_mm / body_height_mm (the collision body is 38 mm wide and 40 mm high, an estimate).
-Measured (offline, 1-4 us steps, runs/2026-10-26-bumper): ring reaches its stop in 18.7 ms at 1.19 m/s with the 15 ms pulse; a ball rolling at the skirt rim closes the switch from
-0.25 m/s head-on (1.59 mm) / 0.50 m/s (3.18 mm); at 1 m/s the ball meets the ring lip 5 ms after the switch closes and there is little kick. In the engine (Rubber Test 2, Bumper1,
-runs/2026-10-09-slow-contact/run_bump1): Solenoid pulse drops the ring about 9 mm; a 1 and a 3 m/s ball fire Hit + Switch; a 0.3 m/s sliding ball presses the skirt 1.1 mm and does not fire.
-Limits (open): two balls on one bumper, and a ball touching two bumpers, are meant to work (one island) but are not tested yet; cost in the engine not measured yet; the drawn base and cap are not checked against the collision body (visual check by the user); a ball overlapping the bumper when Collidable
-becomes True is not handled; a bumper on a ramp or upper playfield is untested; ball sizes other than the standard ball use the standard ball's calibrated damping; the 0.5 mm
-skirt rim and a ball faster than 20 m/s are not tested; pinch (a ball under the ring) has no valid test yet.
+Measured on the group step, one shot at the old 1.59 mm gap (Rubber Test, Bumper1, ball at 0.91 m/s up the slope, runs/2026-11-02-bumper-group/notes.md): ring 9.52 mm down of 10, peak coil current 7.30 A, coil work 34.98 mJ, ball leaves at 0.493 m/s straight back. One table, one shot: not a proof of feel or of the 1/32 in gap. Nudge at 1/32 in, offline, flat table, no ball, coil off, 10 m/s^2 for 30 ms in 8 directions (10 m/s^2 is the old test's figure, maybe not the maximum): the switch did not close in any.
+Limits (open): held and external coil, Collidable switching, two balls on one bumper and two bumpers together are built and not run. The ring stops' e(v) table is open (e from the settings). Revolve's taper joint has a real gradient jump, not yet a fault. The launch the user saw is not reproduced, so not proved gone. Base and cap are not checked against the collision body; a bumper on a ramp, other ball sizes and pinch under the ring are untested.
 
 Change log
 ----------
@@ -826,3 +821,6 @@ notices, minimum centre-to-winding distance 27.9 U for a 25 U ball).
             Removed: ContactBat's state, step and pulse (ContactBat is the settings file only), the mover's m_rb* and m_bat fields, FlipperModelEnabled and the old flipper stepping, HitBall::m_rubberOwner, HitRubber::SideGather/SideStep/RubberSideSet (with VPX_CONTACT_NOSIDE), PhysicsEngine::FlipperNear, the keys rubber_release_steps and rubber_substep_us (each now logs "ignored line"). [Features] flippers, flipper_rubber and rubber_contact = 0 are ignored with a notification. Gone from the bat's own settings: restOmegaH, fieldForceN, the EOS arrival floor, hMin 1e-8, vRattle: the shared step's rules apply.
             Convention changes: VPX_PHYS_TIMING's engaged column now counts balls held by the contact system (was: driven by a flipper rubber; S rows unchanged). The ball-history flags no longer have bit 2 (driven by a flipper). New VPX_GROUP_HFIX; driver: ball ... wx wy wz, enabled FLIPPER 1|0. Bytes change on any table with a flipper (measured in the report: shot and rebound within 5 % of 1 us on 73 of 75 cases, the other 2 piles).
             Gates, spinners, disc and bumpers stay on the old loop, a fixed surface in a bat's island for those cycles. Open from the report: Gorgar pile at roll_smooth_rad_s 0.05 (334 energy steps, worst 7 cycles 126,177 us), a firing bat pressing a ball on a cord (388 energy steps), stuck balls G78 and on Rubber2, G48. Merged build checked by one bench load and one window load each of Gorgar New and Rubber Test only (the left flipper, one ball).
+2026-11-02  The jet bumper on the group step is the only bumper on a unified table; the old stepping is out (runs/2026-11-02-bumper-group/notes.md; restore point backups/2026-11-02-before-bumper-merge). New src/physics/bumpergroup.h: skirt, ring and coil in one solve with the balls, spoon a massless spring on the follower distance. contactbumper.h keeps settings, shapes, masses and materials only. Removed: its Step and ball forces, ContactHost::BumperWanted, CoilModel::NextCurrent, SurfaceContact::stExtra.
+            Ignored with a note: [Features] bumpers = 0, VPX_BUMPERS=0, physical, own_step_us, spoon_mass_g, spoon_travel_mm. CoilModel::Over: the circuit and its force over the solved move, energy closed at any step length, the coil's only energy law on the group step. KKStep (groupstep.h): viscoelastic damping over the step is the law's integral at a steady rate, not its mid-step value; changes every group contact with gammaKK above 0 (hard surfaces, and a gate, spinner or disc in a bat's island), not playfield, rubbers, cords, bats, ball pairs. Energy-step log lines per part (Group step: energy step ..., table-end totals).
+            Switch gap default 1/32 in, 0.79375 mm (user 2026-11-02): bumper switch_close_mm, sling switch_gap_mm (was 1/16 in). Exceptions: BodyPart until the gates; Limits in section 14.

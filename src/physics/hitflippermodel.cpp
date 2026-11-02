@@ -97,7 +97,11 @@ namespace
    {
    public:
       FlipperPartAdapter(FlipperMoverObject *mover, HitFlipper *flipper) : m_mover(mover), m_flipper(flipper) {}
+      ~FlipperPartAdapter() override { PLOGI << "Group step: energy steps alone, table end: " << m_name << " " << m_esSeen; }
       ContactPartHost *m_host = nullptr;
+      std::string m_name;   // (kept: the flipper may be gone when the adapter goes)
+      long m_esSeen = 0;
+      int m_esLines = 0;
 
       void Publish() override
       {
@@ -152,6 +156,16 @@ namespace
             m.m_pflipper->FireVoidEventParm(DISPID_LimitEvents_BOS, anglespd);
             m.m_enableRotateEvent = 0;
          }
+         if (p.energySteps > m_esSeen)   // rule 8: a step of the bat alone was taken on energy (no ball: nothing but the bat in the group)
+         {
+            m_esSeen = p.energySteps;
+            if (m_esLines < 5)
+            {
+               m_esLines++;
+               PLOGW << "Group step: energy step alone, part " << m.m_pflipper->GetName() << ", balls 0, t=" << g_pplayer->m_time_msec << " ms, " << m_esSeen << " so far, why not known for a part alone; " << p.StateNote() << ". A net, not expected to fire: keep vpinball.log and report it";
+            }
+         }
+         m_name = m.m_pflipper->GetName();
          if (p.failedSteps > 0 && !m_warned)   // rule 8
          {
             m_warned = true;

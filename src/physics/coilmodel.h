@@ -373,12 +373,26 @@ namespace CoilModel
       const double g = FlipperModel::Sq(s.x0 / (frac + s.x0)), ih = i / d.iss;
       return d.strength * g * ih * ih;
    }
-   // the current after h seconds under volts vNow with the plunger closing at vClose (m/s, >= 0): di/dt = (V - R i - i dL/dx v) / L, explicit Euler, never below zero
-   inline double NextCurrent(const CoilSettings &s, const CoilDerived &d, double frac, double vClose, double vNow, double i, double h)
+   // The circuit and the force over a step of h in which the plunger moves dx toward the closed end, from frac0 to frac1, under volts vNow: a function of the start and the move only, so a retake is identical and the solve can hold it.
+   // L di/dt + (R + C v) i = V over the step, with L the mean of its ends, C the chord of L along the move and v = dx / h (signed: a plunger drawn out gives its work back to the circuit), solved exactly. The force is what closes the energy exactly:
+   // supplied - lost in R - change in 1/2 L i^2 = F dx at any step length, F = C (mean i^2 - (i0^2 + i1^2) / 4), which is C i^2 / 2 to second order. The coil's only energy law: nothing else books it.
+   struct OverMove { double i1 = 0.0, meanI = 0.0, meanI2 = 0.0, force = 0.0; };
+   inline OverMove Over(const CoilSettings &s, const CoilDerived &d, const double frac0, const double frac1, const double dx, const double vNow, const double i0, const double h)
    {
-      const double dLdx = d.b / (s.bobbinMm * FlipperModel::Sq(frac + s.x0));   // mH/mm = H/m
-      const double lH = (d.a + d.b / (frac + s.x0)) * 1e-3;
-      return std::fmax(0.0, i + ((vNow - s.rOhm * i - i * dLdx * vClose) / lH) * h);
+      const double a0 = frac0 + s.x0, a1 = frac1 + s.x0;
+      const double C = d.b / (s.bobbinMm * a0 * a1);   // (mH/mm = H/m) (L1 - L0) / dx, in closed form: no difference of near-equal numbers
+      const double lH = (d.a + 0.5 * d.b * (1.0 / a0 + 1.0 / a1)) * 1e-3;
+      double R = s.rOhm + C * dx / h;
+      if (R == 0.0)
+         R = 1e-12;   // (the line below divides; a drawn-out plunger so fast it cancels R exactly)
+      const double iInf = vNow / R, di = i0 - iInf, u = h * R / lH;
+      const double e1 = std::exp(-u), au = std::fabs(u), m1 = au > 1e-6 ? (1.0 - e1) / u : 1.0 - 0.5 * u, m2 = au > 1e-6 ? (1.0 - e1 * e1) / (2.0 * u) : 1.0 - u;
+      OverMove o;
+      o.i1 = iInf + di * e1;
+      o.meanI = iInf + di * m1;
+      o.meanI2 = iInf * iInf + 2.0 * iInf * di * m1 + di * di * m2;
+      o.force = C * (o.meanI2 - 0.25 * (i0 * i0 + o.i1 * o.i1));
+      return o;
    }
 }
 

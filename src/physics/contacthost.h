@@ -105,7 +105,6 @@ public:
    static bool LoadHardSurfaceSettings(RubberObjectSettings &s, const std::filesystem::path &file, const char *kind, const std::string &name, double elasticity, double friction);
    static double HardSurfaceE(const HitObject *first);   // the part's restitution at 1 m/s: its elasticity with the stock falloff (0.3 without a collider)
    static bool HingeWanted(const std::filesystem::path &file, const char *kind, const std::string &name);   // like HardSurfaceWanted, for [Features] hinges (gates and spinners)
-   static bool BumperWanted(const std::filesystem::path &file, const std::string &name);   // [Features] bumpers on, VPX_BUMPERS not 0, and the bumper's own section does not say physical = 0
    // The playfield as a surface on the force model. s gets the material of the [Playfield] section (defaults: a steel ball on lacquered wood, all UNVERIFIED), tableMu the
    // table's friction. False if [Features] playfield_contact is off.
    static bool LoadPlayfieldSettings(RubberObjectSettings &s, const std::filesystem::path &file, double tableMu);

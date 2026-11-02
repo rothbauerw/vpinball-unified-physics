@@ -457,6 +457,20 @@ namespace GroupStep
       double A(double d) const { return d > 0.0 ? std::sqrt(reff * d) : 0.0; }   // contact patch radius
       double Kt(double d) const { return ktPerA * A(d); }
       double KtSlope(double d) const { return d > 0.0 ? 0.5 * ktPerA * std::sqrt(reff / d) : 0.0; }
+      double KKIntegral(const double d) const   // 2/3 sqrt(reff) d^1.5, 0 for no touch
+      {
+         return d > 0.0 ? 2.0 / 3.0 * std::sqrt(reff) * d * std::sqrt(d) : 0.0;
+      }
+      // Viscoelastic damping over the step: the law's own integral at a steady rate, as Hunt-Crossley already is (runs/2026-10-31-gate-spinner-disc/patch_gs_rotor.py, without its bend in series). F = gamma a(d) d_dot, so the mean
+      // coefficient over a move is gamma (G(d1) - G(d0)) / (d1 - d0). At the mid-step depth alone it rises as sqrt(d) from a touch's start: a slope with no bound, where Newton stalls. jacTerm: its slope for the Jacobian (d(c x (d1 - d0)) / d d1)
+      double KKStep(const double d0, const double d1, const double dm, double &jacTerm) const
+      {
+         const double top = std::max(std::fabs(d0), std::fabs(d1));
+         jacTerm = gammaKK * A(d1);
+         if (std::fabs(d1 - d0) > 1e-3 * top && top > 0.0)
+            return gammaKK * (KKIntegral(d1) - KKIntegral(d0)) / (d1 - d0);
+         return gammaKK * A(dm);
+      }
       // the normal damping coefficient over a step, mid-step depth d and mean spring force fMean: force = c x compression rate. Hunt-Crossley's 1.5 alpha F is taken over the step, so its loss is
       // 1.5 alpha x the change in stored energy x the rate, the law's own integral at a steady rate; at the mid-step force alone the loss falls short of it by (omega h)^2 and the rebound comes out high
       double DampC(const double d, const double fMean) const
@@ -1385,7 +1399,15 @@ namespace GroupStep
             }
             Gonzalez(gm, d1 - d0, noiseD, dq, W, na + nq, gd);
             const double fe = L.Chord(d0, d1);
-            const double cD = L.DampC(dm, fe);
+            double cD, kkJac = 0.0;
+            if (L.gammaKK > 0.0)
+            {
+               cD = L.KKStep(d0, d1, dm, kkJac);
+               if (dm > 0.0 && L.normalLoss && L.tanDelta > 0.0)
+                  cD += L.tanDelta * std::sqrt(1.5 * L.F(dm) * L.mRed / dm);
+            }
+            else
+               cD = L.DampC(dm, fe);
             const double fd = cD * (d1 - d0) / h;
             const double N = std::max(0.0, fe + fd);   // a contact pushes, it cannot pull (Hertz, no adhesion)
             e.normalLoss = (N - fe) * (d1 - d0);       // (cD (d1 - d0)^2 / h while it pushes; all the spring's release once damping would make it pull)
@@ -1507,7 +1529,7 @@ namespace GroupStep
                else
                   kc = 0.5 * L.K(std::max(std::max(dm, d1), 0.0));
                const double cDp = L.gammaKK > 0.0 ? (dm > 0.0 ? 0.5 * L.gammaKK * 0.5 * std::sqrt(L.reff / dm) : 0.0) : 1.5 * L.alpha * kc;
-               const double kn = fe + fd <= 0.0 ? 0.0 : h * kc + cD + cDp * (d1 - d0);
+               const double kn = fe + fd <= 0.0 ? 0.0 : L.gammaKK > 0.0 ? h * kc + kkJac : h * kc + cD + cDp * (d1 - d0);
                int ix[kGradMax];   // each gradient entry's unknown; -1 = a given move
                for (int p = 0; p < na; p++)
                   ix[p] = (p < 3 ? 6 * it.a : 6 * it.b) + p % 3;
