@@ -247,7 +247,7 @@ namespace GroupStep
       double vFloor = 0.01;                    // m/s: the closing speed below which a contact's expected depth is taken at this speed
       double hMax = 1e-3, hMin = 1e-9;
       // the solver
-      double rollSmooth = 2.0;                 // the rolling torque's smoothing through zero spin, rad/s ([Contact] roll_smooth_rad_s): the shared law's 2 until the 0.05 is proved on the 750 hits
+      double rollSmooth = 0.05;                // the rolling torque's smoothing through zero spin, rad/s ([Contact] roll_smooth_rad_s)
       double tolV = 1e-11;                     // solved when a round changes no ball's speed (or its rim speed R w) by more than this, m/s
       double tolNoise = 1e-9;                  // or when the changes stay below this for stallRounds rounds without halving: the forces' own noise (m/s)
       double tolRes = 1e-10, tolCheckMove = 1e-6;   // the residual in speed units that counts as solved; the move after which a round looks at the residual first, with no factorization (m/s)
@@ -1482,10 +1482,7 @@ namespace GroupStep
                const double pa = N / (kPi * am * am);
                const double muRr = std::max(std::min(2.34 * (pa / L.E) * L.tanDelta, RubberContact::kRollingMuMax), L.rollingMu);
                const double rho = muRr * A.R * N;
-               if (set.rollSmooth == 2.0)   // (/fp:fast: the shared law's own expression, so a table not using the switch keeps its bytes)
-                  sRo = wl > 1e-9 ? rho * std::tanh(wl / 2.0) / wl : 0.5 * rho;
-               else
-                  sRo = wl > 1e-9 ? rho * std::tanh(wl / set.rollSmooth) / wl : rho / set.rollSmooth;
+               sRo = wl > 1e-9 ? rho * std::tanh(wl / set.rollSmooth) / wl : rho / set.rollSmooth;
                rhoR = rho;
                wlR = wl;
                wtR = wt;
@@ -1656,23 +1653,14 @@ namespace GroupStep
                }
                if (sRo > 0.0)
                {
-                  // the rolling torque -rho tanh(|wt| / 2) wt^ : its derivative along wt^ is rho sech^2 / 2, across it rho tanh / |wt| (sRo)
+                  // the rolling torque -rho tanh(|wt| / s) wt^ : its derivative along wt^ is rho sech^2 / s, across it rho tanh / |wt| (sRo)
                   M3 Rm;
                   if (wlR > 1e-9)
                   {
                      const V3 wh = wtR * (1.0 / wlR);
                      const M3 Q = M3::Outer(wh, wh);
-                     double sh, along;
-                     if (set.rollSmooth == 2.0)
-                     {
-                        sh = 1.0 / std::cosh(wlR / 2.0);
-                        along = 0.5 * rhoR * sh * sh;
-                     }
-                     else
-                     {
-                        sh = 1.0 / std::cosh(wlR / set.rollSmooth);
-                        along = rhoR / set.rollSmooth * sh * sh;
-                     }
+                     const double sh = 1.0 / std::cosh(wlR / set.rollSmooth);
+                     const double along = rhoR / set.rollSmooth * sh * sh;
                      for (int i = 0; i < 3; i++)
                         for (int j = 0; j < 3; j++)
                            Rm.a[i][j] = along * Q.a[i][j] + sRo * (Pt.a[i][j] - Q.a[i][j]);

@@ -30,7 +30,7 @@ struct ContactSettings
    // is stepped by its own stiffness at the depth the impact will reach, and a ball far from every surface takes the rest of the cycle as one step.
    bool arrivalStep = true;          // arrival_step (VPX_ARRIVAL=0/1 overrides it)
    bool staticModel = false;         // static_model: 1 = every static surface (walls, primitives, ramps, playfield) takes a ball to the group step as a rubber does (ring_model, GroupStepDesign 14); 0 = only rubbers
-   double rollSmoothRadS = 2.0;      // roll_smooth_rad_s: the rolling torque's smoothing through zero spin in the group step, rad/s
+   double rollSmoothRadS = 0.05;     // roll_smooth_rad_s: the rolling torque's smoothing through zero spin in the group step, rad/s
    double arrivalDepthUm = 2.0;      // arrival_depth_um: the deepest a ball may start a contact before the step is taken again (rewind), um
    static const ContactSettings& Get();   // checks the file for changes about twice a second of game time
    static void StartPlay(const std::filesystem::path& tableFile);   // the start of a play, before any part is built: the file as it is now
