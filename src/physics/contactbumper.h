@@ -62,7 +62,7 @@ namespace JetBumper
       double switchHystMm = 0.1;           // [guess]
       // coil: AE-23-800 as the sling code has it
       DriveMode mode = DriveMode::Pulse;
-      double pulseMs = 20.0;               // [user 2026-10-26: 15 ms first, 20 ms after the first play test]
+      double pulseMs = 40.0;               // [user 2026-11-02: 20 was too short in play; the ring doesn't reach its stop on slow hits] (was 20 ms [user 2026-10-26: 15 ms first, 20 ms after the first play test])
       CoilSettings coil;                   // AE-23-800 defaults; vSupply 28 V [user], x0 0.3 [user accepted]
       double plungerClosedFrac = 0.0;      // plunger position fraction when the ring is fully down (0 = plunger fully in) [guess]
       // contact materials [guess]: Young's modulus of the soft partner, restitution at 0.5 m/s, friction
