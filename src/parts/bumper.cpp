@@ -246,7 +246,8 @@ void Bumper::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       {
          const JetBumper::Bumper &b = m_bumperModel->gp.cfg;
          PLOGI << "Bumper " << GetName() << ": unified part on the group step (skirt " << b.p.skirtMass * 1e3 << " g, ring assembly " << b.p.ringMass * 1e3 << " g, switch closes at "
-               << b.p.switchCloseMm << " mm, drive " << (b.p.mode == JetBumper::DriveMode::Held ? "held" : b.p.mode == JetBumper::DriveMode::External ? "external" : "pulse") << ", pulse " << b.p.pulseMs << " ms, supply " << b.p.coil.vSupply << " V)";
+               << b.p.switchCloseMm << " mm, drive " << (b.p.mode == JetBumper::DriveMode::Held ? "held" : b.p.mode == JetBumper::DriveMode::External ? "external" : "pulse") << ", pulse " << b.p.pulseMs << " ms, supply " << b.p.coil.vSupply << " V, skirt spring " << b.p.skirtKNPerM * 1e-3 << " N/mm preload " << b.p.skirtPreloadN << " N zeta " << b.p.skirtZeta
+               << ", spoon spring " << b.p.spoonKNPerM * 1e-3 << " N/mm preload " << b.p.spoonPreloadN << " N zeta " << b.p.spoonZeta << ")";
       }
       m_partHost->m_enabled = m_d.m_collidable;
       physics->AddCollider(m_partHost, isUI);

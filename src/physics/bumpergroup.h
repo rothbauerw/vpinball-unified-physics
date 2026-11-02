@@ -93,14 +93,31 @@ namespace BumperGroup
          kSpoon = p.spoonKNPerM;
          fSpoon = p.spoonPreloadN;
          cSpoon = 2.0 * p.spoonZeta * std::sqrt(kSpoon * p.spoonMass);   // the old spoon's damper value; its mass is not a mass here (design section 5)
-         const double kTilt = kSpring * aSpring * aSpring * 0.5;
          cZ = 2.0 * p.skirtZeta * std::sqrt(kSpring * m);
-         cTilt = 2.0 * p.skirtZeta * std::sqrt(kTilt * I);
          taWall = p.coneDepthMm / p.coneRadiusMm;
          const double wall = std::atan(taWall);
          w = coneRoundMm * JB::MM * (1.0 / std::cos(wall) - 1.0) / taWall;   // puts D's wall line where a round of this radius puts it (0.414 x the round at 45 deg)
          dClose = p.switchCloseMm * JB::MM;
          dOpen = (p.switchCloseMm - p.switchHystMm) * JB::MM;
+         // The tilt's damper, zeta of a viscous damper on the tilt mode's own stiffness: the spring's 0.5 k a^2 plus the spoon's kSpoon s^2, s = D's slope per tilt where the tilt alone brings D to the closing distance
+         // (the cone's rounded tip makes the slope 0 at its apex, so the closing point; in the wall the slope stays within 1 % of it, runs/2026-11-02-bumper-kick/notes.md)
+         {
+            const auto DOfTilt = [&](const double th) {
+               const double dq[4] = { 0.0, 0.0, th, 0.0 };
+               const Pose q = PoseAt(dq);
+               return D(q) - zRest + q.z;
+            };
+            double lo = 1e-6, hi = 0.3;
+            for (int i = 0; i < 80; i++)
+            {
+               const double mid = 0.5 * (lo + hi);
+               (DOfTilt(mid) < dClose ? lo : hi) = mid;
+            }
+            const double thClose = 0.5 * (lo + hi), e = 1e-7;
+            const double s = (DOfTilt(thClose + e) - DOfTilt(thClose - e)) / (2.0 * e);
+            const double kTilt = kSpring * aSpring * aSpring * 0.5 + kSpoon * s * s;
+            cTilt = 2.0 * p.skirtZeta * std::sqrt(kTilt * I);
+         }
          invM[0] = 1.0 / m;
          invM[1] = invM[2] = 1.0 / I;
          omLip = std::max(std::sqrt(kSeat / m), std::sqrt(kSeat * rLip * rLip * 0.5 / I));

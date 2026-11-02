@@ -2067,6 +2067,53 @@ struct ContactSystemImpl
       cb.slots.assign(balls, balls + n);
    }
 
+   // The group parts in this island's solve. A part at rest stays out while no ball of the island can reach it in this cycle: Group::OutOfReach's test over the whole cycle. A ball can pick up speed inside the cycle, so the
+   // speed is the bound on what it can have: all the island's balls' (a ball's hit passes it on), what its forces can add, and twice the fastest surface in the island that is not at rest (a ball leaves a moving surface at
+   // up to twice its speed). Out of the solve it moves alone (AdvanceAlone), so nothing about it stops; the script and a nudge can only act between cycles.
+   static void PartsInSolve(Cycle &cy, const ContactSystem::Islands::Island &isl, std::vector<const ContactMovingPart *> &in)
+   {
+      in.clear();
+      double sp = 0.0, acc = 0.0, vPart = 0.0;
+      for (const int i : isl.members)
+      {
+         const Body &w = cy.bodies[i];
+         sp += w.v.Length();
+         acc = std::max(acc, w.extBaseVS.Length() / PHYSICS_STEPTIME_S + w.magAcc + w.F.Length() / w.bs.m);
+         if (w.e != nullptr)
+            for (const SurfaceContact &it : w.e->items)
+               if (ContactMovingPart *const mp = it.r->MovingPart(); mp != nullptr && !mp->AtRest())
+               {
+                  mp->SetBall(w.bs);
+                  vPart = std::max(vPart, mp->SurfaceSpeedBound(cy.dt));
+               }
+      }
+      const double reach = 2.0 * (sp + acc * cy.dt + 2.0 * vPart) * cy.dt + 1e-4;
+      for (const int i : isl.members)
+      {
+         Body &w = cy.bodies[i];
+         if (w.e != nullptr)
+            for (SurfaceContact &it : w.e->items)
+            {
+               ContactMovingPart *const mp = it.r->MovingPart();
+               if (mp == nullptr || mp->GroupPart() == nullptr || std::find(in.begin(), in.end(), mp) != in.end())
+                  continue;
+               bool joins = !mp->AtRest();
+               const int surfaces = mp->GroupSurfaces();
+               if ((int)it.gsMore.size() < surfaces - 1)
+                  it.gsMore.resize(surfaces - 1);
+               for (int sf = 0; sf < surfaces && !joins; sf++)
+                  joins = it.Surf(sf).touching;
+               if (!joins)
+               {
+                  mp->SetBall(w.bs);
+                  joins = mp->Probe(w.c).delta > -reach;
+               }
+               if (joins)
+                  in.push_back(mp);
+            }
+      }
+   }
+
    // ring: the island has no cord (IslandOnRing). Returns false when a step of such an island could not be solved: nothing has been written, and the cycle is retaken on the old loop, the contact
    // system's own (GroupStepDesign 14.3; never stock, no hold). A cord island keeps its own rule (15.3) and returns true. So does an island with a part on the group step (a bat), which has no old
    // loop to go to: what is left of the cycle is lost, no energy can appear.
@@ -2094,6 +2141,8 @@ struct ContactSystemImpl
       std::vector<HitRubber *> cords;
       static std::vector<ContactMovingPart *> parts;   // the moving parts on the group in this island
       parts.clear();
+      static std::vector<const ContactMovingPart *> partsIn;
+      PartsInSolve(cy, isl, partsIn);
       bool gSet = false;
       for (const int i : isl.members)
       {
@@ -2172,6 +2221,8 @@ struct ContactSystemImpl
                   continue;
                }
                ContactMovingPart *const mp = it.r->MovingPart() != nullptr && it.r->MovingPart()->GroupPart() != nullptr ? it.r->MovingPart() : nullptr;
+               if (mp != nullptr && std::find(partsIn.begin(), partsIn.end(), mp) == partsIn.end())
+                  continue;
                const int surfaces = mp != nullptr ? mp->GroupSurfaces() : 1;
                if ((int)it.gsMore.size() < surfaces - 1)
                   it.gsMore.resize(surfaces - 1);

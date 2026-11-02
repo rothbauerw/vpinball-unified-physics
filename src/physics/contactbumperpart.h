@@ -206,9 +206,29 @@ namespace JetBumper
          layerM = 0.0;
          return surface == 0 ? &gp.cfg.skirtMat : surface == 1 ? &gp.cfg.ringMat : &gp.cfg.bodyMat;
       }
-      void CycleBegin() override { idle = false; }
+      void CycleBegin() override
+      {
+         idle = false;
+         markZ = gp.z;
+         markThx = gp.thx;
+         markThy = gp.thy;
+         markDr = gp.dr;
+         markI = gp.iCoil;
+         marked = true;
+      }
       void TouchBegan(int, int, double) override {}   // (the bumper's Hit is its switch closing, not a touch)
       bool Sleeping() const override { return idle; }
+      // The rule of AdvanceAlone's sleep, over the last cycle in a group: the same state a whole cycle later, nothing driven, no speed. A part out of the solve still moves alone, so a part caught at the top of a bounce only steps alone
+      bool AtRest() const override
+      {
+         if (gp.CoilOn() || gp.pulseActive)
+            return false;
+         if (idle || !collidable)
+            return true;
+         const double r = gp.reach;
+         return marked && std::fabs(gp.z - markZ) < 1e-9 && (std::fabs(gp.thx - markThx) + std::fabs(gp.thy - markThy)) * r < 1e-9 && std::fabs(gp.dr - markDr) < 1e-9 && std::fabs(gp.vz) < 1e-6
+            && (std::fabs(gp.wx) + std::fabs(gp.wy)) * r < 1e-6 && std::fabs(gp.vr) < 1e-6 && std::fabs(gp.iCoil - markI) < 1e-9;
+      }
 
       // A bumper no ball is near: the same group with no balls, asleep while nothing is driven or moving, its state kept as it is (a part at rest sleeps, ModelStandards 3c)
       int AdvanceAlone(double dt) override
@@ -234,8 +254,8 @@ namespace JetBumper
       struct Dyn
       {
          BumperGroup::Part::Saved s;
-         double steppedS;
-         bool idle, steppedThisCycle, collidable;
+         double steppedS, markZ, markThx, markThy, markDr, markI;
+         bool idle, steppedThisCycle, collidable, marked;
       };
       void SaveState(State &out) const override
       {
@@ -246,6 +266,12 @@ namespace JetBumper
          d.idle = idle;
          d.steppedThisCycle = steppedThisCycle;
          d.collidable = collidable;
+         d.markZ = markZ;
+         d.markThx = markThx;
+         d.markThy = markThy;
+         d.markDr = markDr;
+         d.markI = markI;
+         d.marked = marked;
          out.used = 0;
          Put(out, d);
       }
@@ -260,6 +286,12 @@ namespace JetBumper
          idle = d.idle;
          steppedThisCycle = d.steppedThisCycle;
          collidable = d.collidable;
+         markZ = d.markZ;
+         markThx = d.markThx;
+         markThy = d.markThy;
+         markDr = d.markDr;
+         markI = d.markI;
+         marked = d.marked;
          events.clear();
       }
 
@@ -275,5 +307,7 @@ namespace JetBumper
       static constexpr int kSurfaces = 3;
       double m_reach = 0.0;
       bool idle = false, gravityKnown = false;
+      double markZ = 0.0, markThx = 0.0, markThy = 0.0, markDr = 0.0, markI = 0.0;   // the state at the start of its last cycle in a group (AtRest)
+      bool marked = false;
    };
 }
