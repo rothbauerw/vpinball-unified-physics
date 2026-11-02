@@ -115,8 +115,10 @@ public:
    } pl;
    SlingSettings sl;
    FlipperDerived der;
+   CoilSettings coilS;   // the plate's winding (sl.mech's power values), for the coil's one energy law
+   CoilDerived coilD;
    SlingDriver driver;
-   double phi = 0.0, omega = 0.0, iHigh = 0.0;
+   double phi = 0.0, omega = 0.0, iCoil = 0.0;   // iCoil: A
    bool pinned = false, atRest = false;   // no unknown: on a stop; atRest: the rest stop, otherwise the coil stop
    double minPhi = 0.0;                   // how far it ever went behind its seat (a rigid seat: never)
    mutable double phiQ = 0.0;   // the angle V is asked at
@@ -144,10 +146,17 @@ public:
    void SetupPlate()
    {
       FlipperModel::Derive(sl.mech, der);
+      coilS.vSupply = sl.mech.vSupply;
+      coilS.rOhm = sl.mech.rP;
+      coilS.lAirMH = sl.mech.lAirP;
+      coilS.lArmMH = sl.mech.lArmP;
+      coilS.bobbinMm = sl.mech.bobbinMm;
+      coilS.x0 = sl.mech.x0P;
+      CoilModel::Derive(coilS, coilD);
       driver.SetPulse(sl.pulseMs * 1e-3);
       // seated on its rest stop: metal or wood, far stiffer than anything the ball meets on the way (user 2026-11-01), and the motion during the contact doesn't matter: a hard stop with an impact law, no stiff spring (ModelStandards 3a)
       phi = 0.0;
-      omega = iHigh = 0.0;
+      omega = iCoil = 0.0;
       pinned = atRest = true;
       phiQ = phi;
    }
@@ -241,9 +250,9 @@ public:
       {
          gI0 = Inertia(phi);
          gp0 = gI0 * omega;
-         gCoil = driver.Coil();
-         gIHigh1 = CurrentAfter(h, gCoil);
-         gI2 = 0.5 * (iHigh * iHigh + gIHigh1 * gIHigh1);
+         gVolts = driver.Coil() ? coilS.vSupply : 0.0;
+         gCoilLive = gVolts != 0.0 || iCoil != 0.0;
+         gKin0 = FlipperModel::Kinematics(sl.mech, der, der.theta0 + phi);
          if (!pinned)
             x[off] = (omega + 0.5 * gAlpha * h) * h;
       }
@@ -499,8 +508,14 @@ public:
       }
       phiQ = phi;
       gPlateLoss = gCoilW = 0.0;
+      double tauC = 0.0;
+      if (pl.on)
+      {
+         gOver = gCoilLive ? CoilOver(dphi, h) : CoilModel::OverMove{};
+         tauC = gCoilLive ? CoilTorque(gOver, dphi) : 0.0;
+      }
       if (pl.on && !plDof)
-         gTauPinned = -PlateVp(phi) + (gCoil || iHigh > 0.0 || gIHigh1 > 0.0 ? CoilTorquePerI2(phi) * gI2 : 0.0) + tauCord;
+         gTauPinned = -PlateVp(phi) + tauC + tauCord;
       if (plDof)
       {
          // the plate's own row: its momentum, its spring and rest stop as exact differences, its losses on the mid-step rate, the coil's torque a drive (as bandcord.h)
@@ -517,7 +532,7 @@ public:
          double tauS, cR;
          RestStop(phm, tauS, cR);
          const double om = dphi / h, tauD = tauS > 0.0 ? std::max(-cR * om, -tauS) : 0.0;
-         const double tauC = gCoil || iHigh > 0.0 || gIHigh1 > 0.0 ? CoilTorquePerI2(phm) * gI2 : 0.0, bd = sl.mech.bDamping;
+         const double bd = sl.mech.bDamping;
          const double Fl = -Vp + tauD - bd * om + tauC - dTdphi + tauCord;
          gPlateLoss = -(tauD - bd * om) * dphi;
          gRestL = -tauD * dphi;
@@ -526,7 +541,12 @@ public:
          gCoilW = tauC * dphi;
          Res[off] = pEnd - gp0 - h * Fl;
          if (J)
-            J[off][off] += 2.0 / (h * Jb) + 0.5 * h * std::max(PlateVpp(phm), 0.0) + bd + cR;
+         {
+            // (the coil's term by differences of the same closed form: the magnet's pull, a negative stiffness, and the closing speed's back EMF)
+            const double e = 1e-9 + 1e-6 * std::fabs(dphi);
+            const double dTau = gCoilLive ? (CoilTorque(CoilOver(dphi + e, h), dphi + e) - CoilTorque(CoilOver(dphi - e, h), dphi - e)) / (2.0 * e) : 0.0;
+            J[off][off] += 2.0 / (h * Jb) + 0.5 * h * std::max(PlateVpp(phm), 0.0) + bd + cR - h * dTau;
+         }
       }
       return true;
    }
@@ -581,7 +601,7 @@ public:
             f.Stiffness(std::sqrt(std::max(PlateVpp(phi), 0.0) / Inertia(phi)), false, 103);
             f.Field(w, std::fabs(omega) * dy, 0.0, 104);   // the plate moves the cord by no more than a share of its bending length
          }
-         if (driver.Coil() || iHigh > 1e-6)
+         if (driver.Coil() || iCoil > 1e-6 * coilD.iss)
          {
             const FlipperSettings &s = sl.mech;
             const FlipperModel::Kin k = FlipperModel::Kinematics(s, der, der.theta0 + phi);
@@ -653,7 +673,7 @@ public:
             bkTube += gLoad * dq;
             bkCord += gCordTau * dq;
          }
-         iHigh = gIHigh1;
+         iCoil = gOver.i1;
          gFreed = false;
          driver.Tick(h);
          tNow += h;
@@ -756,7 +776,7 @@ public:
             Chain(sp, [&](const int i) -> Out & { return oo[i]; }, nb, true);
             double L, T;
             Solve(sp, [&](const int i) -> const Out & { return oo[i]; }, nb, L, T, gg.data());
-            if (-dVdP - PlateVp(phi) + CoilTorquePerI2(phi) * iHigh * iHigh < 0.0)
+            if (-dVdP - PlateVp(phi) + CoilTorqueAt(phi) < 0.0)
                pinned = false;
          }
       }
@@ -778,8 +798,8 @@ public:
                Label(span[j], u, g.ball[i]);
          }
    }
-   void SaveState() override { save = tch; savePl[0] = phi; savePl[1] = omega; savePl[2] = iHigh; savePin = pinned; saveRest = atRest; }
-   void RestoreState() override { tch = save; phi = phiQ = savePl[0]; omega = savePl[1]; iHigh = savePl[2]; pinned = savePin; atRest = saveRest; }
+   void SaveState() override { save = tch; savePl[0] = phi; savePl[1] = omega; savePl[2] = iCoil; savePin = pinned; saveRest = atRest; }
+   void RestoreState() override { tch = save; phi = phiQ = savePl[0]; omega = savePl[1]; iCoil = savePl[2]; pinned = savePin; atRest = saveRest; }
    // ---- what the engine's cord path asks of a band (cordband.h, contactsystem.cpp, hitrubber.cpp) ----
    struct Circle { double x = 0.0, y = 0.0, r = 0.0; bool twin = false; };   // r: the cord centre's radius round it
    struct SwitchSpec { double x = 0.0, y = 0.0, bx = 0.0, by = 0.0; bool coil = false; };
@@ -1178,23 +1198,24 @@ public:
       (void)ph;
       tauS = cD = 0.0;   // the rest stop is the hard seat
    }
-   double CoilTorquePerI2(const double ph) const
+   // The coil's torque on the plate at the current now, N m
+   double CoilTorqueAt(const double ph) const
    {
-      const FlipperSettings &s = sl.mech;
-      const FlipperModel::Kin k = FlipperModel::Kinematics(s, der, der.theta0 + ph);
-      const double frac = (k.x - der.xMin) / s.bobbinMm;
-      return der.strengthP * FlipperModel::Sq(s.x0P / (frac + s.x0P)) * k.lever * 1e-3;
+      const FlipperModel::Kin k = FlipperModel::Kinematics(sl.mech, der, der.theta0 + ph);
+      return CoilModel::Force(coilS, coilD, (k.x - der.xMin) / coilS.bobbinMm, iCoil) * k.lever * 1e-3;
    }
-   double CurrentAfter(const double h, const bool coilOn) const
+   // The circuit and the force over a trial move of the plate: the plunger's move through the link, from the step's start, so a retake is identical (CoilModel::Over, the coil's only energy law)
+   CoilModel::OverMove CoilOver(const double dphi, const double h) const
    {
-      const FlipperSettings &s = sl.mech;
-      const FlipperModel::Kin k = FlipperModel::Kinematics(s, der, der.theta0 + phi);
-      const double frac = (k.x - der.xMin) / s.bobbinMm;
-      const double dLdx = der.bP / (s.bobbinMm * FlipperModel::Sq(frac + s.x0P)), lP = der.aP + der.bP / (frac + s.x0P);
-      const double vPos = std::max(k.lever * omega * 1e-3, 0.0), rEff = s.rP + dLdx * vPos, issP = s.vSupply / s.rP;
-      const double iss = (coilOn ? s.vSupply : 0.0) / rEff, i0 = iHigh * issP;
-      const double i1 = iss + (i0 - iss) * std::exp(-h * 1e3 * rEff / lP);
-      return std::max(i1, 0.0) / issP;
+      const double x1 = FlipperModel::SliderX(sl.mech, der, der.theta0 + phi + dphi);
+      return CoilModel::Over(coilS, coilD, (gKin0.x - der.xMin) / coilS.bobbinMm, (x1 - der.xMin) / coilS.bobbinMm, (gKin0.x - x1) * 1e-3, gVolts, iCoil, h);
+   }
+   // The plunger's force as a torque on the plate over the same move: F dx / dphi, the link's chord, so the plate is given exactly the plunger's work. No move: the lever there
+   double CoilTorque(const CoilModel::OverMove &o, const double dphi) const
+   {
+      if (std::fabs(dphi) > 1e-7)
+         return o.force * (gKin0.x - FlipperModel::SliderX(sl.mech, der, der.theta0 + phi + dphi)) * 1e-3 / dphi;
+      return o.force * FlipperModel::LeverMm(sl.mech, der, der.theta0 + phi + 0.5 * dphi) * 1e-3;
    }
    double RestPhi() const
    {
@@ -1786,8 +1807,10 @@ private:
    double gTauPinned = 0.0;
    static constexpr double kArm = 0.05;   // the distance that makes the plate's angle a length, in the solver's rows and in sharing the closure
    double gLoad = 0.0, gRestL = 0.0, gPivotL = 0.0, gCordTau = 0.0;
-   double gI0 = 1.0, gp0 = 0.0, gIHigh1 = 0.0, gI2 = 0.0, gAlpha = 0.0, gPlateLoss = 0.0, gCoilW = 0.0, gPinJ = 0.0;
-   bool gCoil = false;
+   double gI0 = 1.0, gp0 = 0.0, gVolts = 0.0, gAlpha = 0.0, gPlateLoss = 0.0, gCoilW = 0.0, gPinJ = 0.0;
+   bool gCoilLive = false;   // volts on or current flowing: otherwise the coil costs nothing
+   FlipperModel::Kin gKin0{ 0.0, 0.0, 0.0 };   // the link at the step's start
+   CoilModel::OverMove gOver;
    const Ball *b0 = nullptr;
 };
 // What the ball meets on the plate: the cord lying on the face at the cord's height, a straight tube carried by the plate. The ring's Item, the same code; the group books its reaction on the plate

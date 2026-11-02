@@ -64,6 +64,19 @@ namespace BatGroup
          rp = rubber;
          layerM = s.rubberThicknessMm * 1e-3;
          FM::Derive(s, p);
+         gLaw = s.series && !s.single;
+         coilP.vSupply = coilH.vSupply = s.vSupply;
+         coilP.bobbinMm = coilH.bobbinMm = s.bobbinMm;
+         coilP.rOhm = s.rP;
+         coilP.lAirMH = s.lAirP;
+         coilP.lArmMH = s.lArmP;
+         coilP.x0 = s.x0P;
+         coilH.rOhm = s.rH;
+         coilH.lAirMH = s.lAirH;
+         coilH.lArmMH = s.lArmH;
+         coilH.x0 = s.x0H;
+         CoilModel::Derive(coilP, derP);
+         CoilModel::Derive(coilH, derH);
          kLink = s.kContactNPerMm * 1000.0;
          cStiff = p.cStiffNsPerMm * 1000.0;
          cFree = s.freePlayDamping ? p.cContactNsPerMm * 1000.0 : 0.0;
@@ -226,10 +239,13 @@ namespace BatGroup
       {
          nDof = NumDof();
          gPreEos = phi < p.eosDeg * FM::DEG;
-         gCoil = FM::CoilAdvance(s, p, xp, rigid ? -Kin(phi).lever * 1e-3 * omega : vp, iHigh, iLow, solenoid, gPreEos, coilOffPrev, wasPreEos, h);
          gGivenX = pulse.Move(h);
          gLoad = 0.0;
          k0 = Kin(phi);
+         if (gLaw)
+            BeginSeries();
+         else
+            gCoil = FM::CoilAdvance(s, p, xp, rigid ? -k0.lever * 1e-3 * omega : vp, iHigh, iLow, solenoid, gPreEos, coilOffPrev, wasPreEos, h);
          gI0 = rigid ? If + mp * Sq(k0.lever * 1e-3) : If;
          gP0 = gI0 * omega;
          gV0 = Vbat(phi);
@@ -246,7 +262,11 @@ namespace BatGroup
       {
          gLossRest = gLossLink = gLossB = gDrive = 0.0;
          if (nDof == 0)
+         {
+            if (gLaw)
+               TakeSeries(SeriesOver(0.0, h));
             return true;
+         }
          const double dphi = x[off], dx = nDof == 2 ? x[off + 1] : 0.0;
          const double phi1 = phi + dphi, phm = phi + 0.5 * dphi;
          const FM::Kin k1 = Kin(phi1), km = Kin(phm);
@@ -290,24 +310,55 @@ namespace BatGroup
             if (!restClamped && phi1 < 0.0)
                jpp += gCr;
          }
-         // the coil: force at the mid-step place, currents over the step
-         const double xm = rigid ? km.x * 1e-3 : xp + 0.5 * dx;
-         const double frac = std::max((xm - xMin) / bobbin, 0.0);
-         double dF = 0.0;
-         const double Fc = CoilForce(frac, gCoil.i2High, gCoil.i2Low, dF);
+         // the coil. Series: the circuit and its force over the solved move, in the solve (CoilModel), so what the coil gives is what the circuit supplied at any step length; rigid, through the link's chord, so the bat is given exactly the plunger's work. Otherwise: force at the mid-step place, currents over the step
+         double dF = 0.0, Fc = 0.0;
          double Qx = 0.0;
-         if (rigid)
+         if (gLaw)
          {
-            const double Tc = Fc * lm;
-            Qphi += Tc;
-            gDrive = Tc * dphi;
-            if (J)
-               jpp += 0.5 * h * dF * lm * lm;
+            const double dClose = rigid ? CloseOfBat(dphi, k1, lm) : -dx;
+            const SeriesMove m = SeriesOver(dClose, h);
+            TakeSeries(m);
+            if (rigid)
+            {
+               const double Tc = BatTorque(m.force, dphi, dClose, lm);
+               Qphi += Tc;
+               gDrive = Tc * dphi;
+               if (J)
+               {
+                  const double e = 1e-9 + 1e-6 * std::fabs(dphi);
+                  const auto TorqueAt = [&](const double d) { const FM::Kin kd = Kin(phi + d); const double ld = Kin(phi + 0.5 * d).lever * 1e-3, c = CloseOfBat(d, kd, ld); return BatTorque(SeriesOver(c, h).force, d, c, ld); };
+                  jpp -= h * (TorqueAt(dphi + e) - TorqueAt(dphi - e)) / (2.0 * e);
+               }
+            }
+            else
+            {
+               Qx = -m.force;
+               gDrive = m.force * dClose;
+               if (J)
+               {
+                  const double e = 1e-9 + 1e-6 * std::fabs(dx);
+                  dF = (SeriesOver(-dx - e, h).force - SeriesOver(-dx + e, h).force) / (2.0 * e);   // along the plunger's x, for the row below
+               }
+            }
          }
          else
          {
-            Qx = -Fc;
-            gDrive = Fc * -dx;
+            const double xm = rigid ? km.x * 1e-3 : xp + 0.5 * dx;
+            const double frac = std::max((xm - xMin) / bobbin, 0.0);
+            Fc = CoilForce(frac, gCoil.i2High, gCoil.i2Low, dF);
+            if (rigid)
+            {
+               const double Tc = Fc * lm;
+               Qphi += Tc;
+               gDrive = Tc * dphi;
+               if (J)
+                  jpp += 0.5 * h * dF * lm * lm;
+            }
+            else
+            {
+               Qx = -Fc;
+               gDrive = Fc * -dx;
+            }
          }
          double jxx = 2.0 * mp / h, jpx = 0.0;
          if (!rigid)
@@ -351,7 +402,7 @@ namespace BatGroup
                   kn += cFree;
                jpp += kn * gP * gP;
                jpx += kn * gP * gX;
-               jxx += kn * gX * gX + 0.5 * h * dF;   // (the magnet's pull: a negative stiffness)
+               jxx += kn * gX * gX + (gLaw ? h : 0.5 * h) * dF;   // (the magnet's pull: a negative stiffness)
             }
          }
          Res[off] = pEnd - gP0 - h * Qphi;
@@ -556,6 +607,69 @@ namespace BatGroup
          dFdx = (-2.0 * fP / aP - 2.0 * fH / aH) / bobbin;
          return fP + fH;
       }
+      // Series wiring: one law, once per current. Before EOS the power winding on the supply and the hold winding in its short are two loops, with no coupling between them; after EOS, or with the coil off, they are one loop and L is the two windings' sum.
+      // The switches' rule on the currents, at the step's start, as CoilAdvance.
+      void BeginSeries()
+      {
+         gX0 = rigid ? k0.x * 1e-3 : xp;
+         gFrac0 = std::max((gX0 - xMin) / bobbin, FracFloor());
+         double iP = iHigh * (s.vSupply / s.rP), iH = iLow * (s.vSupply / s.rH);
+         const double lP = (p.aP + p.bP / (gFrac0 + s.x0P)) * 1e-3, lH = (p.aH + p.bH / (gFrac0 + s.x0H)) * 1e-3;
+         gVolts = solenoid ? s.vSupply : 0.0;
+         gLoop = !solenoid || !gPreEos;
+         if (!solenoid)
+         {
+            if (!coilOffPrev)
+               iP = iH = (gPreEos && s.eosFlux) ? (lP * iP + lH * iH) / (lP + lH) : iP;
+            else
+               iH = iP;
+         }
+         else if (!gPreEos)
+         {
+            if (wasPreEos)
+               iP = iH = s.eosFlux ? (lP * iP + lH * iH) / (lP + lH) : iP;
+            else
+               iH = iP;
+         }
+         gIP0 = iP;
+         gIH0 = iH;
+         gCoilLive = gVolts != 0.0 || iP != 0.0 || iH != 0.0;
+      }
+      struct SeriesMove { CoilModel::OverMove a, b; double force = 0.0; };   // a: the power winding or the loop; b: the hold winding before EOS. force: over the move as asked, so force * dClose is the work
+      // The windings over a trial move dClose toward the closed end, from the step's start, so a retake is identical. L's curve runs on a little past the closed end, so a trial there sees no kink (a step ends past the stop only by the stop's tolerance). Far past it, where the curve would blow up, a trial does no more work.
+      SeriesMove SeriesOver(const double dClose, const double h) const
+      {
+         SeriesMove m;
+         if (!gCoilLive)
+            return m;
+         const double fTo = (gX0 - dClose - xMin) / bobbin, f1 = std::max(fTo, FracFloor());
+         const bool past = fTo < FracFloor();
+         const double dx = past ? (gFrac0 - f1) * bobbin : dClose;
+         const double cP = CoilModel::ChordHPerM(coilP, derP, gFrac0, f1), cH = CoilModel::ChordHPerM(coilH, derH, gFrac0, f1);
+         if (gLoop)
+         {
+            m.a = CoilModel::OverLoop(s.rP + s.rH, cP + cH, CoilModel::MeanH(coilP, derP, gFrac0, f1) + CoilModel::MeanH(coilH, derH, gFrac0, f1), dx, gVolts, gIP0, h);
+            m.force = m.a.force;
+         }
+         else
+         {
+            m.a = CoilModel::OverLoop(s.rP, cP, CoilModel::MeanH(coilP, derP, gFrac0, f1), dx, gVolts, gIP0, h);
+            m.b = CoilModel::OverLoop(s.rH, cH, CoilModel::MeanH(coilH, derH, gFrac0, f1), dx, 0.0, gIH0, h);
+            m.force = m.a.force + m.b.force;
+         }
+         if (past && dClose != 0.0)
+            m.force *= dx / dClose;
+         return m;
+      }
+      void TakeSeries(const SeriesMove &m)
+      {
+         gCoil.iHigh = m.a.i1 / (s.vSupply / s.rP);
+         gCoil.iLow = (gLoop ? m.a.i1 : m.b.i1) / (s.vSupply / s.rH);
+      }
+      double FracFloor() const { return -0.5 * std::min(s.x0P, s.x0H); }
+      // The plunger's move toward the closed end for a bat's move: the link's chord; over a move so small that it would be rounding, the lever
+      double CloseOfBat(const double dphi, const FM::Kin &k1, const double lm) const { return std::fabs(dphi) > 1e-5 ? (k0.x - k1.x) * 1e-3 : lm * dphi; }
+      static double BatTorque(const double f, const double dphi, const double dClose, const double lm) { return std::fabs(dphi) > 1e-5 ? f * dClose / dphi : f * lm; }
       // A body on a hard stop stays while the force at the end of the step presses into it
       void PinCheck(const bool onStop, const bool afterStep)
       {
@@ -623,6 +737,10 @@ namespace BatGroup
       FM::Kin k0{};
       double gI0 = 1.0, gP0 = 0.0, gV0 = 0.0, gRest0 = 0.0, gCr = 0.0, gGivenX = 0.0, gLoad = 0.0;
       FM::CoilStep gCoil;
+      CoilSettings coilP, coilH;   // the windings as the coil's one energy law takes them
+      CoilDerived derP, derH;
+      bool gLaw = false, gLoop = false, gCoilLive = false;
+      double gX0 = 0.0, gFrac0 = 0.0, gVolts = 0.0, gIP0 = 0.0, gIH0 = 0.0;
       double gDrive = 0.0, gLossRest = 0.0, gLossLink = 0.0, gLossB = 0.0;
       bool gPreEos = true;
    };

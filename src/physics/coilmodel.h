@@ -377,12 +377,13 @@ namespace CoilModel
    // L di/dt + (R + C v) i = V over the step, with L the mean of its ends, C the chord of L along the move and v = dx / h (signed: a plunger drawn out gives its work back to the circuit), solved exactly. The force is what closes the energy exactly:
    // supplied - lost in R - change in 1/2 L i^2 = F dx at any step length, F = C (mean i^2 - (i0^2 + i1^2) / 4), which is C i^2 / 2 to second order. The coil's only energy law: nothing else books it.
    struct OverMove { double i1 = 0.0, meanI = 0.0, meanI2 = 0.0, force = 0.0; };
-   inline OverMove Over(const CoilSettings &s, const CoilDerived &d, const double frac0, const double frac1, const double dx, const double vNow, const double i0, const double h)
+   // L's chord along the move (mH/mm = H/m), in closed form: no difference of near-equal numbers; and L's mean over the move's ends (H). A loop with several windings in series adds them.
+   inline double ChordHPerM(const CoilSettings &s, const CoilDerived &d, const double frac0, const double frac1) { return d.b / (s.bobbinMm * (frac0 + s.x0) * (frac1 + s.x0)); }
+   inline double MeanH(const CoilSettings &s, const CoilDerived &d, const double frac0, const double frac1) { return (d.a + 0.5 * d.b * (1.0 / (frac0 + s.x0) + 1.0 / (frac1 + s.x0))) * 1e-3; }
+   // The law for one current: resistance r, L's chord C and mean lH over the move
+   inline OverMove OverLoop(const double r, const double C, const double lH, const double dx, const double vNow, const double i0, const double h)
    {
-      const double a0 = frac0 + s.x0, a1 = frac1 + s.x0;
-      const double C = d.b / (s.bobbinMm * a0 * a1);   // (mH/mm = H/m) (L1 - L0) / dx, in closed form: no difference of near-equal numbers
-      const double lH = (d.a + 0.5 * d.b * (1.0 / a0 + 1.0 / a1)) * 1e-3;
-      double R = s.rOhm + C * dx / h;
+      double R = r + C * dx / h;
       if (R == 0.0)
          R = 1e-12;   // (the line below divides; a drawn-out plunger so fast it cancels R exactly)
       const double iInf = vNow / R, di = i0 - iInf, u = h * R / lH;
@@ -393,6 +394,10 @@ namespace CoilModel
       o.meanI2 = iInf * iInf + 2.0 * iInf * di * m1 + di * di * m2;
       o.force = C * (o.meanI2 - 0.25 * (i0 * i0 + o.i1 * o.i1));
       return o;
+   }
+   inline OverMove Over(const CoilSettings &s, const CoilDerived &d, const double frac0, const double frac1, const double dx, const double vNow, const double i0, const double h)
+   {
+      return OverLoop(s.rOhm, ChordHPerM(s, d, frac0, frac1), MeanH(s, d, frac0, frac1), dx, vNow, i0, h);
    }
 }
 
