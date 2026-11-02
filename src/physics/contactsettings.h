@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cmath>
+#include <filesystem>
 
 // Table-wide contact settings of the unified engine (see docs/NewPhysicsReference.txt, [Contact]); implemented in contactsettings.cpp.
 
@@ -29,8 +30,10 @@ struct ContactSettings
    // is stepped by its own stiffness at the depth the impact will reach, and a ball far from every surface takes the rest of the cycle as one step.
    bool arrivalStep = true;          // arrival_step (VPX_ARRIVAL=0/1 overrides it)
    bool staticModel = false;         // static_model: 1 = every static surface (walls, primitives, ramps, playfield) takes a ball to the group step as a rubber does (ring_model, GroupStepDesign 14); 0 = only rubbers
+   double rollSmoothRadS = 2.0;      // roll_smooth_rad_s: the rolling torque's smoothing through zero spin in the group step, rad/s
    double arrivalDepthUm = 2.0;      // arrival_depth_um: the deepest a ball may start a contact before the step is taken again (rewind), um
-   static const ContactSettings& Get();   // loads on first use, checks the file for changes about twice a second of game time
+   static const ContactSettings& Get();   // checks the file for changes about twice a second of game time
+   static void StartPlay(const std::filesystem::path& tableFile);   // the start of a play, before any part is built: the file as it is now
    // The friction impulse a contact applies for the impulse `x` that would cancel the slip (signed): inside the static limit it sticks (x); beyond it, it slides at the dynamic limit
    // (muDynamicRatio times the static one). With the settings off (stock engine) it is the plain clamp to the static limit.
    float LimitSlip(const float x, const float maxImpulse) const

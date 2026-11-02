@@ -46,6 +46,7 @@ namespace ContactSystem
       const bool found = !file.empty() && PhysicsIni::ReadFeatures(file, f);
       s_unified = found && f.unified;   // no file, no [Features] or no  unified = 1  = stock VPX physics
       s_unifiedSet = true;
+      ContactSettings::StartPlay(tableFile);   // (after the switch above: the settings ask it)
       if (s_unified)
          PLOGI << "Contact system: unified engine on (" << file.string() << "; dev fallback: stock hit search still runs for object types not yet converted)";
       else
@@ -160,12 +161,7 @@ struct ContactSystemImpl
       bool tripped = false;
       const char *tripWhy = "";
       int tripStep = 0;
-      bool noPairs = false;     // a band's ball outside the unified engine: ball-to-ball stays with the stock collision
-      // a band whose nodes the ball loads (the band's nodes are stepped with the island)
-      HitRubber *band = nullptr;
-      BandBall *bb = nullptr;
-      bool bandContact = false; // the ball touched the band in this cycle
-      double lastGap = 0.0, relNormalVel = 0.0;   // for the band release test
+      HitRubber *band = nullptr;   // a band that holds the ball (the group step takes the whole island)
    };
 
    struct BallHit
@@ -200,8 +196,6 @@ struct ContactSystemImpl
       int stepsWhy = TestDriver::ContactCost::kEnd;   // the rule that set them (fixed-step islands; test driver cost split)
       int stepsPair = 1;                 // the substeps its ball pairs need alone (the arrival-time loop adds the surfaces' own)
       float dtimeF = 0.0f;               // the cycle in engine time units
-      std::vector<HitRubber *> bands;    // bands begun this cycle
-      std::vector<HitRubber *> islandBands;   // the current island's bands
       std::vector<std::pair<int, int>> links;
       std::vector<ContactMovingPart *> islandParts;   // the moving parts (gates, spinners, bumpers) the current island steps (contactmovingpart.h)
       std::vector<std::pair<HitBall *, const char *>> bandReleases;   // balls the band lets go of (after the write-back: the release can fire the script)
@@ -407,15 +401,7 @@ struct ContactSystemImpl
                w.stepsWhy = steps > 1 ? TestDriver::ContactCost::kSurfaceStiffness : TestDriver::ContactCost::kEnd;
                }
             }
-            if (e.band != nullptr)
-            {
-               SetupBand(cy, w, e);
-               if (w.band != nullptr && w.band->m_bc.steps > steps)   // the band's substep
-               {
-                  steps = w.band->m_bc.steps;
-                  w.stepsWhy = TestDriver::ContactCost::kBand;
-               }
-            }
+            w.band = e.band;
             w.steps = steps;
             Sources::Begin(w, dt);
             w.vCap = std::max(50.0, 4.0 * w.v.Length() + 5.0);   // m/s
@@ -494,7 +480,7 @@ struct ContactSystemImpl
             {
                const double gap = (cy.bodies[i].c - cy.bodies[j].c).Length() - cy.bodies[i].bs.R - cy.bodies[j].bs.R;
                const double reach = cs.ballReachMm * 1e-3 + 2.0 * (cy.bodies[i].v - cy.bodies[j].v).Length() * cy.dt;
-               if (gap < reach && !cy.bodies[i].noPairs && !cy.bodies[j].noPairs)
+               if (gap < reach)
                   cy.pairs.emplace_back(i, j);
             }
       cy.links.clear();
@@ -629,17 +615,6 @@ struct ContactSystemImpl
                }
       cy.steps = steps;
       cy.stepsWhy = stepsWhy;
-      cy.islandBands.clear();
-      for (const int i : isl.members)
-      {
-         HitRubber *const b = cy.bodies[i].band;
-         if (b != nullptr && std::find(cy.islandBands.begin(), cy.islandBands.end(), b) == cy.islandBands.end())
-         {
-            cy.islandBands.push_back(b);
-            b->m_bc.steps = steps;   // the band steps with the island
-            b->m_bc.h = cy.dt / steps;
-         }
-      }
       for (BallPairState *const ps : cy.pst)
       {
          ps->lastDelta = ps->maxDelta;
@@ -651,57 +626,6 @@ struct ContactSystemImpl
          w.omega2 = w.deepest = w.vnLast = 0.0;
          w.tripped = false;
       }
-   }
-
-   // ---- A ball on a band: the band's nodes are stepped with the island, the ball's contact with the band is one more force on the ball ----
-
-   // Per cycle, the first ball of a band begins the band's cycle (the sling's driver and switches, the substep, the follow nodes); then this ball is attached to its BandBall.
-   static void SetupBand(Cycle &cy, Body &w, BallContact &e)
-   {
-      HitRubber *const band = e.band;
-      if (band->CordOn())   // the group step takes the whole island (CordIsland)
-      {
-         if (std::find(cy.bands.begin(), cy.bands.end(), band) == cy.bands.end())
-            cy.bands.push_back(band);
-         w.band = band;
-         return;
-      }
-      if (std::find(cy.bands.begin(), cy.bands.end(), band) == cy.bands.end())
-      {
-         cy.bands.push_back(band);
-         band->BandBeforeCore(cy.dtimeF);
-         band->m_bandIslandStepped = true;   // BandAdvance later this cycle only finishes up
-         band->BandCycleBegin(cy.dtimeF);    // may let go of the band's balls (switched off in the ini)
-      }
-      if (e.band == nullptr)
-         return;
-      for (BandBall &b : band->m_engaged)
-         if (b.ball == e.ball)
-         {
-            w.band = band;
-            w.bb = &b;
-            w.noPairs = !ContactSystem::Unified();   // (the band is stepped with the island, so its balls take part in pair contact)
-            return;
-         }
-   }
-
-   // The band's force on the ball at substep s; the reaction goes into the band's nodes
-   static void BandForces(Body &w)
-   {
-      CPROF(BandForces);
-      if (w.band == nullptr || w.bb == nullptr)
-         return;
-      HitRubber::BandBallContact out;
-      w.band->BandBallForce(*w.bb, w.bs, w.c, w.v, w.w, out);
-      if (out.inContact)
-      {
-         w.bandContact = true;
-         w.F = w.F + out.force;
-         w.Mb = w.Mb + out.torque;
-         w.deepest = std::max(w.deepest, out.delta);
-      }
-      w.lastGap = out.gap;
-      w.relNormalVel = (w.v - out.vs).Dot(out.normal);
    }
 
    // Forces of the ball's own surfaces (rubbers, the playfield, the disc) at the current state; the disc gets the reaction
@@ -1518,19 +1442,9 @@ struct ContactSystemImpl
       for (; s < cy.steps && !tripped; s++)
       {
          {
-            const TestDriver::KindTimer kt(s_cc, CC::kBands);
-            for (HitRubber *const b : cy.islandBands)
-               b->BandSubstepBegin();
-         }
-         {
             const TestDriver::KindTimer kt(s_cc, CC::kSurfaces);
             for (const int i : isl.members)
                SurfaceForces(cy, cy.bodies[i], h, s);
-         }
-         {
-            const TestDriver::KindTimer kt(s_cc, CC::kBands);
-            for (const int i : isl.members)
-               BandForces(cy.bodies[i]);
          }
          {
             const TestDriver::KindTimer kt(s_cc, CC::kPairs);
@@ -1542,14 +1456,6 @@ struct ContactSystemImpl
             for (ContactMovingPart *const hg : cy.islandParts)   // the part moves with the reactions of all its balls summed, in its own substeps within h
                hg->StepInIsland(h);
          }
-         {
-            const TestDriver::KindTimer kt(s_cc, CC::kBands);
-            for (HitRubber *const b : cy.islandBands)   // the nodes step after the forces on them were summed
-               tripped = b->BandSubstepEnd() || tripped;
-         }
-         for (const int i : isl.members)
-            if (cy.bodies[i].band != nullptr && cy.bodies[i].bb != nullptr && !std::isfinite(cy.bodies[i].band->BandBallPeak(*cy.bodies[i].bb)))
-               tripped = true;
       }
       // The parts keep stepping whatever happens to the ball: the rest of the cycle without the balls' reactions
       for (; s < cy.steps; s++)
@@ -1557,12 +1463,6 @@ struct ContactSystemImpl
          const TestDriver::KindTimer kt(s_cc, CC::kMovingParts);
          for (ContactMovingPart *const hg : cy.islandParts)
             hg->StepInIsland(h);
-      }
-      {
-         const TestDriver::KindTimer kt(s_cc, CC::kBands);
-         for (HitRubber *const b : cy.islandBands)   // idle nodes merged away; a band that left the model's range is reset and its balls let go
-            if (!b->BandCycleEnd())
-               tripped = true;
       }
       if (ContactTraceDetail())
          for (size_t k = 0; k < isl.edges.size(); k++)
@@ -1598,9 +1498,6 @@ struct ContactSystemImpl
                shown.push_back(name);
                g_pplayer->m_liveUI->PushNotification("A contact step on " + name + " left the model's range: the ball was stopped (see vpinball.log)", 8000);
             }
-            if (w.band != nullptr)
-               w.band->m_bandCooldownUntilMs = g_pplayer->m_time_msec + 20;   // (the old node band's way out: stays with the band work)
-            else
             {
                V3 v((double)w.pb->m_d.m_vel.x, (double)w.pb->m_d.m_vel.y, (double)w.pb->m_d.m_vel.z);
                bool pressed = false;
@@ -1673,22 +1570,15 @@ struct ContactSystemImpl
          BallContact &e = *ep;
          if (e.band != nullptr)   // the band holds the ball until its own release rule lets go (the ball stays in its other contacts)
          {
-            if (e.band->CordOn())
-            {
-               // off the cord and clear of it; a plate on its way out can still catch a ball close by, so it stays in the group until the plate is quiet or the ball is far
-               CordBand &cb = *e.band->Cord();
-               int slot = -1;
-               for (int k = 0; k < (int)cb.slots.size(); k++)
-                  if (cb.slots[k] == pb)
-                     slot = k;
-               const double gap = slot >= 0 ? cb.part.CordGap(slot) : 1.0;
-               if (gap > 0.03 || (gap > 0.001 && cb.part.PlateQuiet()))
-                  cy.bandReleases.emplace_back(pb, "clear");
-               continue;
-            }
-            for (BandBall &b : e.band->m_engaged)
-               if (b.ball == pb && e.band->BandBallClear(b, w.bs, w.c, w.bandContact, w.lastGap, w.relNormalVel))
-                  cy.bandReleases.emplace_back(pb, "clear");
+            // off the cord and clear of it; a plate on its way out can still catch a ball close by, so it stays in the group until the plate is quiet or the ball is far
+            CordBand &cb = *e.band->Cord();
+            int slot = -1;
+            for (int k = 0; k < (int)cb.slots.size(); k++)
+               if (cb.slots[k] == pb)
+                  slot = k;
+            const double gap = slot >= 0 ? cb.Gap(slot) : 1.0;
+            if (gap > 0.03 || (gap > 0.001 && cb.PlateQuiet()))
+               cy.bandReleases.emplace_back(pb, "clear");
             continue;
          }
          bool free = true, touching = false, closeBy = false;
@@ -1990,13 +1880,13 @@ struct ContactSystemImpl
    static bool IslandHasCord(const Cycle &cy, const ContactSystem::Islands::Island &isl)
    {
       for (const int i : isl.members)
-         if (cy.bodies[i].band != nullptr && cy.bodies[i].band->CordOn())
+         if (cy.bodies[i].band != nullptr)
             return true;
       return false;
    }
 
    // An island goes to the group step without a cord ([Rubbers] ring_model, GroupStepDesign 14.1) when a ball can touch a rubber surface within this cycle, or still counts a squash from a
-   // zero only the group knows. An island with a moving part or an old node band stays on the old loop until that part moves over (14.2). The reach is the proximity engagement's, so a ball joins before it touches.
+   // zero only the group knows. An island with a moving part stays on the old loop until that part moves over (14.2). The reach is the proximity engagement's, so a ball joins before it touches.
    static bool IslandOnRing(const Cycle &cy, const ContactSystem::Islands::Island &isl)
    {
       bool want = false;
@@ -2133,10 +2023,9 @@ struct ContactSystemImpl
 
    static void CordFollow(CordBand &cb, const GroupStep::Ball *const groupBalls, HitBall *const *balls, const int n)
    {
-      BandCord::Part &p = cb.part;
       if (!cb.attached)
       {
-         p.AttachGroup(groupBalls, n);
+         cb.fixed->AttachGroup(groupBalls, n);
          cb.attached = true;
       }
       else
@@ -2146,17 +2035,16 @@ struct ContactSystemImpl
             same = cb.slots[i] == balls[i];
          if (!same)
          {
-            int oldOfNew[BandCord::kMaxBalls];
+            std::vector<int> oldOfNew(n, -1);
             for (int i = 0; i < n; i++)
-            {
-               oldOfNew[i] = -1;
                for (int k = 0; k < (int)cb.slots.size(); k++)
                   if (cb.slots[k] == balls[i])
                      oldOfNew[i] = k;
-            }
-            p.RemapBalls(oldOfNew, n);
+            cb.fixed->RemapBalls(oldOfNew.data(), n, groupBalls);
          }
       }
+      if (n > 0)
+         cb.fixed->BeginGroupCycle(groupBalls);
       cb.slots.assign(balls, balls + n);
    }
 
@@ -2169,6 +2057,7 @@ struct ContactSystemImpl
       shapes.clear();
       g.nb = g.ns = g.np = 0;
       g.set.pair = cy.rpBall;
+      g.set.rollSmooth = cy.cs->rollSmoothRadS;
       if (ring)   // (cy.rpBall holds the old loop's halved modulus, and the group halves it for a pair itself; its rolling resistance is on the pair's radius, R / 2)
       {
          g.set.pair.eMpa = cy.cs->ballEMpa;
@@ -2187,9 +2076,9 @@ struct ContactSystemImpl
       for (const int i : isl.members)
       {
          Body &w = cy.bodies[i];
-         if (!ring && g.nb >= BandCord::kMaxBalls)   // (the cord's own limit)
+         if (!ring && g.nb >= CordBand::kMaxBalls)   // (the cord's own limit)
          {
-            PLOGW << "Cord group: more than " << BandCord::kMaxBalls << " balls in one island: the others are left out this cycle";
+            PLOGW << "Cord group: more than " << CordBand::kMaxBalls << " balls in one island: the others are left out this cycle";
             break;
          }
          if (!w.extTaken)   // the group gives every ball its gravity in its steps, wherever the ball is (a ball high on the cord has no floor in its contact)
@@ -2237,7 +2126,7 @@ struct ContactSystemImpl
             const Vertex3Ds inc = w.pb->ExternalVelocityIncrement(), base = w.pb->ExternalVelocityIncrement(false);
             b.fExt = V3((inc.x - base.x) * VS, (inc.y - base.y) * VS, (inc.z - base.z) * VS) * (b.m / PHYSICS_STEPTIME_S);
          }
-         if (w.band != nullptr && w.band->CordOn() && std::find(cords.begin(), cords.end(), w.band) == cords.end())
+         if (w.band != nullptr && std::find(cords.begin(), cords.end(), w.band) == cords.end())
             cords.push_back(w.band);
          if (ring)
          {
@@ -2298,14 +2187,14 @@ struct ContactSystemImpl
       for (HitRubber *const c : cords)
       {
          CordFollow(*c->Cord(), g.ball, balls.data(), g.nb);
-         g.AddPart(&c->Cord()->part);
-         c->Cord()->part.AddPostShapes(g);
+         g.AddPart(c->Cord()->fixed.get());
+         c->Cord()->fixed->AddPostShapes(g, c->Cord()->fixedTube);
          c->CordBegin();
          c->m_cordStepped = true;
       }
       g.Configure();
       for (HitRubber *const c : cords)
-         c->Cord()->part.RestorePostItems(g);
+         c->Cord()->fixed->RestorePostItems(g);
       // what a touch keeps between cycles: the shear spring's stretch
       for (int k = 0; k < g.ni; k++)
       {
@@ -2406,7 +2295,7 @@ struct ContactSystemImpl
          const char *const e = getenv("VPX_CORD_TRACE");
          FILE *const f = e != nullptr ? fopen(e, "w") : nullptr;
          if (f != nullptr)
-            fprintf(f, "t_ms,dt_us,nb,np,E_start_mJ,E_end_mJ,loss_uJ,drive_uJ,book_uJ,x_U,y_U,z_U,vx,vy,vz,wx,wy,wz,on_cord,hold,stick,wrap,tension,gap_mm,psi,slip_J,floorV,L_normal,L_slip,L_shear,L_twist,L_roll,L_part,P_cord,P_back,P_fric,items\n");
+            fprintf(f, "t_ms,dt_us,nb,np,E_start_mJ,E_end_mJ,loss_uJ,drive_uJ,book_uJ,x_U,y_U,z_U,vx,vy,vz,wx,wy,wz,on_cord,gap_mm,L_normal,items\n");
          return f;
       }();
       const double traceE0 = cordTrace != nullptr ? g.Energy() : 0.0;
@@ -2431,7 +2320,23 @@ struct ContactSystemImpl
          }
          return h;
       };
+      // for a test run (VPX_CORD_ENERGY): the group's own books over the cycle, stored energy included, told at each new largest rise
+      static const bool cordEnergy = std::getenv("VPX_CORD_ENERGY") != nullptr;
+      const bool cordEnergyOn = cordEnergy && !cords.empty();
+      for (HitRubber *const c : cords)
+         c->ReloadIfChanged();   // as a ring: the file is looked at while a ball is on it
+      const double cordE0 = cordEnergyOn ? g.Energy() : 0.0;
       const bool ok = g.StepsOver(cy.dt, done, ringCap, [&]() { ringStep(); book.AfterStep(); });
+      if (cordEnergyOn)
+      {
+         static double worstRise = 1e-9;
+         const double riseE = g.Energy() - cordE0 + g.books.Losses() - g.books.driveJ;
+         if (riseE > worstRise)
+         {
+            worstRise = riseE;
+            PLOGI << "Cord energy: largest rise over a cycle so far " << riseE * 1e6 << " uJ, t=" << g_pplayer->m_time_msec;
+         }
+      }
       book.End((int)g_pplayer->m_time_msec, false, cy.dt, !ok);
       for (ContactMovingPart *const mp : parts)
       {
@@ -2441,12 +2346,10 @@ struct ContactSystemImpl
       if (cordTrace != nullptr)
       {
          const double E1 = g.Energy(), loss = g.books.Losses(), drive = g.books.driveJ;
-         const BandCord::Part *const pc = cords.empty() ? nullptr : &cords[0]->Cord()->part;
-         fprintf(cordTrace, "%d,%.2f,%d,%d,%.6f,%.6f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%d,%d,%d,%.2f,%.3f,%.3f,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%s\n", (int)g_pplayer->m_time_msec, cy.dt * 1e6, g.nb, g.np,
+         const CordBand *const pc = cords.empty() ? nullptr : cords[0]->Cord();
+         fprintf(cordTrace, "%d,%.2f,%d,%d,%.6f,%.6f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%d,%.3f,%.2f,%s\n", (int)g_pplayer->m_time_msec, cy.dt * 1e6, g.nb, g.np,
                  traceE0 * 1e3, E1 * 1e3, loss * 1e6, drive * 1e6, (E1 - traceE0 + loss - drive) * 1e6, g.ball[0].c.x / U, g.ball[0].c.y / U, g.ball[0].c.z / U, g.ball[0].v.x, g.ball[0].v.y, g.ball[0].v.z,
-                 g.ball[0].w.x, g.ball[0].w.y, g.ball[0].w.z, pc != nullptr && pc->InPath(BandCord::kBall, 0) ? 1 : 0, pc != nullptr ? pc->gdiag.held[0] : 0, pc != nullptr ? pc->gdiag.stick[0] : 0, pc != nullptr ? pc->gdiag.wrap[0] * 57.2958 : 0.0,
-                 pc != nullptr ? pc->Tension() : 0.0, pc != nullptr ? pc->CordGap(0) * 1e3 : 0.0, pc != nullptr ? pc->TwistOf(0) : 0.0, pc != nullptr ? pc->books.postSlipJ * 1e6 : 0.0, pc != nullptr ? pc->books.floorMaxM * 1e3 : 0.0, g.books.normalLossJ * 1e6, g.books.slipJ * 1e6, g.books.shearDampJ * 1e6, g.books.twistJ * 1e6, g.books.rollJ * 1e6, g.books.partLossJ * 1e6,
-                 pc != nullptr ? pc->books.cordLossJ * 1e6 : 0.0, pc != nullptr ? pc->books.backstopLossJ * 1e6 : 0.0, pc != nullptr ? pc->books.frictionJ * 1e6 : 0.0, [&]() {
+                 g.ball[0].w.x, g.ball[0].w.y, g.ball[0].w.z, pc != nullptr && pc->OnCord(0) ? 1 : 0, pc != nullptr ? pc->Gap(0) * 1e3 : 0.0, g.books.normalLossJ * 1e6, [&]() {
                     static std::string names;
                     names.clear();
                     for (int k = 0; k < g.ni; k++)
@@ -2549,12 +2452,19 @@ struct ContactSystemImpl
          CordBand &cb = *c->Cord();
          std::vector<HitBall *> &on = cb.onCord;
          for (int i = 0; i < g.nb; i++)
-            if (cb.part.InPath(BandCord::kBall, i) && std::find(on.begin(), on.end(), balls[i]) == on.end())
-               cb.hits.emplace_back(balls[i], (float)(cb.part.ClosingOnCord(i, v0[i]) / VS));
+            if (cb.OnCord(i) && std::find(on.begin(), on.end(), balls[i]) == on.end())
+               cb.hits.emplace_back(balls[i], (float)(cb.Closing(i, v0[i]) / VS));
          on.clear();
          for (int i = 0; i < g.nb; i++)
-            if (cb.part.InPath(BandCord::kBall, i))
+            if (cb.OnCord(i))
                on.push_back(balls[i]);
+         if (g.books.energySteps > 0)   // none expected: told each time (rule 8)
+         {
+            cb.fixed->energySteps += g.books.energySteps;
+            PLOGW << "Rubber " << c->Name() << ": energy step on the fixed-height cord, " << cb.fixed->energySteps << " so far, t=" << g_pplayer->m_time_msec;
+            if (g_pplayer->m_liveUI != nullptr)
+               g_pplayer->m_liveUI->PushNotification("Rubber " + c->Name() + ": energy step on the fixed-height cord", 6000);
+         }
       }
       if (ring)
       {
@@ -2566,7 +2476,7 @@ struct ContactSystemImpl
       }
       if (!ok)
       {
-         PLOGW << "Cord group failed: why " << g.failWhy << " at " << done * 1e6 << " us of " << cy.dt * 1e6 << " us, balls " << g.nb << ", ball 0 at (" << g.ball[0].c.x / U << ", " << g.ball[0].c.y / U << ", " << g.ball[0].c.z / U << ") v " << g.ball[0].v.Length() << " m/s, halvings " << g.books.halvings << ", settle fails " << (cords.empty() ? 0 : cords[0]->Cord()->part.gdiag.settleFails) << ", plate " << (cords.empty() ? 0.0 : cords[0]->Cord()->part.PlateDeg()) << " deg";
+         PLOGW << "Cord group failed: why " << g.failWhy << " at " << done * 1e6 << " us of " << cy.dt * 1e6 << " us, balls " << g.nb << ", ball 0 at (" << g.ball[0].c.x / U << ", " << g.ball[0].c.y / U << ", " << g.ball[0].c.z / U << ") v " << g.ball[0].v.Length() << " m/s, halvings " << g.books.halvings << ", plate " << (cords.empty() ? 0.0 : cords[0]->Cord()->fixed->phi * 57.29578) << " deg";
          {
             std::string how;
             char s[220];
@@ -2589,8 +2499,8 @@ struct ContactSystemImpl
             }
             for (HitRubber *const c : cords)
             {
-               const BandCord::Part &p = c->Cord()->part;
-               snprintf(s, sizeof s, " cord %s plate %.3f omega %.3f tension %.3f on0 %d", c->Name().c_str(), p.PlateDeg(), p.omega, p.Tension(), p.InPath(BandCord::kBall, 0) ? 1 : 0);
+               const CordFixed::Part &p = *c->Cord()->fixed;
+               snprintf(s, sizeof s, " cord %s plate %.3f omega %.3f on0 %d", c->Name().c_str(), p.phi * 57.29578, p.omega, p.OnCord(0) ? 1 : 0);
                how += s;
             }
             PLOGW << "Cord group how:" << how;
@@ -2618,26 +2528,7 @@ struct ContactSystemImpl
       else
          for (HitRubber *const c : cords)
          {
-            CordBand &cb = *c->Cord();
-            cb.heldCycles = 0;
-            if (cb.part.books.cordOnPlayfield && !cb.warnedFloor)
-            {
-               cb.warnedFloor = true;
-               const std::string msg = "Rubber " + c->Name() + ": the cord reached the playfield (" + std::to_string(cb.part.books.floorMaxM * 1e3).substr(0, 4) + " mm): this rubber is placed wrong";
-               PLOGW << msg;
-               g_pplayer->m_liveUI->PushNotification(msg, 6000);
-            }
-            if (cb.part.books.crossings > cb.crossingsShown)   // each one, on the cord it happened on
-            {
-               cb.crossingsShown = cb.part.books.crossings;
-               const auto &fr = cb.part.frame;
-               const auto &ca = cb.part.books.crossAt;
-               char where[120];
-               snprintf(where, sizeof where, " at (%.1f, %.1f) U, %.2f m/s", (fr.O.x + fr.ex.x * ca.x + fr.ey.x * ca.y + fr.ez.x * ca.z) / U, (fr.O.y + fr.ex.y * ca.x + fr.ey.y * ca.y + fr.ez.y * ca.z) / U, cb.part.books.crossSpeed);
-               const std::string msg = "Rubber " + c->Name() + ": a ball went through the cord" + where;
-               PLOGW << msg << " t=" << g_pplayer->m_time_msec;
-               g_pplayer->m_liveUI->PushNotification(msg, 6000);
-            }
+            c->Cord()->heldCycles = 0;
          }
       WriteBack(cy, isl);
       return true;
@@ -2647,20 +2538,19 @@ struct ContactSystemImpl
    static void CordAlone(HitRubber *const band, const float dtime)
    {
       CordBand &cb = *band->Cord();
-      BandCord::Part &p = cb.part;
       const double dt = (double)dtime * DEFAULT_STEPTIME_S;
       if (dt <= 0.0)
          return;
-      if (cb.attached && cb.slots.empty() && p.PlateQuiet() && !band->SlingTriggerPending())
+      if (cb.attached && cb.slots.empty() && cb.PlateQuiet() && !band->SlingTriggerPending())
       {
          band->CordBegin();   // (the switches, the driver: nothing to step unless they start something)
-         if (p.PlateQuiet())
+         if (cb.PlateQuiet())
             return;
       }
       CordFollow(cb, nullptr, nullptr, 0);
-      if (!(cb.attached && cb.slots.empty() && !p.PlateQuiet()))
+      if (!(cb.attached && cb.slots.empty() && !cb.PlateQuiet()))
          band->CordBegin();
-      if (!GroupStep::AdvanceAlone(p, dt, 2e-6, (int)g_pplayer->m_time_msec))
+      if (!GroupStep::AdvanceAlone(*cb.fixed, dt, 2e-6, (int)g_pplayer->m_time_msec))
          band->CordSolveFailed("the plate's step could not be solved");
    }
 
@@ -2688,16 +2578,6 @@ struct ContactSystemImpl
          out += ' ' + p + ';';
       if (parts.empty())
          out += " nothing";
-   }
-
-   // Releases, forgetting the pairs that no longer touch, and the deferred events (the script never runs inside the step)
-   // The end of a step: the band's published state. The membership of the engaged list and of the pair list does not change inside a step (ApplyReleases, later in the sub-interval), so a snapshot
-   // taken at its start can be put back. No script runs here (DispatchEvents, later in the sub-interval).
-   static void FinishState(Cycle &cy)
-   {
-      CPROF(Finish);
-      for (HitRubber *const b : cy.bands)
-         b->BandPublish();
    }
 
    // Releases and the pair clean-up of the step, after the free balls have moved and the overlap check has passed
@@ -2817,7 +2697,6 @@ void ContactSystemImpl::StepBalls(const float dtime)
    }
    cy.hitFloor = std::min(0.5f, g_pplayer->m_physics->HitSpeedMin());
    cy.dtimeF = dtime;
-   cy.bands.clear();
    if (!s_append)
       cy.bandReleases.clear();
    for (BallPairState &p : g_ballPairs)
@@ -2912,7 +2791,6 @@ void ContactSystemImpl::StepBalls(const float dtime)
          }
       }
    }
-   FinishState(cy);
    s_pendingCy = &cy;   // its events are dispatched by ContactSystem::Dispatch, after the free balls have moved
    lap(g_last.writeUs);
    if (ContactProf::On())
@@ -2951,17 +2829,20 @@ void ContactSystemImpl::CordNear(const float dtime)
          if (band == nullptr || !band->CordModel())
             continue;
          // a plate on its way out carries the cord this far past its rest line (as the release rule)
-         const double plateReach = band->CordOn() && !band->Cord()->part.PlateQuiet() ? 0.03 : 0.0;
-         const float reachU = pb->m_d.m_radius + (float)((2.0 * speed * dt + plateReach) / U) + 4.0f;
+         const double plateReach = band->CordOn() && !band->Cord()->PlateQuiet() ? 0.03 : 0.0;
+         // a real section thicker than the table's: the cord's surface stands out from the table's tube by twice the difference (its centre moves out by it, and its radius grows by it); the probe below reads the table's tube
+         const double fixedRc = band->CordOn() ? band->Cord()->fixed->rc : 0.0;
+         const float reachU = pb->m_d.m_radius + (float)((2.0 * speed * dt + plateReach + (fixedRc > 0.0 ? 2.0 * fixedRc : 0.0)) / U) + 4.0f;
          const FRect3D &bb = o->m_hitBBox;
          if (pos.x < bb.left - reachU || pos.x > bb.right + reachU || pos.y < bb.top - reachU || pos.y > bb.bottom + reachU || pos.z < bb.zlow - reachU || pos.z > bb.zhigh + reachU)
             continue;
+         o->ReloadIfChanged();
          SurfaceContact it;
          it.r = o;
          const TubeProbe pr = o->Probe(bs, it, c);
          if (pr.dist <= 0.0)
             continue;
-         const double gap = pr.dist - (bs.R + pr.rho), rel = o->ReleaseGapM(), closing = -v.Dot(pr.normal);
+         const double gap = pr.dist - (bs.R + pr.rho) - (fixedRc > 0.0 ? 2.0 * (fixedRc - pr.rho) : 0.0), rel = o->ReleaseGapM(), closing = -v.Dot(pr.normal);
          if ((gap <= rel + plateReach || (closing > 0.0 && gap < closing * 2.0 * dt + rel)) && band->BandEngage(pb))
             break;
       }
@@ -3177,8 +3058,8 @@ bool ContactSystemImpl::EngageImpl(ContactHost *const host, HitBall *const pb, c
                continue;
             if (o->IsPlayfield() && InPlayfieldHole(posStart))
                continue;   // no floor over a kicker's hole
-            if (o->m_set.band && (host == nullptr || o->m_set.bandModel != 0.0))
-               continue;   // the band rubbers are the band model's: as a rigid surface contact they would stop the ball before the band could deflect (as Regather). The old node band keeps its rings when a host engages
+            if (o->m_set.band)
+               continue;   // the band rubbers are the band model's: as a rigid surface contact they would stop the ball before the band could deflect (as Regather)
             const FRect3D &bb = o->m_hitBBox;
             if (posStart.x < bb.left - reach || posStart.x > bb.right + reach || posStart.y < bb.top - reach || posStart.y > bb.bottom + reach
                 || posStart.z < bb.zlow - reach || posStart.z > bb.zhigh + reach)

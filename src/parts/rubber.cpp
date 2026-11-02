@@ -461,15 +461,21 @@ void Rubber::PhysicSetup(PhysicsEngine* physics, const bool isUI)
                sum += Vertex3Ds(m_vertices[i + j].x, m_vertices[i + j].y, m_vertices[i + j].z);
             centre.push_back(sum / (float)segmentsPerRing);
          }
-         if (centre.size() >= 3)
+         HitRubber *const hr = centre.size() >= 3 ? new HitRubber(this, centre, (float)m_d.m_thickness * 0.5f, rs, ini, name) : nullptr;
+         if (hr != nullptr && hr->FeatureOff())
+            delete hr;
+         else if (hr != nullptr)
          {
-            HitRubber *const hr = new HitRubber(this, centre, (float)m_d.m_thickness * 0.5f, rs, ini, name);
             m_pBand = hr;
             // band_stops may name a table object instead of giving x,y,r, so a moved post or band cannot leave the ini stale: a rubber (its footprint), a
             // bumper or a kicker (their radius), or any other part with "Name, r" (its centre, the given radius)
             hr->SetStopResolver([this](const std::string &nm, bool hasR, double rIn, double &x, double &y, double &r) -> bool {
                IEditable *const e = m_ptable->GetElementByName(nm.c_str());
                if (e == nullptr || e == static_cast<IEditable *>(this))
+                  return false;
+               const ItemTypeEnum ty = e->GetItemType();   // a part with Collidable off stops nothing
+               if ((ty == eItemRubber && !static_cast<Rubber *>(e)->m_d.m_collidable) || (ty == eItemBumper && !static_cast<Bumper *>(e)->m_d.m_collidable) || (ty == eItemKicker && !static_cast<Kicker *>(e)->m_d.m_enabled)
+                  || (ty == eItemPrimitive && !static_cast<Primitive *>(e)->m_d.m_collidable))
                   return false;
                const Vertex2D c = e->GetCenter();
                x = c.x;
@@ -529,10 +535,10 @@ void Rubber::PhysicSetup(PhysicsEngine* physics, const bool isUI)
                if (plate != nullptr)
                   hr->SlingAttach(plate, primitives(rs.slingSwitches));   // the sling's own blades come first in the switch index
             }
-            if (!rs.switches.empty() && rs.band)
+            if (!rs.switches.empty() && hr->IsBand())
                hr->BandSwitchesAttach(primitives(rs.switches));
             SetupHitObject(physics, hr, isUI);
-            PLOGI << "Rubber " << name << ": force model on (" << centre.size() << " centreline points, radius " << m_d.m_thickness * 0.5f << " U, hitHeight " << m_d.m_hitHeight
+            PLOGI << "Rubber " << name << ": " << (hr->IsBand() ? "band" : "ring") << ", collidable " << (m_d.m_collidable ? 1 : 0) << ", visible " << (m_d.m_visible ? 1 : 0) << ", force model on (" << centre.size() << " centreline points, radius " << m_d.m_thickness * 0.5f << " U, hitHeight " << m_d.m_hitHeight
                   << " U, first point (" << centre[0].x << ',' << centre[0].y << ',' << centre[0].z << "), middle point (" << centre[centre.size() / 2].x << ',' << centre[centre.size() / 2].y << "))";
             return;
          }
@@ -674,13 +680,8 @@ void Rubber::RenderSetup(Renderer *renderer)
 
    if (m_numIndices == 0) // Degenerate curve: no mesh buffer (buffers can not be empty)
       return;
-   // a force-model band (physics ini: contact = 1, band = 1) is animated: its mesh must be dynamic
-   m_bandAnimated = false;
-   {
-      RubberObjectSettings rs;
-      if (HitRubber::LoadSettings(rs, HitRubber::IniPathFor(m_ptable->m_filename), GetName()) && rs.contact && rs.band)
-         m_bandAnimated = true;
-   }
+   // a force-model band (a rubber with a straight span) is animated: its mesh must be dynamic
+   m_bandAnimated = m_pBand != nullptr && m_pBand->IsBand();
    m_bandDeformed = false;
    std::shared_ptr<VertexBuffer> dynamicVertexBuffer = std::make_shared<VertexBuffer>(m_renderer->m_renderDevice, m_numVertices, (float *)m_vertices.data(), !(m_d.m_staticRendering && !m_bandAnimated));
    std::shared_ptr<IndexBuffer> dynamicIndexBuffer = std::make_shared<IndexBuffer>(m_renderer->m_renderDevice, m_ringIndices);
@@ -1204,7 +1205,45 @@ void Rubber::GenerateMesh(const int _accuracy, const bool createHitShape) //!! h
       m_ringIndices.clear();
       return;
    }
-   const int numRings = splinePoints - 1;
+   int numRings = splinePoints - 1;
+   // a band: rings along the straight spans too, or the drawn band could only tilt between the post wraps. For the mesh that is drawn only, not a hit shape
+   vector<Vertex2D> midSub;
+   const Vertex2D *mid = middlePoints;
+   float thickness = (float)m_d.m_thickness;
+   if (_accuracy == -1 && !createHitShape && m_pBand != nullptr && m_pBand->IsBand())
+   {
+      constexpr float kRingU = 6.f;   // about 3 mm between rings: fine beside a ball's curve
+      for (int i = 0; i < numRings; i++)
+      {
+         const Vertex2D &a = middlePoints[i], &b = middlePoints[(i + 1) % numRings];
+         const float len = sqrtf((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y));
+         const int parts = max(1, (int)(len / kRingU));
+         for (int k = 0; k < parts; k++)
+            midSub.push_back(Vertex2D(a.x + (b.x - a.x) * (float)k / (float)parts, a.y + (b.y - a.y) * (float)k / (float)parts));
+      }
+      numRings = (int)midSub.size();
+      // band_section_mm: the drawn band has the cord's section, and stands where the cord does: the post's groove stays, so its centre moves out from the table's by the difference in radius
+      if (const float sectionU = m_pBand->BandSectionU(); sectionU > 0.f)
+      {
+         const float out = 0.5f * (sectionU - thickness);
+         float area = 0.f;
+         for (int i = 0; i < numRings; i++)
+         {
+            const Vertex2D &a = midSub[i], &b = midSub[(i + 1) % numRings];
+            area += a.x * b.y - b.x * a.y;
+         }
+         const vector<Vertex2D> rest = midSub;
+         for (int i = 0; i < numRings; i++)
+         {
+            const Vertex2D &a = rest[(i + numRings - 1) % numRings], &b = rest[(i + 1) % numRings];
+            const float tx = b.x - a.x, ty = b.y - a.y, tl = max(sqrtf(tx * tx + ty * ty), 1e-6f), sgn = area >= 0.f ? 1.f : -1.f;   // the outside is on the right of an anticlockwise travel
+            midSub[i].x = rest[i].x + sgn * out * ty / tl;
+            midSub[i].y = rest[i].y - sgn * out * tx / tl;
+         }
+         thickness = sectionU;
+      }
+      mid = midSub.data();
+   }
    const int numSegments = accuracy;
    m_numVertices = numRings*numSegments;
    m_numSegments = numSegments;
@@ -1221,13 +1260,13 @@ void Rubber::GenerateMesh(const int _accuracy, const bool createHitShape) //!! h
    {
       const int i2 = (i == numRings - 1) ? 0 : i + 1;
 
-      const Vertex3Ds tangent(middlePoints[i2].x - middlePoints[i].x, middlePoints[i2].y - middlePoints[i].y, 0.0f);
+      const Vertex3Ds tangent(mid[i2].x - mid[i].x, mid[i2].y - mid[i].y, 0.0f);
 
 	  Vertex3Ds binorm;
 	  Vertex3Ds normal;
 	  if (i == 0)
       {
-         const Vertex3Ds up(middlePoints[i2].x + middlePoints[i].x, middlePoints[i2].y + middlePoints[i].y, height*2.f);
+         const Vertex3Ds up(mid[i2].x + mid[i].x, mid[i2].y + mid[i].y, height*2.f);
          normal = Vertex3Ds(tangent.y * up.z, - tangent.x * up.z, tangent.x * up.y - tangent.y * up.x); // = CrossProduct(tangent, up)
          binorm = Vertex3Ds(tangent.y * normal.z, - tangent.x * normal.z, tangent.x * normal.y - tangent.y * normal.x); // = CrossProduct(tangent, normal)
       }
@@ -1243,9 +1282,9 @@ void Rubber::GenerateMesh(const int _accuracy, const bool createHitShape) //!! h
       for (int j = 0; j < numSegments; j++, index++)
       {
          const float v = ((float)j + u) * invNS;
-         Vertex3Ds tmp = GetRotatedAxis((float)j*(360.0f * invNS), tangent, normal) * ((float)m_d.m_thickness*0.5f);
-         m_vertices[index].x = middlePoints[i].x + tmp.x;
-         m_vertices[index].y = middlePoints[i].y + tmp.y;
+         Vertex3Ds tmp = GetRotatedAxis((float)j*(360.0f * invNS), tangent, normal) * (thickness*0.5f);
+         m_vertices[index].x = mid[i].x + tmp.x;
+         m_vertices[index].y = mid[i].y + tmp.y;
          if (createHitShape && (j==0 || j==3)) //!! hack, adapt if changing detail level for hitshape
          {
              // for a hit shape create a more rectangle mesh and not a smooth one

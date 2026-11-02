@@ -16,9 +16,7 @@ struct SlingSettings
    FlipperSettings mech;        // plate, link, coil, spring and stops; the ini keys sling_<flipper key> (sling_r_crank_mm, sling_stop_deg, sling_r_power, ...)
    double pulseMs = 100.0;     // the driver's pulse once the switch has closed, ms (a guess: to be measured)
    double coilDelayMs = 0.0;   // from the switch closing to the coil's pulse, ms: each sling its own (user, 2026-10-30; two videos: about 20 and 33 - 39 ms to the plate seen moving)
-   double minClosedMs = 2.0;   // a switch counts as closed for at least this long, ms (a guess)
    double switchGapMm = 1.5875; // band displacement at a switch that closes it, mm (1/16 in)
-   double plateContactZeta = 0.1; // damping ratio of the plate face pressing on the band (a guess: steel on rubber)
    SlingSettings();
 };
 

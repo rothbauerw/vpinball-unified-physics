@@ -1,7 +1,7 @@
 // license:GPLv3+
 //
 // The group step (docs/GroupStepDesign.txt; ProjectAssessment-2026-10-27.txt item 0 b): the balls of a touching group and their contacts moved together in one solve,
-// so that energy is kept by construction. Build step 1a: balls, fixed surfaces and ball pairs (the band joins in step 1b).
+// so that energy is kept by construction. Balls, fixed surfaces, ball pairs and moving parts.
 //
 // Laws (the shared contact law restated as stored energy plus losses, design pieces 4 and 5):
 //  - normal: F = kH [delta^1.5 + beta reff^1.5 delta^3 / (h - delta)^3] (Hertz plus the thin bonded layer at the thickness left; no layer for steel), stored energy
@@ -17,7 +17,7 @@
 // step's end. Once the step's equations are solved: energy end = start + drive work - losses, at any step size. The step size is set by accuracy only (ChooseStep). A contact's effective radius, layer and material are held for the life of a touch (taken when it starts),
 // so its energy is one function throughout.
 // Moving parts (step 1b, GroupStepDesign.txt 10, 18): a Part describes its own bodies' coordinates and unknowns (after the balls'), its stored energy, losses, drives, grip and the facts of its step, and the
-// group solves it with the balls (the band cord, bandcord.h, is the first). A surface it carries says how a point on it moves with each coordinate (Hit's columns); the group does the rest.
+// group solves it with the balls (the band cord, cordfixed.h, is the first). A surface it carries says how a point on it moves with each coordinate (Hit's columns); the group does the rest.
 // Pure SI maths, no VPX types, no allocation in the step: the offline tests runs/2026-10-29-group-step and runs/2026-10-29-group-band build it.
 
 #pragma once
@@ -247,6 +247,7 @@ namespace GroupStep
       double vFloor = 0.01;                    // m/s: the closing speed below which a contact's expected depth is taken at this speed
       double hMax = 1e-3, hMin = 1e-9;
       // the solver
+      double rollSmooth = 2.0;                 // the rolling torque's smoothing through zero spin, rad/s ([Contact] roll_smooth_rad_s): the shared law's 2 until the 0.05 is proved on the 750 hits
       double tolV = 1e-11;                     // solved when a round changes no ball's speed (or its rim speed R w) by more than this, m/s
       double tolNoise = 1e-9;                  // or when the changes stay below this for stallRounds rounds without halving: the forces' own noise (m/s)
       double tolRes = 1e-10, tolCheckMove = 1e-6;   // the residual in speed units that counts as solved; the move after which a round looks at the residual first, with no factorization (m/s)
@@ -1481,7 +1482,10 @@ namespace GroupStep
                const double pa = N / (kPi * am * am);
                const double muRr = std::max(std::min(2.34 * (pa / L.E) * L.tanDelta, RubberContact::kRollingMuMax), L.rollingMu);
                const double rho = muRr * A.R * N;
-               sRo = wl > 1e-9 ? rho * std::tanh(wl / 2.0) / wl : 0.5 * rho;
+               if (set.rollSmooth == 2.0)   // (/fp:fast: the shared law's own expression, so a table not using the switch keeps its bytes)
+                  sRo = wl > 1e-9 ? rho * std::tanh(wl / 2.0) / wl : 0.5 * rho;
+               else
+                  sRo = wl > 1e-9 ? rho * std::tanh(wl / set.rollSmooth) / wl : rho / set.rollSmooth;
                rhoR = rho;
                wlR = wl;
                wtR = wt;
@@ -1658,7 +1662,17 @@ namespace GroupStep
                   {
                      const V3 wh = wtR * (1.0 / wlR);
                      const M3 Q = M3::Outer(wh, wh);
-                     const double sh = 1.0 / std::cosh(wlR / 2.0), along = 0.5 * rhoR * sh * sh;
+                     double sh, along;
+                     if (set.rollSmooth == 2.0)
+                     {
+                        sh = 1.0 / std::cosh(wlR / 2.0);
+                        along = 0.5 * rhoR * sh * sh;
+                     }
+                     else
+                     {
+                        sh = 1.0 / std::cosh(wlR / set.rollSmooth);
+                        along = rhoR / set.rollSmooth * sh * sh;
+                     }
                      for (int i = 0; i < 3; i++)
                         for (int j = 0; j < 3; j++)
                            Rm.a[i][j] = along * Q.a[i][j] + sRo * (Pt.a[i][j] - Q.a[i][j]);

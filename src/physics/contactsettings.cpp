@@ -89,6 +89,8 @@ namespace
             s.arrivalStep = on;
          else if (key == "static_model")
             s.staticModel = on;
+         else if (key == "roll_smooth_rad_s" && num)
+            s.rollSmoothRadS = d;
          else if (key == "arrival_depth_um" && num)
             s.arrivalDepthUm = d;
          else if (key == "ball_reach_mm" && num)
@@ -113,16 +115,50 @@ namespace
       ClampKey("ball_rest_substep_us", s.ballRestSubstepUs, 0.5, 100.0);
       ClampKey("ball_reach_mm", s.ballReachMm, 0.0, 20.0);
       ClampKey("arrival_depth_um", s.arrivalDepthUm, 0.1, 100.0);
+      ClampKey("roll_smooth_rad_s", s.rollSmoothRadS, 0.001, 100.0);
    }
+}
+
+namespace
+{
+   ContactSettings cur;
+   std::filesystem::path path;
+   std::filesystem::file_time_type stamp{};
+   bool pathKnown = false, loaded = false;
+   uint32_t nextCheckMs = 0;
+
+   void LoadNow()
+   {
+      ContactSettings s;
+      LoadContactSettings(s, path);
+      if (PhysicsIni::Active(path).unified)
+         s.ballContact = true;   // one contact path: on the unified engine a ball pair is never left to the stock collision (ball_contact no longer acts there)
+      cur = s;
+      PLOGI << "Contact settings loaded from " << path.string() << ": " << (s.enable ? "on" : "off") << ", dynamic ratio " << s.muDynamicRatio
+            << ", rolling resistance " << s.rollingResistance << ", twist " << (s.twist ? "on" : "off") << " patch " << s.twistPatchMm << " mm, ball contact " << (s.ballContact ? "on" : "off");
+   }
+}
+
+// The start of a play, before any part is built: [Contact] as the file is now, nothing kept from the last play or table. Game time starts again at 0, so the check in Get would not see a change until it passed the last play's
+void ContactSettings::StartPlay(const std::filesystem::path& tableFile)
+{
+   cur = ContactSettings();
+   stamp = {};
+   nextCheckMs = 0;
+   path = PhysicsIni::FindUnified(tableFile);
+   pathKnown = !path.empty();
+   loaded = true;
+   std::error_code ec;
+   if (pathKnown)
+      stamp = std::filesystem::last_write_time(path, ec);
+   if (pathKnown && !ec)
+      LoadNow();
+   else
+      cur.enable = PhysicsIni::Active(std::filesystem::path()).contact;   // no file: the defaults (off on the stock engine)
 }
 
 const ContactSettings& ContactSettings::Get()
 {
-   static ContactSettings cur;
-   static std::filesystem::path path;
-   static std::filesystem::file_time_type stamp{};
-   static bool pathKnown = false, loaded = false;
-   static uint32_t nextCheckMs = 0;
    if (g_pplayer == nullptr)
       return cur;
    if (!pathKnown)
@@ -146,13 +182,7 @@ const ContactSettings& ContactSettings::Get()
       {
          stamp = mtime;
          loaded = true;
-         ContactSettings s;
-         LoadContactSettings(s, path);
-         if (PhysicsIni::Active(path).unified)
-            s.ballContact = true;   // one contact path: on the unified engine a ball pair is never left to the stock collision (ball_contact no longer acts there)
-         cur = s;
-         PLOGI << "Contact settings loaded from " << path.string() << ": " << (s.enable ? "on" : "off") << ", dynamic ratio " << s.muDynamicRatio
-               << ", rolling resistance " << s.rollingResistance << ", twist " << (s.twist ? "on" : "off") << " patch " << s.twistPatchMm << " mm, ball contact " << (s.ballContact ? "on" : "off");
+         LoadNow();
       }
       else if (ec)
       {

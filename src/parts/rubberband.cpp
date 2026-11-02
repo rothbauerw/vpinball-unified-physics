@@ -6,6 +6,7 @@
 #include "core/stdafx.h"
 #include "rubber.h"
 #include "physics/hitrubber.h"
+#include <chrono>
 
 
 // ---- band state for scripts (rubber-contact branch) ----
@@ -84,6 +85,9 @@ void Rubber::ApplyBandDeformation(Vertex3D_NoTex2 *buf)
    const int S = m_numSegments;
    const bool animating = m_pBand != nullptr && m_pBand->BandAnimating();
    bool any = false;
+   const auto drawT0 = std::chrono::steady_clock::now();
+   if (animating)
+      m_pBand->BandFixedDrawPrepare();
    if (S > 0 && animating)
    {
       const int rings = m_numVertices / S;
@@ -122,6 +126,27 @@ void Rubber::ApplyBandDeformation(Vertex3D_NoTex2 *buf)
    }
    if (any)
       m_bandFrames++;
+   {
+      static double drawUs = 0.0;   // what moving the rings takes, for the log at the animation's end
+      static long drawN = 0;
+      if (any)
+      {
+         drawUs += std::chrono::duration<double>(std::chrono::steady_clock::now() - drawT0).count() * 1e6;
+         drawN++;
+         if (drawN == 600)   // a band bent at rest never ends its animation
+         {
+            PLOGI << "Rubber " << GetName() << ": moving the rings took " << drawUs / drawN << " us a frame over " << drawN << " frames, largest ring shift " << m_bandPeakShift * 0.53975f << " mm";
+            drawUs = 0.0;
+            drawN = 0;
+         }
+      }
+      else if (m_bandDeformed && drawN > 0)
+      {
+         PLOGI << "Rubber " << GetName() << ": moving the rings took " << drawUs / drawN << " us a frame over " << drawN << " frames, " << m_numVertices / std::max(S, 1) << " rings of " << S;
+         drawUs = 0.0;
+         drawN = 0;
+      }
+   }
    if (any != m_bandDeformed)
    {
       if (any)

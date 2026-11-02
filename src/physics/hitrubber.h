@@ -69,32 +69,11 @@ struct SlingInfo
    int fireTimeMs = 0;           // game time when the last one started
 };
 
-// The band's state while a span is deflected: the deformable centreline (the ring with the span replaced by A - P - B) and the node P.
-// Lives in the HitRubber, not in a contact solve, so the band keeps moving (and can be read by scripts) after the ball has left.
-struct BandDyn
-{
-   bool active = false;                  // the band is being loaded or is ringing
-   std::vector<RubberContact::V3> pts;   // closed ring with the span of every chain that has nodes replaced by A - P_1 - ... - P_M - B
-   std::vector<RubberContact::BandChain> chains;   // one per free span
-   std::vector<int> span;                // per chain: index into the span list
-   std::vector<int> base;                // per chain with nodes: index of its A in pts (its nodes follow, then B)
-   RubberContact::BandParams bp;         // what the chains were built with
-   double peakFn = 0.0;                  // peak ball contact force, N
-   double peakBB = 0.0;                  // deepest overlap of two spans, m
-};
-
-// One ball on the band: the node of the span it loads, its shear state, and the bookkeeping for the log and the release.
+// One ball on the band
 struct BandBall
 {
    HitBall *ball = nullptr;
-   int chain = 0;                        // the chain (span) this ball loads, index into BandDyn::chains
-   int node = 0;                         // the node of that chain this ball loads (a node id)
-   RubberContact::RubberState st;        // shear state of this ball's contact with the band
-   double clearS = 0.0;                  // how long the ball has been clear of the band and receding
-   double dwellS = 0.0;
-   double peak = 0.0;                    // peak deflection of its node while it was on the band, m
    RubberContact::V3 vin;                // its velocity at engagement
-   double side = 0.0;                    // +1 / -1: which side of the span's rest line the ball came from (the sign of (centre - A) . (ab.y, -ab.x)); 0 = not known
 };
 
 // The faces of a wall or primitive flagged as rubber, in the world frame (metres). Owned by the HitRubber that hosts the object's contact.
@@ -111,7 +90,7 @@ class FlipperMoverObject;
 struct BallContact
 {
    class ContactHost *host = nullptr;   // the surface or part that engaged the ball (its settings drive the step)
-   class HitRubber *band = nullptr;       // a band whose nodes this ball loads (its BandBall is in band->m_engaged); null = none
+   class HitRubber *band = nullptr;       // a band that holds this ball (its BandBall is in band->m_engaged); null = none
    HitBall *ball = nullptr;
    std::vector<SurfaceContact> items;
    double omega = 0.0;                   // natural frequency of the contact in the last cycle, rad/s (sets the largest stable step); 0 = unknown / no contact
@@ -163,7 +142,7 @@ struct BallPairState
 };
 extern std::vector<BallPairState> g_ballPairs;
 class Primitive;
-// Lets the physics engine step a band that has a ball on it (and the band alone while it rings down), once per cycle, before any displacement.
+// Lets the physics engine step a band with no ball on it, and finish up the one that had, once per cycle, before any displacement.
 class BandMover final : public MoverObject
 {
 public:
@@ -211,6 +190,9 @@ public:
    BandInfo GetBandInfo() const { return m_info; }
    SlingInfo GetSlingInfo() const { return m_slingInfo; }
    int PtCount() const { return (int)m_ptsSI.size(); }
+   bool IsBand() const { return m_set.band; }   // found from its shape at load (DetectBand)
+   bool FeatureOff() const;                     // [Features] rubbers / bands is off for what this rubber turned out to be: stock collisions (a development switch)
+   float BandSectionU() const;                  // band_section_mm in VPX units for the drawn band, 0 = the rubber's Thickness
    int BandSwitchCount() const { return (int)m_switches.size(); }
    bool BandSwitchClosedAt(int i) const { return i >= 0 && i < (int)m_switches.size() && m_switches[i].closed; }
    using StopResolver = std::function<bool(const std::string &name, bool hasRadius, double radiusIn, double &x, double &y, double &r)>;
@@ -221,7 +203,9 @@ public:
    void SlingTrigger() { if (m_slingPlate != nullptr) m_slingTriggerReq = true; }   // script: fire one coil pulse (taken at the next physics cycle)
    // For the renderer: whether the band is deflected or ringing, and where the rendered ring centred at c (table units) goes: the shift of its centre
    // and the rotation (row-major 3x3) of the ring about it. False = this ring does not move.
-   bool BandAnimating() const { return m_dyn.active; }
+   bool BandAnimating() const { return BandFixedActive(); }
+   bool BandFixedActive() const;   // its cord has something to draw
+   void BandFixedDrawPrepare() const;
    bool BandDeformAt(const Vertex3Ds &c, Vertex3Ds &shift, float rot[9]) const;
    int GetType() const override { return e3DLine; }
    void Collide(const CollisionEvent &coll) override;
@@ -238,89 +222,34 @@ public:
 private:
    void Reload() const override;
    void DetectBand();
-   void SlingAdvance(const float dtime);   // switches and driver, once per physics cycle; steps the plate itself unless it is working on the band
    void SlingFinish();                     // the table's primitives follow the plate and the switches
    struct BandSwitch;
    void SwitchPlace(BandSwitch &sw) const;   // find the span a blade senses and the side it is on
-   bool SwitchesUpdate(double dt);          // once per cycle: read the band at every blade, close / open the switches, fire the events; true if a sling (coil) switch is closed
    void SwitchesFinish();                   // the blades follow the band
-   void BandAdvanceCore(const float dtime);
-   // the band's cycle in phases (see BandCycleBegin in hitrubber.cpp)
-   struct BandCycle
-   {
-      double dt = 0.0, h = 0.0;        // the cycle and the substep, s
-      int steps = 1;
-      RubberContact::RubberParams rp;  // the band's rubber (band_shear_zeta applied)
-      double hLayer = 0.0;
-      std::vector<std::vector<RubberContact::V3>> fNode;   // contact reactions on each chain's nodes, by node id
-      std::vector<std::vector<char>> loaded;               // by node id: loaded by a ball (not to be merged away or taken over)
-      bool nodeTripped = false;
-      bool active = false;
-   };
-   BandCycle m_bc;
-   struct BandBallContact
-   {
-      bool inContact = false;
-      RubberContact::V3 force, torque;   // on the ball
-      RubberContact::V3 vs, normal;      // the band's velocity at the contact and the contact normal
-      double delta = 0.0, gap = 0.0;
-   };
-   bool BandCycleBegin(float dtime);
-   void BandZeroForces();
-   void BandChainContacts();
-   void BandMarkLoaded();
-   void BandRingDown();
-   void BandSubstepBegin();
-   void BandBallForce(BandBall &e, const RubberContact::BallSI &bs, const RubberContact::V3 &c, const RubberContact::V3 &v, const RubberContact::V3 &w, BandBallContact &out);
-   bool BandSubstepEnd();
-   double BandBallPeak(BandBall &e);
-   bool BandCycleEnd();
-   bool BandBallClear(BandBall &e, const RubberContact::BallSI &bs, const RubberContact::V3 &c, bool contact, double lastGap, double relNormalVel);
-   bool BandDiverged() const;              // a node of the deformable band is not a number or is farther from its rest place than the model allows
-   bool BandEnsureDyn();                   // the deformable band exists (all free spans as chains); false if it cannot
-   double SlingFaceN(double phi) const;    // where the plate face is at band height, m from the span's rest centreline (+ toward the ball), at plate angle phi
-   double SlingFaceDN(double phi) const;   // its derivative with phi, m/rad
-   int SlingChain() const;                 // index into m_dyn.chains of the span the plate faces, -1 = none
-   void SlingEnsureNodes();                // band nodes at the two ends of the plate face
-   bool SlingInFootprint(int chain, int node) const;
-   void SlingBandStep(std::vector<std::vector<RubberContact::V3>> &fNode, double h);   // one substep: the face presses on the band nodes, the plate steps with the reaction
-   void SlingStepPlate(double h, double torqueNm);
    void SlingPlace() const;   // put the plate so its face is slingGapMm from the band (from its table pose, so it can be repeated when the gap changes)
-   void BandPublish();   // refresh m_info from the band state
-   float BandRubberPos(int span, double f) const;   // place along the whole rubber, 0..1, of the point at fraction f of a span
    friend class BandMover;
    friend void HitRubberBandBallDeleted(HitBall *ball);
    friend void HitRubberContactRelease(HitBall *ball, const char *why);
    friend struct ContactSystemImpl;   // the contact system steps the contact-held balls (contactsystem.cpp)
-   // Engine-stepped band contact: while a ball is engaged, this rubber (not a one-call solve) integrates the ball against the deformable band every
-   // physics cycle, with the band's state kept between cycles. Everything else the engine does to the ball (gravity, playfield, other objects) is unchanged.
+   // A ball on a band: the contact system steps the cord with its balls (CordIsland), with the band's state kept in the cord between cycles.
    bool BandWants(const HitBall *ball) const;
-   bool BandFixedNodes() const { return m_set.bandNodeMm > 0.0 && m_slingPlate == nullptr; }   // permanent evenly spaced nodes (band_node_mm)
-   bool BandBuild(const RubberContact::V3 &c, double ballR, int &chain, int &node, double sameSpot = 0.008);   // choose the free span under the ball, add its node (and the passive ones on the other spans)
-   void BandRebuild();   // the deformed centreline m_dyn.pts after a node was added
-   void BandSyncPts();   // node positions into m_dyn.pts
    bool BandEngage(HitBall *ball);
    void BandRelease(HitBall *ball, const char *why);
    void BandReleaseAll(const char *why);
-   bool BandIsEngaged(const BallS &ball) const;
-   void BandNote(const HitBall *pb) const;   // logs (twice a second at most) why a ball that touches the band is not carried by the band model
-   mutable long long m_bandNoteMs = -1000000;
-   void BandAdvance(const float dtime);   // fills m_bandPosts / m_bandSpans from the centreline (or the band_posts override) and logs them
-   void BandBeforeCore(float dtime);   // once per cycle before the band is stepped: the sling's driver and switches
-   void BandAfterCore(float dtime);    // once per cycle after: diverged check, switches, the sling's table primitives
+   void BandAdvance(const float dtime);
    // The cord in the group step (cordband.h; docs/GroupStepDesign.txt 8, 11): the contact system steps it with its balls
    HitRubber *BandHost() override { return this; }
    bool CordOn() const { return m_cord != nullptr; }
-   bool CordModel() const { return m_set.band && m_set.bandModel != 0.0 && m_bandPosts.size() >= 2; }   // this band runs on the cord: the contact system takes its balls (CordNear), no stock collision
+   bool CordModel() const { return m_set.band && m_bandPosts.size() >= 2; }   // this band runs on the cord: the contact system takes its balls (CordNear), no stock collision
    CordBand *Cord() const { return m_cord.get(); }
-   void CordEnsure();                  // the cord from the band's posts, plate and switches (band_model 1)
+   void CordEnsure();                  // the cord from the band's posts, plate and switches
+   double CordRing(double loopM, double rcM, double EA) const;   // the ring's inner diameter, inches: band_ring_in, or the standard size for this loop
    void CordBegin();                   // once per cycle, before the step: the script's trigger, the switches, the driver
    void CordFinish(float dtime);       // once per cycle, after: the script's events, the table's primitives
    void CordSolveFailed(const char *why);
    bool m_cordStepped = false;         // the contact system stepped the cord with its balls this cycle
    std::shared_ptr<CordBand> m_cord;
    int m_cordFired = 0;
-   bool m_bandIslandStepped = false;   // unified engine: the contact system stepped the band (and its balls) this cycle; BandAdvance only finishes up
 
    // resolver for band_stops entries "Post7" or "Post7, r" (hasRadius / radiusIn: an explicit radius was given; false = not found or no radius of its own;
    // x, y, r in VPX units)
@@ -337,11 +266,8 @@ private:
    std::vector<BandPost> m_bandPosts;
    std::vector<BandSpan> m_bandSpans;
    BandMover m_mover{ this };
-   BandDyn m_dyn;
    BandInfo m_info;
-   std::vector<double> m_cumSI;           // centreline length from the first vertex to each vertex, m (n+1 entries)
    std::vector<BandBall> m_engaged;       // the balls on the band, one per span
-   uint32_t m_bandCooldownUntilMs = 0;
    mutable Primitive *m_slingPlate = nullptr;
    mutable std::vector<Primitive *> m_slingSwitches;
    mutable Vertex3Ds m_slingBase;          // the plate's position as the table has it
@@ -359,7 +285,6 @@ private:
       bool coil = false;           // a sling switch: wired to the coil driver (the others are read by the script only)
       bool legacySign = false;     // a sling switch: TransX decreases with the push (the table authors orient the blades that way)
       bool closed = false;
-      double closedForS = 0.0;
       double dispM = 0.0;          // band displacement toward the blade at the switch, m
       float shownTransX = 0.f;
    };
@@ -369,25 +294,16 @@ private:
    SlingPlate m_plate;
    SlingDriver m_driver;
    bool m_plateConfigured = false;
-   bool m_slingIdle = false;
    bool m_slingEnabled = true;
    bool m_slingTriggerReq = false;   // SlingTrigger() was called; consumed by SlingAdvance
-   bool m_slingTriggered = false;    // the pulse that has just started came from the script
    bool m_slingAnyClosed = false;
    SlingInfo m_slingInfo;
-   bool m_slingInBand = false;                   // this cycle the plate is stepped together with the band (inside BandAdvanceCore)
-   bool m_slingStopLogged = false;
-   bool m_slingWasActive = false;                // log: the band was deflected last cycle
-   double m_slingPkBackMm = 0.0, m_slingPkFwdMm = 0.0;   // log: the largest displacement of the plate's span since the band became active, toward the plate / toward the ball
    // the plate's geometry (SI), measured when the plate is placed: the face at band height is at originN + a / cos(phi) + h tan(phi) from the rest centreline
    mutable bool m_plateGeomValid = false;
    mutable double m_plateOriginN = 0.0, m_plateA = 0.0, m_plateH = 0.0;   // pivot axis place, face offset from the axis, band height above the axis
    mutable double m_plateRest = 0.0;                                       // the plate's angle at rest from the touching pose (RotX = 0), rad, <= 0: turned back for the gap
    mutable double m_plateF0 = 0.5, m_plateF1 = 0.5;                        // the face's extent along the span, fractions of the chord
-   SlingPlate::State m_slingIdleState;
    mutable float m_slingShownRotX = 0.f;
-   int m_slingFired = 0;
-   double SwitchDisplacementM(const BandSwitch &sw) const;   // how far the band is pushed from the ball toward the plate at a switch, m (> 0 = toward the plate)
 };
 
 // A ball being deleted must not stay engaged with a band

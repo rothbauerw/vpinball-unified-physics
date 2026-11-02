@@ -52,28 +52,14 @@ struct RubberObjectSettings
    double maxMs = 30.0;           // give up after this much simulated contact time
    double releaseGapMm = 0.2;     // an engaged ball is released only once it is farther than this from every rubber (and receding): a resting ball must not engage and release over and over
 
-   // Band (a rubber stretched between posts): the posts and free spans are found at load (logged); a ball hitting a free span deflects it
-   // (a tensioned cord, see BandChain in rubbercontact.h). Other parts of the rubber (the post wraps, short spans) stay rigid.
-   bool band = false;             // this rubber is a band
-   double bandModel = 0.0;        // 0 = the old node band (default until the cord is finished); 1 = the cord in the group step (bandcord.h, GroupStepDesign 8, 11, 12.2: not ready)
-   double bandRingIn = 0.0;       // the ring's inner diameter, inches: the stretch at rest comes from it and the posts; 0 = band_prestretch_pct
-   double bandSectionMm = 0.0;     // the cord's section (its diameter), mm; 0 = from the table's rubber thickness. Cord model only
-   double bandPrestretchPct = 7.0; // stretch of a span at rest, percent
-   double bandTensionN = 0.0;      // rest tension of a span, N; 0 = from the rubber's modulus and the stretch (the cord's EA is then e_mpa x area), > 0 = this tension (EA = tension / stretch)
+   // Band (a rubber stretched between posts): the posts and free spans are found at load (logged); a ball on a span deflects it (cordfixed.h: the fixed-height cord)
+   bool band = false;             // this rubber is a band: found from its shape at load (DetectBand), not an ini key
+   double bandRingIn = 0.0;       // the ring's inner diameter, inches: the stretch at rest comes from it and the posts; 0 = the standard size that gives a tension within the range (HitRubber::CordRing)
+   double bandSectionMm = 0.0;     // the cord's section (its diameter), mm, for physics and drawing; 0 = the rubber's Thickness in the editor
+   double bandStretchAlpha = 0.09; // Hunt-Crossley on the cord's stretch, s/m: half the ring's 0.18, for half its drop-off with speed. Fitted to the user's best guess (about 0.8 at 3 m/s), not measured
+   double bandTwistScale = 1.0;    // the twist spring against its calculated stiffness (kT / 6)
+   bool bandTwistLoss = true;      // the twist spring takes the rubber's tan_delta
    double bandRefHz = 20.0;       // frequency at which tan_delta (the rubber's own loss tangent, shared with the rings) applies to the stretch
-   double bandNodeMassG = 0.0;    // moving mass of the deflected span, g; 0 = half the span's mass
-   double bandNodeZeta = 0.05;    // damping ratio of the deflected span's own vibration (internal friction, air): how fast the ringing dies out
-   double bandShearZeta = 1.0;    // the old node band only (band_model 0): damping ratio of the sideways spring of the ball / band contact; < 0 = from tan_delta. 1 = critical: a ball resting on the band does not rock. The cord has no such spring on its span, and its posts use the ring's law
-   double bandSubstepUs = 20.0;   // step of the band's integration, microseconds; 0 = the same as substep_us. Larger = faster, a little less exact (40 is too coarse)
-   bool bandFollow = true;       // a ball rolling along the span loads a new node under itself once it is more than band_follow_mm from its node, and idle nodes that have relaxed onto the line are merged away; false = nodes stay where the ball engaged
-   double bandNodeMm = 0.0;       // > 0: a plain band (no sling) gets permanent nodes this far apart along every span, a ball rolls on the polyline they form and loads the legs under it; 0 = nodes are made under the ball (band_follow)
-   double bandFollowMm = 6.0;     // how far a ball may be from the node it loads along the span before it takes a new one, mm (nodes closer than about 5 mm are too stiff for the 20 us step: 4 mm already trips)
-   bool bandRinging = true;       // false = no ringing: after the last ball has left the band returns without oscillating (critical damping)
-   double bandRingZeta = -1.0;    // damping ratio of the ringing after the last ball has left; < 0 = the same as band_node_zeta
-   double bandRestMm = 0.05;      // the band counts as at rest (stops being simulated and drawn deflected) below this deflection, mm
-   bool bandLockZ = true;         // the deflected span keeps its height (the posts hold the band); false = it can ride up over the ball
-   double bandMaxMs = 150.0;      // not used (a band contact lasts as long as the ball is on it); kept so old files load
-   double bandFlipperMarginU = 1.0; // a ball engages the band only if no flipper is closer than this to its surface, VPX units
    double bandCurveRadiusMm = 40.0; // a centreline vertex whose local bend radius is below this belongs to a post wrap
    double bandMinSpanMm = 20.0;   // a straight run shorter than this between two posts is not a free span
    // Sling (a band with a kicker plate behind it): the plate and the switch blades are table primitives named here. The engine places the plate at load
@@ -81,8 +67,6 @@ struct RubberObjectSettings
    std::string slingPlate;        // name of the plate primitive; its position is the pivot. Empty = this band is not a sling
    std::string slingSwitches;     // names of the switch blade primitives, comma separated (wired in parallel)
    std::string switches;          // names of switch blade primitives behind the band that only the script reads (BandSwitchClosed, SwitchClosed / SwitchOpened), comma separated
-   double switchGapMm = 1.5875;   // band displacement toward such a blade that closes its switch, mm (1/16 in)
-   double switchMinClosedMs = 2.0; // such a switch counts as closed for at least this long, ms
    double slingGapMm = 4.7625;    // distance from the plate face to the back of the band at rest, mm (3/16 in)
    SlingSettings sling;           // the plate, its coil and its driver (sling_<flipper key>, sling_pulse_ms, sling_min_closed_ms, sling_switch_gap_mm)
    std::string bandStops;         // obstacles the band cannot enter: "x,y,r | x,y,r | ..." in VPX units (centre, radius of the post); empty = none

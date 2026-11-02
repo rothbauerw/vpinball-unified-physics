@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <set>
 #include <sstream>
 
 #include "physics/contacthost.h"
@@ -28,7 +29,8 @@ namespace
    struct BoolKey { const char *name; bool RubberObjectSettings::*field; };
    const NumKey NUM_KEYS[] = {
       { "sling_gap_mm", &RubberObjectSettings::slingGapMm },
-      { "band_model", &RubberObjectSettings::bandModel }, { "band_ring_in", &RubberObjectSettings::bandRingIn }, { "band_section_mm", &RubberObjectSettings::bandSectionMm }, { "ring_model", &RubberObjectSettings::ringModel },
+      { "band_ring_in", &RubberObjectSettings::bandRingIn }, { "band_section_mm", &RubberObjectSettings::bandSectionMm }, { "ring_model", &RubberObjectSettings::ringModel },
+      { "band_stretch_alpha_s_per_m", &RubberObjectSettings::bandStretchAlpha }, { "band_twist_scale", &RubberObjectSettings::bandTwistScale },
       { "surface_layer_mm", &RubberObjectSettings::surfaceLayerMm }, { "edge_radius_mm", &RubberObjectSettings::edgeRadiusMm },
       { "e_mpa", &RubberObjectSettings::eMpa }, { "layer_mm", &RubberObjectSettings::layerMm },
       { "alpha_s_per_m", &RubberObjectSettings::alphaSPerM }, { "restitution", &RubberObjectSettings::restitution }, { "plate_areal_density_kg_m2", &RubberObjectSettings::plateArealKgM2 }, { "plate_mass_g", &RubberObjectSettings::plateMassG }, { "plate_clearance_u", &RubberObjectSettings::plateClearanceU }, { "restitution_ref_speed_ms", &RubberObjectSettings::restitutionRefMs }, { "beta_layer", &RubberObjectSettings::betaLayer },
@@ -36,16 +38,11 @@ namespace
       { "tan_delta", &RubberObjectSettings::tanDelta },
       { "substep_us", &RubberObjectSettings::substepUs }, { "rest_substep_us", &RubberObjectSettings::restSubstepUs }, { "rest_omega_h", &RubberObjectSettings::restOmegaH }, { "rest_speed_mm_s", &RubberObjectSettings::restSpeedMmS }, { "roll_travel_um", &RubberObjectSettings::rollTravelUm }, { "max_ms", &RubberObjectSettings::maxMs }, { "release_gap_mm", &RubberObjectSettings::releaseGapMm },
       { "band_curve_radius_mm", &RubberObjectSettings::bandCurveRadiusMm }, { "band_min_span_mm", &RubberObjectSettings::bandMinSpanMm },
-      { "band_prestretch_pct", &RubberObjectSettings::bandPrestretchPct }, { "band_tension_n", &RubberObjectSettings::bandTensionN }, { "band_node_zeta", &RubberObjectSettings::bandNodeZeta },
-      { "band_ring_zeta", &RubberObjectSettings::bandRingZeta }, { "band_rest_mm", &RubberObjectSettings::bandRestMm },
-      { "band_substep_us", &RubberObjectSettings::bandSubstepUs }, { "band_shear_zeta", &RubberObjectSettings::bandShearZeta }, { "band_ref_hz", &RubberObjectSettings::bandRefHz },
-      { "band_node_mass_g", &RubberObjectSettings::bandNodeMassG }, { "band_max_ms", &RubberObjectSettings::bandMaxMs },
-      { "band_flipper_margin_u", &RubberObjectSettings::bandFlipperMarginU }, { "band_follow_mm", &RubberObjectSettings::bandFollowMm }, { "band_node_mm", &RubberObjectSettings::bandNodeMm },
-      { "switch_gap_mm", &RubberObjectSettings::switchGapMm }, { "switch_min_closed_ms", &RubberObjectSettings::switchMinClosedMs },
+      { "band_ref_hz", &RubberObjectSettings::bandRefHz },
    };
    const BoolKey BOOL_KEYS[] = {
-      { "contact", &RubberObjectSettings::contact }, { "rubber", &RubberObjectSettings::surfaceRubber }, { "normal_loss", &RubberObjectSettings::normalLoss }, { "viscoelastic_damping", &RubberObjectSettings::viscoelastic }, { "twist", &RubberObjectSettings::twist }, { "band", &RubberObjectSettings::band },
-      { "band_ringing", &RubberObjectSettings::bandRinging }, { "band_follow", &RubberObjectSettings::bandFollow },      { "band_lock_z", &RubberObjectSettings::bandLockZ },
+      { "contact", &RubberObjectSettings::contact }, { "rubber", &RubberObjectSettings::surfaceRubber }, { "normal_loss", &RubberObjectSettings::normalLoss }, { "viscoelastic_damping", &RubberObjectSettings::viscoelastic }, { "twist", &RubberObjectSettings::twist },
+      { "band_twist_loss", &RubberObjectSettings::bandTwistLoss },
    };
 
    using PhysicsIni::Trim;
@@ -86,6 +83,16 @@ namespace
          told = true;
          return true;
       }
+      static const char *const OLD_BAND_KEYS[] = { "band", "band_model", "band_prestretch_pct", "band_tension_n", "band_node_zeta", "band_ring_zeta", "band_rest_mm", "band_substep_us", "band_shear_zeta", "band_node_mass_g", "band_max_ms", "band_flipper_margin_u", "band_follow",
+         "band_follow_mm", "band_node_mm", "band_ringing", "band_lock_z", "switch_gap_mm", "switch_min_closed_ms", "sling_min_closed_ms", "sling_plate_contact_zeta" };
+      for (const char *const old : OLD_BAND_KEYS)   // keys taken out with the old band models (2026-11-01): the fixed-height cord is the only band, every rubber with a straight span is one, its ring is band_ring_in or automatic. Old files still load
+         if (key == old)
+         {
+            static std::set<std::string> told;
+            if (told.insert(key).second)
+               PLOGW << "Rubber settings: " << key << " no longer acts (the fixed-height cord is the only band; a rubber with a straight span is one by itself)";
+            return true;
+         }
       if (key == "shear_zeta" || key == "shear_scale")   // keys that no longer act (2026-10-31): the damping comes from tan_delta, the stiffness from sideways_stiffness. Old files still load
       {
          static bool told = false;
@@ -126,12 +133,8 @@ namespace
             return num(s.sling.pulseMs);
          if (k == "coil_delay_ms")
             return num(s.sling.coilDelayMs);
-         if (k == "min_closed_ms")
-            return num(s.sling.minClosedMs);
          if (k == "switch_gap_mm")
             return num(s.sling.switchGapMm);
-         if (k == "plate_contact_zeta")
-            return num(s.sling.plateContactZeta);
          return FlipperApplyKey(s.sling.mech, k, val);
       }
       return false;
@@ -180,6 +183,9 @@ namespace
       clampKey("e_mpa", s.eMpa, 0.1, eMaxMpa);
       clampKey("layer_mm", s.layerMm, 0.0, 50.0);
       clampKey("band_section_mm", s.bandSectionMm, 0.0, 25.0);
+      clampKey("band_ring_in", s.bandRingIn, 0.0, 20.0);
+      clampKey("band_stretch_alpha_s_per_m", s.bandStretchAlpha, 0.0, 2.0);
+      clampKey("band_twist_scale", s.bandTwistScale, 0.0, 10.0);
       clampKey("surface_layer_mm", s.surfaceLayerMm, 0.2, 50.0);
       clampKey("edge_radius_mm", s.edgeRadiusMm, 0.05, 20.0);
       clampKey("alpha_s_per_m", s.alphaSPerM, 0.0, 2.0);
@@ -198,30 +204,11 @@ namespace
       clampKey("release_gap_mm", s.releaseGapMm, 0.0, 5.0);
       clampKey("band_curve_radius_mm", s.bandCurveRadiusMm, 2.0, 500.0);
       clampKey("band_min_span_mm", s.bandMinSpanMm, 0.0, 500.0);
-      clampKey("switch_gap_mm", s.switchGapMm, 0.05, 20.0);
-      clampKey("switch_min_closed_ms", s.switchMinClosedMs, 0.0, 1000.0);
-      clampKey("band_prestretch_pct", s.bandPrestretchPct, 0.0, 50.0);
-      clampKey("band_tension_n", s.bandTensionN, 0.0, 2000.0);
       clampKey("band_ref_hz", s.bandRefHz, 1.0, 10000.0);
-      clampKey("band_node_zeta", s.bandNodeZeta, 0.0, 2.0);
-      if (s.bandRingZeta >= 0.0)
-         clampKey("band_ring_zeta", s.bandRingZeta, 0.0, 2.0);
-      clampKey("band_rest_mm", s.bandRestMm, 0.001, 5.0);
-      clampKey("band_substep_us", s.bandSubstepUs, 0.0, 50.0);
-      if (s.bandShearZeta >= 0.0)
-         clampKey("band_shear_zeta", s.bandShearZeta, 0.0, 10.0);
-      clampKey("band_node_mass_g", s.bandNodeMassG, 0.0, 100.0);
-      clampKey("band_max_ms", s.bandMaxMs, 1.0, 1000.0);
-      clampKey("band_flipper_margin_u", s.bandFlipperMarginU, 0.0, 200.0);
-      clampKey("band_follow_mm", s.bandFollowMm, 5.0, 50.0);
-      if (s.bandNodeMm > 0.0)
-         clampKey("band_node_mm", s.bandNodeMm, 3.0, 30.0);
       clampKey("sling_gap_mm", s.slingGapMm, 0.0, 50.0);
       clampKey("sling_pulse_ms", s.sling.pulseMs, 1.0, 500.0);
       clampKey("sling_coil_delay_ms", s.sling.coilDelayMs, 0.0, 500.0);
-      clampKey("sling_min_closed_ms", s.sling.minClosedMs, 0.0, 100.0);
       clampKey("sling_switch_gap_mm", s.sling.switchGapMm, 0.05, 20.0);
-      clampKey("sling_plate_contact_zeta", s.sling.plateContactZeta, 0.0, 2.0);
    }
 
 }
@@ -253,8 +240,8 @@ bool ContactHost::LoadSettings(RubberObjectSettings &s, const std::filesystem::p
 {
    if (!ContactSystem::Unified())
       return false;   // stock engine: stock rubbers
-   // the rubber model is on for every rubber the [Features] allow (no file: every model on with its defaults; a rubber says contact = 0 to opt out);
-   // a sling section makes its rubber a band
+   // the rubber model is on for every rubber the [Features] allow (no file: every model on with its defaults; a rubber says contact = 0 to opt out).
+   // Whether it is a band or a ring is found from its shape (HitRubber::DetectBand), which also takes the [Features] rubbers / bands switch for that kind
    const PhysicsIni::Features feat = PhysicsIni::Active(file);
    s.contact = true;
    ApplySection(s, file, "rubbers", name);
@@ -262,9 +249,7 @@ bool ContactHost::LoadSettings(RubberObjectSettings &s, const std::filesystem::p
    ApplySection(s, file, "rubber:" + name, name);
    ApplySection(s, file, "sling:" + name, name, "sling_");
    Clamp(s, name);
-   if (!s.slingPlate.empty())
-      s.band = true;
-   if (s.band ? !feat.bands : !feat.rubbers)
+   if (!feat.rubbers && !feat.bands)
       s.contact = false;
    if (!feat.slings)
       s.slingPlate.clear();
@@ -278,9 +263,7 @@ bool ContactHost::LoadSurfaceSettings(RubberObjectSettings &s, const std::filesy
    const std::string section = std::string(kind) + ":" + name;
    ApplySection(s, file, "rubbers", name);
    s.surfaceRubber = false;   // the flag is read from the object's own section only: [Rubbers] is the default for the numbers, not a switch for every wall
-   s.band = false;
    ApplySection(s, file, section, name);
-   s.band = false;
    Clamp(s, name);
    s.contact = s.surfaceRubber;
    return s.surfaceRubber;
@@ -347,11 +330,8 @@ bool ContactHost::LoadHardSurfaceSettings(RubberObjectSettings &s, const std::fi
    s.restSubstepUs = 250.0;
    s.restOmegaH = 0.8;
    s.surfaceRubber = true;
-   s.band = false;
    ApplySection(s, file, "surfaces", name);
-   s.band = false;
    ApplySection(s, file, std::string(kind) + ":" + name, name);
-   s.band = false;
    Clamp(s, name, 1.0e6);
    s.contact = s.surfaceRubber;
    // Viscoelastic normal damping (the default for hard surfaces; VPX_VISCOELASTIC=0 or viscoelastic_damping = 0 restores the alpha law): gamma is calibrated so that a ball of the default
@@ -394,7 +374,6 @@ bool ContactHost::LoadPlayfieldSettings(RubberObjectSettings &s, const std::file
    s.restSubstepUs = 250.0;   // a hard contact's own frequency (about 1 kHz) is what limits the step of a resting ball
    s.restOmegaH = 0.8;
    ApplySection(s, file, "playfield", "playfield");
-   s.band = false;
    Clamp(s, "playfield", 1.0e6);
    s.surfaceRubber = true;
    s.contact = true;
