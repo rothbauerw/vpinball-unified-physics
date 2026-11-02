@@ -51,8 +51,8 @@ namespace JetBumper
       double skirtMass = 7e-3, ringMass = 105e-3, spoonMass = 1e-3;
       double plasticDensity = 1100.0;      // kg/m^3 [guess], splits the skirt mass between wafer and stem
       // springs [guess, tuned by feel]
-      double skirtKNPerM = 200.0, skirtPreloadN = 0.4, springRadiusMm = 8.0, skirtZeta = 0.3;   // preloads 0.8 / 0.3 N made a ball rolling in from an inch up the 6 deg slope miss; 0.4 / 0.15 N fire it (T11)
-      double spoonKNPerM = 100.0, spoonPreloadN = 0.15, spoonZeta = 0.3;
+      double skirtKNPerM = 50.0, skirtPreloadN = 0.08, springRadiusMm = 8.0, skirtZeta = 0.3;   // [user 2026-11-02: hair-trigger; a ball at rest on the high side of a 6 deg slope must fire, about 0.085 N down at the rim available; the old 0.4 / 0.15 N needed 0.42 N and held a ball there; guess, not measured]
+      double spoonKNPerM = 30.0, spoonPreloadN = 0.02, spoonZeta = 0.3;
       double returnKNPerM = 100.0, returnPreloadN = 1.6, ringViscousNsPerM = 0.5;
       // stops [guess]
       double ringStopReffMm = 5.0, ringRestE = 0.4, ringCoilE = 0.3, ringRestEMpa = 30.0;   // ring stops: Hertz contact at this effective radius; rest stop rubber (E), coil stop steel on steel
