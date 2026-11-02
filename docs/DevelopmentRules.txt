@@ -53,3 +53,9 @@ Set by the project owner. They apply to every change, by a person or an assistan
    b. Other faults may only be a result of the model being incomplete. Note them and recheck them once it is finished, unless one stops the model working.
    c. Cost is measured and tuned once the model works, unless it stops the model working or is a real question whether the model is feasible.
    d. The cost in rules 3 and 5 and in ModelStandards section 7 applies when a model is called done, not on each fix.
+
+10. STRESS TESTS (user, 2026-11-01; defines "push the engine until it breaks" in ProjectLeadBrief.txt)
+   a. When: once per model or law change, when it already works on typical hits and before it is promoted; and when a specific failure is suspected. Never for routine changes.
+   b. What: a small fixed stress set for that part, about 10 - 20 shots with a time cap: 6 m/s (twice the extreme), grazing hits, deep overlap starts, repeated hits, stacked contacts, a few step sizes.
+   c. Always a fault, at any input: a crash, a launch, an energy gain, a solver that hangs. Anything else outside typical is recorded, not fixed, unless it points to a fault that also affects typical play.
+   d. Every failure is saved as a repeatable case. Only cases that found something join the set.

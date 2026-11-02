@@ -37,3 +37,50 @@ Communication and pacing:
 - Keep me informed of meaningful findings and changes in direction without narrating every action.
 
 You remain accountable for the whole project. Delegation does not replace your responsibility to understand the work, exercise judgment, and verify that the result meets the agreed objective.
+
+ADDED INSTRUCTION (written by the user, 2026-11-01)
+---------------------------------------------------
+
+Develop our physics engine through rapid, evidence-driven iteration. Favor small, working changes and measurable improvements over elaborate designs and speculative abstractions.
+
+Follow these principles:
+
+1. Question requirements before implementing them.
+Identify the physical behavior or user problem each requirement serves. Challenge assumptions, inherited constraints, and unnecessary complexity. Distinguish physical correctness, gameplay feel, numerical stability, performance, and compatibility so tradeoffs are explicit.
+
+2. Delete before optimizing.
+Remove unnecessary code, parameters, dependencies, and processing steps. Simplify the model before tuning it. Preserve complexity when experiments show that it produces a meaningful improvement.
+
+3. Build the smallest useful experiment.
+Implement a narrow, runnable version of an idea and test it quickly. Use isolated scenes to investigate collisions, friction, restitution, spin, flipper interactions, and other behaviors before integrating them into a full table. Use analytical solutions and reference measurements where available.
+
+4. Push the engine until it breaks.
+Deliberately test extreme velocities, grazing contacts, deep overlaps, repeated impacts, stacked contacts, and timestep variation. Treat failures as evidence about the model or implementation. Capture reproducible cases and fix underlying causes.
+
+5. Measure behavior instead of trusting appearances.
+Evaluate relevant quantities such as trajectories, penetration depth, energy and momentum changes, contact jitter, determinism, and execution cost. Account for external forces, powered mechanisms, and intentional energy losses when interpreting results. Use visual inspection alongside measurements.
+
+6. Keep feedback loops short.
+For each change, state a hypothesis, choose a useful measurement, run the smallest relevant experiment, and compare against a baseline. Change one major variable at a time when practical. Keep, revise, or revert the change based on the evidence.
+
+7. Own the complete behavior.
+Carry changes through the physical model, solver, integration, diagnostics, and representative gameplay. Investigate interactions across subsystem boundaries. Keep interfaces clear and avoid abstractions that make experiments unnecessarily difficult.
+
+8. Optimize in the right order.
+First question the requirement, then remove unnecessary work, simplify the implementation, shorten the development cycle, and finally automate. Profile before optimizing performance. Require optimizations to preserve agreed behavior within explicit tolerances.
+
+9. Separate exploration from release quality.
+Use disposable prototypes to learn quickly. Before promoting a change, verify numerical stability, relevant physical behavior, performance, and compatibility with representative tables. Add focused regression tests for meaningful failure cases and established behavior.
+
+10. Keep decisions traceable.
+Record the hypothesis, experiment, result, and decision briefly. Make units, coordinate conventions, assumptions, and tuning parameters explicit. Separate measured physical parameters from empirical gameplay adjustments.
+
+For each meaningful development task:
+- Define the problem and observable success criteria.
+- Identify the assumptions and simplest viable change.
+- Implement and run a focused experiment.
+- Compare results with the baseline and relevant references.
+- Check representative gameplay and performance when affected.
+- Summarize what changed, the supporting evidence, and remaining limitations.
+
+Use judgment about the depth of verification: a small diagnostic change needs less validation than a new collision solver. Keep experiments reversible and changes easy to review. The goal is a physics engine that becomes more credible, stable, responsive, and maintainable through frequent, measurable improvements.
