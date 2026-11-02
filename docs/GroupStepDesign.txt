@@ -809,7 +809,7 @@ on a lifted ball (an unbooked energy drop when it lets go).
 
 18.7 What this does not prove (as written 2026-10-31; the bat now uses it, 19). No real part uses it yet: only the cord and rings run on it in the branch, and they do not use columns. Same bytes on the bench rows says nothing about columns. The columns were run on a test part only, never merged: offline (tests/if_test.cpp: energy, Jacobian, stop, pin, free, given move) and through the engine (mk_wired.py, a test arm standing in for a gate on Gorgar: two surfaces, TouchBegan, steppedS, snapshot). That run found two bugs a byte comparison could not (ModelStandards 6). Accuracy on a moving surface is not judged. Not run: a part sharing an island with an old-loop part or a cord. IslandOnRing still sends an island with a moving part to the old loop; the real rule comes with the flipper. Sleeping has no caller yet.
 
-18.8 Left for later steps. BodyPart comes with the gates. Law items (KKStep, kb, tolEndRes) and one hMin are separate steps. Two gate changes to Group::Step stay in the gates' copy because they would change the cord's failure path: halving a failed stop solve instead of EnergyStep, and bisecting when the start is within 1e-12 of the stop.
+18.8 Left for later steps (BodyPart, kb and tolEndRes came with the gates: 21). Law items (KKStep) and one hMin are separate steps. Two gate changes to Group::Step stay in the gates' copy because they would change the cord's failure path: halving a failed stop solve instead of EnergyStep, and bisecting when the start is within 1e-12 of the stop.
 
 19. The bat on the group step (2026-11-01; MERGED, the only flipper; runs/2026-11-01-flipper/report.md, runs/2026-10-31-flipper-engine/notes.md)
 
@@ -834,3 +834,19 @@ on a lifted ball (an unbooked energy drop when it lets go).
 20.4 KKStep. Viscoelastic damping over a step is the law's integral over the move at a steady rate, as Hunt-Crossley already is. At the mid-step depth alone it rises as sqrt(d) from a touch's start, a slope with no bound, where Newton stalls. It changes every group contact with gammaKK above 0.
 
 20.5 Limits. Not run: held and external coil, Collidable switching, two balls on one bumper, two bumpers together. BodyPart stays an exception until the gates. The ring stops' e(v) table is open. Revolve's taper joint has a real gradient jump, not yet a fault: none of the 17 failed solves read on stress p1 sat on it. The launch is not reproduced, so not proved gone. The shared energy check skips an island with a moving part; the group's books and on-screen report cover it. SurfaceContact::stExtra of 18.6 went with the old path.
+
+21. Gates and spinners on the group step (2026-11-02; MERGED; bodypart.h, hingegroup.h, gategroup.h, spinnergroup.h, runs/2026-11-02-gate/notes.md, design runs/2026-10-31-gate-spinner-disc/design.md)
+
+21.1 One-unknown parts. BodyPart: one body on one coordinate, its mass, speed, stops and friction. Its row is m (2 dq / h - 2 v) = h Q, so energy closes at any step. The derived part gives stored energy, its own dampers, the friction's limit and its surfaces. It fits a body with one unknown and fixed mass (gate, spinner, disc). It does not fit the bat (inertia varies, two unknowns) or the ring (one coordinate of four, coil force on the solved move); what they could share is the stop's impact and rest law.
+
+21.2 Stops as events. The step ends on a stop; the stop's own Hertz + damping contact gives the rebound from a table by speed. A body whose rebound would not leave the squash its pressing force holds rests, with no unknown. Friction: a body it stops has no unknown while the other forces stay within the limit, so friction's work has one sign. A driven stop is a given move; the part books the stored energy and friction it pays for, the group books its work on the balls.
+
+21.3 No change to Group::Step. The two 10-31 changes were left out. Bisecting near a stop is done on the part, as the ring does: at zero move a body leaving a stop counts its distance by its rate. From rest, the speed's zero counts only if the solved move went back against the friction. Halving a failed stop solve was not added: no shot reached EnergyStep on a stop.
+
+21.4 V split. Each side of a wire W's V is its own contact, so its own Item. Nearest-only has a force step in the ball's sideways place: no root (114 halvings, 10-31).
+
+21.5 The bend in the Item. Hit::kb: a massless spring in series, far softer than Hertz (wire leg at 25 mm about 7.7 kN/m against 6 MN/m). V(d) = min over u of Hertz(u) + 1/2 kb (d - u)^2. Taken when a touch starts, held while it lasts, across cycles too (SurfaceState::kb, as the radius), so the contact's energy is one function of depth. A probe starts with no bend. 0 for everything else, which then runs the same code path.
+
+21.6 tolEndRes. A step counts as solved only with its residual within this, and a noise stop keeps the point it read: a noise stop could land past a light body's steep onset, 0.45 uJ (10-31). A part asks through Part::EndResidual, Group::Configure takes the largest, 0 with no such part: a table with no gate or spinner keeps its bytes (six_0 md5). A cord, bat or bumper in one group with a gate or spinner takes it for those cycles.
+
+21.7 What this does not prove. Not run: script hold, Collidable, snapshot self-test, spinner stops and other switches, two-way and plate gates, two balls. Not on 5e matrix. Cost not judged (10-31: 100 - 330 us on the cycles of a hit against 30 us). Open from 10-31: wire corners count twice, pin friction not loaded by the stop's force, stop and pivot values are guesses.

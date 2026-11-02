@@ -259,8 +259,9 @@ void Gate::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          m_phitgate->m_twoWay = m_d.m_twoWay;
          m_phitgate->m_obj = (IFireEvents *)this;
          m_phitgate->m_enabled = m_d.m_collidable;
-         m_phitgate->m_gateMover.m_angle = (float)m_partModel->body.theta;
+         m_phitgate->m_gateMover.m_angle = (float)m_partModel->part.q;
          m_partHost = HingePartAdapter::MakeHost(this, "gate", GetName(), hingeIni, m_partModel, this, nullptr, &m_phitgate->m_gateMover.m_angle, &m_phitgate->m_gateMover.m_anglespeed, m_d.m_elasticity, m_d.m_friction);
+         m_partModel->SetCollidable(m_d.m_collidable);
          m_partHost->m_enabled = m_d.m_collidable;
          physics->AddCollider(m_partHost, isUI);
          return;
@@ -791,6 +792,7 @@ STDMETHODIMP Gate::put_Collidable(VARIANT_BOOL newVal)
    {
       m_phitgate->m_enabled = VBTOb(newVal);
       m_partHost->m_enabled = VBTOb(newVal);
+      m_partModel->SetCollidable(VBTOb(newVal));
       return S_OK;
    }
    if (m_phitgate)

@@ -135,6 +135,10 @@ e. Every matrix run writes its pass/fail report to disk the day it runs.
 - A group's limit on surfaces dropped the ones past it: six balls, ball through the playfield, 2026-10-31 (the limit is gone, GroupStepDesign 17.6). Catches it: driver limit 4, the note on screen.
 - Energy that leaves between cycles booked in a step: a book error with no gain, 2026-10-31. Catches it: E0 against the last E1 in the book file.
 - A slope taken over a move near rounding: a chord (V1 - V0) / move at 1e-9 rad and a gradient at tolerance 1e-17 m carried noise, the solve never settled, a shorter step fell to the clean branch and steps went under 2 us, 2026-11-01. Catches it: same bytes at a 2 us floor and a 10 ns floor.
+- A kept probe reused a field its next shape did not write: a wall took a gate's bend, 0.4 mJ then 1188 mJ, launch at 165 m/s, 2026-10-31. Only the real bench showed it: the offline bench never changes shapes between cycles. Catches it: real bench limit 3, the group's book.
+- Viscoelastic damping pulls at the end of every contact (sqrt(d) against d^1.5). On a light part that is a throw: a gate went to 56 deg after a blocked hit, 2026-10-31. Catches it: peak swing against 1 us in the step sweep.
+- A noise stop kept the move after the point it had judged, a false "solved": 0.45 uJ, 2026-10-31. Catches it: the book at the rule.
+- A zero-length stop step: starting from rest with friction acting, the stop test took the start for the speed's zero, so the search ended there every step: 2 million steps at one time while a gate settled on its stop, 2026-11-02. Five shots passed; a slower one found it. Catches it: the offline run past settling, step count.
 Each trap names the test that now catches it ("none yet" until one exists); the older entries above get theirs as they are reviewed.
 
 

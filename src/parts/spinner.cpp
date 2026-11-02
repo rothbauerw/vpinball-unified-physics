@@ -200,7 +200,7 @@ void Spinner::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          m_partModel = std::make_shared<SpinnerModel::Spinner>();
          const double rot = ANGTORAD(m_d.m_rotation);
          m_partModel->Build(s, RubberContact::V3((double)m_d.m_vCenter.x * U, (double)m_d.m_vCenter.y * U, (double)height * U), RubberContact::V3(std::sin(rot), -std::cos(rot), 0.0), RubberContact::BallSI());
-         m_phitspinner->m_spinnerMover.m_angle = (float)m_partModel->body.theta;   // (not in the physics: the angle the script and the renderer read)
+         m_phitspinner->m_spinnerMover.m_angle = (float)m_partModel->part.q;   // (not in the physics: the angle the script and the renderer read)
          m_partHost = HingePartAdapter::MakeHost(this, "spinner", GetName(), hingeIni, m_partModel, nullptr, this, &m_phitspinner->m_spinnerMover.m_angle, &m_phitspinner->m_spinnerMover.m_anglespeed, m_d.m_elasticity, s.friction);
          physics->AddCollider(m_partHost, isUI);
          return;

@@ -74,14 +74,14 @@ namespace PartsIni
          else if (k == "bracket_edge_mm") s.bracketEdgeMm = v;
          else if (k == "mu_pivot") s.muPivot = v;
          else if (k == "density_kg_m3") s.density = v;
-         else if (k == "switch") s.sw = lv == "none" ? GateModel::Switch::None : GateModel::Switch::Leaf;
+         else if (k == "switch") s.hasSwitch = lv != "none";
          else if (k == "switch_lead_deg") s.switchLeadDeg = v;
          else if (k == "switch_hyst_deg") s.switchHystDeg = v;
          else if (k == "switch_force_n") s.switchForceN = v;
          else if (k == "hold_angle_deg") s.holdAngleDeg = v;
          else if (k == "hold_speed_dps") s.holdSpeedDps = v;
          else if (k == "steel_e_gpa") s.steelEGpa = v;
-         else if (k == "release_gap_mm") s.releaseGapMm = v;
+         else if (k == "release_gap_mm") {}   // the part host reads it (ContactHost::LoadHardSurfaceSettings)
          else if (k == "hit_window_deg") s.hitWindowDeg = v;
          else if (k == "rubber") {}   // the opt-out key (HitRubber::HingeWanted)
          else PLOGW << "Gate " << name << ": unknown key '" << k << "' ignored";
@@ -176,7 +176,7 @@ namespace PartsIni
          else if (k == "stop_e") s.stopE = v;
          else if (k == "bracket_edge_mm") s.bracketEdgeMm = v;
          else if (k == "steel_e_gpa") s.steelEGpa = v;
-         else if (k == "release_gap_mm") s.releaseGapMm = v;
+         else if (k == "release_gap_mm") {}   // the part host reads it (ContactHost::LoadHardSurfaceSettings)
          else if (k == "hit_window_deg") s.hitWindowDeg = v;
          else if (k == "rubber") {}
          else PLOGW << "Spinner " << name << ": unknown key '" << k << "' ignored";

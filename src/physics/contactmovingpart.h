@@ -1,7 +1,7 @@
 // license:GPLv3+
 //
 // A moving part of the contact system: the engine-facing interface of anything that has its own bodies and surfaces, is stepped inside the islands of the balls that touch it, and
-// raises its own events. Gates and spinners (HingePart::Part, contacthingepart.h) and the jet bumper (JetBumper::EnginePart, contactbumperpart.h) implement it; the contact system
+// raises its own events. Gates and spinners (HingeModel::Engine, contacthingepart.h) and the jet bumper (JetBumper::EnginePart, contactbumperpart.h) implement it; the contact system
 // (contactsystem.cpp) and the host (ContactPartHost, contactparthost.h) know only this interface. The turntable disc (TurntableDisc::Part, contactdisc.h) implements it too. A new part (a kicker door, a drop target, a plunger) implements it and nothing else changes.
 //
 // What the engine does with a part, in the order of a physics cycle:

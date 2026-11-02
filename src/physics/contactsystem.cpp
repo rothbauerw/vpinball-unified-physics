@@ -1844,6 +1844,7 @@ struct ContactSystemImpl
       const SurfaceContact *it = nullptr;
       BallSI bs;
       double heldReff = 0.0;   // > 0: the radius this touch started with (the group takes a shape's law anew each cycle; a polygon's radius jumps at a corner, the energy must not)
+      double heldKb = 0.0;     // the bend this touch started with, for the same reason
       ContactMovingPart *mp = nullptr;   // a part on the group: its own surface, which moves with it
       int surface = 0;
       void Probe(const V3 &c, double R, GroupStep::Hit &h) const override
@@ -1852,7 +1853,10 @@ struct ContactSystemImpl
          {
             mp->GroupProbe(surface, c, R, trial, h);
             if (heldReff > 0.0)
+            {
                h.reff = heldReff;
+               h.kb = heldKb;
+            }
             return;
          }
          const TubeProbe pr = r->ProbePatch(bs, *it, c);
@@ -2237,13 +2241,14 @@ struct ContactSystemImpl
                   sh.layerM = it.hLayer;
                   sh.onlyBall = ib;
                   sh.heldReff = (ring || mp != nullptr) && it.Surf(sf).touching ? it.Surf(sf).reff : 0.0;
+                  sh.heldKb = mp != nullptr && it.Surf(sf).touching ? it.Surf(sf).kb : 0.0;
                   if (hasPart && mp == nullptr && it.r->MovingPart() != nullptr)   // a part still on the old loop is a surface at its present pose in this cycle, its reaction left out, until it moves over (GroupStepDesign 3)
                   {
                      static const void *warned = nullptr;
                      if (warned != g_pplayer)
                      {
                         warned = g_pplayer;
-                        const std::string msg = "Group step: a bat and " + it.r->Name() + " share an island: " + it.r->Name() + " counts as a fixed surface in those cycles until it moves to the group step";
+                        const std::string msg = "Group step: a part on the group step and " + it.r->Name() + " share an island: " + it.r->Name() + " counts as a fixed surface in those cycles until it moves to the group step";
                         PLOGW << msg;
                         g_pplayer->m_liveUI->PushNotification(msg, 6000);
                      }
@@ -2590,6 +2595,7 @@ struct ContactSystemImpl
          {
             it.touching = sh->surface == 0 ? gi.touching : it.touching || gi.touching;
             kept.reff = gi.touching ? gi.reff : 0.0;
+            kept.kb = gi.touching ? gi.kb : 0.0;
             GroupStep::Hit hp;
             g.ProbeItem(k, hp);
             kept.endDepth = hp.delta;
@@ -3877,6 +3883,7 @@ namespace
             f.contacts = FnvV(f.contacts, it.gs.xi);
             f.contacts = FnvV(f.contacts, it.gs.zero);
             f.contacts = FnvV(f.contacts, it.gs.reff);
+            f.contacts = FnvV(f.contacts, it.gs.kb);
             f.contacts = FnvV(f.contacts, it.touching);
             f.contacts = FnvV(f.contacts, it.partTouching);
             f.contacts = FnvV(f.contacts, it.fnLast);

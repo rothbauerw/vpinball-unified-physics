@@ -156,6 +156,7 @@ namespace GroupStep
       double reff = 0.0;
       double curvDist = 0.0;   // > 0: the ball turns round a centre this far away while it rolls along the surface (a post, a tube): the step's turning rule
       double grad = 1.0;       // the depth's gradient is n x grad (below 1 where the contact patch spans a fold of the surface)
+      double kb = 0.0;         // > 0: the surface bends in series with the contact here (N/m along the normal): a massless spring, taken with the law when a touch starts and held while it lasts
       int nc = 0;              // the columns in use; 0 = a fixed surface
       Column c[7];             // one rigid body's 6 coordinates and 1 given motion of its frame: a physical size, not a table limit
       Hit() {}
@@ -167,6 +168,7 @@ namespace GroupStep
          reff = o.reff;
          curvDist = o.curvDist;
          grad = o.grad;
+         kb = o.kb;
          nc = o.nc;
          for (int j = 0; j < nc; j++)
             c[j] = o.c[j];
@@ -250,6 +252,7 @@ namespace GroupStep
       double rollSmooth = 0.05;                // the rolling torque's smoothing through zero spin, rad/s ([Contact] roll_smooth_rad_s)
       double tolV = 1e-11;                     // solved when a round changes no ball's speed (or its rim speed R w) by more than this, m/s
       double tolNoise = 1e-9;                  // or when the changes stay below this for stallRounds rounds without halving: the forces' own noise (m/s)
+      double tolEndRes = 0.0;                  // > 0: a step counts as solved only with its residual within this (m/s), and a noise stop keeps the point it read
       double tolRes = 1e-10, tolCheckMove = 1e-6;   // the residual in speed units that counts as solved; the move after which a round looks at the residual first, with no factorization (m/s)
       int stallRounds = 6;
       int maxRounds = 60;
@@ -373,6 +376,7 @@ namespace GroupStep
       virtual void HoldArcs() {}   // no solve in this attempt: what the part solves within itself stays as it is
       virtual void BallsMoved(const Ball *, int) {}              // the balls were moved with no step of its own
       virtual void ExplicitMove(const double *, int, double, double *) const {}   // its own unknowns in an energy step's explicit round
+      virtual double EndResidual() const { return 0.0; }         // > 0: a step of a group holding this part counts as solved only with its residual within this (m/s; Settings::tolEndRes)
    };
 
    // One contact: ball a on shape s, or ball a on ball b. Its law is taken when a touch starts and held while it lasts.
@@ -386,6 +390,23 @@ namespace GroupStep
       double kH = 0.0, cL = 0.0, hL = 0.0, reff = 0.0, ktPerA = 0.0, E = 0.0, mRed = 0.0, mt = 0.0;
       double alpha = 0.0, gammaKK = 0.0, tanDelta = 0.0, shearTan = 0.0, mu = 0.0, rollingMu = 0.0;
       bool normalLoss = false, twist = false;
+      double kb = 0.0;                // the surface's bend in series with the contact (0 = none): V(d) = min over u of Hertz(u) + 1/2 kb (d - u)^2, kH u^1.5 = kb (d - u)
+      // the contact's share of the depth
+      double Uc(const double d) const
+      {
+         if (kb <= 0.0 || d <= 0.0)
+            return d;
+         double u = std::min(d, std::pow(kb * d / kH, 2.0 / 3.0));   // above the root of a convex function: Newton comes down to it
+         for (int i = 0; i < 30; i++)
+         {
+            const double su = std::sqrt(std::max(u, 0.0));
+            const double du = (kH * u * su + kb * (u - d)) / (1.5 * kH * su + kb);
+            u = std::max(0.0, u - du);
+            if (std::fabs(du) <= 1e-14 * d)
+               break;
+         }
+         return u;
+      }
       double W(double d) const   // integral of x^3 / (h - x)^3 from 0 to d; for a shallow squash its series (the closed form cancels to rounding there)
       {
          const double s = d / hL;
@@ -397,11 +418,24 @@ namespace GroupStep
          const double u = hL - d;
          return 1.5 * hL + 3.0 * hL * std::log(hL / u) + hL * hL * hL / (2.0 * u * u) - 3.0 * hL * hL / u + u;
       }
-      double V(double d) const { return d > 0.0 ? 0.4 * kH * d * d * std::sqrt(d) + (cL > 0.0 ? cL * W(d) : 0.0) : 0.0; }
+      double V(double d) const
+      {
+         if (kb > 0.0 && d > 0.0)
+         {
+            const double u = Uc(d);
+            return 0.4 * kH * u * u * std::sqrt(u) + 0.5 * kb * (d - u) * (d - u);
+         }
+         return d > 0.0 ? 0.4 * kH * d * d * std::sqrt(d) + (cL > 0.0 ? cL * W(d) : 0.0) : 0.0;
+      }
       double F(double d) const
       {
          if (d <= 0.0)
             return 0.0;
+         if (kb > 0.0)
+         {
+            const double u = Uc(d);
+            return kH * u * std::sqrt(u);
+         }
          double f = kH * d * std::sqrt(d);
          if (cL > 0.0)
          {
@@ -414,6 +448,11 @@ namespace GroupStep
       {
          if (d <= 0.0)
             return 0.0;
+         if (kb > 0.0)
+         {
+            const double kc = 1.5 * kH * std::sqrt(Uc(d));
+            return kc * kb / (kc + kb);
+         }
          double k = 1.5 * kH * std::sqrt(d);
          if (cL > 0.0)
          {
@@ -429,6 +468,15 @@ namespace GroupStep
             return 0.0;
          if (std::fabs(d1 - d0) < 1e-13)
             return F(0.5 * (d0 + d1));
+         if (kb > 0.0)
+         {
+            if (d0 > 0.0 && d1 > 0.0 && std::fabs(d1 - d0) < 0.01 * std::max(d0, d1))   // a short move: the integral by quadrature, no cancellation (as the layer's, below)
+            {
+               const double dm = 0.5 * (d0 + d1), g = 0.3872983346207417 * (d1 - d0);
+               return (5.0 * F(dm - g) + 8.0 * F(dm) + 5.0 * F(dm + g)) / 18.0;
+            }
+            return (V(d1) - V(d0)) / (d1 - d0);
+         }
          double hz;
          if (d0 > 0.0 && d1 > 0.0)
          {
@@ -454,28 +502,46 @@ namespace GroupStep
          }
          return hz + lw;
       }
-      double A(double d) const { return d > 0.0 ? std::sqrt(reff * d) : 0.0; }   // contact patch radius
+      double A(double d) const { return d > 0.0 ? std::sqrt(reff * Uc(d)) : 0.0; }   // contact patch radius
       double Kt(double d) const { return ktPerA * A(d); }
-      double KtSlope(double d) const { return d > 0.0 ? 0.5 * ktPerA * std::sqrt(reff / d) : 0.0; }
+      double KtSlope(double d) const
+      {
+         if (d <= 0.0)
+            return 0.0;
+         if (kb > 0.0)
+         {
+            const double u = Uc(d), kc = 1.5 * kH * std::sqrt(u);
+            return u > 0.0 ? 0.5 * ktPerA * std::sqrt(reff / u) * kb / (kc + kb) : 0.0;
+         }
+         return 0.5 * ktPerA * std::sqrt(reff / d);
+      }
       double KKIntegral(const double d) const   // 2/3 sqrt(reff) d^1.5, 0 for no touch
       {
-         return d > 0.0 ? 2.0 / 3.0 * std::sqrt(reff) * d * std::sqrt(d) : 0.0;
+         if (d <= 0.0)
+            return 0.0;
+         const double u = Uc(d);
+         return 2.0 / 3.0 * std::sqrt(reff) * u * std::sqrt(u);
       }
       // Viscoelastic damping over the step: the law's own integral at a steady rate, as Hunt-Crossley already is (runs/2026-10-31-gate-spinner-disc/patch_gs_rotor.py, without its bend in series). F = gamma a(d) d_dot, so the mean
       // coefficient over a move is gamma (G(d1) - G(d0)) / (d1 - d0). At the mid-step depth alone it rises as sqrt(d) from a touch's start: a slope with no bound, where Newton stalls. jacTerm: its slope for the Jacobian (d(c x (d1 - d0)) / d d1)
       double KKStep(const double d0, const double d1, const double dm, double &jacTerm) const
       {
          const double top = std::max(std::fabs(d0), std::fabs(d1));
-         jacTerm = gammaKK * A(d1);
+         jacTerm = gammaKK * (d1 > 0.0 ? A(d1) * (kb > 0.0 ? kb / (kb + 1.5 * kH * std::sqrt(Uc(d1))) : 1.0) : 0.0);
          if (std::fabs(d1 - d0) > 1e-3 * top && top > 0.0)
             return gammaKK * (KKIntegral(d1) - KKIntegral(d0)) / (d1 - d0);
-         return gammaKK * A(dm);
+         double c = gammaKK * A(dm);
+         if (kb > 0.0 && dm > 0.0)
+            c *= kb / (kb + 1.5 * kH * std::sqrt(Uc(dm)));
+         return c;
       }
       // the normal damping coefficient over a step, mid-step depth d and mean spring force fMean: force = c x compression rate. Hunt-Crossley's 1.5 alpha F is taken over the step, so its loss is
       // 1.5 alpha x the change in stored energy x the rate, the law's own integral at a steady rate; at the mid-step force alone the loss falls short of it by (omega h)^2 and the rebound comes out high
       double DampC(const double d, const double fMean) const
       {
          double c = gammaKK > 0.0 ? (d > 0.0 ? gammaKK * A(d) : 0.0) : 1.5 * alpha * fMean;
+         if (kb > 0.0 && d > 0.0)   // the contact takes its share of the approach rate
+            c *= kb / (kb + 1.5 * kH * std::sqrt(Uc(d)));
          if (d > 0.0 && normalLoss && tanDelta > 0.0)
             c += tanDelta * std::sqrt(1.5 * F(d) * mRed / d);
          return c;
@@ -593,6 +659,9 @@ namespace GroupStep
                rmS.Grow(nJ);
             }
          }
+         set.tolEndRes = 0.0;
+         for (int p = 0; p < np; p++)
+            set.tolEndRes = std::max(set.tolEndRes, part[p]->EndResidual());
          ni = 0;
          for (int a = 0; a < nb; a++)
             for (int s = 0; s < ns; s++)
@@ -785,6 +854,17 @@ namespace GroupStep
                   const double mid = 0.5 * (lo + hi);
                   (L.V(mid) < eC ? lo : hi) = mid;
                }
+            }
+            if (L.kb > 0.0)
+            {
+               double uLo = 0.0, uHi = lo;
+               for (int r = 0; r < 30 && uHi - uLo > 1e-3 * uHi; r++)
+               {
+                  const double u = 0.5 * (uLo + uHi), f = L.kH * u * std::sqrt(u);
+                  (0.4 * f * u + 0.5 * f * f / L.kb < eC ? uLo : uHi) = u;
+               }
+               const double fE = L.kH * uHi * std::sqrt(uHi);
+               lo = uHi + fE / L.kb;
             }
             const double dE = std::max(hp.delta, lo);
             const double ktE = L.Kt(dE);
@@ -1145,6 +1225,7 @@ namespace GroupStep
       void Probe(const Item &it, const Ball *bs, Hit &hp) const
       {
          const Ball &A = bs[it.a];
+         hp.kb = 0.0;
          hp.nc = 0;   // (hits are kept and reused: a fixed surface writes no columns, and must not inherit a carried one's)
          if (it.b < 0)
          {
@@ -1176,6 +1257,7 @@ namespace GroupStep
             Gs *= 0.5;
          }
          it.reff = hp.reff;
+         it.kb = it.b >= 0 ? 0.0 : hp.kb;
          it.kH = 4.0 / 3.0 * Estar * std::sqrt(it.reff);
          it.hL = it.b >= 0 ? 0.0 : shape[it.s]->layerM;
          it.cL = it.hL > 0.0 ? it.kH * rp.betaLayer * it.reff * std::sqrt(it.reff) : 0.0;
@@ -2193,6 +2275,12 @@ namespace GroupStep
             rd.grip = gch;
             if (round <= kRounds)
                roundDiag[round - 1] = rd;
+            if (!moved && !gripMoved && set.tolEndRes > 0.0 && rn > set.tolEndRes)
+            {
+               failWhy = 'S';
+               lastRounds = round;
+               return false;
+            }
             if (!moved && !gripMoved)
             {
                converged = true;
@@ -2220,6 +2308,15 @@ namespace GroupStep
                   }
                   else if (++stallCount >= set.stallRounds)
                   {
+                     if (set.tolEndRes > 0.0 && rn > set.tolEndRes)
+                     {
+                        failWhy = 'S';
+                        lastRounds = round;
+                        return false;
+                     }
+                     if (set.tolEndRes > 0.0)
+                        for (int a = 0; a < nU; a++)
+                           x[a] = xPrev[a];
                      converged = true;
                      books.noiseStops++;
                      break;
