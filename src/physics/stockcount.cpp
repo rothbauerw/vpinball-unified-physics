@@ -9,6 +9,7 @@
 #include <vector>
 #include "physics/stockcount.h"
 #include "physics/contacthost.h"
+#include "physics/contactsystem.h"
 #include "physics/hitball.h"
 #include "physics/hitrubber.h"
 #include "physics/testdriver.h"
@@ -157,7 +158,7 @@ namespace StockCount
 
    void Begin(HitObject *const obj, HitBall *const ball, const bool contact)
    {
-      if (Off())
+      if (Off() || !ContactSystem::Unified())   // stock engine: nothing is converted, nothing to count
          return;
       Fresh();
       const void *key = obj;
@@ -227,11 +228,15 @@ namespace StockCount
 
    void Wall()
    {
+      if (Off() || !ContactSystem::Unified())
+         return;
       (s_cur != nullptr ? *s_cur : s_outside).wall++;
    }
 
    void Static()
    {
+      if (Off() || !ContactSystem::Unified())
+         return;
       (s_cur != nullptr ? *s_cur : s_outside).statics++;
    }
 
