@@ -1014,7 +1014,13 @@ RubberContact::TubeProbe HitRubber::ProbePatch(const RubberContact::BallSI &bs, 
 {
    RubberContact::TubeProbe pr = Probe(bs, it, c);
    if (m_surface != nullptr)
-      RubberContact::PatchTriangles(bs, m_surface->tris, it.Faces(c), c, it.gs.zero, pr);
+   {
+      const RubberContact::CarvedHole *holes = nullptr;
+      int nHoles = 0;
+      if (m_surfaceKind == "playfield")
+         Turntables::Holes(holes, nHoles);   // (as Probe)
+      RubberContact::PatchTriangles(bs, m_surface->tris, it.Faces(c), c, it.gs.zero, pr, holes, nHoles);
+   }
    else
       RubberContact::PatchTube(bs, m_ptsSI.data(), (int)m_ptsSI.size(), m_radiusSI, c, m_tubePre, it.gs.zero, pr);
    return pr;

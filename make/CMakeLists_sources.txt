@@ -235,7 +235,9 @@ set(VPX_SOURCES
    src/physics/contacthost.h
    src/physics/contactparthost.cpp
    src/physics/contactparthost.h
-   src/physics/contactdisc.h
+   src/physics/contactdiscpart.h
+   src/physics/discgroup.h
+   src/physics/pairform.h
    src/physics/hitrubber.cpp
    src/physics/hitrubber.h
    src/physics/coilmodel.h

@@ -6,6 +6,8 @@
 #include "physics/physconst.h"
 #include "physics/magnetcore.h"
 #include "physics/magnetballs.h"
+#include "physics/rubbercontact.h"
+#include "physics/contactsystem.h"
 #include "parts/pintable.h"
 #include "core/player.h"
 #include "parts/ball.h"
@@ -94,15 +96,20 @@ namespace Magnets
          double pts[NPTS][3];                  // point charge positions relative to the face centre (m)
          // state
          double ratedVolts = 48;               // rated_volts: the supply the script's MagnetDuty is a fraction of
-         double volts = 0, amps = 0;
+         double volts = 0, amps = 0, ampsBefore = 0;
       };
 
       std::vector<Magnet> g_magnets;
+      std::vector<CellPull> g_cellPulls;        // this physics step's (Step)
+      long long g_stepNumber = 0;
       struct OptAWarnings { bool mixed = false, cost = false; } g_optAWarn;   // Option A ball-ball notices, once per table start
       MagnetBalls::Solver g_optASolver;
       // this physics step's Option A parts per ball (build step B7); cleared at the start of every UpdateBallInteraction
       struct BallParts { double massKg = 0; std::vector<BallBallPart> parts; };
       std::unordered_map<const HitBall *, BallParts> g_parts;
+      // the pair form (pairform.h): this step's terms and the last solve's (for the store's carry and J), the store U carried across a refit, the detector J, the update's time
+      std::vector<FormTerm> g_form, g_formOld;
+      struct FormLog { double store = 0, jSum = 0, jPos = 0, usSum = 0, resMax = 0; long solves = 0, cycles = 0; } g_formLog;
       std::unordered_map<const HitBall *, std::array<double, 3>> g_partStart;   // the balls' centres (m) when the step's solve ran   // Option A solver: warm state and the last result (gate (b)); its last result is cleared at table start
       std::map<std::string, size_t> g_byName;
       const void *g_owner = nullptr;
@@ -744,10 +751,58 @@ namespace Magnets
             double p[3], r, vol, mass, Bext[3], m[3];
             bool gated = false;
          };
+         // Pile sleep (runs/2026-11-03-pile-sleep/design.md 4): every ball of the last solve asleep, no current changed and no awake ball the magnets or those balls' fields
+         // gate: the inputs are those of the last solve, whose answer is kept (a solve from it would move each force by at most half of stopForce as it converges)
+         if (!g_partStart.empty())
+         {
+            bool same = true;
+            for (const Magnet &m : g_magnets)
+               same = same && m.amps == m.ampsBefore;
+            size_t asleep = 0;
+            for (const auto ball : g_pplayer->m_vball)
+               if (ball->m_hitBall.m_sleepGroup != 0)
+                  asleep += g_partStart.count(&ball->m_hitBall);
+            bool awakeGated = false;
+            if (same && asleep == g_partStart.size())   // (only then: with sleep off no ball sleeps and nothing here runs)
+               for (const auto ball : g_pplayer->m_vball)
+               {
+                  const HitBall &hb = ball->m_hitBall;
+                  if (hb.m_sleepGroup != 0 || !hb.m_magnetic || hb.m_d.m_lockedInKicker || awakeGated)
+                     continue;
+                  const double p[3] = { hb.m_d.m_pos.x, hb.m_d.m_pos.y, hb.m_d.m_pos.z };
+                  double B[3];
+                  ExternalField(p, hb.m_d.m_radius, B);
+                  awakeGated = std::sqrt(B[0] * B[0] + B[1] * B[1] + B[2] * B[2]) >= B_GATE;
+                  const double r = VPUTOM(hb.m_d.m_radius);
+                  for (const auto &kv : g_partStart)   // gate (b): within half a ball diameter of a gated ball
+                  {
+                     const double dx = VPUTOM(p[0]) - kv.second[0], dy = VPUTOM(p[1]) - kv.second[1], dz = VPUTOM(p[2]) - kv.second[2];
+                     awakeGated = awakeGated || std::sqrt(dx * dx + dy * dy + dz * dz) - 2.0 * r <= r;
+                  }
+               }
+            if (same && asleep == g_partStart.size() && !awakeGated)
+            {
+               for (const auto ball : g_pplayer->m_vball)
+                  if (ball->m_hitBall.m_sleepGroup == 0)
+                     ball->m_hitBall.m_magPair[0] = ball->m_hitBall.m_magPair[1] = ball->m_hitBall.m_magPair[2] = 0.f;
+               return;
+            }
+         }
          static std::vector<BallM> bs;
          bs.clear();
          g_parts.clear();
          g_partStart.clear();
+         g_formOld.swap(g_form);   // (no solve this step: no old form either, nothing to carry)
+         g_form.clear();
+         if (++g_formLog.cycles >= 1000)
+         {
+            PLOGI << "Magnets pair form, last 1000 steps: solves " << g_formLog.solves << ", pair store " << g_formLog.store * 1e3 << " mJ, J sum " << g_formLog.jSum * 1e3
+                  << " mJ (positive part " << g_formLog.jPos * 1e3 << "), magnets update " << (g_formLog.solves ? g_formLog.usSum / g_formLog.solves : 0.0)
+                  << " us per solve, worst fit residual " << g_formLog.resMax * 1e3 << " mN";
+            const double keep = g_formLog.store;
+            g_formLog = FormLog();
+            g_formLog.store = keep;
+         }
          for (const auto ball : g_pplayer->m_vball)
          {
             HitBall &hb = ball->m_hitBall;
@@ -804,6 +859,9 @@ namespace Magnets
                }
             }
          }
+         for (const BallM &b : bs)   // pile sleep: the solve runs, so a sleeping ball it gates has new forces: its group wakes, before the balls' velocities of this cycle
+            if (b.gated && b.hb->m_sleepGroup != 0)
+               ContactSystem::SleepWakeAtStart(b.hb, "magnet solve runs");
          if (ngated < 2)
          {
             g_optASolver.ClearLast();
@@ -858,7 +916,57 @@ namespace Magnets
                const auto t0 = std::chrono::steady_clock::now();
                std::vector<MagnetBalls::Part> parts;
                solver.Evaluate(src, pos, dF, &st, &ids, &parts);
+               // the pair form: dF fitted on the invariants, per energised magnet (its own axis)
+               {
+                  const int Nb = (int)pos.size();
+                  std::vector<double> pp(3 * Nb), ff(3 * Nb), oo, nn;
+                  for (int k = 0; k < Nb; k++)
+                  {
+                     pp[3 * k] = pos[k].x; pp[3 * k + 1] = pos[k].y; pp[3 * k + 2] = pos[k].z;
+                     ff[3 * k] = dF[k].x; ff[3 * k + 1] = dF[k].y; ff[3 * k + 2] = dF[k].z;
+                  }
+                  for (const MagnetBalls::Source &s : src)
+                  {
+                     const double an = std::sqrt(s.axis.x * s.axis.x + s.axis.y * s.axis.y + s.axis.z * s.axis.z);
+                     oo.insert(oo.end(), { s.origin.x, s.origin.y, s.origin.z });
+                     if (an > 0) nn.insert(nn.end(), { s.axis.x / an, s.axis.y / an, s.axis.z / an }); else nn.insert(nn.end(), { 0.0, 0.0, 1.0 });
+                  }
+                  std::vector<PairForm::Term> terms;
+                  const double res = PairForm::Fit(Nb, pp.data(), (int)src.size(), oo.data(), nn.data(), ff.data(), terms);
+                  g_formLog.resMax = std::max(g_formLog.resMax, res);
+                  // the store carried across the refit: the old form's U at these places (a ball gone takes its terms' share with it)
+                  std::unordered_map<const HitBall *, int> at;
+                  for (int k = 0; k < Nb; k++) at[bs[gidx[k]].hb] = k;
+                  for (const FormTerm &ft : g_formOld)
+                  {
+                     const auto ia = at.find(ft.a), ib = ft.b ? at.find(ft.b) : at.end();
+                     if (ia == at.end() || (ft.b && ib == at.end())) continue;
+                     g_formLog.store -= ft.t.g * (PairForm::Q(ft.t, &pp[3 * ia->second], ft.b ? &pp[3 * ib->second] : nullptr) - ft.t.q0);
+                  }
+                  // the detector J = 1/2 sum (g_new - g_old)(q_new - q_old), over the terms in both
+                  double J = 0;
+                  for (const PairForm::Term &t : terms)
+                  {
+                     const HitBall *ha = bs[gidx[t.a]].hb, *hbb = t.b >= 0 ? bs[gidx[t.b]].hb : nullptr;
+                     for (const FormTerm &ft : g_formOld)
+                        if (ft.t.kind == t.kind && ((ft.a == ha && ft.b == hbb) || (t.kind == 0 && ft.a == hbb && ft.b == ha)) && ft.t.o[0] == t.o[0] && ft.t.o[1] == t.o[1] && ft.t.o[2] == t.o[2])
+                        {
+                           J += 0.5 * (t.g - ft.t.g) * (t.q0 - ft.t.q0);
+                           break;
+                        }
+                  }
+                  g_formLog.jSum += J;
+                  if (J > 0) g_formLog.jPos += J;
+                  g_formLog.solves++;
+                  g_formOld.clear();
+                  for (const PairForm::Term &t : terms)
+                  {
+                     FormTerm ft; ft.t = t; ft.a = bs[gidx[t.a]].hb; ft.b = t.b >= 0 ? bs[gidx[t.b]].hb : nullptr;
+                     g_form.push_back(ft);
+                  }
+               }
                const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+               g_formLog.usSum += us;
                for (size_t k = 0; k < gidx.size(); ++k)
                {
                   BallM &b = bs[gidx[k]];
@@ -972,18 +1080,48 @@ namespace Magnets
       }
    }
 
+   // A coil's current one physics step on: the L / R approach to volts / R (exact steps of the first-order circuit), 0 once off and below 1 uA
+   static double NextAmps(const Magnet &m)
+   {
+      double a = m.amps;
+      a += (m.volts / m.r - a) * (1.0 - std::exp(-PHYSICS_STEPTIME_S / m.tau));
+      if (m.volts == 0 && std::fabs(a) < 1e-6)
+         a = 0;
+      return a;
+   }
+
+   bool CurrentSteady()
+   {
+      Ensure();
+      for (const Magnet &m : g_magnets)
+         if (NextAmps(m) != m.amps)
+            return false;
+      return true;
+   }
+
    void Step()
    {
       Ensure();
+      g_cellPulls.clear();
+      g_stepNumber++;
       if (g_magnets.empty())
          return;
       bool any = false;
       for (Magnet &m : g_magnets)
       {
-         m.amps += (m.volts / m.r - m.amps) * (1.0 - std::exp(-PHYSICS_STEPTIME_S / m.tau));
-         if (m.volts == 0 && std::fabs(m.amps) < 1e-6)
-            m.amps = 0;
+         m.ampsBefore = m.amps;
+         m.amps = NextAmps(m);
          any = any || m.amps != 0;
+         if (m.core && !m.aircore && (m.amps != 0 || m.ampsBefore != 0))
+         {
+            CellPull p;
+            p.core = m.core.get();
+            p.o[0] = m.x * 0.53975e-3; p.o[1] = m.y * 0.53975e-3; p.o[2] = m.z * 0.53975e-3;   // (the group's own metres per unit, contactsystem.h kMetresPerUnit)
+            p.n[0] = m.nx; p.n[1] = m.ny; p.n[2] = m.nz;
+            p.amps = m.amps;
+            p.ampsBefore = m.ampsBefore;
+            g_cellPulls.push_back(p);
+         }
       }
       g_anyCurrent = any;
       UpdateBallInteraction();
@@ -1174,6 +1312,25 @@ namespace Magnets
       return g_anyCurrent;
    }
 
+   const std::vector<CellPull> &CellPulls()
+   {
+      return g_cellPulls;
+   }
+
+   long long StepNumber()
+   {
+      return g_stepNumber;
+   }
+
+   const std::vector<FormTerm> &PairFormTerms() { return g_form; }
+   bool HasPairForm(const HitBall *hb)
+   {
+      for (const FormTerm &ft : g_form)
+         if (ft.a == hb || ft.b == hb)
+            return true;
+      return false;
+   }
+
    bool HasBallBallParts(const HitBall *hb)
    {
       return g_parts.find(hb) != g_parts.end();
@@ -1210,7 +1367,7 @@ namespace Magnets
       return g_magnets.empty() ? 0.0 : g_magnets.front().eddySigma * g_magnets.front().eddyScale;
    }
 
-   void AddVelocityIncrement(const float pos[3], float radiusU, float mass, float dv[3])
+   void AddVelocityIncrement(const float pos[3], float radiusU, float mass, float dv[3], const bool heldOnly)
    {
       if (!g_anyCurrent)
          return;
@@ -1270,6 +1427,8 @@ namespace Magnets
          }
          if (m.core)
          {
+            if (heldOnly)
+               continue;
             // core_model = cells (magnetcore.h): the force table of the operating levels around the coil current: the order-4 ball in the bare field, the core's
             // answer (on-axis reaction carried by the tube equivalent height), the ball's saturation and the rim rule. Built for the standard ball (radius 25 U).
             const double zc = px * m.nx + py * m.ny + pz * m.nz;

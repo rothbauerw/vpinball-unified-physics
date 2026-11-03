@@ -514,6 +514,52 @@ namespace MagnetCore
       }
    }
 
+   // The level's stored energy from its force table (Model::Energy). V = 0 on the far edges and beyond the level's bare table. Each grid edge asks V's difference along it to be the table's work along it
+   // (exact for the table's interpolation); the residuals, in force units, are minimised in least squares by a band Cholesky over the grid (one row of the band per gap).
+   static void BuildEnergy(const std::vector<double> &xg, const std::vector<double> &hg, const Geometry &g, Level &L)
+   {
+      const int NX = (int)xg.size(), NH = (int)hg.size(), n = NX * NH, W1 = NH + 1;
+      std::vector<char> fixed(n);
+      for (int i = 0; i < NX; i++) for (int k = 0; k < NH; k++) fixed[i * NH + k] = i == NX - 1 || k == NH - 1 || !L.bare.Inside(xg[i] + g.ballR, hg[k] + 2 * g.ballR);
+      std::vector<double> A((size_t)n * W1, 0.0), b(n, 0.0);   // A[r * W1 + (r - c)]: the lower band
+      auto edge = [&](int p, int q, double work, double w)      // V[q] - V[p] = work, weight w
+      {
+         if (!fixed[p]) { A[(size_t)p * W1] += w; b[p] -= w * work; }
+         if (!fixed[q]) { A[(size_t)q * W1] += w; b[q] += w * work; }
+         if (!fixed[p] && !fixed[q]) A[(size_t)std::max(p, q) * W1 + std::abs(p - q)] -= w;
+      };
+      for (int i = 0; i < NX; i++) for (int k = 0; k < NH; k++)
+      {
+         const int p = i * NH + k;
+         if (i + 1 < NX) { const double dx = xg[i + 1] - xg[i]; edge(p, p + NH, 0.5 * (L.side[p] + L.side[p + NH]) * dx, 1.0 / (dx * dx)); }
+         if (k + 1 < NH)
+         {
+            const double h0 = hg[k], h1 = hg[k + 1], dh = h1 - h0, la = std::log(h1 / h0);   // down is linear in ln h along the edge
+            edge(p, p + 1, L.down[p] * dh + (L.down[p + 1] - L.down[p]) * (h1 - dh / la), 1.0 / (dh * dh));
+         }
+      }
+      for (int p = 0; p < n; p++) if (fixed[p]) { A[(size_t)p * W1] = 1.0; b[p] = 0.0; }
+      for (int r = 0; r < n; r++)
+         for (int c = std::max(0, r - NH); c <= r; c++)
+         {
+            double s = A[(size_t)r * W1 + (r - c)];
+            for (int m = std::max(0, r - NH); m < c; m++) if (c - m <= NH) s -= A[(size_t)r * W1 + (r - m)] * A[(size_t)c * W1 + (c - m)];
+            A[(size_t)r * W1 + (r - c)] = r == c ? std::sqrt(s) : s / A[(size_t)c * W1];
+         }
+      for (int r = 0; r < n; r++) { double s = b[r]; for (int c = std::max(0, r - NH); c < r; c++) s -= A[(size_t)r * W1 + (r - c)] * b[c]; b[r] = s / A[(size_t)r * W1]; }
+      for (int r = n - 1; r >= 0; r--) { double s = b[r]; for (int c = r + 1; c <= std::min(n - 1, r + NH); c++) s -= A[(size_t)c * W1 + (c - r)] * b[c]; b[r] = s / A[(size_t)r * W1]; }
+      L.V = b; L.Vx.assign(n, 0.0); L.Vs.assign(n, 0.0); L.Vxs.assign(n, 0.0);
+      for (int p = 0; p < n; p++) if (!fixed[p]) { L.Vx[p] = L.side[p]; L.Vs[p] = L.down[p] * hg[p % NH]; }
+      for (int i = 1; i < NX; i++) for (int k = 0; k < NH; k++)   // (on the axis the energy is even in x: its slope in x is zero at every height, so the mixed slope is too)
+      {
+         const int p = i * NH + k;
+         if (fixed[p]) continue;
+         const int i0 = i - 1, i1 = std::min(NX - 1, i + 1), k0 = std::max(0, k - 1), k1 = std::min(NH - 1, k + 1);
+         const double dVsDx = (L.Vs[i1 * NH + k] - L.Vs[i0 * NH + k]) / (xg[i1] - xg[i0]), dVxDs = (L.Vx[i * NH + k1] - L.Vx[i * NH + k0]) / std::log(hg[k1] / hg[k0]);
+         L.Vxs[p] = 0.5 * (dVsDx + dVxDs);
+      }
+   }
+
    bool Model::Build(const Geometry &geom, const std::vector<double> &ampsIn)
    {
       g = geom; levels.clear(); xg.clear(); hg.clear();
@@ -605,6 +651,7 @@ namespace MagnetCore
                xp = xg[i]; fp = f;
             }
          }
+         BuildEnergy(xg, hg, g, L);
          nfixes[li] = nfix; lf[li] = Now() - tf;
       });
       for (size_t li = 0; li < levels.size(); li++)
@@ -647,6 +694,60 @@ namespace MagnetCore
       double dl, sl; one(*lo_, dl, sl);
       const double w = (I - Ilo) / (Ihi - Ilo); down = (1 - w) * dl + w * dh; side = (1 - w) * sl + w * sh;
       return true;
+   }
+
+   void Model::Energy(double x, double h, double I, Pull &p) const
+   {
+      p = Pull();
+      I = std::fabs(I);
+      const int NX = (int)xg.size(), NH = (int)hg.size();
+      if (levels.empty() || I == 0 || NX < 2 || NH < 2 || x > xg.back() || h > hg.back())
+         return;
+      // the two levels around I and their shares, as Force
+      size_t hi = 0; while (hi < levels.size() && levels[hi].amps < I) hi++;
+      const Level *lo_ = nullptr, *hi_ = nullptr; double wl = 0, wh = 1;
+      if (hi == 0) { hi_ = &levels[0]; wh = I / hi_->amps; }
+      else if (hi == levels.size()) { hi_ = &levels.back(); if (levels.size() > 1) { lo_ = &levels[levels.size() - 2]; wh = (I - lo_->amps) / (hi_->amps - lo_->amps); wl = 1 - wh; } else wh = I / hi_->amps; }
+      else { lo_ = &levels[hi - 1]; hi_ = &levels[hi]; wh = (I - lo_->amps) / (hi_->amps - lo_->amps); wl = 1 - wh; }
+      const double hg0 = std::max(h, GAP_MIN);
+      const int i = std::min(NX - 2, x <= X_KNEE ? (int)(x / DX_NEAR) : NX_NEAR + (int)((x - X_KNEE) / DX_FAR));
+      const int k = std::min(NH - 2, std::max(0, (int)(std::log(hg0 / GAP_MIN) / HStepLog())));
+      const double dx = xg[i + 1] - xg[i], ds = std::log(hg[k + 1] / hg[k]), u = (x - xg[i]) / dx, v = std::log(hg0 / hg[k]) / ds;
+      // the cubic Hermite shapes: A value at each end, C slope at each end, with their first and second derivatives
+      auto shapes = [](double t, double A[2], double C[2], double dA[2], double dC[2], double ddA[2], double ddC[2])
+      {
+         const double t2 = t * t, t3 = t2 * t;
+         A[0] = 2 * t3 - 3 * t2 + 1; A[1] = 3 * t2 - 2 * t3; C[0] = t3 - 2 * t2 + t; C[1] = t3 - t2;
+         dA[0] = 6 * t2 - 6 * t; dA[1] = 6 * t - 6 * t2; dC[0] = 3 * t2 - 4 * t + 1; dC[1] = 3 * t2 - 2 * t;
+         ddA[0] = 12 * t - 6; ddA[1] = 6 - 12 * t; ddC[0] = 6 * t - 4; ddC[1] = 6 * t - 2;
+      };
+      double Au[2], Cu[2], dAu[2], dCu[2], ddAu[2], ddCu[2], Av[2], Cv[2], dAv[2], dCv[2], ddAv[2], ddCv[2];
+      shapes(u, Au, Cu, dAu, dCu, ddAu, ddCu);
+      shapes(v, Av, Cv, dAv, dCv, ddAv, ddCv);
+      double e = 0, eu = 0, ev = 0, euu = 0, euv = 0, evv = 0;
+      auto one = [&](const Level &L, double w)
+      {
+         for (int c = 0; c < 2; c++) for (int d = 0; d < 2; d++)
+         {
+            const int q = (i + c) * NH + k + d;
+            const double a = w * L.V[q], bx = w * L.Vx[q] * dx, bs = w * L.Vs[q] * ds, bm = w * L.Vxs[q] * dx * ds;
+            e += Au[c] * Av[d] * a + Cu[c] * Av[d] * bx + Au[c] * Cv[d] * bs + Cu[c] * Cv[d] * bm;
+            eu += dAu[c] * Av[d] * a + dCu[c] * Av[d] * bx + dAu[c] * Cv[d] * bs + dCu[c] * Cv[d] * bm;
+            ev += Au[c] * dAv[d] * a + Cu[c] * dAv[d] * bx + Au[c] * dCv[d] * bs + Cu[c] * dCv[d] * bm;
+            euu += ddAu[c] * Av[d] * a + ddCu[c] * Av[d] * bx + ddAu[c] * Cv[d] * bs + ddCu[c] * Cv[d] * bm;
+            euv += dAu[c] * dAv[d] * a + dCu[c] * dAv[d] * bx + dAu[c] * dCv[d] * bs + dCu[c] * dCv[d] * bm;
+            evv += Au[c] * ddAv[d] * a + Cu[c] * ddAv[d] * bx + Au[c] * ddCv[d] * bs + Cu[c] * ddCv[d] * bm;
+         }
+      };
+      one(*hi_, wh);
+      if (lo_) one(*lo_, wl);
+      const double Vs = ev / ds, Vss = evv / (ds * ds);
+      p.V = e; p.Vx = eu / dx; p.Vh = Vs / hg0; p.Vxx = euu / (dx * dx); p.Vxh = euv / (dx * ds) / hg0; p.Vhh = (Vss - Vs) / (hg0 * hg0);
+      if (h < GAP_MIN)   // below the tables' first gap: that gap's down force goes on
+      {
+         const double dh = h - GAP_MIN;
+         p.V += p.Vh * dh; p.Vx += p.Vxh * dh; p.Vhh = 0;
+      }
    }
 
    bool Model::Field(double x, double z, double I, double &Br, double &Bz) const

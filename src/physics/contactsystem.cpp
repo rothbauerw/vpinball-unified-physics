@@ -16,6 +16,7 @@
 #include "hitflipper.h"
 #include "magnet.h"
 #include "magnetballs.h"
+#include "magnetcore.h"
 #include "turntable.h"
 #include "contactprof.h"
 #include "contacthingepart.h"
@@ -236,6 +237,30 @@ struct ContactSystemImpl
          w.v = w.v - V3(extInc.x * VS * cycleShare, extInc.y * VS * cycleShare, extInc.z * VS * cycleShare);
       }
 
+      // Eddy-current braking of the ball's spin across the coil field, the one form for the old loop and the group: a steel sphere turning at w in a field B feels a torque (2 pi / 15) sigma R^5 B^2 w
+      // against the part of w across B (a spin about the field lines induces nothing). Its rate and direction into the body. The field changes little within a cycle: one evaluation per cycle, at the ball's place then.
+      static void EddyBrake(Body &w)
+      {
+         if (w.eddyRate >= 0.0)
+            return;
+         w.eddyRate = 0.0;
+         if (!w.magnetsOn)
+            return;
+         const float mp[3] = { (float)(w.c.x / U), (float)(w.c.y / U), (float)(w.c.z / U) };
+         const double sigma = Magnets::EddyConductivity();
+         double Bf[3];
+         if (sigma > 0.0 && Magnets::FieldAt(mp, w.pb->m_d.m_radius, Bf))
+         {
+            const double b2 = Bf[0] * Bf[0] + Bf[1] * Bf[1] + Bf[2] * Bf[2];
+            if (b2 > 1e-8)
+            {
+               w.eddyDir = V3(Bf[0], Bf[1], Bf[2]) / std::sqrt(b2);
+               const double R2 = w.bs.R * w.bs.R;
+               w.eddyRate = (2.0 * M_PI / 15.0) * sigma * R2 * R2 * w.bs.R * b2 / w.bs.Inertia();
+            }
+         }
+      }
+
       // One substep's share (aScale = h / one physics step), at the body's current position.
       static void Add(Body &w, const double aScale)
       {
@@ -248,24 +273,8 @@ struct ContactSystemImpl
             Magnets::AddVelocityIncrement(mp, w.pb->m_d.m_radius, w.pb->m_d.m_mass, mdv);
             const double k = VS * aScale;
             w.v = w.v + V3(mdv[0] * k, mdv[1] * k, mdv[2] * k);
-            // Eddy-current braking of the ball's spin across the coil field: a steel sphere turning at w in a field B feels a torque (2 pi / 15) sigma R^5 B^2 w
-            // against the part of w across B (a spin about the field lines induces nothing). Exact exponential decay over the substep.
-            if (w.eddyRate < 0.0)   // the field changes little within a cycle: one evaluation, the substeps reuse its rate and direction
-            {
-               w.eddyRate = 0.0;
-               const double sigma = Magnets::EddyConductivity();
-               double Bf[3];
-               if (sigma > 0.0 && Magnets::FieldAt(mp, w.pb->m_d.m_radius, Bf))
-               {
-                  const double b2 = Bf[0] * Bf[0] + Bf[1] * Bf[1] + Bf[2] * Bf[2];
-                  if (b2 > 1e-8)
-                  {
-                     w.eddyDir = V3(Bf[0], Bf[1], Bf[2]) / std::sqrt(b2);
-                     const double R2 = w.bs.R * w.bs.R;
-                     w.eddyRate = (2.0 * M_PI / 15.0) * sigma * R2 * R2 * w.bs.R * b2 / w.bs.Inertia();
-                  }
-               }
-            }
+            // Exact exponential decay over the substep.
+            EddyBrake(w);
             if (w.eddyRate > 0.0)
             {
                const V3 wPerp = w.w - w.eddyDir * w.w.Dot(w.eddyDir);
@@ -352,6 +361,8 @@ struct ContactSystemImpl
       for (auto eit = g_engaged.begin(); eit != g_engaged.end();)
       {
          BallContact &e = *eit++;   // (a release below erases only this entry)
+         if (e.ball->m_sleepGroup != 0)   // pile sleep: held where it is, its contact state kept (SleepInStep)
+            continue;
          ContactHost *const o = e.host;   // null for a ball only a band holds
          if (o != nullptr && !o->m_set.contact)   // switched off in the ini while a ball is engaged
          {
@@ -435,7 +446,7 @@ struct ContactSystemImpl
       for (auto *const ball : g_pplayer->m_vball)
       {
          HitBall *const pb = &ball->m_hitBall;
-         if (pb->m_bandOwner != nullptr || pb->m_contact != nullptr || !PairEligible(pb))
+         if (pb->m_bandOwner != nullptr || pb->m_contact != nullptr || pb->m_sleepGroup != 0 || !PairEligible(pb))
             continue;
          Body w;
          LoadBody(w, pb);
@@ -2118,6 +2129,38 @@ struct ContactSystemImpl
       }
    }
 
+   // A cells magnet's pull on the group's balls: what the ball's place stores at the coil's current (magnetcore.h Model::Energy), the current held for the cycle. Behind the pole face's plane the tables have nothing: what the plane's points store goes on, unchanged in height.
+   class PullField final : public GroupStep::BallField
+   {
+   public:
+      Magnets::CellPull p;
+      double Eval(const V3 &c, const double R, V3 *const grad, GroupStep::M3 *const hess) const override { return At(p.amps, c, R, grad, hess); }
+      double At(const double amps, const V3 &c, const double R, V3 *const grad, GroupStep::M3 *const hess) const
+      {
+         const V3 n(p.n[0], p.n[1], p.n[2]), d = c - V3(p.o[0], p.o[1], p.o[2]);
+         const double zc = d.Dot(n);
+         const V3 rv = d - n * zc;
+         const double x = rv.Length(), h = zc > 0.0 ? zc - R : -R;
+         MagnetCore::Model::Pull e;
+         p.core->Energy(x, h, amps, e);
+         if (zc <= 0.0)
+            e.Vh = e.Vxh = e.Vhh = 0.0;
+         const V3 ur = x > 1e-12 ? rv * (1.0 / x) : V3();
+         if (grad != nullptr)
+            *grad = n * e.Vh + ur * e.Vx;
+         if (hess != nullptr)
+         {
+            using M3 = GroupStep::M3;
+            const M3 nn = M3::Outer(n, n), rr = M3::Outer(ur, ur), nr = M3::Outer(n, ur);
+            const double across = x > 1e-9 ? e.Vx / x : e.Vxx;   // the turn of the radial direction round the axis
+            for (int i = 0; i < 3; i++)
+               for (int j = 0; j < 3; j++)
+                  hess->a[i][j] = e.Vhh * nn.a[i][j] + e.Vxx * rr.a[i][j] + e.Vxh * (nr.a[i][j] + nr.a[j][i]) + across * ((i == j ? 1.0 : 0.0) - nn.a[i][j] - rr.a[i][j]);
+         }
+         return e.V;
+      }
+   };
+
    // ring: the island has no cord (IslandOnRing). Returns false when a step of such an island could not be solved: nothing has been written, and the cycle is retaken on the old loop, the contact
    // system's own (GroupStepDesign 14.3; never stock, no hold). A cord island keeps its own rule (15.3) and returns true. So does an island with a part on the group step (a bat), which has no old
    // loop to go to: what is left of the cycle is lost, no energy can appear.
@@ -2127,7 +2170,16 @@ struct ContactSystemImpl
       static GroupStep::Group g;
       static std::deque<SurfaceShape> shapes;
       shapes.clear();
-      g.nb = g.ns = g.np = 0;
+      g.nb = g.ns = g.np = g.nf = 0;
+      g.nform = 0;
+      static std::deque<PullField> pulls;
+      pulls.clear();
+      for (const Magnets::CellPull &cp : Magnets::CellPulls())
+      {
+         pulls.emplace_back();
+         pulls.back().p = cp;
+         g.AddField(&pulls.back());
+      }
       g.set.pair = cy.rpBall;
       g.set.rollSmooth = cy.cs->rollSmoothRadS;
       if (ring)   // (cy.rpBall holds the old loop's halved modulus, and the group halves it for a pair itself; its rolling resistance is on the pair's radius, R / 2)
@@ -2196,10 +2248,19 @@ struct ContactSystemImpl
             g.set.g = w.extBaseVS * (1.0 / PHYSICS_STEPTIME_S);   // gravity along the table's slope, and the nudge
             gSet = true;
          }
-         if (w.magAcc > 0.0)   // the magnets' pull, held for the cycle: a drive
+         Sources::EddyBrake(w);   // (the old loop's own: its rate and direction, held for the cycle as the coil's current is)
+         b.brakeRate = w.eddyRate;
+         b.brakeAxis = w.eddyDir;
+         // a cells magnet's pull: a stored energy of the ball's place; on the body it is the same acceleration as AddVelocityIncrement's (m / the steel mass it uses)
+         b.fieldScale = g.nf > 0 && w.pb->m_magnetic ? b.m / (7800.0 * 4.0 / 3.0 * M_PI * b.R * b.R * b.R * std::max(0.001f, w.pb->m_d.m_mass)) : 0.0;
+         if (w.magAcc > 0.0)   // what stays held for the cycle: the other balls' part, the magnets not on a field: a drive
          {
-            const Vertex3Ds inc = w.pb->ExternalVelocityIncrement(), base = w.pb->ExternalVelocityIncrement(false);
-            b.fExt = V3((inc.x - base.x) * VS, (inc.y - base.y) * VS, (inc.z - base.z) * VS) * (b.m / PHYSICS_STEPTIME_S);
+            const float mp[3] = { w.pb->m_d.m_pos.x, w.pb->m_d.m_pos.y, w.pb->m_d.m_pos.z };
+            // the other balls' part: a stored energy of place when the solve gave a form (pairform.h, 2026-11-03, added below), else held as before (the dipoles)
+            const bool form = Magnets::HasPairForm(w.pb);
+            float mdv[3] = { form ? 0.f : w.pb->m_magPair[0], form ? 0.f : w.pb->m_magPair[1], form ? 0.f : w.pb->m_magPair[2] };
+            Magnets::AddVelocityIncrement(mp, w.pb->m_d.m_radius, w.pb->m_d.m_mass, mdv, true);
+            b.fExt = V3(mdv[0] * VS, mdv[1] * VS, mdv[2] * VS) * (b.m / PHYSICS_STEPTIME_S);
          }
          if (w.band != nullptr && std::find(cords.begin(), cords.end(), w.band) == cords.end())
             cords.push_back(w.band);
@@ -2272,6 +2333,32 @@ struct ContactSystemImpl
                }
             }
       }
+      // the magnets' ball-pair form: its terms on this group's balls. A pair with one ball outside the group: that ball held where it is now (its own island steps it)
+      for (const Magnets::FormTerm &ft : Magnets::PairFormTerms())
+      {
+         int ia = -1, ib = -1;
+         for (int k = 0; k < g.nb; k++)
+         {
+            if (balls[k] == ft.a) ia = k;
+            if (ft.b != nullptr && balls[k] == ft.b) ib = k;
+         }
+         const HitBall *out = nullptr;
+         if (ia < 0 && ib >= 0) { ia = ib; ib = -1; out = ft.a; }   // (a distance: either end may lead)
+         else if (ia >= 0 && ib < 0 && ft.b != nullptr) out = ft.b;
+         if (ia < 0)
+            continue;
+         PairForm::Term t = ft.t;
+         t.a = ia;
+         t.b = ib;
+         if (out != nullptr)
+         {
+            V3 c((double)out->m_d.m_pos.x * U, (double)out->m_d.m_pos.y * U, (double)out->m_d.m_pos.z * U);
+            for (const Body &w : cy.bodies)
+               if (w.pb == out) { c = w.c; break; }
+            t.o[0] = c.x; t.o[1] = c.y; t.o[2] = c.z;
+         }
+         g.AddForm(t);
+      }
       const int nSurf = g.ns;   // the surfaces' shapes; after them each cord's posts (rubbers on posts: GroupStepDesign 13)
       for (HitRubber *const c : cords)
       {
@@ -2282,6 +2369,26 @@ struct ContactSystemImpl
          c->m_cordStepped = true;
       }
       g.Configure();
+      // a coil's current changed since the last cycle: what the balls' places store changed with it, with nothing moved. That is the coil's work, a drive. Once per ball per physics step (a split cycle comes back here)
+      for (const PullField &pf : pulls)
+         if (pf.p.amps != pf.p.ampsBefore)
+         {
+            static std::unordered_map<const HitBall *, long long> booked;
+            const long long stepNo = Magnets::StepNumber();
+            for (int i = 0; i < g.nb; i++)
+            {
+               const GroupStep::Ball &b = g.ball[i];
+               if (b.fieldScale == 0.0)
+                  continue;
+               long long &last = booked[balls[i]];
+               if (last == stepNo)
+                  continue;
+               last = stepNo;
+               for (const PullField &q : pulls)
+                  g.books.coilJ += b.fieldScale * (q.At(q.p.amps, b.c, b.R, nullptr, nullptr) - q.At(q.p.ampsBefore, b.c, b.R, nullptr, nullptr));
+            }
+            break;
+         }
       for (HitRubber *const c : cords)
          c->Cord()->fixed->RestorePostItems(g);
       // what a touch keeps between cycles: the shear spring's stretch
@@ -2851,6 +2958,361 @@ struct ContactSystemImpl
    }
    static Cycle *s_pendingCy;   // the step whose events have not been dispatched yet
    static std::vector<ContactHost *> &Hosts() { return ContactHost::Registry(); }   // (for the snapshot, outside the struct)
+   // ---- Pile sleep ([Contact] sleep = 1; runs/2026-11-03-pile-sleep/design.md) ----
+   // A group (an island) whose balls have all stayed under sleep_speed_mm_s, in travel and in the surface speed of their spin, for sleep_hold_ms, touching only parts at rest, with every
+   // coil current steady and no contact deeper than 0.05 mm, sleeps: its balls keep their place and every contact state (surface shear, ball pairs), their speed and spin go to 0 (a loss
+   // of at most the kinetic energy under the line; nothing stored changes), and nothing steps them until a wake. The line is requirement 4.1's 'still' (under 0.1 mm/s).
+   struct SleepGroup
+   {
+      int id = 0;
+      std::vector<HitBall *> balls;
+      std::vector<ContactMovingPart *> parts;   // the moving parts its balls touch
+      std::vector<char> partIdle;              // the part has been seen asleep since: a drive that wakes it then wakes the group
+   };
+   inline static std::vector<SleepGroup> g_sleep;
+   inline static int g_sleepNextId = 1;
+   inline static Vertex3Ds g_sleepBase;          // gravity and nudge over one physics step at the last cycle start (U/VPT)
+   inline static bool g_sleepBaseKnown = false;
+   inline static double g_sleepCycleDt = 0.0;    // the share of this physics cycle the contact steps have covered (s): holds count at the cycle's end only
+   inline static int g_sleepLog = 0;             // sleep and wake lines this table start
+   inline static bool g_sleepCreepWarned = false, g_sleepDepthWarned = false;
+   inline static const void *g_sleepOwner = nullptr;
+   static constexpr double kSleepDepthM = 0.05e-3;   // requirement 4.2: a contact deeper than this is a fault to see, not a pile to put to sleep
+   static constexpr double kSleepCreepMS = 1e-3;     // the slow-creep notice: a group between the sleep line and 1 mm/s ...
+   static constexpr double kSleepCreepS = 5.0;       // ... for this long
+
+   static void SleepTable()
+   {
+      if (g_sleepOwner == g_pplayer)
+         return;
+      g_sleepOwner = g_pplayer;
+      g_sleep.clear();
+      g_sleepNextId = 1;
+      g_sleepBaseKnown = false;
+      g_sleepCycleDt = 0.0;
+      g_sleepLog = 0;
+      g_sleepCreepWarned = g_sleepDepthWarned = false;
+   }
+   static bool SleepLogOk()
+   {
+      if (g_sleepLog < 1000)
+      {
+         g_sleepLog++;
+         return true;
+      }
+      if (g_sleepLog++ == 1000)
+         PLOGI << "Pile sleep: further sleep and wake lines this table start are not logged";
+      return false;
+   }
+   static void SleepNotice(const std::string &msg)
+   {
+      PLOGW << msg;
+      if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+         g_pplayer->m_liveUI->PushNotification(msg, 8000);
+   }
+   static bool SameV(const Vertex3Ds &a, const Vertex3Ds &b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
+   static bool PartQuiet(const ContactMovingPart *mp) { return mp->Sleeping() || mp->AtRest(); }
+
+   // owe: woken after this cycle's velocity update (which gave a sleeping ball no gravity): the contact steps of the rest of the cycle give the share back first (SleepInStep)
+   static void SleepWakeGroup(const size_t gi, const char *cause, const bool owe)
+   {
+      SleepGroup &g = g_sleep[gi];
+      if (SleepLogOk())
+         PLOGI << "Pile sleep: wake group " << g.id << " (" << g.balls.size() << " balls) at t=" << g_pplayer->m_time_msec << " ms: " << cause;
+      for (HitBall *const pb : g.balls)
+      {
+         pb->m_sleepGroup = 0;
+         pb->m_sleepHoldS = 0.0;
+         pb->m_sleepCreepS = 0.0;
+         pb->m_sleepOwe = owe;
+      }
+      g_sleep.erase(g_sleep.begin() + (long)gi);
+   }
+   static void SleepWakeBall(const HitBall *pb, const char *cause, const bool owe)
+   {
+      if (pb == nullptr || pb->m_sleepGroup == 0)
+         return;
+      for (size_t gi = 0; gi < g_sleep.size(); gi++)
+         if (g_sleep[gi].id == pb->m_sleepGroup)
+         {
+            SleepWakeGroup(gi, cause, owe);
+            return;
+         }
+   }
+   // Something no step did: a ball moved, given a speed or spin, captured, or put somewhere (a script, the driver, a kicker, a stock collision)
+   static const char *SleepMoved(const SleepGroup &g)
+   {
+      for (const HitBall *const pb : g.balls)
+      {
+         if (pb->m_d.m_lockedInKicker)
+            return "ball captured by a kicker";
+         if (!SameV(pb->m_d.m_pos, pb->m_sleepPos))
+            return "ball moved outside the step";
+         if (!SameV(pb->m_d.m_vel, Vertex3Ds(0.f, 0.f, 0.f)) || !SameV(pb->m_angularmomentum, Vertex3Ds(0.f, 0.f, 0.f)))
+            return "ball given a speed or spin outside the step";
+         if (std::find(g_placed.begin(), g_placed.end(), pb) != g_placed.end())
+            return "ball placed";
+      }
+      return nullptr;
+   }
+   // A part the balls touch that a drive woke or that moved; a part not at rest that can reach a ball of the group within the cycle (the rule of PartsInSolve)
+   static const char *SleepParts(SleepGroup &g, const double dt)
+   {
+      for (size_t k = 0; k < g.parts.size(); k++)
+      {
+         ContactMovingPart *const mp = g.parts[k];
+         if (mp->Sleeping())
+            g.partIdle[k] = 1;
+         else if (g.partIdle[k])
+            return "a part it touches was driven";
+         else if (!mp->AtRest())
+            return "a part it touches moved";
+      }
+      for (ContactHost *const o : ContactHost::Registry())
+      {
+         ContactMovingPart *const mp = o->MovingPart();
+         if (mp == nullptr || PartQuiet(mp))
+            continue;
+         for (HitBall *const pb : g.balls)
+         {
+            Body s;
+            LoadBody(s, pb);
+            LoadState(s);
+            mp->SetBall(s.bs);
+            const double reach = 2.0 * mp->SurfaceSpeedBound(dt) * dt + 1e-4;
+            if ((s.c - mp->Origin()).Length() > mp->Reach() + s.bs.R + reach)
+               continue;
+            if (mp->Probe(s.c).delta > -reach)
+               return "a moving part can reach it";
+         }
+      }
+      return nullptr;
+   }
+   // Once per cycle, before the magnets and the balls' velocity update: gravity and nudge, coil currents, moves outside the step, parts
+   static void SleepStart()
+   {
+      if (!ContactSettings::Get().sleep || g_pplayer == nullptr)
+         return;
+      SleepTable();
+      g_sleepCycleDt = 0.0;
+      for (auto *const ball : g_pplayer->m_vball)
+         ball->m_hitBall.m_sleepOwe = false;
+      if (g_pplayer->m_vball.empty())
+         return;
+      const Vertex3Ds base = g_pplayer->m_vball[0]->m_hitBall.ExternalVelocityIncrement(false);
+      const bool baseChanged = g_sleepBaseKnown && !SameV(base, g_sleepBase);
+      g_sleepBase = base;
+      g_sleepBaseKnown = true;
+      const bool steady = Magnets::CurrentSteady();
+      if (baseChanged || !steady)   // a hold counts only under the same gravity, nudge and currents
+         for (auto *const ball : g_pplayer->m_vball)
+            if (baseChanged || ball->m_hitBall.m_magnetic)
+               ball->m_hitBall.m_sleepHoldS = 0.0;
+      for (size_t gi = 0; gi < g_sleep.size();)
+      {
+         SleepGroup &g = g_sleep[gi];
+         const char *cause = baseChanged ? "gravity or nudge changed" : nullptr;
+         if (cause == nullptr && !steady)
+            for (const HitBall *const pb : g.balls)
+               if (pb->m_magnetic)
+                  cause = "a coil current changes";
+         if (cause == nullptr)
+            cause = SleepMoved(g);
+         if (cause == nullptr)
+            cause = SleepParts(g, PHYSICS_STEPTIME_S);
+         if (cause != nullptr)
+            SleepWakeGroup(gi, cause, false);
+         else
+            gi++;
+      }
+   }
+   // At each contact step, before the gather: moves outside the step since the last one, an awake ball within reach (the islands' own test), then the gravity share a ball woken
+   // within this cycle is owed; the pairs of sleeping balls are kept
+   static void SleepInStep(Cycle &cy)
+   {
+      SleepTable();
+      if (!s_append)
+         g_sleepCycleDt += cy.dt;
+      for (size_t gi = 0; gi < g_sleep.size();)
+         if (const char *const cause = SleepMoved(g_sleep[gi]))
+            SleepWakeGroup(gi, cause, true);
+         else
+            gi++;
+      for (bool woke = !g_sleep.empty(); woke;)
+      {
+         woke = false;
+         for (auto *const a : g_pplayer->m_vball)
+         {
+            const HitBall *const pa = &a->m_hitBall;
+            if (pa->m_sleepGroup != 0 || pa->m_d.m_lockedInKicker)
+               continue;
+            const double ra = (double)pa->m_d.m_radius * U, va = std::sqrt((double)pa->m_d.m_vel.Dot(pa->m_d.m_vel)) * VS;
+            for (auto *const b : g_pplayer->m_vball)
+            {
+               const HitBall *const pb = &b->m_hitBall;
+               if (pb->m_sleepGroup == 0)
+                  continue;
+               const Vertex3Ds d = pa->m_d.m_pos - pb->m_d.m_pos;
+               const double gap = std::sqrt((double)d.Dot(d)) * U - ra - (double)pb->m_d.m_radius * U;
+               if (gap < cy.cs->ballReachMm * 1e-3 + 2.0 * va * cy.dt)
+               {
+                  SleepWakeBall(pb, "an awake ball within reach", true);
+                  woke = true;
+               }
+            }
+         }
+      }
+      const double share = cy.dt / PHYSICS_STEPTIME_S;
+      for (auto *const ball : g_pplayer->m_vball)
+      {
+         HitBall &hb = ball->m_hitBall;
+         if (hb.m_sleepOwe && !s_append)
+            hb.m_d.m_vel += hb.ExternalVelocityIncrement() * (float)share;
+      }
+      for (BallPairState &p : g_ballPairs)
+         if (p.a != nullptr && p.b != nullptr && p.a->m_sleepGroup != 0 && p.b->m_sleepGroup != 0)
+            p.used = true;
+   }
+   // After an island's step: its balls' holds at the cycle's end, the slow-creep notice, and the sleep itself
+   static void SleepConsider(Cycle &cy, const ContactSystem::Islands::Island &isl)
+   {
+      const ContactSettings &cs = *cy.cs;
+      if (!cs.sleep || s_append || g_sleepCycleDt < PHYSICS_STEPTIME_S * (1.0 - 1e-6))   // (between the sub-intervals of a split cycle a ball still carries the rest of the cycle's gravity)
+         return;
+      const double vs = cs.sleepSpeedMmS * 1e-3, hold = cs.sleepHoldMs * 1e-3;
+      bool ok = true, bandKick = false, partBlock = false;
+      double vmax = 0.0, spinMax = 0.0, minHold = 1e9;
+      for (const int i : isl.members)
+      {
+         const Body &b = cy.bodies[i];
+         HitBall *const pb = b.pb;
+         Body s;
+         LoadBody(s, pb);
+         LoadState(s);
+         const double v = s.v.Length(), spin = s.w.Length() * s.bs.R;
+         vmax = std::max(vmax, v);
+         spinMax = std::max(spinMax, spin);
+         pb->m_sleepHoldS = std::max(v, spin) < vs ? pb->m_sleepHoldS + PHYSICS_STEPTIME_S : 0.0;
+         minHold = std::min(minHold, pb->m_sleepHoldS);
+         if (b.band != nullptr || pb->m_bandOwner != nullptr || pb->m_d.m_lockedInKicker)
+            bandKick = true;
+         if (pb->m_contact != nullptr)
+            for (const SurfaceContact &it : pb->m_contact->items)
+               if (const ContactMovingPart *const mp = it.r->MovingPart(); mp != nullptr && !PartQuiet(mp))
+                  partBlock = true;
+      }
+      ok = minHold >= hold - 1e-9 && !bandKick && !partBlock;
+      const double vtop = std::max(vmax, spinMax);
+      for (const int i : isl.members)
+      {
+         HitBall *const pb = cy.bodies[i].pb;
+         pb->m_sleepCreepS = vtop >= vs && vtop < kSleepCreepMS ? pb->m_sleepCreepS + PHYSICS_STEPTIME_S : 0.0;
+         if (pb->m_sleepCreepS > kSleepCreepS && !g_sleepCreepWarned)
+         {
+            g_sleepCreepWarned = true;
+            std::ostringstream os;
+            os << "Pile sleep: a group of " << isl.members.size() << " balls has crept at " << vtop * 1e3 << " mm/s (between " << cs.sleepSpeedMmS << " and 1 mm/s) for over 5 s at t=" << g_pplayer->m_time_msec
+               << " ms: it never comes to rest (requirement 4.1)";
+            SleepNotice(os.str());
+         }
+      }
+      const auto whyNot = [&](const char *stage, const double deepM)
+      {
+         if (vtop >= vs)
+            return;
+         static std::vector<std::pair<const HitBall *, uint32_t>> last;   // per group (its first ball), when it was last logged
+         const HitBall *const key = cy.bodies[isl.members[0]].pb;
+         const uint32_t now = g_pplayer->m_time_msec;
+         auto at = std::find_if(last.begin(), last.end(), [key](const std::pair<const HitBall *, uint32_t> &p) { return p.first == key; });
+         if (at != last.end() && now - at->second < 1000)
+            return;
+         if (at != last.end())
+            at->second = now;
+         else if (last.size() < 64)
+            last.emplace_back(key, now);
+         std::ostringstream os;
+         os << "Pile sleep: a group of " << isl.members.size() << " balls under the speed line is not asleep at t=" << now << " ms, held by: " << stage << ". Worst speed " << vmax * 1e3
+            << " mm/s, worst spin surface speed " << spinMax * 1e3 << " mm/s (line " << cs.sleepSpeedMmS << "), shortest hold " << minHold * 1e3 << " ms (need " << cs.sleepHoldMs << "), band or kicker "
+            << (int)bandKick << ", coil currents steady " << (int)Magnets::CurrentSteady() << ", deepest contact " << deepM * 1e6 << " um (-1 = not checked)";
+         std::vector<const ContactMovingPart *> seen;
+         for (const int i : isl.members)
+            if (const BallContact *const e = cy.bodies[i].pb->m_contact)
+               for (const SurfaceContact &it : e->items)
+                  if (const ContactMovingPart *const mp = it.r->MovingPart(); mp != nullptr && !PartQuiet(mp) && std::find(seen.begin(), seen.end(), mp) == seen.end())
+                  {
+                     seen.push_back(mp);
+                     double mv = 0.0, sp = 0.0;
+                     os << "; part not at rest at (" << mp->Origin().x << ", " << mp->Origin().y << ") m: ";
+                     if (mp->RestNumbers(mv, sp))
+                        os << "moved " << mv * 1e9 << " nm over its last cycle (AtRest limit 1 nm), surface speed " << sp * 1e6 << " um/s (limit 1 um/s), ";
+                     os << mp->StateNote();
+                  }
+         PLOGI << os.str();
+      };
+      const bool steady = Magnets::CurrentSteady();
+      if (!ok || !steady)
+      {
+         whyNot(minHold < hold - 1e-9 ? "the hold" : bandKick ? "a band or kicker" : partBlock ? "a moving part not at rest" : "a coil current not steady", -1.0);
+         return;
+      }
+      // no contact deeper than requirement 4.2 allows: a pile held that deep is a fault to see, not to hide
+      double deep = 0.0;
+      for (size_t a = 0; a < isl.members.size(); a++)
+      {
+         Body s;
+         LoadBody(s, cy.bodies[isl.members[a]].pb);
+         LoadState(s);
+         for (size_t b = a + 1; b < isl.members.size(); b++)
+         {
+            Body t;
+            LoadBody(t, cy.bodies[isl.members[b]].pb);
+            LoadState(t);
+            deep = std::max(deep, s.bs.R + t.bs.R - (s.c - t.c).Length());
+         }
+         if (s.pb->m_contact != nullptr)
+            for (const SurfaceContact &it : s.pb->m_contact->items)
+            {
+               const TubeProbe pr = it.r->Probe(s.bs, it, s.c);
+               if (pr.overlap)
+                  deep = std::max(deep, pr.delta);
+            }
+      }
+      if (deep > kSleepDepthM)
+      {
+         whyNot("the depth guard", deep);
+         if (!g_sleepDepthWarned)
+         {
+            g_sleepDepthWarned = true;
+            std::ostringstream os;
+            os << "Pile sleep: a group of " << isl.members.size() << " balls at rest holds a contact " << deep * 1e3 << " mm deep (limit 0.05 mm) at t=" << g_pplayer->m_time_msec << " ms: it is not put to sleep";
+            SleepNotice(os.str());
+         }
+         return;
+      }
+      SleepGroup g;
+      g.id = g_sleepNextId++;
+      for (const int i : isl.members)
+      {
+         HitBall *const pb = cy.bodies[i].pb;
+         g.balls.push_back(pb);
+         if (pb->m_contact != nullptr)
+            for (const SurfaceContact &it : pb->m_contact->items)
+               if (ContactMovingPart *const mp = it.r->MovingPart(); mp != nullptr && std::find(g.parts.begin(), g.parts.end(), mp) == g.parts.end())
+                  g.parts.push_back(mp);
+         pb->m_d.m_vel = Vertex3Ds(0.f, 0.f, 0.f);
+         pb->m_angularmomentum = Vertex3Ds(0.f, 0.f, 0.f);
+         pb->m_sleepPos = pb->m_d.m_pos;
+         pb->m_sleepGroup = g.id;
+         pb->m_sleepOwe = false;
+         pb->m_sleepCreepS = 0.0;
+      }
+      g.partIdle.assign(g.parts.size(), 0);
+      if (SleepLogOk())
+         PLOGI << "Pile sleep: group " << g.id << " (" << g.balls.size() << " balls, " << g.parts.size() << " moving parts) sleeps at t=" << g_pplayer->m_time_msec << " ms, max speed " << vmax * 1e3
+               << " mm/s, max spin surface speed " << spinMax * 1e3 << " mm/s, deepest contact " << deep * 1e6 << " um";
+      g_sleep.push_back(std::move(g));
+   }
+
    static bool s_append;   // StepBalls: do not flush or clear the queued events: the steps of one replayed sub-interval chain
    static bool PreventOn()   // point 1 of the overlap standard; VPX_PREVENT=0 switches it off (test only)
    {
@@ -2914,6 +3376,8 @@ void ContactSystemImpl::StepBalls(const float dtime)
    cy.rpBall.normalLoss = cy.cs->ballTanDelta > 0.0;
 
    CPROF(StepBalls);
+   if (cy.cs->sleep)
+      SleepInStep(cy);
    s_cc = TestDriver::Contact();
    static const bool timed = getenv("VPX_CONTACT_TIMING") != nullptr && *getenv("VPX_CONTACT_TIMING") != 0;
    uint64_t tp = timed ? usec() : 0;
@@ -2947,12 +3411,14 @@ void ContactSystemImpl::StepBalls(const float dtime)
          CordIsland(cy, isl, true);
          lap(g_last.substepUs);
          EnergyCheckEnd(cy, isl);
+         SleepConsider(cy, isl);
          continue;
       }
       if (IslandOnRing(cy, isl) && CordIsland(cy, isl, true))
       {
          lap(g_last.substepUs);
          EnergyCheckEnd(cy, isl);
+         SleepConsider(cy, isl);
          continue;
       }
       RingHandOut(cy, isl);
@@ -2987,6 +3453,7 @@ void ContactSystemImpl::StepBalls(const float dtime)
       {
          WriteBack(cy, isl);
          EnergyCheckEnd(cy, isl);
+         SleepConsider(cy, isl);
       }
       lap(g_last.writeUs);
       if (s_cc != nullptr)
@@ -3053,7 +3520,7 @@ void ContactSystemImpl::CordNear(const float dtime)
          if (pr.dist <= 0.0)
             continue;
          const double gap = pr.dist - (bs.R + pr.rho) - (fixedRc > 0.0 ? 2.0 * (fixedRc - pr.rho) : 0.0), rel = o->ReleaseGapM(), closing = -v.Dot(pr.normal);
-         if ((gap <= rel + plateReach || (closing > 0.0 && gap < closing * 2.0 * dt + rel)) && band->BandEngage(pb))
+         if ((gap <= rel + plateReach || (closing > 0.0 && gap < closing * 2.0 * dt + rel)) && (pb->m_sleepGroup == 0 || (SleepWakeBall(pb, "a band can take it", true), true)) && band->BandEngage(pb))
             break;
       }
    }
@@ -3097,7 +3564,7 @@ void ContactSystemImpl::EngageNear(const float dtime)
    for (auto *const ball : g_pplayer->m_vball)
    {
       HitBall *const pb = &ball->m_hitBall;
-      if (pb->m_contact != nullptr || pb->m_bandOwner != nullptr || pb->m_d.m_lockedInKicker)
+      if (pb->m_contact != nullptr || pb->m_bandOwner != nullptr || pb->m_d.m_lockedInKicker || pb->m_sleepGroup != 0)
          continue;
       const Vertex3Ds &pos = pb->m_d.m_pos;
       const double speed = std::sqrt((double)pb->m_d.m_vel.Dot(pb->m_d.m_vel)) * VS;
@@ -3696,6 +4163,21 @@ void ContactSystem::NotePlaced(const HitBall *const ball)
    g_placed.push_back(ball);
 }
 
+void ContactSystem::SleepCycleStart()
+{
+   ContactSystemImpl::SleepStart();
+}
+
+void ContactSystem::SleepWake(const HitBall *const ball, const char *const cause)
+{
+   ContactSystemImpl::SleepWakeBall(ball, cause, true);
+}
+
+void ContactSystem::SleepWakeAtStart(const HitBall *const ball, const char *const cause)
+{
+   ContactSystemImpl::SleepWakeBall(ball, cause, false);
+}
+
 void ContactSystem::Step(float dtime)
 {
    ContactSystemImpl::StepBalls(dtime);
@@ -3728,6 +4210,10 @@ namespace
       bool advanced = false;
       bool hasKept = false;
       ContactSystemImpl::KeptDoubles kept;
+      int sleepGroup = 0;   // pile sleep
+      bool sleepOwe = false;
+      double sleepHoldS = 0.0, sleepCreepS = 0.0;
+      Vertex3Ds sleepPos;
    };
    struct StartSnap
    {
@@ -3735,6 +4221,8 @@ namespace
       std::vector<BallContact> contacts;
       std::vector<BallPairState> pairs;
       std::vector<PartSnap> parts;
+      std::vector<ContactSystemImpl::SleepGroup> sleep;   // pile sleep
+      double sleepCycleDt = 0.0;
       size_t deferred = 0;
       bool valid = false;
       unsigned us = 0;
@@ -3757,7 +4245,14 @@ void ContactSystem::SaveStart()
       s.balls[i].hasKept = kd != ContactSystemImpl::g_keptDoubles.end();
       if (s.balls[i].hasKept)
          s.balls[i].kept = kd->second;
+      s.balls[i].sleepGroup = hb.m_sleepGroup;
+      s.balls[i].sleepOwe = hb.m_sleepOwe;
+      s.balls[i].sleepHoldS = hb.m_sleepHoldS;
+      s.balls[i].sleepCreepS = hb.m_sleepCreepS;
+      s.balls[i].sleepPos = hb.m_sleepPos;
    }
+   s.sleep = ContactSystemImpl::g_sleep;
+   s.sleepCycleDt = ContactSystemImpl::g_sleepCycleDt;
    s.contacts.resize(g_engaged.size());
    size_t k = 0;
    for (const BallContact &e : g_engaged)
@@ -3790,8 +4285,15 @@ static void RestoreSnap(const std::vector<HitBall *> *only)
    StartSnap &s = g_snap;
    if (!s.valid)
       return;
+   ContactSystemImpl::g_sleep = s.sleep;   // pile sleep: every ball's, whatever the replay restores of the rest
+   ContactSystemImpl::g_sleepCycleDt = s.sleepCycleDt;
    for (const BallSnap &b : s.balls)
    {
+      b.pb->m_sleepGroup = b.sleepGroup;
+      b.pb->m_sleepOwe = b.sleepOwe;
+      b.pb->m_sleepHoldS = b.sleepHoldS;
+      b.pb->m_sleepCreepS = b.sleepCreepS;
+      b.pb->m_sleepPos = b.sleepPos;
       if (only != nullptr && b.pb->m_contact == nullptr && std::find(only->begin(), only->end(), b.pb) == only->end())
          continue;
       b.pb->m_d.m_pos = b.pos;

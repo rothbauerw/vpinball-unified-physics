@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "physics/rubbercontact.h"
+#include "physics/pairform.h"
 
 namespace GroupStep
 {
@@ -130,6 +131,14 @@ namespace GroupStep
       }
    };
 
+   // A position energy on the balls (a magnet's pull): what a ball's place stores, per unit of its Ball::fieldScale. Fixed for the cycle; it owns no state of a step. grad, hess: its slopes in the centre, when wanted
+   class BallField
+   {
+   public:
+      virtual ~BallField() = default;
+      virtual double Eval(const V3 &c, double R, V3 *grad, M3 *hess) const = 0;
+   };
+
    // ---- surfaces ----
    // What a surface reports for a ball centre: the signed depth (> 0 = squashed; the ball's radius plus a tube's radius minus the distance), the normal (surface -> ball
    // centre) and the Hertz effective radius. The depth must be continuous in the ball's position (the step takes exact differences of it).
@@ -225,7 +234,10 @@ namespace GroupStep
    {
       V3 c, v, w;            // centre, velocity, spin (m, m/s, rad/s)
       double m = 0.080, R = 25.0 * 0.53975e-3;
-      V3 fExt;               // a held outside force (a magnet, a part not yet moved over): a drive, its work counted
+      V3 fExt;               // a held outside force (a magnet not on a field, the magnets' ball-pair force, a part not yet moved over): a drive, its work counted
+      double fieldScale = 0.0;   // how much of the group's fields it feels (Group::field); 0 = none
+      double brakeRate = 0.0;    // a viscous brake on its spin across an axis (the eddy currents in a coil's field), 1/s; 0 = none. The caller's, held for the cycle
+      V3 brakeAxis;              // the axis (unit): a spin about it is not braked
       double I() const { return 0.4 * m * R * R; }
    };
 
@@ -268,12 +280,14 @@ namespace GroupStep
    {
       double driveJ = 0.0, normalLossJ = 0.0, slipJ = 0.0, shearDampJ = 0.0, twistJ = 0.0, rollJ = 0.0;
       double partLossJ = 0.0;   // the parts' losses (their own books split them)
+      double spinBrakeJ = 0.0;  // the balls' spin brake (Ball::brakeRate)
+      double coilJ = 0.0;       // a coil's work on what the balls store: a current that changed since the last cycle, at the balls' places. It falls before this cycle's energy starts, so it is apart from driveJ
       long steps = 0, rounds = 0, halvings = 0, stopSteps = 0, noiseStops = 0;   // noiseStops: steps solved to the forces' noise (Settings::tolNoise)
       long energySteps = 0, energyBounces = 0, energyFree = 0;   // steps no solve could do: taken on energy alone, of them turned back at a step in the energy too high to pay, moved with no path (Group::EnergyStep)
       int maxRounds = 0;
       double hMinUsed = 1.0, maxDepthM = 0.0;
       bool failed = false, through = false;
-      double Losses() const { return normalLossJ + slipJ + shearDampJ + twistJ + rollJ + partLossJ; }
+      double Losses() const { return normalLossJ + slipJ + shearDampJ + twistJ + rollJ + partLossJ + spinBrakeJ; }
    };
 
    class Group;
@@ -553,8 +567,13 @@ namespace GroupStep
    public:
       Settings set;
       Books books;
-      int nb = 0, ns = 0, ni = 0, np = 0;
+      int nb = 0, ns = 0, ni = 0, np = 0, nf = 0;
       Buf<Ball> ball;
+      AddedList<const BallField *> field;   // the position energies on the balls: one energy, each ball's difference over its move exact
+      // the magnets' ball-pair form (pairform.h, 2026-11-03): a stored energy E = -sum g q of the balls' places, fixed for the cycle; a and b index the group's balls
+      // (b < 0: the other ball held at the term's o, outside this group). Its work over a move is the exact difference (discrete gradient), as the fields'
+      Buf<PairForm::Term> form;
+      int nform = 0;
       AddedList<const Shape *> shape;
       Buf<Item> item;
       AddedList<Part *> part;   // moving parts (the band); they read the balls through the step calls
@@ -582,6 +601,40 @@ namespace GroupStep
          esB0.Grow(n);
          esA0.Grow(n);
          esAl0.Grow(n);
+         fieldE0.Grow(n);
+         warmA.Grow(n);
+         warmAl.Grow(n);
+      }
+      void AddField(const BallField *const f)
+      {
+         field.b.Grow((size_t)nf + 1);
+         field.b[nf++] = f;
+      }
+      void AddForm(const PairForm::Term &t)
+      {
+         form.Grow((size_t)nform + 1);
+         form[nform++] = t;
+      }
+      // What the balls' places store in the pair form; each ball's force from it (-slope) added to F when wanted
+      double FormEnergy(const Ball *const b, V3 *const F = nullptr) const
+      {
+         double e = 0.0;
+         for (int t = 0; t < nform; t++)
+         {
+            const PairForm::Term &T = form[t];
+            const double ca[3] = { b[T.a].c.x, b[T.a].c.y, b[T.a].c.z };
+            double cb[3], ga[3], gb[3];
+            if (T.b >= 0)
+               cb[0] = b[T.b].c.x, cb[1] = b[T.b].c.y, cb[2] = b[T.b].c.z;
+            e -= T.g * PairForm::Q(T, ca, T.b >= 0 ? cb : nullptr, ga, gb);
+            if (F != nullptr)
+            {
+               F[T.a] = F[T.a] + V3(ga[0], ga[1], ga[2]) * T.g;
+               if (T.b >= 0)
+                  F[T.b] = F[T.b] + V3(gb[0], gb[1], gb[2]) * T.g;
+            }
+         }
+         return e;
       }
       void AddShape(const Shape *const s)
       {
@@ -703,6 +756,8 @@ namespace GroupStep
          {
             const Ball &b = ball[i];
             e += 0.5 * b.m * b.v.Dot(b.v) + 0.5 * b.I() * b.w.Dot(b.w) - b.m * set.g.Dot(b.c);
+            if (nf > 0 && b.fieldScale != 0.0)
+               e += FieldEnergy(b);
          }
          for (int k = 0; k < ni; k++)
             if (item[k].touching)
@@ -713,6 +768,25 @@ namespace GroupStep
             }
          for (int p = 0; p < np; p++)
             e += part[p]->Energy(ball, nb);
+         e += FormEnergy(ball);
+         return e;
+      }
+      // What the ball's place stores in the group's fields; its slopes when wanted
+      double FieldEnergy(const Ball &b, V3 *const grad = nullptr, M3 *const hess = nullptr) const
+      {
+         double e = 0.0;
+         for (int f = 0; f < nf; f++)
+         {
+            V3 g;
+            M3 hs;
+            e += b.fieldScale * field[f]->Eval(b.c, b.R, grad != nullptr ? &g : nullptr, hess != nullptr ? &hs : nullptr);
+            if (grad != nullptr)
+               *grad = *grad + g * b.fieldScale;
+            if (hess != nullptr)
+               for (int i = 0; i < 3; i++)
+                  for (int j = 0; j < 3; j++)
+                     hess->a[i][j] += b.fieldScale * hs.a[i][j];
+         }
          return e;
       }
       bool Touching(int k) const { return item[k].touching; }
@@ -801,7 +875,16 @@ namespace GroupStep
          StepDiag dg;
          V3 *const fNet = fNetS;   // the net force on each ball now: gravity, each touching contact's spring and shear stretch
          for (int i = 0; i < nb; i++)
+         {
             fNet[i] = (set.g * ball[i].m) + ball[i].fExt;
+            if (nf > 0 && ball[i].fieldScale != 0.0)
+            {
+               V3 gf;
+               FieldEnergy(ball[i], &gf);
+               fNet[i] = fNet[i] - gf;
+            }
+         }
+         FormEnergy(ball, fNet);
          for (int k = 0; k < ni; k++)
          {
             const Item &it = item[k];
@@ -980,13 +1063,19 @@ namespace GroupStep
                }
                double lo = 0.0, flo = std::min(StopExcess(zero), -1e-30), hi = h, fhi = StopExcess(), hBelow = 0.0;
                int side = 0;
+               bool solvedBelow = false;   // x holds the solve at hBelow (the search ended on it): no need to solve it again
+               WarmFromSolve(h);
                for (int it = 0; it < 80; it++)
                {
                   double hm = (lo * fhi - hi * flo) / (fhi - flo);
                   if (!(hm > lo && hm < hi))
                      hm = 0.5 * (lo + hi);
                   if (!Solve(hm))
+                  {
+                     warmOn = false;
                      return EnergyStep(hTry);
+                  }
+                  WarmFromSolve(hm);
                   const double f = StopExcess();
                   if (f <= 0.0)
                   {
@@ -995,7 +1084,10 @@ namespace GroupStep
                      for (int p = 0; p < np; p++)
                         arriving = arriving && part[p]->ArrivingAtStop();
                      if (f > -kOnStop && arriving)
+                     {
+                        solvedBelow = true;
                         break;
+                     }
                      lo = hm;
                      flo = f;
                      if (side == -1)
@@ -1011,7 +1103,9 @@ namespace GroupStep
                      side = 1;
                   }
                }
-               if (hBelow <= 0.0 || !Solve(hBelow))
+               const bool endOk = hBelow > 0.0 && (solvedBelow || Solve(hBelow));
+               warmOn = false;
+               if (!endOk)
                   return EnergyStep(hTry);
                Accept(hBelow, true);
                books.stopSteps++;
@@ -1092,6 +1186,19 @@ namespace GroupStep
       // what each function of a step works in
       mutable Buf<V3> fNetS;
       Buf<V3> evF, evM, evDc, evDw, evWm, esA0, esAl0;
+      // the stop search's first guess: the accelerations of this step's last solve (same start state), so a re-solve at a nearby length starts near its answer
+      Buf<V3> warmA, warmAl;
+      bool warmOn = false;
+      void WarmFromSolve(const double h)
+      {
+         for (int i = 0; i < nb; i++)
+         {
+            const V3 dc(x[6 * i], x[6 * i + 1], x[6 * i + 2]), dw(x[6 * i + 3], x[6 * i + 4], x[6 * i + 5]);
+            warmA[i] = (dc - ball[i].v * h) * (2.0 / (h * h));   // dc = v h + a h^2 / 2
+            warmAl[i] = dw * (1.0 / h);
+         }
+         warmOn = true;
+      }
       Buf<Ball> evB1, evBm, farB1, farBm, esB0;
       Buf<Item> esI0;
       Buf<double> resS, stpS, xPrevS, stpPrevS, trialS, zeroS, esRes, xpS, rpS, rmS, jStore, jacAnaS, jacFdS;
@@ -1111,6 +1218,7 @@ namespace GroupStep
       int nUnk = 0;              // unknowns of the step being solved
       bool partEvalFailed = false;
       Buf<char> farNow;          // not touching and out of reach in this attempt
+      Buf<double> fieldE0;       // what each ball's place stores at the start of the attempt
       // out of reach: the gap is more than both bodies' speeds can close in twice the step, with a margin. A body that picks up speed inside the step is what the check after the solve is for
       bool OutOfReach(const Item &it, const double d0, const double h, const Hit &h0) const
       {
@@ -1428,6 +1536,55 @@ namespace GroupStep
          driveW = 0.0;
          for (int i = 0; i < nb; i++)
             driveW += ball[i].fExt.Dot(dc[i]);
+         // the spin brake: on the mid-step spin across its axis, so it can only take energy, and that energy is what Accept books
+         for (int i = 0; i < nb; i++)
+            if (ball[i].brakeRate > 0.0)
+            {
+               const double c = ball[i].brakeRate * ball[i].I();
+               M[i] = M[i] - (wm[i] - ball[i].brakeAxis * wm[i].Dot(ball[i].brakeAxis)) * c;
+               if (J)
+                  AddBlock(J, 6 * i + 3, 6 * i + 3, M3::Tangent(ball[i].brakeAxis), 0.5 * h * c);   // (the mid-step spin moves half as far as the end)
+            }
+         // the fields' stored energy: its discrete gradient over the ball's move (Gonzalez), so the work it does is the exact difference at any step length
+         for (int i = 0; nf > 0 && i < nb; i++)
+            if (ball[i].fieldScale != 0.0)
+            {
+               V3 gf;
+               M3 hf;
+               const double e1 = FieldEnergy(b1[i]);
+               FieldEnergy(bm[i], &gf, J ? &hf : nullptr);
+               const double gm[3] = { gf.x, gf.y, gf.z }, dq[3] = { dc[i].x, dc[i].y, dc[i].z }, W[3] = { 1.0, 1.0, 1.0 };
+               double gd[3];
+               Gonzalez(gm, e1 - fieldE0[i], 16.0 * 2.220446049250313e-16 * std::fabs(e1) + gf.Length() * noiseD, dq, W, 3, gd);
+               F[i] = F[i] - V3(gd[0], gd[1], gd[2]);
+               if (J)
+                  AddBlock(J, 6 * i, 6 * i, hf, 0.5 * h);   // (the midpoint moves half as far as the end)
+            }
+         // the pair form: each term's discrete gradient over the move (Gonzalez), so its work is the exact change of -g q. Its curvature (about g / l, 0.4 N/mm against
+         // the contacts' 3.5e3 N/mm) is left out of the Jacobian: it changes the rounds, not the answer
+         for (int t = 0; t < nform; t++)
+         {
+            const PairForm::Term &T = form[t];
+            const bool two = T.b >= 0;
+            const double c0a[3] = { ball[T.a].c.x, ball[T.a].c.y, ball[T.a].c.z }, c1a[3] = { b1[T.a].c.x, b1[T.a].c.y, b1[T.a].c.z }, cma[3] = { bm[T.a].c.x, bm[T.a].c.y, bm[T.a].c.z };
+            double c0b[3] = { 0, 0, 0 }, c1b[3] = { 0, 0, 0 }, cmb[3] = { 0, 0, 0 };
+            if (two)
+            {
+               c0b[0] = ball[T.b].c.x, c0b[1] = ball[T.b].c.y, c0b[2] = ball[T.b].c.z;
+               c1b[0] = b1[T.b].c.x, c1b[1] = b1[T.b].c.y, c1b[2] = b1[T.b].c.z;
+               cmb[0] = bm[T.b].c.x, cmb[1] = bm[T.b].c.y, cmb[2] = bm[T.b].c.z;
+            }
+            double gm[6] = { 0, 0, 0, 0, 0, 0 };
+            const double q0 = PairForm::Q(T, c0a, two ? c0b : nullptr), q1 = PairForm::Q(T, c1a, two ? c1b : nullptr);
+            PairForm::Q(T, cma, two ? cmb : nullptr, gm, gm + 3);
+            const double dq[6] = { dc[T.a].x, dc[T.a].y, dc[T.a].z, two ? dc[T.b].x : 0.0, two ? dc[T.b].y : 0.0, two ? dc[T.b].z : 0.0 };
+            const double W[6] = { 1.0 / ball[T.a].m, 1.0 / ball[T.a].m, 1.0 / ball[T.a].m, two ? 1.0 / ball[T.b].m : 0.0, two ? 1.0 / ball[T.b].m : 0.0, two ? 1.0 / ball[T.b].m : 0.0 };
+            double gd[6];
+            Gonzalez(gm, q1 - q0, 16.0 * 2.220446049250313e-16 * std::fabs(q1) + noiseD, dq, W, two ? 6 : 3, gd);
+            F[T.a] = F[T.a] + V3(gd[0], gd[1], gd[2]) * T.g;
+            if (two)
+               F[T.b] = F[T.b] + V3(gd[3], gd[4], gd[5]) * T.g;
+         }
 
          for (int k = 0; k < ni; k++)
          {
@@ -1518,35 +1675,38 @@ namespace GroupStep
             if (k1 > k0)
                xi0 = xi0 * (k0 / k1);
             e.slip = held - 0.5 * k1 * xi0.Dot(xi0);
-            V3 Fs, xi1, FsTr;
-            double ct = 0.0, limS = 0.0, flTr = 0.0, dampShare = 1.0;
+            // the patch: the spring k1 and the damper ct side by side, in series with the Coulomb slip. The trial force (no slip) is the spring's midpoint force and the
+            // damper's; past mu N the patch slips along the trial and the spring's end stretch is the one that carries the limit force with the damper. The force is
+            // continuous across stick and slip.
+            V3 Ft, xi1, FsTr;
+            double ct = 0.0, limS = 0.0, flTr = 0.0;
             bool slipping = false;
             if (k1 > 0.0)
             {
                const V3 xtr = xi0 + ut * h;
-               Fs = (xi0 + xtr) * (0.5 * k1);
-               FsTr = Fs;
-               const double lim = L.mu * N, fl = Fs.Length();
+               ct = L.shearTan * std::sqrt(k1 * L.mt);
+               Ft = (xi0 + xtr) * (0.5 * k1) + ut * ct;
+               FsTr = Ft;
+               const double lim = L.mu * N, fl = Ft.Length();
                limS = lim;
                flTr = fl;
+               xi1 = xtr;
                if (fl > lim)
                {
-                  Fs = fl > 0.0 ? Fs * (lim / fl) : V3();
-                  xi1 = Fs * (2.0 / k1) - xi0;
+                  Ft = fl > 0.0 ? Ft * (lim / fl) : V3();
+                  // Ft = k1 (xi0 + xi1) / 2 + ct (xi1 - xi0) / h, so the slip xtr - xi1 = (trial - Ft) / (k1 / 2 + ct / h) lies along Ft: its loss Ft . slip >= 0
+                  const double cs = 0.5 * k1 + ct / h;
+                  xi1 = (Ft - xi0 * (0.5 * k1 - ct / h)) * (1.0 / cs);
                   slipping = true;
                   e.slipping = true;
-                  e.slip += Fs.Dot(xtr - xi1);
-               }
-               else
-               {
-                  xi1 = xtr;
-                  ct = L.shearTan * std::sqrt(k1 * L.mt);
-                  dampShare = RubberContact::DamperShare(Fs, ut * ct, lim);
+                  e.slip += Ft.Dot(xtr - xi1);
                }
             }
             e.xi1 = xi1;
-            const V3 Ft = Fs + ut * (ct * dampShare);
-            e.shearDamp = ct * dampShare * ut.Dot(ut) * h;
+            {
+               const V3 dxi = xi1 - xi0;   // the damper's loss over its own stretch (ct ut^2 h while it sticks)
+               e.shearDamp = slipping ? ct * dxi.Dot(dxi) / h : ct * ut.Dot(ut) * h;
+            }
             F[it.a] = F[it.a] - V3(gd[0], gd[1], gd[2]) * N - Ft;
             M[it.a] = M[it.a] + rA.Cross(Ft * -1.0);
             if (pr)
@@ -1627,9 +1787,8 @@ namespace GroupStep
                //    d/d dc_q: sp sq [Cm; Skew(r_p) Cm] - h sp sq [fd1; Skew(r_p) fd1] n^T,   d/d dw_q: 1/2 h sp sq [Cm; Skew(r_p) Cm] Skew(r_q)^T
                // The spring's force is k1 xi0 + k1 ut h / 2, and a growing patch holds k1 xi0 (= k0 xi0 before the hold): g = k1'(d1) ((k1 > k0 ? 0 : xi0) + ut h / 2) is its change with d1.
                // Sticking: Cm = (k1 h / 2 + ct) Pt, fd1 = g + k1' shearTan sqrt(mt / k1) ut / 2 (ct grows with k1 too).
-               // Damper at the limit (Ft = Fs + s D, D = ct ut, |Ft| = lim): with s from that, dFt = P (dFs + s dD) + D lim dlim / (Ft . D), P = I - D Ft^T / (Ft . D).
-               // Sliding (Ft = lim f^, f^ along the spring's trial force): Cm = (lim / |trial|) (k1 h / 2) (Pt - f^ f^^T), fd1 = mu N'(d1) f^ +
-               // (lim / |trial|) (Pt - f^ f^^T) g, N' = K / 2 + c / h.
+               // Sliding (Ft = lim f^, f^ along the total trial force T = k1 xi0 + (k1 h / 2 + ct) ut): Cm = (lim / |T|) (k1 h / 2 + ct) (Pt - f^ f^^T),
+               // fd1 = mu N'(d1) f^ + (lim / |T|) (Pt - f^ f^^T) (g + gc), N' = kn / h, the normal row's own slope.
                const M3 Pt = M3::Tangent(nm);
                const int nbod = pr ? 2 : 1;
                const int bi[2] = { it.a, it.b };
@@ -1642,27 +1801,9 @@ namespace GroupStep
                   const double kp = L.KtSlope(d1);
                   const V3 g = ((k1 > k0 ? V3() : xi0) + ut * (0.5 * h)) * kp;
                   const V3 gc = ut * (0.5 * L.shearTan * std::sqrt(L.mt / k1) * kp);
-                  const double FD = Ft.Dot(ut) * ct;
-                  if (!slipping && dampShare < 1.0 && FD > 1e-30)
+                  const double C = 0.5 * k1 * h + ct;
+                  if (!slipping)
                   {
-                     const V3 D = ut * ct;
-                     const V3 dd = g + gc * dampShare;
-                     const double C = 0.5 * k1 * h + ct * dampShare;
-                     const M3 Q = M3::Outer(D, Ft);
-                     M3 P;
-                     for (int i = 0; i < 3; i++)
-                        for (int j = 0; j < 3; j++)
-                           P.a[i][j] = (i == j ? 1.0 : 0.0) - Q.a[i][j] / FD;
-                     const M3 PPt = P * Pt;
-                     for (int i = 0; i < 3; i++)
-                        for (int j = 0; j < 3; j++)
-                           Cm.a[i][j] = C * PPt.a[i][j];
-                     const double dN = 0.5 * L.K(std::max(std::max(dm, d1), 0.0)) + cD / h;
-                     fd1 = dd + D * ((limS * L.mu * dN - Ft.Dot(dd)) / FD);
-                  }
-                  else if (!slipping)
-                  {
-                     const double C = 0.5 * k1 * h + ct;
                      for (int i = 0; i < 3; i++)
                         for (int j = 0; j < 3; j++)
                            Cm.a[i][j] = C * Pt.a[i][j];
@@ -1678,11 +1819,12 @@ namespace GroupStep
                         for (int j = 0; j < 3; j++)
                         {
                            Pf.a[i][j] = Pt.a[i][j] - Q.a[i][j];
-                           Cm.a[i][j] = r * 0.5 * k1 * h * Pf.a[i][j];
+                           Cm.a[i][j] = r * C * Pf.a[i][j];
                         }
-                     const double dN = 0.5 * L.K(std::max(std::max(dm, d1), 0.0)) + cD / h;
-                     const V3 Pg(Pf.a[0][0] * g.x + Pf.a[0][1] * g.y + Pf.a[0][2] * g.z, Pf.a[1][0] * g.x + Pf.a[1][1] * g.y + Pf.a[1][2] * g.z,
-                                 Pf.a[2][0] * g.x + Pf.a[2][1] * g.y + Pf.a[2][2] * g.z);
+                     const double dN = kn / h;
+                     const V3 gt = g + gc;
+                     const V3 Pg(Pf.a[0][0] * gt.x + Pf.a[0][1] * gt.y + Pf.a[0][2] * gt.z, Pf.a[1][0] * gt.x + Pf.a[1][1] * gt.y + Pf.a[1][2] * gt.z,
+                                 Pf.a[2][0] * gt.x + Pf.a[2][1] * gt.y + Pf.a[2][2] * gt.z);
                      fd1 = fh * (L.mu * dN) + Pg * r;
                   }
                   const M3 Dn = M3::Outer(fd1, nm);
@@ -2047,10 +2189,14 @@ namespace GroupStep
             if (!item[k].touching)
                TakeLaw(law[k], h0);
          }
+         for (int i = 0; nf > 0 && i < nb; i++)
+            fieldE0[i] = ball[i].fieldScale != 0.0 ? FieldEnergy(ball[i]) : 0.0;
          for (int i = 0; i < nb; i++)
          {
-            // the first guess: the last step's accelerations carried on (a guess only: the solve's answer does not depend on it)
-            const V3 g0 = (ball[i].v + aLast[i] * (0.5 * h)) * h, w0 = alphaLast[i] * h;
+            // the first guess: the last step's accelerations carried on, or in the stop search this step's own from its last solve (a guess only: the solve's
+            // answer does not depend on it)
+            const V3 &ag = warmOn ? warmA[i] : aLast[i], &alg = warmOn ? warmAl[i] : alphaLast[i];
+            const V3 g0 = (ball[i].v + ag * (0.5 * h)) * h, w0 = alg * h;
             x[6 * i] = g0.x; x[6 * i + 1] = g0.y; x[6 * i + 2] = g0.z;
             x[6 * i + 3] = w0.x; x[6 * i + 4] = w0.y; x[6 * i + 5] = w0.z;
          }
@@ -2354,6 +2500,11 @@ namespace GroupStep
             Ball &b = ball[i];
             const V3 dc(x[6 * i], x[6 * i + 1], x[6 * i + 2]), dw(x[6 * i + 3], x[6 * i + 4], x[6 * i + 5]);
             const V3 v0 = b.v;
+            if (b.brakeRate > 0.0)
+            {
+               const V3 wmid = b.w + dw * 0.5, wa = wmid - b.brakeAxis * wmid.Dot(b.brakeAxis);
+               books.spinBrakeJ += b.brakeRate * b.I() * wa.Dot(wa) * h;
+            }
             b.c = b.c + dc;
             b.v = dc * (2.0 / h) - b.v;
             b.w = b.w + dw;
@@ -2419,7 +2570,7 @@ namespace GroupStep
          const char *const e = getenv("VPX_GROUP_BOOK");
          FILE *const o = e != nullptr && *e ? fopen(e, "w") : nullptr;
          if (o != nullptr)
-            fprintf(o, "t_ms,alone,dt_us,nb,np,touch,steps,rounds,maxRounds,halvings,stopSteps,energySteps,failed,E0_mJ,E1_mJ,drive_uJ,loss_uJ,book_uJ,rises_uJ,maxRise_uJ,us,maxDepth_mm\n");
+            fprintf(o, "t_ms,alone,dt_us,nb,np,touch,steps,rounds,maxRounds,halvings,stopSteps,energySteps,failed,E0_mJ,E1_mJ,drive_uJ,loss_uJ,book_uJ,rises_uJ,maxRise_uJ,us,maxDepth_mm,coil_uJ,brake_uJ\n");
          return o;
       }();
       return f;
@@ -2454,8 +2605,8 @@ namespace GroupStep
          int touch = 0;
          for (int k = 0; k < g.ni; k++)
             touch += g.Touching(k) ? 1 : 0;
-         fprintf(f, "%d,%d,%.3f,%d,%d,%d,%ld,%ld,%d,%ld,%ld,%ld,%d,%.9f,%.9f,%.6f,%.6f,%.6f,%.6f,%.6f,%.1f,%.5f\n", tMs, alone ? 1 : 0, dt * 1e6, g.nb, g.np, touch, g.books.steps, g.books.rounds, g.books.maxRounds, g.books.halvings, g.books.stopSteps, g.books.energySteps, failed ? 1 : 0,
-                 e0 * 1e3, e1 * 1e3, d * 1e6, l * 1e6, (e1 - e0 + l - d) * 1e6, rises * 1e6, maxRise * 1e6, us, g.books.maxDepthM * 1e3);
+         fprintf(f, "%d,%d,%.3f,%d,%d,%d,%ld,%ld,%d,%ld,%ld,%ld,%d,%.9f,%.9f,%.6f,%.6f,%.6f,%.6f,%.6f,%.1f,%.5f,%.6f,%.6f\n", tMs, alone ? 1 : 0, dt * 1e6, g.nb, g.np, touch, g.books.steps, g.books.rounds, g.books.maxRounds, g.books.halvings, g.books.stopSteps, g.books.energySteps, failed ? 1 : 0,
+                 e0 * 1e3, e1 * 1e3, d * 1e6, l * 1e6, (e1 - e0 + l - d) * 1e6, rises * 1e6, maxRise * 1e6, us, g.books.maxDepthM * 1e3, g.books.coilJ * 1e6, g.books.spinBrakeJ * 1e6);
          fflush(f);
       }
 

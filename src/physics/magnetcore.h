@@ -50,6 +50,7 @@ namespace MagnetCore
       BareTable bare;
       std::vector<double> hR, R, sat;                 // on-axis: gap (m), reaction down force (N, linear ball), ball-saturation factor
       std::vector<double> down, side;                 // force table over the geometry grid (N): toward the face, toward the axis (rim rule applied to down)
+      std::vector<double> V, Vx, Vs, Vxs;             // the pull's stored energy over the same grid (Model::Energy): J, and its slopes per node in x and in ln h, and the mixed one
       // for a ball-ball model (used by the multipole model, removed 2026-10-19; kept for its successor): the core with ONE ball on the face (plug, on the axis, gap hR.front()) and the plug's own drive per on-axis gap
       BareTable plug;                                 // H (A/m) of coil + core in the plug state (the plug's own field NOT included), same layout as bare
       std::vector<std::vector<double>> plugB;         // per gap (as hR): scaled zonal drive b_bar_n0 (orthonormal Y_n0, n = 1..13) of coil + core at the plug centre, core frozen
@@ -68,6 +69,11 @@ namespace MagnetCore
       // Force on a ball of radius g.ballR centred at offset x (m, >= 0) and gap h (m, above the face) at coil current I (A): down (toward the face) and side (toward the axis), N.
       // Returns false outside the bare table (no force).
       bool Force(double x, double h, double I, double &down, double &side) const;
+      // The pull as a stored energy of the ball's place (J: 0 far away, negative near the face). Per level the one energy closest to that level's force table (least squares over the grid's edges, built
+      // at load: the tables are close to one energy, not exactly, runs/2026-11-02-magnet-step/notes.md), smooth between nodes (bicubic Hermite in x and ln h, the table's forces its slopes at the nodes).
+      // Vx = dV/dx (a force side toward the axis), Vh = dV/dh (a force down toward the face). Below the first gap it goes on with that gap's down force (Force holds the gap there). In the current as Force is.
+      struct Pull { double V = 0, Vx = 0, Vh = 0, Vxx = 0, Vxh = 0, Vhh = 0; };
+      void Energy(double x, double h, double I, Pull &p) const;
       // Bare field B (T) at (x, height above the face): Br along the offset, Bz along the axis, interpolated in the current
       bool Field(double x, double z, double I, double &Br, double &Bz) const;
    };

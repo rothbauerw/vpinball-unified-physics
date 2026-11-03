@@ -234,17 +234,6 @@ namespace RubberContact
       double E = 0.0;        // Young's modulus, Pa
    };
 
-   // How much of a damper's force D goes on top of the spring's force Fs and stays within the limit lim (|Fs| <= lim): the largest s in [0, 1] with |Fs + s D| <= lim.
-   // Taken off the damper, so the spring keeps its own force and the damper can only remove energy.
-   inline double DamperShare(const V3 &Fs, const V3 &D, const double lim)
-   {
-      const V3 sum = Fs + D;
-      if (sum.Dot(sum) <= lim * lim)
-         return 1.0;
-      const double qa = D.Dot(D), qb = 2.0 * Fs.Dot(D), qc = Fs.Dot(Fs) - lim * lim;
-      return qa > 0.0 ? std::min(1.0, std::max(0.0, (-qb + std::sqrt(std::max(0.0, qb * qb - 4.0 * qa * qc))) / (2.0 * qa))) : 1.0;
-   }
-
    // The surface-independent part of the contact law: normal (Hertz + thin layer + Hunt-Crossley), Mindlin shear with the Coulomb cap, twist.
    // The caller supplies the geometry of the touch: n = outward surface normal (surface -> ball centre), delta = compression, reff = Hertz
    // effective radius, h = rubber layer thickness (m), vs = velocity of the surface point. Shared by the flipper (Evaluate) and static rubbers.
@@ -280,27 +269,25 @@ namespace RubberContact
       // the spring holds can then only fall. kt goes as sqrt(delta), and the depth a step ago comes from the closing speed, so no state is kept for it.
       if (vn < 0.0)
          st.xi = st.xi * std::sqrt(std::max(delta + vn * dt, 0.0) / delta);
+      V3 xiOld;
       {
          const double l0 = st.xi.Length();
          const V3 xp = st.xi - n * st.xi.Dot(n);
          const double lp = xp.Length();
-         st.xi = (lp > 1e-300 ? xp * (l0 / lp) : V3()) + vt * dt;   // turned into the contact plane, its length kept
+         xiOld = lp > 1e-300 ? xp * (l0 / lp) : V3();   // turned into the contact plane, its length kept
+         st.xi = xiOld + vt * dt;
       }
       const double mt = 1.0 / (1.0 / m + R * R / Ib);          // tangential effective mass (m/3.5 for a solid sphere)
       const double ct = rp.shearTan * std::sqrt(kt * mt);
-      const V3 Fs = st.xi * (-kt);
-      V3 Ft;
+      // the patch: the spring kt and the damper ct side by side, in series with the Coulomb slip (the group step's law): the trial force is both, past the limit the
+      // patch slips along it and the spring's end stretch is the one that carries the limit force with the damper (Ft = -kt xi - ct (xi - xiOld) / dt)
       const double lim = rp.mu * Fn;
-      const double ns = Fs.Length();
-      if (ns > lim)
+      V3 Ft = st.xi * (-kt) + vt * (-ct);
+      const double nt = Ft.Length();
+      if (nt > lim)
       {
-         Ft = Fs * (lim / ns);
-         st.xi = Ft * (-1.0 / kt);   // on the spring's force alone: a damper's share here would charge the spring with work nobody did
-      }
-      else
-      {
-         const V3 D = vt * (-ct);
-         Ft = Fs + D * DamperShare(Fs, D, lim);
+         Ft = Ft * (lim / nt);
+         st.xi = (xiOld * (ct / dt) - Ft) * (1.0 / (kt + ct / dt));
       }
 
       const V3 F = n * Fn + Ft;
@@ -804,6 +791,11 @@ namespace RubberContact
    struct CarvedHole
    {
       double x, y, r, z;
+      bool Holds(const V3 &p) const   // a point of a face inside the hole isn't surface
+      {
+         const double dx = p.x - x, dy = p.y - y;
+         return std::abs(p.z - z) < 0.003 && dx * dx + dy * dy < r * r;
+      }
    };
 
    // halfThick > 0: the faces are the mid-surface of a sheet of thickness 2 halfThick (a gate plate): the surface is everything within halfThick of the faces
@@ -822,8 +814,7 @@ namespace RubberContact
          for (int k = 0; k < nHoles; k++)
          {
             const CarvedHole &h = holes[k];
-            const double dx = p.x - h.x, dy = p.y - h.y;
-            if (std::abs(p.z - h.z) < 0.003 && dx * dx + dy * dy < h.r * h.r)
+            if (h.Holds(p))
             {
                double ux = c.x - h.x, uy = c.y - h.y;
                const double ul = std::sqrt(ux * ux + uy * uy);
@@ -871,7 +862,7 @@ namespace RubberContact
    }
 
    // ProbeTriangles' result with the other faces pressing the ball: the nearest point inside a face of another plane (a concave corner of the mesh). A face in a plane already counted adds nothing.
-   inline void PatchTriangles(const BallSI &ball, const std::vector<SurfaceTri> &tris, const std::vector<int> &cand, const V3 &c, const double zero, TubeProbe &pr)
+   inline void PatchTriangles(const BallSI &ball, const std::vector<SurfaceTri> &tris, const std::vector<int> &cand, const V3 &c, const double zero, TubeProbe &pr, const CarvedHole *holes = nullptr, int nHoles = 0)
    {
       if (!pr.overlap || pr.seg < 0 || pr.reff <= 0.0 || pr.delta <= zero)
          return;
@@ -902,7 +893,7 @@ namespace RubberContact
             continue;
          int kind = 0;
          const V3 p = ClosestOnTriangle(t, c, kind);
-         if (kind != 0)
+         if (kind != 0 || std::any_of(holes, holes + nHoles, [&](const CarvedHole &h) { return h.Holds(p); }))
             continue;
          if (fitBest < 0.0)
             fitBest = fitOn(tris[pr.seg], pr.point);

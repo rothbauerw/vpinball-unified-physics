@@ -56,12 +56,22 @@ namespace MagnetBalls
    V3 ReaimPair(const V3 &F, const V3 &u0, const V3 &u1);
    V3 ReaimMagnet(const V3 &F, const V3 &n, double dphi);
    V3 ReaimMagnetCS(const V3 &F, const V3 &n, double c, double s);   // the same with the angle's cosine and sine (no trig in the substeps)
-   struct Stats { int balls = 0, pairs = 0, pairFix = 0, sweeps = 0, offAxisPlug = 0; };   // pairFix: pairs within the pair-fix range
+   // pairFix: pairs within the pair-fix range; passes: pair-fix passes taken; change: the force the last sweep or pass could still have moved (N, see stopForce)
+   struct Stats { int balls = 0, pairs = 0, pairFix = 0, sweeps = 0, passes = 0, offAxisPlug = 0; bool turned = false; double change = 0; };
    struct Settings
    {
       double pairFixGap = 12e-3;   // m, surface to surface: pairs closer than this get the pair fix (build step B2; the operator table covers 0.1 .. 12 mm)
-      int gsRounds = 3;            // Gauss-Seidel rounds of the order-4 global solve per Evaluate, from the last answer (build step B5; stops early when converged)
-      int passes = 2;              // feedback passes of the pair fix per Evaluate, from the last answer (build step B5)
+      // The order-4 sweeps and the pair-fix passes each stop when their last round moved no ball's force by more than half of stopForce (2026-11-02): bound
+      // mu0 |a|max |da|max over the balls (2n+1 weighted), the force between two balls' moments when one changes by da. Half: the rounds shrink the error by about
+      // half or better, so what is left is at most about the last change again (measured offline: error up to 1.85 x the last change on arrivals).
+      // 1 mN: an eighth of the smallest pair force the model counts at all (the gate, MagnetCore::B_GATE: ~8 mN, 1 % of the ball's weight). A ball with no
+      // last answer (new, or a cold start) gets today's fixed rounds first (gsCold, passesCold), then the same stop. 0 = no stop (offline references).
+      double stopForce = 1e-3;
+      // The most rounds are today's counts, so the solve never costs more than before: with a poor start (a ball arriving, a second magnet, the current
+      // changing) the stop may not be reached and the error is what these rounds leave, as before (offline: up to 6 sweeps and 6 passes reach 1 mN there).
+      int gsRounds = 3;            // most Gauss-Seidel rounds of the order-4 global solve per Evaluate, from the last answer (build step B5; stops on stopForce)
+      int passes = 2;              // most feedback passes of the pair fix per Evaluate, from the last answer (build step B5; stops on stopForce)
+      int gsCold = 3, passesCold = 2;   // the least, when a ball has no last answer
       bool saturation = true;      // false = linear balls (contact factors 1): offline tests against the linear reference only
       bool linearTotal = false;    // with saturation = false: dF = the TOTAL linear force on each ball (lone part included), for offline tests only
    };

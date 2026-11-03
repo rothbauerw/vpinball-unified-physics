@@ -135,6 +135,12 @@ namespace HingeModel
       }
       bool Sleeping() const override { return idle; }
       // Nothing driven and nothing moved over the last cycle in a group: it stays out of a ball's solve while no ball can reach it. A part out of the solve still moves alone
+      bool RestNumbers(double &moveM, double &speedMS) const override
+      {
+         moveM = marked ? std::fabs(gp.q - markQ) * gp.reach : -1.0;
+         speedMS = std::fabs(gp.rate) * gp.reach;
+         return true;
+      }
       bool AtRest() const override
       {
          if (gp.AnyStopMoving())

@@ -421,9 +421,10 @@ namespace MagnetBalls
    struct Solver::Impl
    {
       Lean l4, l8, l9; const double R = BALL_R;   // l9: rotation of a magnet's drive (order 9, for its gradient to order 8) from its frame to the table frame
-      struct Pair { int i, j; bool touch; double gap; Lean::Frame f4, f8; std::vector<double> op; std::vector<cd> x, pf; double key = 0; };   // pf: partner fields of this pass (at j, at i)
+      // op: the pair operators at this gap, a table row itself when the gap is at the table's end (2026-11-02), else opBuf; pf: partner fields of this pass (at j, at i)
+      struct Pair { int i, j; bool touch; double gap; Lean::Frame f4, f8; const double *op = nullptr; std::vector<double> opBuf; std::vector<cd> x, pf; double key = 0; };
       std::vector<Pair> P;                          // this Evaluate's pairs; kept between calls so their buffers are reused (build step B6)
-      struct Warm { std::vector<cd> a4, ac; };   // a ball's last answer: global order-4 coefficients, corrected coefficients (order 8 layout)
+      struct Warm { std::vector<cd> a4, ac; V3 pos; };   // a ball's last answer: global order-4 coefficients, corrected coefficients (order 8 layout), its place then
       std::unordered_map<uint64_t, Warm> warm;    // by ball id (build step B5); a ball not in it starts from its own response to the drive
       std::vector<V3> lastPos; std::vector<cd> lastA; std::vector<uint64_t> lastIds;   // the last Evaluate: positions, coefficients (order 8 layout), ids
       Impl() : l4(L4, BALL_R), l8(LP, BALL_R), l9(L9, BALL_R) {}
@@ -533,45 +534,86 @@ namespace MagnetBalls
          if (q.touch)
          {
             I.l8.frame(D, q.f8); const double g = std::min(std::max(q.gap, ops.gaps.front()), ops.gaps.back()); size_t a = 0; while (a + 2 < ops.gaps.size() && g > ops.gaps[a + 1]) a++;
-            const double u = std::log(g / ops.gaps[a]) / std::log(ops.gaps[a + 1] / ops.gaps[a]); q.op.resize(ops.size);
-            const double *A0 = ops.data[a].data(), *A1 = ops.data[a + 1].data(); for (size_t e = 0; e < ops.size; e++) q.op[e] = (1 - u) * A0[e] + u * A1[e];
+            const double u = std::log(g / ops.gaps[a]) / std::log(ops.gaps[a + 1] / ops.gaps[a]);
+            const double *A0 = ops.data[a].data(), *A1 = ops.data[a + 1].data();
+            if (u <= 0) q.op = A0;        // at the table's end (touching: the gap is under its first row): the row itself, the same numbers as the blend
+            else if (u >= 1) q.op = A1;
+            else { q.opBuf.resize(ops.size); for (size_t e = 0; e < ops.size; e++) q.opBuf[e] = (1 - u) * A0[e] + u * A1[e]; q.op = q.opBuf.data(); }
             q.x.assign(2 * KP, 0.0); q.pf.assign(2 * KP, 0.0);
          }
          pidx[(size_t)i * N + j] = pidx[(size_t)j * N + i] = (int)np; np++;
       }
       P.resize(np);
       if (st) { st->balls = N; st->pairs = (int)P.size(); for (auto &q : P) st->pairFix += q.touch; }
-      // ---- global order-4 solve: gsRounds Gauss-Seidel rounds from each ball's last answer (by id), a new ball from its own response (a = -beta b)
+      // ---- global order-4 solve: Gauss-Seidel rounds from each ball's last answer (by id), a new ball from its own response (a = -beta b)
       std::vector<uint64_t> idv(N); for (int i = 0; i < N; i++) idv[i] = (ids && (int)ids->size() == N) ? (*ids)[i] : (uint64_t)i;
       std::vector<const Impl::Warm *> wp(N, nullptr);
+      bool cold = false;   // a ball with no last answer: today's fixed rounds first, no shortcut
+      for (int i = 0; i < N; i++) { const auto it = I.warm.find(idv[i]); if (it != I.warm.end()) wp[i] = &it->second; else cold = true; }
+      // The last answer turned with its ball round the magnet's axis (2026-11-02). The drive is axisymmetric, so balls turned together about the axis have the same
+      // answer turned: a_nm -> a_nm e^(-i m dphi). dphi: the turn about the axis that best carries the ball and its pair-fixed partners from their last places to
+      // these, each weighted by its distance from the axis squared (a ball near the axis has no angle of its own; its partners give it one, a lone ball there gets
+      // almost none). Only with one energised upright magnet: with two, or a tilted one, there is no one axis of symmetry and nothing is turned. It sets the start
+      // only: the rounds below stop on the force they still move, so a poor turn costs rounds, not the answer.
+      std::vector<cd> ph((size_t)N * (2 * LP + 1), cd(1, 0));
+      {
+         int on = -1, nOn = 0;
+         for (size_t s = 0; s < src.size(); s++) if (src[s].drive && src[s].drive->core && src[s].amps != 0) { on = (int)s; nOn++; }
+         const double an = nOn == 1 ? len(src[on].axis) : 0;
+         if (an > 0 && src[on].axis.z / an >= 1.0 - 1e-12)
+         {
+            const V3 o = src[on].origin;
+            for (int i = 0; i < N; i++)
+            {
+               if (!wp[i]) continue;
+               double c = 0, s = 0;
+               for (int j = 0; j < N; j++)
+               {
+                  if (!wp[j] || (j != i && (pidx[(size_t)i * N + j] < 0 || !P[pidx[(size_t)i * N + j]].touch))) continue;
+                  const double x0 = wp[j]->pos.x - o.x, y0 = wp[j]->pos.y - o.y, x1 = pos[j].x - o.x, y1 = pos[j].y - o.y;
+                  c += x0 * x1 + y0 * y1; s += x0 * y1 - y0 * x1;
+               }
+               const double r = std::hypot(c, s);
+               if (r <= 0) continue;
+               const cd e(c / r, -s / r); cd pw(1, 0); cd *pi = &ph[(size_t)i * (2 * LP + 1) + LP];
+               for (int m = 1; m <= LP; m++) { pw *= e; pi[m] = pw; pi[-m] = std::conj(pw); }
+               if (st) st->turned = true;
+            }
+         }
+      }
       std::vector<cd> a4((size_t)N * K4, 0.0), t1(KP), t2(KP), t3(KP);
       for (int i = 0; i < N; i++)
       {
-         const auto it = I.warm.find(idv[i]);
-         if (it != I.warm.end()) { wp[i] = &it->second; for (int k = 0; k < K4; k++) a4[(size_t)i * K4 + k] = it->second.a4[k]; }
+         if (wp[i]) for (int k = 0; k < K4; k++) a4[(size_t)i * K4 + k] = wp[i]->a4[k] * ph[(size_t)i * (2 * LP + 1) + LP + I.l4.m_[k]];
          else for (int k = 0; k < K4; k++) a4[(size_t)i * K4 + k] = -beta(I.l4.n_[k]) * b8[(size_t)i * KP + k];
       }
-      int sweeps = 0;
-      for (; sweeps < std::max(1, set.gsRounds); sweeps++)
+      // the force a round could still move: mu0 |a|max |da|max, 2n+1 weighted norms of each ball's coefficients (the force between two balls' moments is mu0 a a)
+      const auto moved = [&](double a2, double d2) { return MU0 * std::sqrt(a2 * d2); };
+      int sweeps = 0; double change = 0;
+      while (sweeps < std::max(1, set.gsRounds))
       {
-         double ch = 0, nm = 0;
+         double a2 = 0, d2 = 0;
          for (int i = 0; i < N; i++)
          {
             for (int k = 0; k < K4; k++) t3[k] = b8[(size_t)i * KP + k];
             for (int j = 0; j < N; j++) { const int q = pidx[(size_t)i * N + j]; if (j == i || q < 0) continue; I.l4.translate(P[q].f4, i < j ? +1 : -1, &a4[(size_t)j * K4], t3.data(), t1.data(), t2.data()); }
-            for (int k = 0; k < K4; k++) { const cd an = -beta(I.l4.n_[k]) * t3[k]; ch += std::norm(an - a4[(size_t)i * K4 + k]); nm += std::norm(an); a4[(size_t)i * K4 + k] = an; }
+            double ai = 0, di = 0;
+            for (int k = 0; k < K4; k++) { const cd an = -beta(I.l4.n_[k]) * t3[k]; di += I.l4.W_[k] * std::norm(an - a4[(size_t)i * K4 + k]); ai += I.l4.W_[k] * std::norm(an); a4[(size_t)i * K4 + k] = an; }
+            a2 = std::max(a2, ai); d2 = std::max(d2, di);
          }
-         if (ch <= 1e-12 * (nm + 1e-300)) { sweeps++; break; }
+         sweeps++; change = moved(a2, d2);
+         if (sweeps >= (cold ? set.gsCold : 1) && change <= 0.5 * set.stopForce) break;
       }
-      if (st) st->sweeps = sweeps;
-      // ---- coefficients at order 8: global + each ball's own response above order 4 (the plug), then 3 feedback passes on the touching pairs
+      if (st) { st->sweeps = sweeps; st->change = change; }
+      // ---- coefficients at order 8: global + each ball's own response above order 4 (the plug), then feedback passes on the touching pairs (stop as the sweeps)
       std::vector<cd> ag((size_t)N * KP, 0.0);
       for (int i = 0; i < N; i++) { for (int k = 0; k < K4; k++) ag[(size_t)i * KP + k] = a4[(size_t)i * K4 + k]; if (high[i]) for (int k = K4; k < KP; k++) ag[(size_t)i * KP + k] = -beta(I.l8.n_[k]) * b8[(size_t)i * KP + k]; }
       std::vector<cd> ac = ag, tot((size_t)N * KP), next, din(2 * KP), dout(2 * KP), s4a(K4), s4b(K4);
-      for (int i = 0; i < N; i++) if (wp[i]) for (int k = 0; k < KP; k++) ac[(size_t)i * KP + k] = wp[i]->ac[k];   // passes from the last corrected answer
+      for (int i = 0; i < N; i++) if (wp[i]) for (int k = 0; k < KP; k++) ac[(size_t)i * KP + k] = wp[i]->ac[k] * ph[(size_t)i * (2 * LP + 1) + LP + I.l8.m_[k]];   // passes from the last corrected answer, turned
       bool anyTouch = false; for (auto &q : P) anyTouch |= q.touch;
       if (!anyTouch) ac = ag;
-      for (int pass = 0; pass < set.passes && anyTouch; pass++)
+      int passes = 0;
+      while (passes < set.passes && anyTouch)
       {
          for (int i = 0; i < N; i++)
          {
@@ -611,12 +653,21 @@ namespace MagnetBalls
             I.l8.rot(q.f8, dout.data(), t1.data(), true); for (int k = 0; k < KP; k++) next[(size_t)q.j * KP + k] += t1[k];
             I.l8.rot(q.f8, dout.data() + KP, t1.data(), true); for (int k = 0; k < KP; k++) next[(size_t)q.i * KP + k] += t1[k];
          }
-         ac = next;
+         double a2 = 0, d2 = 0;
+         for (int i = 0; i < N; i++)
+         {
+            double ai = 0, di = 0;
+            for (int k = 0; k < KP; k++) { const size_t e = (size_t)i * KP + k; di += I.l8.W_[k] * std::norm(next[e] - ac[e]); ai += I.l8.W_[k] * std::norm(next[e]); }
+            a2 = std::max(a2, ai); d2 = std::max(d2, di);
+         }
+         ac = next; passes++; change = moved(a2, d2);
+         if (passes >= (cold ? set.passesCold : 1) && change <= 0.5 * set.stopForce) break;
       }
+      if (st) { st->passes = passes; st->change = change; }
       I.lastPos = pos; I.lastA = ac; if (ids) I.lastIds = *ids; else I.lastIds.clear();   // kept for FieldFromBalls (gate (b))
       {
          std::unordered_map<uint64_t, Impl::Warm> w; w.reserve(N);   // the warm start of the next Evaluate: this answer, for the balls in it only
-         for (int i = 0; i < N; i++) { Impl::Warm &e = w[idv[i]]; e.a4.assign(a4.begin() + (size_t)i * K4, a4.begin() + (size_t)(i + 1) * K4); e.ac.assign(ac.begin() + (size_t)i * KP, ac.begin() + (size_t)(i + 1) * KP); }
+         for (int i = 0; i < N; i++) { Impl::Warm &e = w[idv[i]]; e.pos = pos[i]; e.a4.assign(a4.begin() + (size_t)i * K4, a4.begin() + (size_t)(i + 1) * K4); e.ac.assign(ac.begin() + (size_t)i * KP, ac.begin() + (size_t)(i + 1) * KP); }
          I.warm.swap(w);
       }
       // ---- linear forces: drive + every pair (touching: the order-24 pair from its last drive; others: order 4)

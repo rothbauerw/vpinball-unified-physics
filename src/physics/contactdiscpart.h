@@ -1,0 +1,157 @@
+// license:GPLv3+
+//
+// A turntable disc as a moving part of the contact system, on the group step. Its motor, bearing and shape are a DiscGroup::Part (discgroup.h, bodypart.h): the engine moves it with the balls in one solve,
+// so an island with one always goes to the group. There is no other path: no old-loop contact, no impulse, no stock.
+//
+// What this class adds to the group part: what the engine needs of any moving part (the probe for engagement, the saved state), its contact law, and its own steps when no ball is near.
+// It raises no events: a disc comes from the ini and has no table object to raise them on. World frame in metres, z up.
+
+#pragma once
+
+#include <algorithm>
+#include <cassert>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <string>
+
+#include "physics/contactmovingpart.h"
+#include "physics/discgroup.h"
+
+namespace DiscModel
+{
+   class Engine : public ContactMovingPart
+   {
+   public:
+      DiscGroup::Part gp;
+      RubberContact::RubberParams rp;  // the textured surface against the steel ball
+      double layerM = 0.0;
+      RubberContact::BallSI ball;
+      long failedSteps = 0, aloneSteps = 0, energySteps = 0;   // the disc alone: a step not solved (the detector: rule 8), steps taken (cost), of them taken on energy alone (rule 8)
+      int bookMs = 0;                  // the table's time, for the book of a cycle alone
+
+      // The script's drive, between cycles: a disc asleep wakes, and who has an unknown is decided again at the next CycleBegin
+      void SetVolts(const double v)
+      {
+         gp.volts = v;
+         idle = false;
+      }
+
+      // ---- the moving-part interface (contactmovingpart.h) ----
+      void SetBall(const RubberContact::BallSI &b) override { ball = b; }
+      void SetGravity(const V3 &) override {}   // the disc turns about its own axis: its weight acts on the bearing, not about the axis
+      V3 Origin() const override { return gp.centre; }
+      double Reach() const override { return gp.R; }
+      double SurfaceSpeedBound(double) const override { return 0.0; }   // no point of the disc moves along its own normal (discgroup.h)
+      RubberContact::TubeProbe Probe(const V3 &c) const override
+      {
+         GroupStep::Hit h;
+         gp.ProbeSurface(c, ball.R, h);
+         RubberContact::TubeProbe pr;
+         pr.seg = 0;
+         pr.normal = h.n;
+         pr.dist = ball.R - h.delta;
+         pr.point = c - h.n * pr.dist;
+         pr.rho = 0.0;
+         pr.delta = h.delta;
+         pr.overlap = h.delta > 0.0;
+         pr.reff = h.reff;
+         return pr;
+      }
+      void SurfaceVelocity(const V3 &point, V3 &v, V3 &w) const override
+      {
+         v = V3(-gp.rate * (point.y - gp.centre.y), gp.rate * (point.x - gp.centre.x), 0.0);
+         w = V3(0.0, 0.0, gp.rate);
+      }
+      // The old loop's calls: an island with this part never goes there (GroupPart)
+      RubberContact::ContactResult ContactItem(int, SurfaceContact &, const V3 &, const V3 &, const V3 &, double) override { assert(false); return RubberContact::ContactResult(); }
+      double BallStep(const V3 &, const V3 &, double hMax) const override { assert(false); return hMax; }
+      void StepInIsland(double) override { assert(false); }
+
+      // ---- the group's calls ----
+      GroupStep::Part *GroupPart() override { return &gp; }
+      void GroupProbe(int, const V3 &c, const double R, const double *, GroupStep::Hit &h) const override { gp.ProbeSurface(c, R, h); }
+      const RubberContact::RubberParams *GroupLaw(int, double &layer) const override
+      {
+         layer = layerM;
+         return &rp;
+      }
+      void CycleBegin() override
+      {
+         idle = false;
+         markQ = gp.q;
+         marked = true;
+         gp.CycleBegin();
+      }
+      bool Sleeping() const override { return idle; }
+      // Nothing moved over the last cycle in a group: it stays out of a ball's solve while no ball can reach it. A part out of the solve still moves alone
+      bool RestNumbers(double &moveM, double &speedMS) const override
+      {
+         moveM = marked ? std::fabs(gp.q - markQ) * gp.reach : -1.0;
+         speedMS = std::fabs(gp.rate) * gp.reach;
+         return true;
+      }
+      bool AtRest() const override { return idle || (marked && std::fabs(gp.q - markQ) * gp.reach < 1e-9 && std::fabs(gp.rate) * gp.reach < 1e-6); }
+      // No ball near: the same group with no balls, asleep while the friction holds it still; the script's drive wakes it
+      int AdvanceAlone(const double dt) override
+      {
+         if (dt <= 0.0 || idle)
+            return 0;
+         gp.ClearLoads();
+         gp.CycleBegin();
+         GroupStep::Books bk;
+         if (!GroupStep::AdvanceAlone(gp, dt, 2e-6, bookMs, &bk))
+            failedSteps++;   // (time is lost, no energy can appear: the next cycle goes on from here)
+         aloneSteps += bk.steps;
+         energySteps += bk.energySteps;
+         idle = gp.NumDof() == 0 && gp.rate == 0.0;
+         return (int)bk.steps;
+      }
+
+      // The dynamic state, plain bytes (the settings and the shape are not state; the script's volts are, so a replay keeps the drive it ran on)
+      struct Dyn
+      {
+         GroupStep::BodyPart::Dyn b;
+         double volts, steppedS, markQ;
+         bool idle, steppedThisCycle, marked;
+      };
+      void SaveState(State &out) const override
+      {
+         Dyn d;
+         std::memset(&d, 0, sizeof d);   // (the padding too: saved bytes must be the same for the same state)
+         gp.Fill(d.b);
+         d.volts = gp.volts;
+         d.steppedS = steppedS;
+         d.markQ = markQ;
+         d.idle = idle;
+         d.steppedThisCycle = steppedThisCycle;
+         d.marked = marked;
+         out.used = 0;
+         Put(out, d);
+      }
+      void RestoreState(const State &in) override
+      {
+         StateReader r(in);
+         Dyn d;
+         r.Get(d);
+         gp.Load(d.b);
+         gp.volts = d.volts;
+         steppedS = d.steppedS;
+         markQ = d.markQ;
+         idle = d.idle;
+         steppedThisCycle = d.steppedThisCycle;
+         marked = d.marked;
+         events.clear();
+      }
+      std::string StateNote() const override
+      {
+         char buf[160];
+         std::snprintf(buf, sizeof buf, "%.2f rad/s, volts %.2f, stuck %d, asleep %d", gp.rate, gp.volts, (int)gp.Stuck(), (int)idle);
+         return buf;
+      }
+
+   private:
+      bool idle = false, marked = false;
+      double markQ = 0.0;   // the angle at the start of its last cycle in a group (AtRest)
+   };
+}

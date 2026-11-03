@@ -39,6 +39,10 @@ namespace ContactSystem
    // One cycle's step of every ball the contact system holds (dtime in the engine's step units). Its events (ball-ball callbacks, part hits, the parts' own events) are only queued here.
    void Step(float dtime);
 void NotePlaced(const HitBall *ball);   // a script or the driver put this ball where it is: a position move no step did, and no fault (GroupStepDesign 17)
+   // Pile sleep ([Contact] sleep = 1, runs/2026-11-03-pile-sleep/design.md): a group of balls at rest stops being stepped until something can change it.
+   void SleepCycleStart();                                  // once per physics cycle, before the magnets and the balls' velocities: the wakes known at the cycle's start
+   void SleepWake(const HitBall *ball, const char *cause);  // wake the group this ball sleeps in (no-op for a ball awake); within a cycle the substeps take back the gravity share the cycle start did not give
+   void SleepWakeAtStart(const HitBall *ball, const char *cause);   // the same, before the balls' velocities of this cycle are updated (Magnets::Step)
 
    // The state of everything an overlap replay would have to put back (docs/UnifiedContactDesign.txt section 11, point 2), taken at the start of a sub-interval, before Step: every ball's position,
    // velocity and spin, the engaged balls' contacts (shear springs, touching flags, counters), the ball pairs, the saved state of every moving part, the size of the event queue. No allocation after the

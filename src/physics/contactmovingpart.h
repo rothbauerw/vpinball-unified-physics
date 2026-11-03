@@ -2,7 +2,7 @@
 //
 // A moving part of the contact system: the engine-facing interface of anything that has its own bodies and surfaces, is stepped inside the islands of the balls that touch it, and
 // raises its own events. Gates and spinners (HingeModel::Engine, contacthingepart.h) and the jet bumper (JetBumper::EnginePart, contactbumperpart.h) implement it; the contact system
-// (contactsystem.cpp) and the host (ContactPartHost, contactparthost.h) know only this interface. The turntable disc (TurntableDisc::Part, contactdisc.h) implements it too. A new part (a kicker door, a drop target, a plunger) implements it and nothing else changes.
+// (contactsystem.cpp) and the host (ContactPartHost, contactparthost.h) know only this interface. The turntable disc (DiscModel::Engine, contactdiscpart.h) implements it too. A new part (a kicker door, a drop target, a plunger) implements it and nothing else changes.
 //
 // What the engine does with a part, in the order of a physics cycle:
 //   SetGravity       the gravity the part feels (gravity minus the cabinet acceleration, so a nudge acts on it), once per cycle
@@ -106,5 +106,6 @@ public:
    virtual void CycleBegin() {}                                                                      // a group holding it is being built this cycle
    virtual void TouchBegan(int, int, double) {}                                                      // this surface, this ball of the group, closing at vn (m/s): a touch began. A part's Hit is what it decides
    virtual bool Sleeping() const { return false; }                                                   // no ball near and nothing to step: no group this cycle
+   virtual bool RestNumbers(double &, double &) const { return false; }                             // pile sleep's log: what AtRest is decided on, the move over the last cycle in a group and the surface speed (m, m/s); false = not given
    virtual bool AtRest() const { return false; }                                                     // nothing driven and nothing moved over the last whole cycle: it stays out of a ball's solve while no ball can reach it (a part that does not say so is always in)
 };

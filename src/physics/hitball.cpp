@@ -682,6 +682,8 @@ void BallMoverObject::UpdateDisplacements(const float dtime)
 
 void HitBall::UpdateDisplacements(const float dtime)
 {
+   if (m_sleepGroup != 0)   // pile sleep: held where it went to sleep, spin and orientation too
+      return;
    if (!m_d.m_lockedInKicker)
    {
       if (m_rubberAdvanced)
@@ -728,7 +730,8 @@ void HitBall::UpdateVelocities()
       }
       else
       {
-         m_d.m_vel += ExternalVelocityIncrement(); // gravity, nudge (stock) and the magnets (hitballcontact.cpp)
+         if (m_sleepGroup == 0)   // (a sleeping ball is held where it is: no gravity is given that the contact would have to take back)
+            m_d.m_vel += ExternalVelocityIncrement(); // gravity, nudge (stock) and the magnets (hitballcontact.cpp)
       }
    }
 

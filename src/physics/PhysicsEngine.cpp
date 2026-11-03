@@ -275,6 +275,7 @@ void PhysicsEngine::RemoveCollider(HitObject * collider, const bool isUI)
       RemoveFromVectorSingle<MoverObject *>(m_vmover, &ball->m_mover);
       RemoveFromVectorSingle(m_vballs, ball);
       m_hitoctree_dynamic.Remove(collider);
+      ContactSystem::SleepWake(ball, "a ball of the group removed");   // pile sleep: its group lost a ball (no-op for a ball awake)
       // the ball object may outlive its removal (a destroyed ball is freed later, it may still be rendered): a band must let go of it now, not when it is freed
       if (ball->m_bandOwner != nullptr || ball->m_contact != nullptr)
          HitRubberBandBallDeleted(ball);
@@ -787,6 +788,8 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
          if (g_pplayer)
             g_pplayer->m_pininput.PlayNudgeRumble(cabinetAcceleration);
       }
+
+      ContactSystem::SleepCycleStart();   // pile sleep: the wakes known at the cycle's start, before the magnets and the balls' velocities (nothing unless [Contact] sleep = 1)
 
       {
          const TestDriver::Timed tdMag(TestDriver::kMagnets);

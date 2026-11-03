@@ -3,7 +3,7 @@
 #include "core/stdafx.h"
 #include "physics/turntable.h"
 #include "physics/contactparthost.h"
-#include "physics/contactdisc.h"
+#include "physics/contactdiscpart.h"
 #include "physics/physicsini.h"
 #include "physics/physconst.h"
 #include "physics/PhysicsEngine.h"
@@ -16,6 +16,7 @@
 #include "renderer/VertexBuffer.h"
 #include "renderer/IndexBuffer.h"
 #include "renderer/Shader.h"
+#include "ui/live/LiveUI.h"
 #include <cmath>
 #include <map>
 
@@ -52,19 +53,53 @@ namespace Turntables
          bool gapVisible = true;               // visible: a dark ring marks the gap
          std::string marker = "spokes";        // visible: spokes | dot | stripe | none
          double refDeg = 0;                    // angle reference, degrees clockwise from the +x direction (screen right)
-         // the disc as a moving part of the contact system (contactdisc.h): motor, bearing, speed and angle (clockwise positive), the script's voltage
-         std::shared_ptr<TurntableDisc::Part> part;
+         // the disc as a moving part of the contact system, on the group step (contactdiscpart.h, discgroup.h): motor, bearing, speed and angle (clockwise positive), the script's voltage
+         std::shared_ptr<DiscModel::Engine> part;
          std::shared_ptr<MeshBuffer> discMesh, markMesh, gapMesh;
       };
 
-      // The table side of the disc's moving part (UnifiedContactDesign 12.1): the renderer and the script read the part itself, it raises no events, and its settings are
+      // The table side of the disc's moving part (UnifiedContactDesign 12.1): the renderer and the script read the part itself, it raises no events (it has no table object to raise them on), and its settings are
       // read when the table loads only
       class DiscAdapter final : public PartAdapter
       {
       public:
-         void Publish() override {}
+         DiscAdapter(std::shared_ptr<DiscModel::Engine> model, const std::string &name, const std::string &note) : m_model(std::move(model)), m_name(name), m_note(note) {}
+         void Publish() override
+         {
+            m_model->bookMs = (int)g_pplayer->m_time_msec;
+            if (!m_note.empty() && g_pplayer->m_liveUI != nullptr)   // (what the table load found, shown once the player can show it)
+            {
+               g_pplayer->m_liveUI->PushNotification(m_note, 6000);
+               m_note.clear();
+            }
+            // detector (rule 8): a step of the disc alone was taken on energy, or could not be solved
+            if (m_model->energySteps > m_esSeen)
+            {
+               m_esSeen = m_model->energySteps;
+               if (m_esLines < 5)
+               {
+                  m_esLines++;
+                  PLOGW << "Group step: energy step alone, part " << m_name << ", balls 0, t=" << g_pplayer->m_time_msec << " ms, " << m_esSeen << " so far; " << m_model->StateNote() << ". A net, not expected to fire: keep vpinball.log and report it";
+               }
+            }
+            if (m_model->failedSteps > 0 && !m_failShown)
+            {
+               m_failShown = true;
+               const std::string msg = m_name + ": a step of the disc alone could not be solved: the rest of that cycle was lost";
+               PLOGW << msg;
+               if (g_pplayer->m_liveUI != nullptr)
+                  g_pplayer->m_liveUI->PushNotification(msg, 6000);
+            }
+         }
          void Fire(const std::vector<ContactMovingPart::Event> &) override {}
          bool FixedSettings() const override { return true; }
+
+      private:
+         std::shared_ptr<DiscModel::Engine> m_model;
+         std::string m_name, m_note;
+         long m_esSeen = 0;
+         int m_esLines = 0;
+         bool m_failShown = false;
       };
 
       std::vector<Turntable> g_tt;
@@ -74,7 +109,7 @@ namespace Turntables
 
       void Derive(Turntable &t)
       {
-         TurntableDisc::Motor &m = t.part->motor;
+         DiscGroup::Motor &m = t.part->gp.motor;
          const double r = t.radiusMm * 1e-3;
          m.I = t.inertia > 0 ? t.inertia : 0.5 * t.massG * 1e-3 * r * r;
          m.freeRpm = t.freeRpm;
@@ -89,6 +124,73 @@ namespace Turntables
             PLOGI << "Turntable " << t.name << ": friction_nm alone stops the disc from max_rpm in " << m.coastFrictionS << " s, sooner than ramp_down_s " << t.rampDownS << " s: the coast-down is " << m.coastFrictionS << " s (lower friction_nm or raise the inertia for a longer one)";
          if (m.dragClamped)
             PLOGW << "Turntable " << t.name << ": ramp_down_s is shorter than the bearing drag allows next to ramp_up_s (a motor off cannot stop the disc faster than the motor spins it up); using " << 3.0 * m.I / m.kTot << " s";
+      }
+
+      // The playfield's surface around a disc: the height the disc is flush with. In each of 24 directions, the nearest playfield face outward from the disc's edge, taking the highest face at a point; a direction that finds none has no say (past the table's edge).
+      // So it holds for a mesh cut under the disc's centre, cut wider than the disc and its gap, or cut off-centre. The height is the median of what the directions found, so a uniform slope gives the height at the disc's centre and a ramp's faces in less than half
+      // the directions have no say. farU: how far out from the disc's edge the furthest direction had to go to find a face, and which way (degrees clockwise from screen right).
+      struct AroundDisc
+      {
+         double z = 0.0, lo = 0.0, hi = 0.0, farU = 0.0, farDeg = 0.0;
+         int points = 0;
+      };
+      bool SurfaceAroundDisc(const double x, const double y, const double rU, AroundDisc &o)
+      {
+         constexpr int kDirs = 24;
+         constexpr double kFirstU = 0.5, kLastU = 8192.0, kTolU = 0.1;
+         const auto height = [](const double px, const double py, double &z) {
+            bool any = false;
+            for (ContactHost *const h : ContactHost::AllHosts())
+            {
+               double zh;
+               if (h->IsPlayfieldKind() && h->SurfaceHeightAt(px, py, zh) && (!any || zh > z))
+               {
+                  z = zh;
+                  any = true;
+               }
+            }
+            return any;
+         };
+         std::vector<double> found;
+         for (int k = 0; k < kDirs; k++)
+         {
+            const double a = 2.0 * PI * k / kDirs, cx = std::cos(a), cy = std::sin(a);
+            double miss = 0.0, hit = kFirstU, z = 0.0;
+            while (hit < kLastU && !height(x + (rU + hit) * cx, y + (rU + hit) * cy, z))
+            {
+               miss = hit;
+               hit *= 2.0;
+            }
+            if (hit >= kLastU)
+               continue;
+            while (hit - miss > kTolU)
+            {
+               const double mid = 0.5 * (hit + miss);
+               double zm = 0.0;
+               if (height(x + (rU + mid) * cx, y + (rU + mid) * cy, zm))
+               {
+                  hit = mid;
+                  z = zm;
+               }
+               else
+                  miss = mid;
+            }
+            found.push_back(z);
+            if (hit > o.farU)
+            {
+               o.farU = hit;
+               o.farDeg = 360.0 * k / kDirs;
+            }
+         }
+         if (found.empty())
+            return false;
+         std::sort(found.begin(), found.end());
+         const size_t n = found.size();
+         o.z = 0.5 * (found[(n - 1) / 2] + found[n / 2]);
+         o.lo = found.front();
+         o.hi = found.back();
+         o.points = (int)n;
+         return true;
       }
 
       void Parse(const std::filesystem::path &file)
@@ -175,27 +277,29 @@ namespace Turntables
       for (size_t i = 0; i < g_tt.size(); i++)
       {
          Turntable &t = g_tt[i];
-         t.part = std::make_shared<TurntableDisc::Part>();
+         t.part = std::make_shared<DiscModel::Engine>();
          Derive(t);
          g_byName[PhysicsIni::Lower(t.name)] = i;
          const auto pend = g_pending.find(PhysicsIni::Lower(t.name));
          if (pend != g_pending.end())
-            t.part->volts = pend->second.first ? pend->second.second * t.ratedVolts : pend->second.second;
-         if (!t.playfieldZSet)
+            t.part->SetVolts(pend->second.first ? pend->second.second * t.ratedVolts : pend->second.second);
+         std::string note;
          {
-            // the playfield surface under the centre: a mesh playfield's top is not necessarily at 0 (the blank mesh table's is at 0.5 U)
-            double zf = 0.0;
-            bool any = false;
-            for (ContactHost *const h : ContactHost::AllHosts())
+            AroundDisc around;
+            const double gapU = t.gapMm * 1e-3 / UM;
+            const bool found = SurfaceAroundDisc(t.x, t.y, t.radiusMm * 1e-3 / UM, around);
+            if (found)
+               PLOGI << "Turntable " << t.name << ": the playfield around it is at z " << around.z << " (" << around.points << " directions, " << around.lo << " .. " << around.hi << "), furthest " << around.farU * UM * 1e3 << " mm from its edge";
+            if (!t.playfieldZSet)
             {
-               double z;
-               if (h->IsPlayfieldKind() && h->SurfaceHeightAt(t.x, t.y, z) && (!any || z > zf))
-               {
-                  zf = z;
-                  any = true;
-               }
+               t.playfieldZ = found ? around.z : 0.0;
+               if (!found)
+                  note = "Turntable " + t.name + ": no playfield surface found around it: the disc is at z 0. Set z in its ini section, or check the playfield";
             }
-            t.playfieldZ = any ? zf : 0.0;
+            if (found && around.farU > gapU + 0.1)   // the table's own geometry: an open gap a ball can drop into. Said, not filled
+               note = "Turntable " + t.name + ": the playfield's own hole reaches " + std::to_string((around.farU - gapU) * UM * 1e3) + " mm past the disc and its gap, at " + std::to_string((int)around.farDeg) + " deg clockwise from screen right: a ball can drop in there";
+            if (!note.empty())
+               PLOGW << note;
          }
          if (!t.zSet)
             t.z = t.playfieldZ;
@@ -235,16 +339,13 @@ namespace Turntables
                   hi[k] = std::max(hi[k], (&v.x)[k]);
                }
 
-         // the disc is the host's moving part: it probes its own shape (a flat disc, and its side when it stands proud), turns with the balls in the island substeps (UnifiedContactDesign 12.1);
+         // the disc is the host's moving part: it probes its own shape (a flat disc, and its side when it stands proud), turns with the balls in one solve (the group step);
          // it takes the host's contact law (material, layer, edge rounding)
          const RubberObjectSettings ps = ContactHost::TurntableSettings(t.mu, t.rollingResistance);
-         ContactPartHost *const host = new ContactPartHost(table, t.part, std::make_unique<DiscAdapter>(), ps, file, t.name, "turntable", lo, hi);
-         t.part->shape.centre = RubberContact::V3(t.x * UM, t.y * UM, t.z * UM);
-         t.part->shape.R = t.radiusMm * 1e-3;
-         t.part->shape.zBottom = (double)zBottom * UM;
-         t.part->shape.rp = ps.ToParams();
-         t.part->shape.hLayer = host->LayerM();
-         t.part->shape.edgeRhoM = ps.edgeRadiusMm * 1e-3;
+         ContactPartHost *const host = new ContactPartHost(table, t.part, std::make_unique<DiscAdapter>(t.part, t.name, note), ps, file, t.name, "turntable", lo, hi);
+         t.part->gp.Build(t.part->gp.motor, GroupStep::V3(t.x * UM, t.y * UM, t.z * UM), t.radiusMm * 1e-3, (double)zBottom * UM, ps.edgeRadiusMm * 1e-3);
+         t.part->rp = ps.ToParams();
+         t.part->layerM = host->LayerM();
          hosts.push_back(host);   // the physics engine owns it and deletes it with itself (the host is in the process-wide registry: a leaked one is tested against every ball in every later session)
          host->CalcHitBBox();
          if (MoverObject *const pmo = host->GetMoverObject(); pmo != nullptr && pmo->AddToList())
@@ -262,8 +363,8 @@ namespace Turntables
             physics->AddCollider(ht, false);
          }
          PLOGI << "Turntable " << t.name << ": centre " << t.x << ", " << t.y << ", top z " << t.z << ", radius " << t.radiusMm << " mm, gap " << t.gapMm << " mm, "
-               << (t.clockwise ? "clockwise" : "counter-clockwise") << ", " << t.freeRpm << " rpm at " << t.ratedVolts << " V, friction " << t.frictionNm << " N m, ramp up " << t.spinupS << " s, ramp down " << t.rampDownS << " s, I " << t.part->motor.I << " kg m^2, stall torque " << t.part->motor.Ts
-               << " N m, drag " << t.part->motor.b << " N m s, mu " << t.mu << ", rolling resistance " << (t.rollingResistance >= 0.0 ? t.rollingResistance : ContactSettings::Get().rollingResistance) << (proud ? ", disc stands proud of the playfield" : ", disc flush with the playfield");
+               << (t.clockwise ? "clockwise" : "counter-clockwise") << ", " << t.freeRpm << " rpm at " << t.ratedVolts << " V, friction " << t.frictionNm << " N m, ramp up " << t.spinupS << " s, ramp down " << t.rampDownS << " s, I " << t.part->gp.motor.I << " kg m^2, stall torque " << t.part->gp.motor.Ts
+               << " N m, drag " << t.part->gp.motor.b << " N m s, mu " << t.mu << ", rolling resistance " << (t.rollingResistance >= 0.0 ? t.rollingResistance : ContactSettings::Get().rollingResistance) << (proud ? ", disc stands proud of the playfield" : ", disc flush with the playfield");
       }
       g_pending.clear();
    }
@@ -286,7 +387,7 @@ namespace Turntables
       Turntable *const t = Find(name);
       if (t == nullptr)
          return false;
-      t->part->volts = volts;
+      t->part->SetVolts(volts);
       return true;
    }
 
@@ -300,7 +401,7 @@ namespace Turntables
       Turntable *const t = Find(name);
       if (t == nullptr)
          return false;
-      t->part->volts = std::max(-1.0, std::min(1.0, (double)duty)) * t->ratedVolts;
+      t->part->SetVolts(std::max(-1.0, std::min(1.0, (double)duty)) * t->ratedVolts);
       return true;
    }
 
@@ -310,7 +411,7 @@ namespace Turntables
       const Turntable *const t = Find(name);
       if (t == nullptr)
          return false;
-      rpm = (float)(t->part->omega * 60.0 / (2.0 * PI));   // fixed frame: clockwise seen from above is positive, whatever the direction key
+      rpm = (float)(t->part->gp.rate * 60.0 / (2.0 * PI));   // fixed frame: clockwise seen from above is positive, whatever the direction key
       return true;
    }
 
@@ -320,7 +421,7 @@ namespace Turntables
       const Turntable *const t = Find(name);
       if (t == nullptr)
          return false;
-      double a = std::fmod((t->part->theta * 180.0 / PI) + t->refDeg, 360.0);   // degrees clockwise from screen right, plus the reference
+      double a = std::fmod((t->part->gp.Angle() * 180.0 / PI) + t->refDeg, 360.0);   // degrees clockwise from screen right, plus the reference
       if (a < 0)
          a += 360.0;
       deg = (float)a;
@@ -430,7 +531,7 @@ namespace Turntables
          }
          if (t.marker != "none")
          {
-            build(v, idx, t.part->theta + t.refDeg * PI / 180.0, true);
+            build(v, idx, t.part->gp.Angle() + t.refDeg * PI / 180.0, true);
             if (!v.empty())
             {
                if (!t.markMesh || t.markMesh->m_vb->m_count != (unsigned int)v.size())

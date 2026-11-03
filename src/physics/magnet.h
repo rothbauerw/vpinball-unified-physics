@@ -1,6 +1,8 @@
 #pragma once
 #include <vector>
+#include "physics/pairform.h"
 class HitBall;
+namespace MagnetCore { struct Model; }
 // Electromagnets (coil + iron core) that pull the steel ball. Configured in [Magnet:<name>] sections of vpx_physics.ini;
 // the table script switches a coil with Magnet "<name>", volts and reads its current with MagnetCurrent("<name>").
 //
@@ -18,6 +20,7 @@ class HitBall;
 namespace Magnets
 {
    void Step();                                              // once per 1 ms physics frame: advance every coil current
+   bool CurrentSteady();                                     // pile sleep: no coil current would change in the next Step (each at its own fixed point)
    void RenderGuides(class Renderer *renderer);              // draws the guide tubes and stops that have tube_visible = 1
    void ReleaseRender();                                     // frees the drawn guide meshes (called when the renderer shuts down)
    bool HasGuides();                                         // true if an air-core magnet has a guide tube or stop (checked once per physics cycle)
@@ -32,8 +35,18 @@ namespace Magnets
    // the parts of hb this step (nullptr: none); massKg = the steel mass the magnets use for hb (7800 kg/m3 x volume x Ball.Mass): F x (body mass / massKg) gives
    // the same acceleration as the held increment (m_magPair)
    const std::vector<BallBallPart> *BallBallParts(const HitBall *hb, double &massKg);
-   // adds the velocity change over one physics step (VPU/VPT) of a ball at pos (U) with radius (U) and mass (VPX mass units) to dv
-   void AddVelocityIncrement(const float pos[3], float radius, float mass, float dv[3]);
+   // The ball-pair force as a stored energy (physics/pairform.h, 2026-11-03), fitted at this step's Option A solve; the group step takes it instead of the held m_magPair.
+   // a, b: the balls of a term (b == nullptr: a one-ball term); t.a and t.b are the solve's own indices, unused by the caller. Empty: no form this step.
+   struct FormTerm { const HitBall *a = nullptr, *b = nullptr; PairForm::Term t; };
+   const std::vector<FormTerm> &PairFormTerms();
+   bool HasPairForm(const HitBall *hb);
+   // adds the velocity change over one physics step (VPU/VPT) of a ball at pos (U) with radius (U) and mass (VPX mass units) to dv. heldOnly: the magnets whose pull the group step holds for the cycle (not core_model = cells: CellPulls)
+   void AddVelocityIncrement(const float pos[3], float radius, float mass, float dv[3], bool heldOnly = false);
+   // A cells magnet's pull as the group step takes it, a stored energy of the ball's place (magnetcore.h Model::Energy): its tables, its pole face (m), its axis, the coil's current held for this physics step and the one
+   // before it (a change between them is the coil's work). Every cells magnet with a current in either. StepNumber: counts the physics steps.
+   struct CellPull { const MagnetCore::Model *core = nullptr; double o[3] = { 0, 0, 0 }, n[3] = { 0, 0, 1 }, amps = 0, ampsBefore = 0; };
+   const std::vector<CellPull> &CellPulls();
+   long long StepNumber();
    // field (T) inside the steel ball at pos (U), radius (U): the coil field times up to 3 (a permeable sphere gathers the field), for the eddy currents of a spinning ball; false if no coil carries current
    bool FieldAt(const float pos[3], float radiusU, double B[3]);
    // electrical conductivity of the ball steel (S/m) times the ball_eddy scale: 0 = no eddy-current braking of the ball's spin

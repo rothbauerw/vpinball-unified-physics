@@ -26,6 +26,9 @@ struct ContactSettings
    double ballSubstepUs = 2.0;       // ball_substep_us: the smallest substep a pair may need (its step is omega_H / omega of the contact, see SetupIsland)
    double ballRestSubstepUs = 6.0;   // ball_rest_substep_us: no longer used, still read
    double ballReachMm = 1.0;         // ball_reach_mm: balls closer than this (surface gap) are stepped as one cluster
+   bool sleep = false;               // sleep: 1 = a group of touching balls at rest sleeps (not stepped) until something can change it (runs/2026-11-03-pile-sleep/design.md)
+   double sleepSpeedMmS = 0.1;       // sleep_speed_mm_s: every ball of the group under this speed and surface speed of spin (requirement 4.1, 'still')
+   double sleepHoldMs = 100.0;       // sleep_hold_ms: for this long without a break (a ball only passing through zero speed does not sleep)
    // Arrival-time substeps for islands of static surfaces and balls: a step never carries a ball into a surface (it ends at a small gap when an approach is predicted within it), a contact
    // is stepped by its own stiffness at the depth the impact will reach, and a ball far from every surface takes the rest of the cycle as one step.
    bool arrivalStep = true;          // arrival_step (VPX_ARRIVAL=0/1 overrides it)
