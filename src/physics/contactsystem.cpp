@@ -3,6 +3,7 @@
 #include "core/stdafx.h"
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
 #include <list>
 #include <map>
 #include <sstream>
@@ -25,6 +26,7 @@
 #include <unordered_map>
 #include "physicsini.h"
 #include "testdriver.h"
+void ContactTraceBall(const char *stage, const HitBall *pb, bool items, int island);   // VPX_TRACE_BALL (end of file)
 #include "ui/live/LiveUI.h"
 #include "PhysicsEngine.h"
 #include "physics/cordband.h"
@@ -1748,6 +1750,14 @@ struct ContactSystemImpl
    static void EnergyCheckStart(Cycle &cy)
    {
       const V3 g = CheckGravity();
+      for (size_t i = 0; i < cy.bodies.size(); i++)   // VPX_TRACE_BALL (off by default)
+      {
+         int island = -1;
+         for (size_t k = 0; k < cy.islands.count && island < 0; k++)
+            if (std::find(cy.islands.list[k].members.begin(), cy.islands.list[k].members.end(), (int)i) != cy.islands.list[k].members.end())
+               island = (int)k;
+         ContactTraceBall("EnergyCheckStart", cy.bodies[i].pb, true, island);
+      }
       for (Body &w : cy.bodies)
       {
          double held = 0.0, worst = 0.0, depth0 = 0.0, depth1 = 0.0;
@@ -4775,4 +4785,27 @@ void ContactSystemImpl::CheckOverlaps(const float hittime)
          }
       }
    }
+}
+
+// VPX_TRACE_BALL=<driver ball name> (a diagnostic, off by default): that ball's position (U) and velocity at a named stage of the cycle, and, when asked, its contact's items and its
+// island, one log line each. Nothing is printed or changed without the variable.
+void ContactTraceBall(const char *const stage, const HitBall *const pb, const bool items, const int island)
+{
+   static const std::string want = []() { const char *const e = getenv("VPX_TRACE_BALL"); return std::string(e != nullptr ? e : ""); }();
+   if (want.empty() || pb == nullptr || g_pplayer == nullptr)
+      return;
+   const char *const name = TestDriver::BallName(pb);
+   if (name == nullptr || want != name)
+      return;
+   std::ostringstream o;
+   o << std::fixed << std::setprecision(4) << "TraceBall " << name << " t=" << g_pplayer->m_time_msec << ' ' << stage << " pos " << pb->m_d.m_pos.x << ' ' << pb->m_d.m_pos.y << ' ' << pb->m_d.m_pos.z
+     << " vel " << pb->m_d.m_vel.x << ' ' << pb->m_d.m_vel.y << ' ' << pb->m_d.m_vel.z;
+   if (items)
+   {
+      o << " held " << (pb->m_contact != nullptr ? 1 : 0) << " band " << (pb->m_bandOwner != nullptr ? 1 : 0) << " island " << island << " items";
+      if (pb->m_contact != nullptr)
+         for (const SurfaceContact &it : pb->m_contact->items)
+            o << ' ' << it.r->Name();
+   }
+   PLOGI << o.str();
 }

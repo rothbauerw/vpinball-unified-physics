@@ -13,6 +13,7 @@
 #include "hitplunger.h"
 #include "contactsystem.h"
 #include "contactprof.h"
+void ContactTraceBall(const char *stage, const HitBall *pb, bool items, int island);   // VPX_TRACE_BALL (contactsystem.cpp)
 
 #include "input/PlungerHandler.h"
 #include "physics/cabinet/NudgeHandler.h"
@@ -33,6 +34,23 @@
 #include "parts/primitive.h"
 static unsigned s_ctReplays = 0, s_ctReplayUs = 0;   // VPX_CONTACT_TIMING: overlap replays and their time since the last cost-log row
 static uint64_t s_ctMagUs = 0;   // VPX_CONTACT_TIMING: time of Magnets::Step since the last cost-log row, us
+// VPX_TRACE_BALL: a stock Collide or Contact on the traced ball: the object, whether the contact system owns it (a surface host) and owns it for this ball, and what it did to the ball
+static bool TraceStockOn(const HitBall *const pb)
+{
+   static const std::string want = []() { const char *const e = getenv("VPX_TRACE_BALL"); return std::string(e != nullptr ? e : ""); }();
+   if (want.empty() || pb == nullptr)
+      return false;
+   const char *const name = TestDriver::BallName(pb);
+   return name != nullptr && want == name;
+}
+static void TraceStock(const char *const kind, const HitObject *const pho, const HitBall *const pb, const CollisionEvent &coll, const bool owns, const Vertex3Ds &pos0, const Vertex3Ds &vel0, const float hittime)
+{
+   const Vertex3Ds dp = pb->m_d.m_pos - pos0, dv = pb->m_d.m_vel - vel0;
+   PLOGI << "TraceStock " << std::string(TestDriver::BallName(pb)) << " t=" << g_pplayer->m_time_msec << ' ' << kind << " obj " << (pho->m_editable != nullptr ? pho->m_editable->GetName() : std::string("-"))
+         << " class " << typeid(*pho).name() << " objtype " << (int)pho->m_ObjType << " surfaceHost " << (pho->m_surfaceHost != nullptr ? 1 : 0) << " ownsForBall " << (owns ? 1 : 0)
+         << " held " << (pb->m_contact != nullptr ? 1 : 0) << " band " << (pb->m_bandOwner != nullptr ? 1 : 0) << " hittime " << hittime << " hitdist " << coll.m_hitdistance << " contact " << (coll.m_isContact ? 1 : 0)
+         << " dpos " << dp.x << ' ' << dp.y << ' ' << dp.z << " dvel " << dv.x << ' ' << dv.y << ' ' << dv.z;
+}
 
 PhysicsEngine::PhysicsEngine(PinTable *const table)
    : m_plumbHandler(table->GetSettings())
@@ -817,6 +835,8 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
          const TestDriver::Timed tdDriver(TestDriver::kDriver);
          TestDriver::EndCycle(m_time_msec);
       }
+      for (const HitBall *const pb : m_vballs)
+         ContactTraceBall("EndCycle", pb, true, -1);   // VPX_TRACE_BALL (off by default)
 
       // Fast-ball watchdog: a ball above VPX_SPEED_WATCH m/s (default 8; 0 = off) is logged once per second with its last 8 cycles (position, velocity, who holds it), so a rare launch
       // can be traced afterwards. Costs a copy of a few floats per ball per cycle.
@@ -881,6 +901,8 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
             }
          }
       }
+      for (const HitBall *const pb : m_vballs)
+         ContactTraceBall("AfterGuides", pb, false, -1);   // VPX_TRACE_BALL (off by default)
 
       // Store new position of balls for ball trails
       {
@@ -921,6 +943,8 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
 {
    // PLOGD << "Cycle " << dtime;
 
+   for (const HitBall *const pb : m_vballs)
+      ContactTraceBall("SimulateStart", pb, false, -1);   // VPX_TRACE_BALL (off by default)
    int StaticCnts = STATICCNTS; // maximum number of static counts
    // it's okay to have this code outside of the inner loop, as the ball hitrects already include the maximum distance they can travel in that timespan
    {
@@ -1145,7 +1169,13 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
             if (m_hitSpeedEvents)
                pball->m_hitSpeed = std::max(0.f, -pball->m_coll.m_hitnormal.Dot(pball->m_d.m_vel)); // normal speed at the instant before the impact, whichever model resolves it
             StockCount::Begin(pho, pball, false);
+            const bool trc = TraceStockOn(pball);   // VPX_TRACE_BALL (off by default)
+            const CollisionEvent trcColl = pball->m_coll;
+            const bool trcOwns = trc && pho->SurfaceOwns(pball->m_d);
+            const Vertex3Ds trcPos = pball->m_d.m_pos, trcVel = pball->m_d.m_vel;
             pho->Collide(pball->m_coll);                 //!!!!! 3) collision on active ball
+            if (trc && i < m_vballs.size() && m_vballs[i] == pball)
+               TraceStock("Collide", pho, pball, trcColl, trcOwns, trcPos, trcVel, hittime);
             StockCount::End(i < m_vballs.size() && m_vballs[i] == pball);
             // The playfield (the plane, the implicit mesh or an explicit playfield primitive) has no hit event of its own: the table gets one, for impacts only (not resting or rolling contact)
             if (m_hitSpeedEvents && g_pplayer != nullptr && pball->m_hitSpeed >= m_hitSpeedMin && i < g_pplayer->m_vball.size() && g_pplayer->m_vball[i] == pball->m_pBall
@@ -1213,7 +1243,12 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
             if ((contact.m_obj->GetType() == eBall) == (pass == 0))
             {
                StockCount::Begin(contact.m_obj, contact.m_ball, true);
+               const bool trc = TraceStockOn(contact.m_ball);   // VPX_TRACE_BALL (off by default)
+               const bool trcOwns = trc && contact.m_obj->SurfaceOwns(contact.m_ball->m_d);
+               const Vertex3Ds trcPos = contact.m_ball->m_d.m_pos, trcVel = contact.m_ball->m_d.m_vel;
                contact.m_obj->Contact(contact, hittime);
+               if (trc)
+                  TraceStock("Contact", contact.m_obj, contact.m_ball, contact, trcOwns, trcPos, trcVel, hittime);
                StockCount::End(true);
             }
          }
