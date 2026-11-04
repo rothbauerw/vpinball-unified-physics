@@ -101,7 +101,7 @@ namespace GroupStep
       BodyBooks bk;
       // [Contact] pivot_model, set by the owner when the part is made: 1 = the pin's stick spring (it holds to the static limit, slides at dynRatio times it);
       // 0 = the slip direction, stuck state and turn event (the part keeps 0 until its owner sets it)
-      int pivotModel = 0;
+      int pivotModel = 1;   // [Contact] pivot_model (default 1, as the ini); the engine sets it per part
       double dynRatio = 0.85;   // [Contact] mu_dynamic_ratio
       virtual void SetPivotModel(const int m) { pivotModel = m; }   // (a part whose losses depend on the law sets them here)
 
@@ -212,6 +212,7 @@ namespace GroupStep
          {
             const PinMove pm = PinStep(dq, h);
             Res[off] = mass * (2.0 * dq / h - 2.0 * rate) - h * (-Vp - lossF - cv * r + Fd + pm.M);
+            rowT[0] = mass * (2.0 * dq / h - 2.0 * rate); rowT[1] = h * (Vp + lossF); rowT[2] = h * cv * r; rowT[3] = -h * pm.M; rowT[4] = -h * gBallQ; rowT[5] = pm.K; rowT[6] = FrictionLimit(qm, r, gBallF); rowT[7] = pm.holds ? 1.0 : 0.0; rowT[8] = pm.s1; rowT[9] = dq;
             if (J)
                J[off][off] += 2.0 * mass / h + h * slope + h * lossSlope + cv + (pm.holds ? h * 0.5 * pm.K + pm.c : 0.0);
             gViscous = cv * r * dq + lossF * dq;
@@ -450,6 +451,26 @@ namespace GroupStep
       // s scaled by K0 / K1) the stored energy it can no longer hold.
       static constexpr double kPinShearTan = 0.4;
       struct PinMove { double M = 0.0, s1 = 0.0, K = 0.0, c = 0.0, loss = 0.0; bool holds = false; };
+      // the wire row's terms at the last evaluation (pivot_model 1), each as it enters Res (N m s): inertia, stored (spring + gravity), viscous, pin, balls; the pin's K, static limit, holds, s1; dq
+      double rowT[10] = {};
+      std::string RowNote() const override
+      {
+         char line[300];
+         snprintf(line, sizeof line, "row: inertia %.4g stored %.4g visc %.3g pin %.4g balls %.4g (sum %.3g) | pin K %.4g lim %.4g holds %d s1 %.6g dq %.4g gBallF %.5g",
+                  rowT[0], rowT[1], rowT[2], rowT[3], rowT[4], rowT[0] + rowT[1] + rowT[2] + rowT[3] + rowT[4], rowT[5], rowT[6], (int)rowT[7], rowT[8], rowT[9], gBallF.Length());
+         return line;
+      }
+      std::string SearchNote(const double *x, const int off, const double h) const override
+      {
+         if (NumDof() != 1)
+            return std::string();
+         const double dq = x[off];
+         const PinMove pm = pivotModel == 1 ? PinStep(dq, h) : PinMove();
+         char line[300];
+         snprintf(line, sizeof line, "q0 %.6g deg rate0 %.4g dq %.4g q1 %.6g deg rate1 %.4g pin %d | pin spring s0 %.4g s1 %.4g K %.4g M %.4g holds %d | stop excess %.4g | ball force %.4g N",
+                  q * 57.29577951308232, rate, dq, (q + dq) * 57.29577951308232, 2.0 * dq / h - rate, pinStop, pinS, pm.s1, pm.K, pm.M, pm.holds ? 1 : 0, StopExcess(x, off), gBallF.Length());
+         return line;
+      }
       PinMove PinStep(const double dq, const double h) const
       {
          PinMove pm;

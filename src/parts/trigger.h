@@ -18,6 +18,8 @@
 class Hit3DPoly;
 class MeshBuffer;
 class TriggerHitCircle;
+class ContactPartHost;
+namespace WireSwitchModel { class WireSwitch; }
 
 class TriggerData final : public BaseProperty
 {
@@ -106,6 +108,8 @@ public:
    void TriggerAnimationHit();
    void TriggerAnimationUnhit();
    void OnHit(bool hit);
+   // unified engine: a wire trigger (WireA-D) is a rollover wire switch of the contact system, no stock sensor (trigger.cpp, design-wire.md)
+   bool OnWirePart() const { return m_partHost != nullptr; }
 
    // Fills 'outline' with the 2D outline of wire-shaped triggers for editor display (empty for other shapes)
    void GetWireOutline(vector<Vertex2D> &outline) const;
@@ -134,6 +138,8 @@ private:
    // Valid through PhysicSetup/PhysicRelease
    TriggerHitCircle *m_ptriggerhitcircle = nullptr;
    Hit3DPoly *m_ptriggerhitpoly = nullptr;
+   std::shared_ptr<WireSwitchModel::WireSwitch> m_partModel;
+   ContactPartHost *m_partHost = nullptr;
    bool m_hitEvent = false;
    bool m_unhitEvent = false;
 

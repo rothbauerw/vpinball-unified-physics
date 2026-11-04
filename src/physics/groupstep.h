@@ -402,6 +402,8 @@ namespace GroupStep
       // the residual of that round (its rows from off). Told only when an energy step is reported
       virtual void KeepFailNote(int, const double *, int) {}
       virtual std::string FailNote(int) const { return std::string(); }
+      virtual std::string SearchNote(const double *, int, double) const { return std::string(); }   // diagnostics (VPX_GROUP_SEARCH_TRACE): the part's state for the move x over h
+      virtual std::string RowNote() const { return std::string(); }   // diagnostics (VPX_GROUP_ROUND_TRACE): the terms of its rows at its last evaluation
       virtual void BallsMoved(const Ball *, int) {}              // the balls were moved with no step of its own
       virtual void ExplicitMove(const double *, int, double, double *) const {}   // its own unknowns in an energy step's explicit round
       virtual double EndResidual() const { return 0.0; }         // > 0: a step of a group holding this part counts as solved only with its residual within this (m/s; Settings::tolEndRes)
@@ -1127,8 +1129,14 @@ namespace GroupStep
                   double hm = (lo * fhi - hi * flo) / (fhi - flo);
                   if (!(hm > lo && hm < hi))
                      hm = 0.5 * (lo + hi);
-                  if (!Solve(hm))
+                  searchTrace = SearchTraceOn();
+                  searchBuf.clear();
+                  const bool solvedHm = Solve(hm);
+                  searchTrace = false;
+                  if (!solvedHm)
                   {
+                     if (SearchTraceOn())   // diagnostics, off by default: the failing stop-search solve, round by round
+                        fprintf(stderr, "SEARCH FAIL why %c it %d hm %.6g us (lo %.6g hi %.6g h %.6g) stop excess lo %.4g hi %.4g\n%s", failWhy, it, hm * 1e6, lo * 1e6, hi * 1e6, h * 1e6, flo, fhi, searchBuf.c_str());
                      warmOn = false;
                      return EnergyStep(hTry);
                   }
@@ -1170,6 +1178,8 @@ namespace GroupStep
             }
             if (nHalveDiag < kHalveDiag)   // why this attempt failed (diagnostics)
             {
+               if (RoundTraceOn() && nHalveDiag == 0)
+                  failRoundBuf = roundBuf;
                HalveDiag &hd = halveDiag[nHalveDiag++];
                hd.why = failWhy;
                hd.h = h;
@@ -1208,6 +1218,7 @@ namespace GroupStep
       struct HalveDiag { char why = '?'; double h = 0.0; int rounds = 0; double moveC = 0.0, moveW = 0.0; int slipFlips = 0, touchFlips = 0, maxSliding = 0; double lastW[6] = {}; };
       static constexpr int kHalveDiag = 8;
       HalveDiag halveDiag[kHalveDiag];
+      std::string roundBuf, failRoundBuf;   // VPX_GROUP_ROUND_TRACE: this attempt's rounds; the first failed attempt of the step
       int nHalveDiag = 0;
       char failWhy = '?';
       // back: a line-search round (the last move retaken shorter); grip: the parts' grip change after the move (m/s)
@@ -2389,8 +2400,15 @@ namespace GroupStep
          return true;
       }
       bool farOff = false;
+      // diagnostics, off by default (VPX_GROUP_ROUND_TRACE=1): each round of an attempt, the residual by row in speed units and the parts' row terms; the first failed attempt of a step kept in failRoundBuf
+      static bool RoundTraceOn() { static const bool on = []() { const char *const e = getenv("VPX_GROUP_ROUND_TRACE"); return e != nullptr && atoi(e) != 0; }(); return on; }
+      bool searchTrace = false;
+      std::string searchBuf;
+      static bool SearchTraceOn() { static const bool on = []() { const char *const e = getenv("VPX_GROUP_SEARCH_TRACE"); return e != nullptr && atoi(e) != 0; }(); return on; }
       bool SolveOnce(double h)
       {
+         if (RoundTraceOn())
+            roundBuf.clear();
          if (!BeginAttempt(h))
             return false;
          const int nU = nUnk;
@@ -2572,6 +2590,33 @@ namespace GroupStep
             gripMoved = gch > set.tolV;
             rd.scale = scale;
             rd.grip = gch;
+            if (RoundTraceOn())
+            {
+               char line[400];
+               int n = snprintf(line, sizeof line, "  r%d h %.4g us rn %.4g |", round, h * 1e6, rn);
+               for (int i = 0; i < nb && n < 300; i++)
+               {
+                  const double ic = 1.0 / ball[i].m, iw = ball[i].R / ball[i].I();
+                  n += snprintf(line + n, sizeof line - n, " b%d v %.3g %.3g %.3g w %.3g %.3g %.3g |", i, Res[6 * i] * ic, Res[6 * i + 1] * ic, Res[6 * i + 2] * ic, Res[6 * i + 3] * iw, Res[6 * i + 4] * iw, Res[6 * i + 5] * iw);
+               }
+               for (int c = 0; c < nCoord && n < 360; c++)
+                  if (cUnk[c] >= 0)
+                     n += snprintf(line + n, sizeof line - n, " q%d %.3g step %.3g |", c, Res[cUnk[c]] * ci[c].invM * ci[c].reach, stp[cUnk[c]] * scale);
+               snprintf(line + n, sizeof line - n, " ch %.3g grip %.3g settled %d moved %d", ch, gch, settled ? 1 : 0, moved ? 1 : 0);
+               roundBuf += line;
+               for (int p = 0; p < np; p++)
+                  roundBuf += " || " + part[p]->RowNote();
+               roundBuf += "\n";
+            }
+            if (searchTrace)
+            {
+               char line[200];
+               snprintf(line, sizeof line, "  round %d h %.6g us rn %.4g ch %.4g grip %.4g scale %.3g back %d", round, h * 1e6, rn, ch, gch, scale, back);
+               searchBuf += line;
+               for (int p = 0; p < np; p++)
+                  searchBuf += " | part res " + std::to_string(Res[partOff[p]]) + " " + part[p]->SearchNote(x, partOff[p], h);
+               searchBuf += "\n";
+            }
             if (round <= kRounds)
                roundDiag[round - 1] = rd;
             if (!moved && !gripMoved && set.tolEndRes > 0.0 && rn > set.tolEndRes)

@@ -41,6 +41,12 @@ namespace HingeGroup
 
       // ---- what the derived part supplies ----
       virtual double BendKb(double y) const = 0;           // the bend stiffness out of the part's plane at the distance y from the axis
+      // the bend out of the part's plane, in series with a touch at pb (body coordinates) along the normal nb: the part's plane holds the axis (out of it: z, N)
+      virtual double BendAlongNormal(const V3 &nb, const V3 &pb) const
+      {
+         const double oop = std::fabs(nb.z);
+         return oop > 1e-6 ? BendKb(std::max(std::fabs(pb.y), 1e-4)) / (oop * oop) : 0.0;
+      }
       virtual bool NearStart(double th) const = 0;         // near its start angle: a Hit fires only then
       virtual int LimitKind(int) const { return 0; }       // a touch of this stop as an event: +1 EOS, -1 BOS, 0 none
       virtual void UpdateSwitches() = 0;                   // after a step
@@ -105,9 +111,7 @@ namespace HingeGroup
          const V3 pb = cb - nb * (R - 0.5 * std::max(best.delta, 0.0));
          h.nc = 1;
          h.c[0].Set(0, nb.z * pb.y - nb.y * pb.z, fr * pb.y - dn * pb.z, E);
-         // the bend out of the part's plane, along the normal
-         const double oop = std::fabs(nb.z);
-         h.kb = oop > 1e-6 ? BendKb(std::max(std::fabs(pb.y), 1e-4)) / (oop * oop) : 0.0;
+         h.kb = BendAlongNormal(nb, pb);
       }
 
       // ---- the body's terms ----
@@ -141,13 +145,18 @@ namespace HingeGroup
          lossF = lossSlope = 0.0;
          if (kBlade > 0.0)
          {
+            // the linear spring's chord in closed form, k (x0 + dq / 2), while both ends are past the free angle: (V1 - V0) / dq with x1 = x0 + dq loses ulp(x0) / dq to rounding,
+            // which froze the solve of a ball resting on a wire switch (dq ~ 1e-12 rad). Across the free angle one end is 0, so the difference form has no cancellation.
             const double x0 = th - aBlade, x1 = x0 + dq;
-            if (x0 > 0.0 || x1 > 0.0)
+            if (x0 > 0.0 && x1 > 0.0)
+               chord += kBlade * (x0 + 0.5 * dq);
+            else if (x0 > 0.0 || x1 > 0.0)
             {
                const double a0 = std::max(x0, 0.0), a1 = std::max(x1, 0.0);
-               chord += kBlade * 0.5 * (a1 + a0) * (dq != 0.0 ? (a1 - a0) / dq : (x0 > 0.0 ? 1.0 : 0.0));
-               slope += 0.5 * kBlade;
+               chord += 0.5 * kBlade * (a1 * a1 - a0 * a0) / dq;
             }
+            if (x0 > 0.0 || x1 > 0.0)
+               slope += 0.5 * kBlade;
          }
          for (const HingeBody::Cam &cm : cams)
          {
@@ -155,22 +164,22 @@ namespace HingeGroup
             if (d0 <= 0.0 && d1 <= 0.0)
                continue;
             const double sn = std::sin(thm - cm.phase), ddt = -cm.r * sn;   // d delta / d theta at mid-step
+            const double dd = ddt * sinc;                                    // (d1 - d0) / dq in closed form (cos a - cos b = -2 sin((a + b) / 2) sin((a - b) / 2))
             const double Fm = cm.F(std::max(0.5 * (d0 + d1), 0.0));
-            if (std::fabs(dq) > 1e-7)
-               chord += (cm.V(d1) - cm.V(d0)) / dq;
-            else
-               chord += Fm * ddt;
+            chord += cm.MeanF(d0, d1) * dd;
             slope += 0.5 * (cm.k + (cm.F0 > 0.0 ? cm.F0 / cm.rampM : 0.0)) * ddt * ddt;
             if (cm.c > 0.0)
             {
-               // the damper on the part of the move inside the zone: continuous in the move, and its work has one sign; never pulling
-               const double p0 = std::max(d0, 0.0), p1 = std::max(d1, 0.0);
-               double Fd = cm.c * (p1 - p0) / h;
+               // the damper on the part of the move inside the zone: continuous in the move, and its work has one sign; never pulling.
+               // Inside the zone at both ends the move in it is dd dq (closed form); entering or leaving, one end is 0 (no cancellation)
+               const bool in = d0 > 0.0 && d1 > 0.0;
+               const double p0 = std::max(d0, 0.0), p1 = std::max(d1, 0.0), dp = in ? dd * dq : p1 - p0;
+               double Fd = cm.c * dp / h;
                if (Fd < -Fm)
                   Fd = -Fm;
                if (std::fabs(dq) > 1e-12)
                {
-                  lossF += Fd * (p1 - p0) / dq;
+                  lossF += Fd * (in ? dd : dp / dq);
                   lossSlope += cm.c * ddt * ddt / h;
                }
             }

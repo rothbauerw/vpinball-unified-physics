@@ -14,6 +14,7 @@
 #include "physics/hitrubber.h"
 #include "physics/testdriver.h"
 #include "parts/ball.h"
+#include "parts/trigger.h"
 #include "core/player.h"
 #include "physics/PhysicsEngine.h"
 #include "ui/live/LiveUI.h"
@@ -94,6 +95,8 @@ namespace StockCount
                : t == eItemGate ? "gate" : t == eItemSpinner ? "spinner" : t == eItemKicker ? "kicker" : t == eItemTrigger ? "trigger" : t == eItemPlunger ? "plunger" : t == eItemHitTarget ? "target"
                : t == eItemTable ? "table" : "part";
             r->allowed = AllowedStock(t);
+            if (t == eItemTrigger && dynamic_cast<const Trigger *>(obj->m_editable) != nullptr && dynamic_cast<const Trigger *>(obj->m_editable)->OnWirePart())
+               r->allowed = nullptr;   // a wire trigger on the wire switch part is converted: no stock allowed
             if (t == eItemTable)   // the table's own edges (PhysicsEngine): no part of the table to convert yet
             {
                r->name = "table edge";

@@ -84,5 +84,23 @@ namespace HingeBody
             return 0.0;
          return k * d + (F0 <= 0.0 ? 0.0 : d < rampM ? F0 * d / rampM : F0);
       }
+      // F's mean over [d0, d1] = (V(d1) - V(d0)) / (d1 - d0) without that cancellation: F is linear between its breaks (0, rampM), so each piece's mean is its ends' mean
+      double MeanF(double d0, double d1) const
+      {
+         if (d0 > d1)
+            std::swap(d0, d1);
+         const double brk[2] = { 0.0, F0 > 0.0 ? rampM : INFINITY };
+         if (!(d0 < brk[0] && d1 > brk[0]) && !(d0 < brk[1] && d1 > brk[1]))
+            return 0.5 * (F(d0) + F(d1));
+         double s = 0.0, u = d0;
+         for (const double b : brk)
+            if (b > u && b < d1)
+            {
+               s += (b - u) * 0.5 * (F(u) + F(b));
+               u = b;
+            }
+         s += (d1 - u) * 0.5 * (F(u) + F(d1));
+         return s / (d1 - d0);
+      }
    };
 }

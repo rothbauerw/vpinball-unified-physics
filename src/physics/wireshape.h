@@ -138,8 +138,8 @@ inline Centreline TraceCentreline(const float* verts, size_t nVerts, size_t stri
    }
    for (size_t j = 0; j < nodes.size(); j++) nodes[j] = nodes[j] * (1. / cnt[j]);
    // 5. order end to end: start at the node farthest from node 0 (an end), then nearest unvisited each step
-   size_t start = 0; double far = -1.;
-   for (size_t j = 0; j < nodes.size(); j++) { const double d = (nodes[j] - nodes[0]).Len(); if (d > far) { far = d; start = j; } }
+   size_t start = 0; double farthest = -1.;
+   for (size_t j = 0; j < nodes.size(); j++) { const double d = (nodes[j] - nodes[0]).Len(); if (d > farthest) { farthest = d; start = j; } }
    std::vector<char> used(nodes.size(), 0);
    std::vector<V3> chain; chain.reserve(nodes.size());
    size_t cur = start; used[cur] = 1; chain.push_back(nodes[cur]);

@@ -14,6 +14,16 @@
 #include "parts/ball.h"
 #include "parts/Collection.h"
 #include "physics/collideex.h"
+#include "physics/contacthost.h"
+#include "physics/contactparthost.h"
+#include "physics/contactpartsini.h"
+#include "physics/contactsettings.h"
+#include "physics/contactsystem.h"
+#include "physics/contactwireswitch.h"
+#include "physics/hitrubber.h"
+#include "physics/physicsini.h"
+#include "core/player.h"
+#include "ui/live/LiveUI.h"
 #include "physics/PhysicsEngine.h"
 #include "renderer/Renderer.h"
 #include "renderer/Shader.h"
@@ -138,6 +148,145 @@ void Trigger::WriteRegDefaults()
 
 // Ported at: VisualPinball.Engine/VPT/Trigger/TriggerHitGenerator.cs
 
+namespace
+{
+   // The table side of a wire trigger's rollover wire switch (contactwireswitch.h): the switch's close is the trigger's Hit, its open the Unhit; ActiveBall is the ball
+   // nearest the wire (one ball presses a wire at a time, design-wire.md topic 6). The drawn mesh keeps the stock dip.
+   class WireSwitchAdapter final : public PartAdapter
+   {
+   public:
+      WireSwitchAdapter(Trigger *trigger, std::shared_ptr<WireSwitchModel::WireSwitch> model, std::vector<WireShape::Capsule> chainVpu)
+         : m_trigger(trigger), m_model(std::move(model)), m_chain(std::move(chainVpu)), m_name(trigger->GetName())
+      {
+         const ContactSettings &cs = ContactSettings::Get();
+         m_model->gp.dynRatio = cs.muDynamicRatio;
+         m_model->gp.SetPivotModel(cs.pivotModel);
+      }
+      void Publish() override
+      {
+         m_model->Collect();
+         m_model->bookMs = (int)g_pplayer->m_time_msec;
+         if (!m_notice.empty() && g_pplayer->m_liveUI != nullptr)   // the load-time detector, on screen once the player runs
+         {
+            g_pplayer->m_liveUI->PushNotification(m_notice, 10000);
+            m_notice.clear();
+         }
+         static const bool gapLog = []() { const char *const e = getenv("VPX_WIRE_GAP"); return e != nullptr && atoi(e) != 0; }();
+         if (gapLog && m_host != nullptr && m_gapLines < 600)   // diagnostic (off by default): each ball near the wire, its probe gap and whether its contact holds the wire
+         {
+            constexpr double U = ContactSystem::kMetresPerUnit;
+            if (m_gapLines == 0)
+            {
+               const FRect3D &bb = m_host->m_hitBBox;
+               PLOGI << "WireGap " << m_name << " box x " << bb.left << " " << bb.right << " y " << bb.top << " " << bb.bottom << " z " << bb.zlow << " " << bb.zhigh << " enabled " << m_host->m_enabled << " contact " << m_host->ContactSettings().contact;
+               m_gapLines++;
+            }
+            for (Ball *b : g_pplayer->m_vball)
+            {
+               const HitBall &hb = b->m_hitBall;
+               const Vertex3Ds &p = hb.m_d.m_pos;
+               if (WireShape::DistToChain(WireShape::V3(p.x, p.y, p.z), m_chain) > hb.m_d.m_radius + 40.0)
+                  continue;
+               RubberContact::BallSI bs;
+               bs.R = hb.m_d.m_radius * U;
+               m_model->SetBall(bs);
+               const RubberContact::TubeProbe pr = m_model->Probe(RubberContact::V3(p.x * U, p.y * U, p.z * U));
+               int held = -1;
+               if (hb.m_contact != nullptr)
+                  held = std::any_of(hb.m_contact->items.begin(), hb.m_contact->items.end(), [this](const SurfaceContact &it) { return it.r == m_host; }) ? 1 : 0;
+               PLOGI << "WireGap " << m_name << " t=" << g_pplayer->m_time_msec << " ball (" << p.x << ", " << p.y << ", " << p.z << ") probe gap " << -pr.delta * 1e3 << " mm, chain gap "
+                     << (WireShape::DistToChain(WireShape::V3(p.x, p.y, p.z), m_chain) - hb.m_d.m_radius - m_chain[0].r) * U * 1e3 << " mm, in a contact " << (hb.m_contact != nullptr) << ", holds the wire " << held
+                     << ", items " << (hb.m_contact != nullptr ? (int)hb.m_contact->items.size() : 0) << ", q " << m_model->gp.q;
+               m_gapLines++;
+            }
+         }
+         if (m_model->energySteps > m_esSeen)   // detector (rule 8)
+         {
+            m_esSeen = m_model->energySteps;
+            if (m_esLines < 5)
+            {
+               m_esLines++;
+               PLOGW << "Group step: energy step alone, part " << m_name << ", balls 0, t=" << g_pplayer->m_time_msec << " ms, " << m_esSeen << " so far; " << m_model->StateNote() << ". A net, not expected to fire: keep vpinball.log and report it";
+            }
+         }
+         if (m_model->failedSteps > 0 && !m_failShown)
+         {
+            m_failShown = true;
+            const std::string msg = m_name + ": a step of the wire alone could not be solved: the rest of that cycle was lost";
+            PLOGW << msg;
+            if (g_pplayer->m_liveUI != nullptr)
+               g_pplayer->m_liveUI->PushNotification(msg, 6000);
+         }
+      }
+      void Fire(const std::vector<ContactMovingPart::Event> &events) override
+      {
+         for (const ContactMovingPart::Event &e : events)
+         {
+            if (e.kind != ContactMovingPart::Event::SwitchClosed && e.kind != ContactMovingPart::Event::SwitchOpened)
+               continue;
+            const bool closed = e.kind == ContactMovingPart::Event::SwitchClosed;
+            if (closed)
+            {
+               if (!m_trigger->m_d.m_enabled)
+                  continue;
+               HitBall *best = nullptr;
+               double bestD = INFINITY;
+               for (Ball *b : g_pplayer->m_vball)
+               {
+                  const Vertex3Ds &p = b->m_hitBall.m_d.m_pos;
+                  const double d = WireShape::DistToChain(WireShape::V3(p.x, p.y, p.z), m_chain) - b->m_hitBall.m_d.m_radius;
+                  if (d < bestD)
+                  {
+                     bestD = d;
+                     best = &b->m_hitBall;
+                  }
+               }
+               if (best == nullptr)
+                  continue;
+               m_holder = best;
+               g_pplayer->m_pactiveball = best->m_pBall;
+               if (best->m_d.m_vpVolObjs != nullptr)
+                  best->m_d.m_vpVolObjs->push_back(m_trigger);
+               m_trigger->TriggerAnimationHit();
+            }
+            else
+            {
+               if (m_holder == nullptr)
+                  continue;   // (closed while disabled)
+               const auto &vb = g_pplayer->m_vball;
+               if (std::any_of(vb.begin(), vb.end(), [&](const Ball *b) { return &b->m_hitBall == m_holder; }))
+               {
+                  g_pplayer->m_pactiveball = m_holder->m_pBall;
+                  if (m_holder->m_d.m_vpVolObjs != nullptr)
+                     std::erase(*m_holder->m_d.m_vpVolObjs, (IFireEvents *)m_trigger);
+               }
+               m_holder = nullptr;
+               m_trigger->TriggerAnimationUnhit();
+            }
+            (closed ? m_hits : m_unhits)++;
+            if (m_hits + m_unhits <= 40)
+               PLOGI << "Trigger " << m_name << ": wire switch " << (closed ? "closed: Hit" : "opened: Unhit") << " t=" << g_pplayer->m_time_msec << " ms (" << m_hits << " Hit, " << m_unhits << " Unhit so far)";
+            m_trigger->OnHit(closed);
+         }
+      }
+
+   private:
+      Trigger *m_trigger;
+      std::shared_ptr<WireSwitchModel::WireSwitch> m_model;
+      std::vector<WireShape::Capsule> m_chain;   // the wire at rest, VPX units: ActiveBall is the ball nearest it
+      std::string m_name;
+      HitBall *m_holder = nullptr;   // the ball that closed the switch
+      long m_esSeen = 0;
+      int m_esLines = 0, m_hits = 0, m_unhits = 0;
+      bool m_failShown = false;
+      int m_gapLines = 0;
+
+   public:
+      const ContactHost *m_host = nullptr;   // (the gap log)
+      std::string m_notice;                  // a load-time detector's message, shown at the first cycle
+   };
+}
+
 void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 {
    m_hitEvent = false;
@@ -146,6 +295,85 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       return;
 
    const float height = m_ptable->GetSurfaceHeight(m_d.m_szSurface, m_d.m_vCenter.x, m_d.m_vCenter.y);
+   const bool wire = m_d.m_shape == TriggerWireA || m_d.m_shape == TriggerWireB || m_d.m_shape == TriggerWireC || m_d.m_shape == TriggerWireD;
+   if (!isUI && ContactSystem::Unified())
+   {
+      const std::filesystem::path ini = ContactHost::IniPathFor(m_ptable->m_filename);
+      const bool on = PhysicsIni::Active(ini).triggers;
+      static const void *s_noted = nullptr;   // once per play
+      if (s_noted != g_pplayer)
+      {
+         s_noted = g_pplayer;
+         PLOGI << "Triggers: [Features] triggers = " << (on ? 1 : 0) << (on ? ": WireA-D are rollover wire switches of the contact system (group step); None, Star, Button and Inder stay stock sensors (not converted yet)" : ": every trigger is a stock sensor");
+      }
+      if (on && wire)
+      {
+         // the real wire: a steel wire on a micro switch lever, hinged below the playfield (design-wire.md); no stock sensor, mover or volume
+         constexpr double U = ContactSystem::kMetresPerUnit;
+         WireSwitchModel::Settings s;
+         if (m_d.m_shape == TriggerWireB)
+            s.hingeBackMm = 27.0;   // the user's layouts 2026-11-04 (bench runs/2026-11-04-wire-bcd): B a standard-size micro switch; C held at the low end of its visible strand
+         if (m_d.m_shape == TriggerWireC)
+            s.leverNode = 1;
+         PartsIni::LoadWireSwitch(s, ini, GetName());
+         WireShape::Pose pose;
+         pose.x = m_d.m_vCenter.x;
+         pose.y = m_d.m_vCenter.y;
+         pose.rotDeg = m_d.m_rotation;
+         pose.scaleX = m_d.m_scaleX;
+         // on the trigger's own surface (user 2026-11-04): the arch top peak_mm above it. Detector (rule 8): a wire whose top ends below the playfield under it can never be reached
+         // (Gorgar's old triggerWall at -25, a workaround that sank the drawn wire)
+         const float floorZ = height;
+         const float playfieldZ = m_ptable->GetSurfaceHeight(string(), m_d.m_vCenter.x, m_d.m_vCenter.y);
+         pose.surfaceZ = floorZ;
+         pose.peakMm = s.peakMm;
+         pose.wireDmm = s.wireDMm;
+         pose.thicknessVpu = m_d.m_wireThickness;
+         const WireShape::Shape shape = m_d.m_shape == TriggerWireB ? WireShape::Shape::WireB : m_d.m_shape == TriggerWireC ? WireShape::Shape::WireC : m_d.m_shape == TriggerWireD ? WireShape::Shape::WireD : WireShape::Shape::WireA;
+         const WireShape::WireBody wb = shape == WireShape::Shape::WireD ? WireShape::Build(shape, &triggerDWireMesh[0].x, triggerDWireNumVertices, 8, pose)
+                                                                          : WireShape::Build(shape, &triggerSimple[0].x, triggerSimpleNumVertices, 8, pose);
+         if (wb.caps.empty())
+         {
+            PLOGW << "Trigger " << GetName() << ": the wire's centreline could not be traced from its mesh: no switch";
+            return;
+         }
+         std::vector<WireShape::Capsule> chain;
+         for (const WireShape::Capsule &c : wb.caps)
+         {
+            WireShape::Capsule m;
+            m.a = c.a * U;
+            m.b = c.b * U;
+            m.r = c.r * U;
+            chain.push_back(m);
+         }
+         m_partModel = std::make_shared<WireSwitchModel::WireSwitch>();
+         m_partModel->Build(s, (double)floorZ * U, chain, RubberContact::BallSI());
+         RubberObjectSettings hs;
+         ContactHost::LoadHardSurfaceSettings(hs, ini, "trigger", GetName(), s.elasticity, s.friction);
+         const RubberContact::V3 &A = m_partModel->gp.A;
+         const double reach = m_partModel->Reach();
+         const float lo[3] = { (float)((A.x - reach) / U), (float)((A.y - reach) / U), (float)((A.z - reach) / U) };
+         const float hi[3] = { (float)((A.x + reach) / U), (float)((A.y + reach) / U), (float)((A.z + reach) / U) };
+         auto adapter = std::make_unique<WireSwitchAdapter>(this, m_partModel, wb.caps);
+         WireSwitchAdapter *const adapterRaw = adapter.get();
+         m_partHost = new ContactPartHost(this, m_partModel, std::move(adapter), hs, ini, GetName(), "trigger", lo, hi);
+         adapterRaw->m_host = m_partHost;
+         if (floorZ + s.peakMm / WireShape::kMmPerVpu < playfieldZ)
+         {
+            adapterRaw->m_notice = "Wire trigger " + GetName() + " sits below the playfield: no ball can reach it; check its Surface";
+            PLOGW << adapterRaw->m_notice << " (its top at z " << floorZ + s.peakMm / WireShape::kMmPerVpu << " VPU on '" << m_d.m_szSurface << "', the playfield at z " << playfieldZ << ")";
+         }
+         m_partHost->SetHardSurface(s.elasticity, s.friction);
+         physics->AddCollider(m_partHost, isUI);
+         const WireSwitchGroup::Part &w = m_partModel->part;
+         const WireShape::V3 tip(w.TipWorld().x / U, w.TipWorld().y / U, w.TipWorld().z / U);
+         PLOGI << "Trigger " << GetName() << ": wire switch part on the group step (shape Wire" << "ABCD"[(int)shape] << ", " << chain.size() << " capsules, wire " << 2e3 * chain[0].r
+               << " mm, scale " << m_d.m_scaleX << ", peak " << s.peakMm << " mm above its surface '" << m_d.m_szSurface << "' at z " << floorZ << " VPU (playfield z " << playfieldZ << "); lever end node " << s.leverNode << " at (" << tip.x << ", " << tip.y << ") VPU; pivot " << s.hingeBackMm << " mm back, "
+               << s.hingeBelowMm << " mm below; spring " << s.springN << " N at first touch, " << s.springFullN << " N at full travel; close " << s.closeMm << " mm, release " << s.releaseMm << " mm; mass "
+               << w.mp.m * 1e3 << " g, reach " << reach * 1e3 << " mm)";
+         return;
+      }
+   }
    if (m_d.m_shape == TriggerStar || m_d.m_shape == TriggerButton)
    {
       TriggerHitCircle* hitcircle = new TriggerHitCircle(this, m_d.m_vCenter, m_d.m_radius, height, height + m_d.m_hit_height);
@@ -207,6 +435,8 @@ void Trigger::PhysicRelease(PhysicsEngine* physics, const bool isUI)
    {
       m_ptriggerhitcircle = nullptr;
       m_ptriggerhitpoly = nullptr;
+      m_partModel = nullptr;   // (the host is owned by the physics engine)
+      m_partHost = nullptr;
    }
 }
 

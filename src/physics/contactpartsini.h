@@ -195,8 +195,9 @@ namespace PartsIni
          else if (k == "spring_n") s.springN = v;
          else if (k == "spring_full_n") s.springFullN = v;
          else if (k == "wire_d_mm") s.wireDMm = v;
-         else if (k == "hinge_offset_mm") s.hingeOffsetMm = v;
-         else if (k == "hinge_depth_mm") s.hingeDepthMm = v;
+         else if (k == "hinge_back_mm") s.hingeBackMm = v;
+         else if (k == "lever_node") s.leverNode = (int)v;
+         else if (k == "hinge_below_mm") s.hingeBelowMm = v;
          else PLOGW << "Trigger " << name << ": unknown key '" << k << "' ignored";
       });
    }
