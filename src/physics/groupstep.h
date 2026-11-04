@@ -30,6 +30,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "physics/rubbercontact.h"
@@ -763,6 +764,35 @@ namespace GroupStep
          stamp++;
       }
 
+      // VPX_GROUP_BOOK_STEPS=2 (a diagnostic): every stored term of the group, one string: per ball place, kinetic, height; per item its depth, zero, squash, shear, roll; per part its energy
+      std::string Terms() const
+      {
+         std::string o;
+         char t[400];
+         for (int i = 0; i < nb; i++)
+         {
+            const Ball &b = ball[i];
+            snprintf(t, sizeof(t), "|b%d c=%.9g,%.9g,%.9g ke=%.9g pe=%.9g", i, b.c.x, b.c.y, b.c.z, (0.5 * b.m * b.v.Dot(b.v) + 0.5 * b.I() * b.w.Dot(b.w)) * 1e6, -b.m * set.g.Dot(b.c) * 1e6);
+            o += t;
+         }
+         for (int k = 0; k < ni; k++)
+         {
+            const Item &it = item[k];
+            Hit hp;
+            Probe(it, ball, hp);
+            const double vn = it.touching ? it.V(hp.delta) : 0.0, vs = it.touching ? 0.5 * it.Kt(hp.delta) * it.xi.Dot(it.xi) : 0.0;
+            const double vr = it.touching && set.rollModel == 1 ? 0.5 * it.Kr(hp.delta) * it.ra.th.Dot(it.ra.th) + 0.5 * it.Ktw(hp.delta) * it.ra.tw * it.ra.tw : 0.0;
+            snprintf(t, sizeof(t), "|i%d a%d b%d s%d t%d d=%.6g z=%.6g Vn=%.6g Vs=%.6g Vr=%.6g", k, it.a, it.b, it.s, it.touching ? 1 : 0, hp.delta * 1e6, it.dZero * 1e6, vn * 1e6, vs * 1e6, vr * 1e6);
+            o += t;
+         }
+         for (int q = 0; q < np; q++)
+         {
+            snprintf(t, sizeof(t), "|p%d E=%.9g", q, part[q]->Energy(ball, nb) * 1e6);
+            o += t;
+         }
+         snprintf(t, sizeof(t), "|form=%.9g", FormEnergy(ball) * 1e6);
+         return o + t;
+      }
       double Energy() const
       {
          double e = 0.0;
@@ -2697,6 +2727,9 @@ namespace GroupStep
             return;
          static const bool on = []() { const char *const e = getenv("VPX_GROUP_BOOK_STEPS"); return e != nullptr && atoi(e) != 0; }();
          perStep = on;
+         static const bool terms = []() { const char *const e = getenv("VPX_GROUP_BOOK_STEPS"); return e != nullptr && atoi(e) >= 2; }();
+         if (terms)
+            startTerms = g.Terms();
          e0 = g.Energy();
          t0 = std::chrono::steady_clock::now();
       }
@@ -2720,6 +2753,8 @@ namespace GroupStep
             touch += g.Touching(k) ? 1 : 0;
          fprintf(f, "%d,%d,%.3f,%d,%d,%d,%ld,%ld,%d,%ld,%ld,%ld,%d,%.9f,%.9f,%.6f,%.6f,%.6f,%.6f,%.6f,%.1f,%.5f,%.6f,%.6f\n", tMs, alone ? 1 : 0, dt * 1e6, g.nb, g.np, touch, g.books.steps, g.books.rounds, g.books.maxRounds, g.books.halvings, g.books.stopSteps, g.books.energySteps, failed ? 1 : 0,
                  e0 * 1e3, e1 * 1e3, d * 1e6, l * 1e6, (e1 - e0 + l - d) * 1e6, rises * 1e6, maxRise * 1e6, us, g.books.maxDepthM * 1e3, g.books.coilJ * 1e6, g.books.spinBrakeJ * 1e6);
+         if (!startTerms.empty())   // (uJ, um, m)
+            fprintf(f, "T,%d,%.3f,start%s\nT,%d,%.3f,end%s\n", tMs, dt * 1e6, startTerms.c_str(), tMs, dt * 1e6, g.Terms().c_str());
          fflush(f);
       }
 
@@ -2728,6 +2763,7 @@ namespace GroupStep
       FILE *const f;
       bool perStep = false;
       double e0 = 0.0, last = 0.0, rises = 0.0, maxRise = 0.0;
+      std::string startTerms;
       std::chrono::steady_clock::time_point t0;
    };
 

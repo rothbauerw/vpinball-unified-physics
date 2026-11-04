@@ -119,6 +119,7 @@ using namespace RubberContact;
 // The balls the contact system holds in an engine-stepped contact (a post, a wall rubber, the playfield, a disc): the rubbers each one touches, the shear state and the
 // bookkeeping for the log and the release. HitBall::m_contact points at the ball's entry.
 static std::list<BallContact> g_engaged;
+static double g_frameUsedS = 0.0;   // how much of this physics step (1 ms) the sub-intervals before this one took (the engine splits a step at a hit)
 static std::vector<const HitBall *> g_placed;   // the balls a script or the driver put where they are since the last cycle (NotePlaced)
 static ContactSystem::CycleStats g_last;
 static std::vector<std::function<void()>> g_deferred;      // events raised inside the step, fired after it (Finish)
@@ -155,6 +156,7 @@ struct ContactSystemImpl
       int stepsWhy = TestDriver::ContactCost::kEnd;   // the rule that set steps (test driver cost split, TestMatrixDesign section 3 point 10c)
       bool magnetsOn = false;
       bool extTaken = false;    // Sources::Begin took this cycle's gravity and nudge out of the velocity (they act in the substeps)
+      V3 extOwe;                // the step's gravity and nudge for the sub-intervals after this one: out of the velocity while this one is stepped, back at the write-back
       double endPair = 0.0;     // the energy check: its half of what its ball pairs hold at the island's end
       bool magParts = false;    // the Option A ball-ball force is applied re-aimed at every substep (MagnetPartForces), not as the held increment
       double magAcc = 0.0;      // m/s2: the magnets' acceleration of this ball at the start of the step (the substep bound)
@@ -234,7 +236,10 @@ struct ContactSystemImpl
          w.magAcc = w.magnetsOn ? V3((extInc.x - extBase.x) * VS, (extInc.y - extBase.y) * VS, (extInc.z - extBase.z) * VS).Length() / PHYSICS_STEPTIME_S : 0.0;
          const double cycleShare = dt / PHYSICS_STEPTIME_S;
          w.extBaseVS = V3(extBase.x * VS, extBase.y * VS, extBase.z * VS);
-         w.v = w.v - V3(extInc.x * VS * cycleShare, extInc.y * VS * cycleShare, extInc.z * VS * cycleShare);
+         // the step's increment is all in the velocity: the sub-intervals after this one (a step split at a hit) get theirs back at the write-back, not while this one is stepped
+         const double later = std::max(PHYSICS_STEPTIME_S - g_frameUsedS - dt, 0.0) / PHYSICS_STEPTIME_S;
+         w.extOwe = V3(extInc.x * VS * later, extInc.y * VS * later, extInc.z * VS * later);
+         w.v = w.v - V3(extInc.x * VS * cycleShare, extInc.y * VS * cycleShare, extInc.z * VS * cycleShare) - w.extOwe;
       }
 
       // Eddy-current braking of the ball's spin across the coil field, the one form for the old loop and the group: a steel sphere turning at w in a field B feels a torque (2 pi / 15) sigma R^5 B^2 w
@@ -1576,7 +1581,8 @@ struct ContactSystemImpl
                   << " depth" << o.str() << " cluster " << isl.members.size();
          }
          pb->m_d.m_pos = Vertex3Ds((float)(w.c.x / U), (float)(w.c.y / U), (float)(w.c.z / U));
-         pb->m_d.m_vel = Vertex3Ds((float)(w.v.x / VS), (float)(w.v.y / VS), (float)(w.v.z / VS));
+         pb->m_d.m_vel = Vertex3Ds((float)((w.v.x + w.extOwe.x) / VS), (float)((w.v.y + w.extOwe.y) / VS), (float)((w.v.z + w.extOwe.z) / VS));
+         w.extOwe = V3();
          pb->m_angularmomentum = Vertex3Ds((float)(w.w.x * w.lScale), (float)(w.w.y * w.lScale), (float)(w.w.z * w.lScale));
          const Vertex3Ds ds = pb->m_d.m_pos - w.posStart;
          pb->m_lastEventSqrDist += ds.LengthSquared();
@@ -4208,6 +4214,7 @@ void ContactSystem::NotePlaced(const HitBall *const ball)
 
 void ContactSystem::SleepCycleStart()
 {
+   g_frameUsedS = 0.0;   // (a new physics step: called before the balls' velocities)
    ContactSystemImpl::SleepStart();
 }
 
@@ -4225,7 +4232,10 @@ void ContactSystem::Step(float dtime)
 {
    ContactSystemImpl::StepBalls(dtime);
    if (dtime > 0.f)
+   {
       g_placed.clear();
+      g_frameUsedS += (double)dtime * DEFAULT_STEPTIME_S;
+   }
 }
 
 const ContactSystem::CycleStats &ContactSystem::LastCycle()
