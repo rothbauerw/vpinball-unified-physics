@@ -100,76 +100,8 @@ namespace FlipperModel
    {
       return s.plungerKg * (k.lever / 1000.0) * (k.dLever / 1000.0) * omega * omega;
    }
-   // The windings over a step of h: the circuit's exponential with L and R + dL/dx v held (the plunger's place at mid-step, by its speed now). From the state at the step's start, so a step taken again is the same.
-   // iHigh, iLow: the currents at the end, fractions of each winding's V / R; i2High, i2Low: their squares' exact means over the step, same units (the force goes as i^2, and its fall is twice as fast as the current's).
-   struct CoilStep { double iHigh = 0.0, iLow = 0.0, i2High = 0.0, i2Low = 0.0; };
-   inline CoilStep CoilAdvance(const FlipperSettings& s, const FlipperDerived& p, const double xM, const double vX, const double iHigh, const double iLow, const bool coilOn, const bool preEos, const bool coilOffPrev, const bool wasPreEos, const double h)
-   {
-      const bool coilOff = !coilOn;
-      double frac = (xM + 0.5 * h * vX - p.xMin * 1e-3) / (s.bobbinMm * 1e-3);
-      frac = fmax(frac, 0.0);
-      const double vClose = fmax(-vX, 0.0);
-      const double dP = p.bP / (s.bobbinMm * Sq(frac + s.x0P)), dH = p.bH / (s.bobbinMm * Sq(frac + s.x0H));
-      const double lP = (p.aP + p.bP / (frac + s.x0P)) * 1e-3, lH = (p.aH + p.bH / (frac + s.x0H)) * 1e-3;
-      const double issP = s.vSupply / s.rP, issH = s.vSupply / s.rH;
-      double iP = iHigh * issP, iH = iLow * issH;
-      const auto Exp = [&](const double i0, const double V, const double R, const double L, double& meanI2) {
-         const double iInf = V / R, d = i0 - iInf, u = h * R / L;
-         const double e1 = exp(-u), m1 = u > 1e-6 ? (1.0 - e1) / u : 1.0 - 0.5 * u, m2 = u > 1e-6 ? (1.0 - e1 * e1) / (2.0 * u) : 1.0 - u;
-         meanI2 = iInf * iInf + 2.0 * iInf * d * m1 + d * d * m2;
-         return iInf + d * e1;
-      };
-      double mP = 0.0, mH = 0.0, iP1, iH1;
-      if (s.single)
-      {
-         iP1 = Exp(iP, coilOff ? 0.0 : s.vSupply, s.rP + dP * vClose, lP, mP);
-         iH1 = 0.0;
-      }
-      else if (s.series)
-      {
-         if (coilOff)
-         {
-            if (!coilOffPrev)
-            {
-               const double iLoop = (preEos && s.eosFlux) ? (lP * iP + lH * iH) / (lP + lH) : iP;
-               iP = iH = iLoop;
-            }
-            else
-               iH = iP;
-            iP1 = iH1 = Exp(iP, 0.0, s.rP + s.rH + (dP + dH) * vClose, lP + lH, mP);
-            mH = mP;
-         }
-         else if (preEos)
-         {
-            iP1 = Exp(iP, s.vSupply, s.rP + dP * vClose, lP, mP);
-            iH1 = Exp(iH, 0.0, s.rH, lH, mH);
-         }
-         else
-         {
-            if (wasPreEos)
-            {
-               const double iLoop = s.eosFlux ? (lP * iP + lH * iH) / (lP + lH) : iP;
-               iP = iH = iLoop;
-            }
-            else
-               iH = iP;
-            iP1 = iH1 = Exp(iP, s.vSupply, s.rP + s.rH + (dP + dH) * vClose, lP + lH, mP);
-            mH = mP;
-         }
-      }
-      else
-      {
-         const double V = coilOff ? 0.0 : 1.0;   // parallel
-         iP1 = Exp(iP, preEos ? V * s.vSupply : 0.0, s.rP + (preEos ? dP * vClose : 0.0), lP, mP);
-         iH1 = Exp(iH, V * s.vSupply, s.rH + dH * vClose, lH, mH);
-      }
-      CoilStep o;
-      o.iHigh = iP1 / issP;
-      o.iLow = iH1 / issH;
-      o.i2High = mP / (issP * issP);
-      o.i2Low = mH / (issH * issH);
-      return o;
-   }
+   // The windings' currents at a step's end, fractions of each winding's V / R (the stepping itself is CoilModel::OverLoop, batgroup.h CoilOver)
+   struct CoilStep { double iHigh = 0.0, iLow = 0.0; };
    // The time constant the windings are changing with now, s; infinite when they are at their targets (for a step's facts)
    inline double CoilTimeConstant(const FlipperSettings& s, const FlipperDerived& p, const double xM, const double vX, const double iHigh, const double iLow, const bool coilOn, const bool preEos)
    {
@@ -183,6 +115,13 @@ namespace FlipperModel
       {
          if (fabs((coilOn ? 1.0 : 0.0) - iHigh) > 1e-3)
             tau = lP / (s.rP + dP * vClose);
+      }
+      else if (!s.series)   // parallel: each winding its own loop; the power winding's is open past EOS
+      {
+         if (preEos && fabs((coilOn ? 1.0 : 0.0) - iHigh) > 1e-3)
+            tau = lP / (s.rP + dP * vClose);
+         if (fabs((coilOn ? 1.0 : 0.0) - iLow) > 1e-3)
+            tau = fmin(tau, lH / (s.rH + dH * vClose));
       }
       else if (!coilOn || !preEos)
       {
