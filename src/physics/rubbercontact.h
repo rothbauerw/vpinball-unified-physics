@@ -203,10 +203,18 @@ namespace RubberContact
    // it from running away if a very soft rubber or a hard hit pushes p_a/E up.
    constexpr double kRollingMuMax = 0.3;
 
+   // The rolling and twist stick springs' angles at a contact (group step, [Contact] roll_model 1): th in the contact plane (rolling), tw about the normal (twist), rad
+   struct RollAngle
+   {
+      V3 th;
+      double tw = 0.0;
+   };
+
    struct RubberState
    {
       V3 xi;                 // shear spring state (tangent plane), m; zero when not in contact
-      void Reset() { xi = V3(); }
+      RollAngle ra;          // rolling and twist springs (group step, roll_model 1); zero when not in contact
+      void Reset() { xi = V3(); ra = RollAngle(); }
    };
 
    struct ContactResult

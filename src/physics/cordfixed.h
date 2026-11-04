@@ -740,6 +740,7 @@ public:
          Keep &kp = keep[(size_t)it.a * nShapes + (it.s - postFirst)];
          kp.touching = it.touching;
          kp.xi = it.xi;
+         kp.ra = it.ra;
          kp.zero = it.dZero;
       }
       for (int i = 0; i < nb; i++)
@@ -932,7 +933,7 @@ public:
          if (it.b >= 0 || it.s < postFirst || it.s >= postFirst + nShapes)
             continue;
          const Keep &kp = keep[(size_t)it.a * nShapes + (it.s - postFirst)];
-         g.SetShapeItem(k, kp.touching, kp.zero, kp.xi);
+         g.SetShapeItem(k, kp.touching, kp.zero, kp.xi, kp.ra);
       }
    }
    bool OnCord(const int i) const
@@ -1171,7 +1172,7 @@ public:
    }
    void SetNShapes() { nShapes = (int)circles.size() + (pl.on ? 1 : 0); swClosed.assign(kMaxSwitches, 0); }
    int postFirst = 0, nShapes = 0;
-   struct Keep { bool touching = false; double zero = 0.0; V3 xi; };
+   struct Keep { bool touching = false; double zero = 0.0; V3 xi; RubberContact::RollAngle ra; };
    std::vector<Keep> keep;
    std::vector<PostShape> postShape;
    std::vector<V3> lastC;

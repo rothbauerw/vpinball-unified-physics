@@ -91,6 +91,12 @@ namespace
             s.staticModel = on;
          else if (key == "roll_smooth_rad_s" && num)
             s.rollSmoothRadS = d;
+         else if (key == "roll_model" && num)
+         {
+            double m = d;
+            ClampKey("roll_model", m, 0.0, 1.0);
+            s.rollModel = (int)std::lround(m);
+         }
          else if (key == "arrival_depth_um" && num)
             s.arrivalDepthUm = d;
          else if (key == "ball_reach_mm" && num)

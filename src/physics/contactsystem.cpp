@@ -1115,8 +1115,8 @@ struct ContactSystemImpl
    struct RwSnap
    {
       struct Bd { V3 c, v, w; double omega2, deepest, vnLast, peakFn; size_t itemBase; size_t nItems; };
-      struct It { V3 xi; bool touching; };
-      struct Pr { V3 xi; bool inContact; double maxDelta, maxFn, zero; };
+      struct It { V3 xi; bool touching; RubberContact::RollAngle ra; };
+      struct Pr { V3 xi; bool inContact; double maxDelta, maxFn, zero; RubberContact::RollAngle ra; };
       std::vector<Bd> b;
       std::vector<It> it;
       std::vector<Pr> p;
@@ -1144,7 +1144,7 @@ struct ContactSystemImpl
             size_t k = 0;
             for (SurfaceContact &it : w.e->items)
             {
-               sn.it.push_back({ it.st.xi, it.touching });
+               sn.it.push_back({ it.st.xi, it.touching, it.st.ra });
                const TubeProbe &pr = w.probes[k++];
                if (!pr.overlap && pr.dist < 0.0)
                {
@@ -1166,7 +1166,7 @@ struct ContactSystemImpl
       for (size_t k = 0; k < isl.edges.size(); k++)
       {
          const BallPairState &ps = *cy.pst[k];
-         sn.p.push_back({ ps.st.xi, ps.inContact, ps.maxDelta, ps.maxFn, ps.zero });
+         sn.p.push_back({ ps.st.xi, ps.inContact, ps.maxDelta, ps.maxFn, ps.zero, ps.st.ra });
          const Body &A = cy.bodies[isl.edges[k].first], &B = cy.bodies[isl.edges[k].second];
          sn.pairGap.push_back((A.c - B.c).Length() - A.bs.R - B.bs.R + ps.zero);
       }
@@ -1209,6 +1209,7 @@ struct ContactSystemImpl
             for (SurfaceContact &it : w.e->items)
             {
                it.st.xi = sn.it[k].xi;
+               it.st.ra = sn.it[k].ra;
                it.touching = sn.it[k].touching;
                k++;
             }
@@ -1218,6 +1219,7 @@ struct ContactSystemImpl
       {
          BallPairState &ps = *cy.pst[k];
          ps.st.xi = sn.p[k].xi;
+         ps.st.ra = sn.p[k].ra;
          ps.inContact = sn.p[k].inContact;
          ps.maxDelta = sn.p[k].maxDelta;
          ps.maxFn = sn.p[k].maxFn;
@@ -1988,6 +1990,7 @@ struct ContactSystemImpl
       {
          it.gs.touching = it.touching && e.dwellS > 0.0;
          it.gs.xi = it.st.xi;
+         it.gs.ra = it.st.ra;
          it.gs.zero = it.gs.reff = 0.0;
          if (!it.gs.touching || it.hLayer <= 0.0 || it.r->MovingPart() != nullptr || it.NoFaces(c))
             continue;
@@ -2033,7 +2036,10 @@ struct ContactSystemImpl
          for (SurfaceContact &it : e.items)
          {
             if (e.groupLoop)
+            {
                it.st.xi = it.gs.xi;
+               it.st.ra = it.gs.ra;
+            }
             seat = seat || it.gs.zero > 0.0;
             it.gs.touching = false;
             it.gs.zero = it.gs.reff = 0.0;
@@ -2182,12 +2188,13 @@ struct ContactSystemImpl
       }
       g.set.pair = cy.rpBall;
       g.set.rollSmooth = cy.cs->rollSmoothRadS;
+      g.set.rollModel = cy.cs->rollModel;
       if (ring)   // (cy.rpBall holds the old loop's halved modulus, and the group halves it for a pair itself; its rolling resistance is on the pair's radius, R / 2)
       {
          g.set.pair.eMpa = cy.cs->ballEMpa;
          g.set.pair.rollingMu = 0.5 * cy.cs->ballRollingResistance;
       }
-      g.set.hMin = 2e-6;   // a step that cannot be solved gives up here: in real time it must not spend the frame halving
+      g.set.hMin = GroupStep::GroupFixedStepS() > 0.0 ? 1e-9 : 2e-6;   // a step that cannot be solved gives up here: in real time it must not spend the frame halving (a fixed-step reference may)
       const bool hasPart = IslandHasGroupPart(cy, isl);
       static std::vector<HitBall *> balls;
       static std::vector<DepthCause> cause;
@@ -2282,6 +2289,7 @@ struct ContactSystemImpl
                {
                   it.gs.touching = it.touching = false;
                   it.gs.xi = V3();
+                  it.gs.ra = RubberContact::RollAngle();
                   it.gs.zero = it.gs.reff = 0.0;
                   continue;
                }
@@ -2399,7 +2407,7 @@ struct ContactSystemImpl
             continue;
          const SurfaceShape *const sh = static_cast<const SurfaceShape *>((const GroupStep::Shape *)g.shape[it.s]);
          const SurfaceState &kept = sh->it->Surf(sh->surface);
-         g.SetShapeItem(k, kept.touching, kept.zero, kept.xi);
+         g.SetShapeItem(k, kept.touching, kept.zero, kept.xi, kept.ra);
          if (ring && it.touching && g_contactKeptEnd(balls[it.a]))
          {
             GroupStep::Hit hp;
@@ -2444,7 +2452,10 @@ struct ContactSystemImpl
                const BallPairState *const ps = FindPair(balls[it.a], balls[it.b]);
                hitOn[k] = ps != nullptr && ps->inContact;
                if (hitOn[k] && it.touching)
+               {
                   it.xi = ps->st.xi;
+                  it.ra = ps->st.ra;
+               }
             }
          }
       }
@@ -2531,7 +2542,7 @@ struct ContactSystemImpl
       const double cordE0 = cordEnergyOn ? g.Energy() : 0.0;
       // a part's books (always on, rule 8): the group's energy across the cycle against what its drives did and its losses took
       const double partE0 = hasPart ? g.Energy() : 0.0;
-      const double hFix = hasPart ? GroupStep::GroupFixedStepS() : 0.0;
+      const double hFix = GroupStep::GroupFixedStepS();
       // the group's moving parts and cords by name
       const auto groupParts = [&]() {
          std::vector<std::string> names;
@@ -2605,7 +2616,35 @@ struct ContactSystemImpl
             msg += " (no more of these lines this table start: the totals come at its end)";
          PLOGW << msg;
       };
+      // VPX_GROUP_STATS=<file> (a diagnostic, read once): the group step's totals over the run, rewritten every 200 ms of table time: cycles, time per cycle, steps, solve rounds, halvings,
+      // energy steps, failed cycles (the behaviour check's step statistics)
+      static const char *const statsPath = []() -> const char * { const char *const e = getenv("VPX_GROUP_STATS"); return e != nullptr && *e ? e : nullptr; }();
+      const uint64_t statsT0 = statsPath != nullptr ? usec() : 0;
       const bool ok = g.StepsOver(cy.dt, done, [&](const double h) { return hFix > 0.0 ? std::min(hFix, cy.dt - done) : ringCap(h); }, [&]() { ringStep(); book.AfterStep(); partEnergy(); });
+      if (statsPath != nullptr)
+      {
+         static long n = 0, steps = 0, rounds = 0, eSteps = 0, fails = 0, halv = 0;
+         static double us = 0.0, usMax = 0.0;
+         static uint32_t lastDump = 0;
+         const double t = (double)(usec() - statsT0);
+         n++;
+         us += t;
+         usMax = std::max(usMax, t);
+         steps += g.books.steps;
+         rounds += g.books.rounds;
+         eSteps += g.books.energySteps;
+         halv += g.books.halvings;
+         fails += ok ? 0 : 1;
+         if (g_pplayer->m_time_msec - lastDump > 200)
+         {
+            lastDump = g_pplayer->m_time_msec;
+            if (FILE *const f = fopen(statsPath, "w"))
+            {
+               fprintf(f, "cycles %ld us/cycle %.2f max %.0f steps %ld rounds %ld halvings %ld energysteps %ld failed %ld balls %d\n", n, us / n, usMax, steps, rounds, halv, eSteps, fails, g.nb);
+               fclose(f);
+            }
+         }
+      }
       if (cordEnergyOn)
       {
          static double worstRise = 1e-9;
@@ -2688,7 +2727,10 @@ struct ContactSystemImpl
          {
             BallPairState &ps = MakePair(balls[gi.a], balls[gi.b]);
             if (ring)
+            {
                ps.st.xi = gi.xi;
+               ps.st.ra = gi.ra;
+            }
             ps.zero = gi.dZero;
             ps.inContact = gi.touching;
             ps.used = true;
@@ -2727,6 +2769,7 @@ struct ContactSystemImpl
             it.touching = gi.touching;
          kept.touching = gi.touching;
          kept.xi = gi.xi;
+         kept.ra = gi.ra;
          kept.zero = gi.dZero;
       }
       for (HitRubber *const c : cords)
@@ -4383,6 +4426,13 @@ namespace
             f.contacts = FnvV(f.contacts, it.st.xi);
             f.contacts = FnvV(f.contacts, it.gs.touching);
             f.contacts = FnvV(f.contacts, it.gs.xi);
+            if (it.gs.ra.th.Dot(it.gs.ra.th) + it.gs.ra.tw * it.gs.ra.tw > 0.0 || it.st.ra.th.Dot(it.st.ra.th) + it.st.ra.tw * it.st.ra.tw > 0.0)
+            {
+               f.contacts = FnvV(f.contacts, it.gs.ra.th);
+               f.contacts = FnvV(f.contacts, it.gs.ra.tw);
+               f.contacts = FnvV(f.contacts, it.st.ra.th);
+               f.contacts = FnvV(f.contacts, it.st.ra.tw);
+            }
             f.contacts = FnvV(f.contacts, it.gs.zero);
             f.contacts = FnvV(f.contacts, it.gs.reff);
             f.contacts = FnvV(f.contacts, it.gs.kb);
@@ -4394,6 +4444,11 @@ namespace
       for (const BallPairState &p : g_ballPairs)
       {
          f.pairs = FnvV(f.pairs, p.st.xi);
+         if (p.st.ra.th.Dot(p.st.ra.th) + p.st.ra.tw * p.st.ra.tw > 0.0)
+         {
+            f.pairs = FnvV(f.pairs, p.st.ra.th);
+            f.pairs = FnvV(f.pairs, p.st.ra.tw);
+         }
          f.pairs = FnvV(f.pairs, p.inContact);
          f.pairs = FnvV(f.pairs, p.lastDelta);
          f.pairs = FnvV(f.pairs, p.zero);

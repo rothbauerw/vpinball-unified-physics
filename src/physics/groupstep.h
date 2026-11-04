@@ -262,6 +262,7 @@ namespace GroupStep
       double hMax = 1e-3, hMin = 1e-9;
       // the solver
       double rollSmooth = 0.05;                // the rolling torque's smoothing through zero spin, rad/s ([Contact] roll_smooth_rad_s)
+      int rollModel = 1;                       // 1 (default) = rolling and twist stick springs at the contact instead of the smoothed torques ([Contact] roll_model)
       double tolV = 1e-11;                     // solved when a round changes no ball's speed (or its rim speed R w) by more than this, m/s
       double tolNoise = 1e-9;                  // or when the changes stay below this for stallRounds rounds without halving: the forces' own noise (m/s)
       double tolEndRes = 0.0;                  // > 0: a step counts as solved only with its residual within this (m/s), and a noise stop keeps the point it read
@@ -289,6 +290,14 @@ namespace GroupStep
       bool failed = false, through = false;
       double Losses() const { return normalLossJ + slipJ + shearDampJ + twistJ + rollJ + partLossJ + spinBrakeJ; }
    };
+
+   // VPX_GROUP_HFIX=<us> (a diagnostic, read once): every step of every group, balls alone, with parts or a part alone, is this long, not the step rule's (the energy's step sweep, and the
+   // fixed-step reference of a behaviour check, e.g. 1). Its cycles may take more than the step guard's 3000 steps.
+   inline double GroupFixedStepS()
+   {
+      static const double s = []() { const char *const e = getenv("VPX_GROUP_HFIX"); return e != nullptr && *e ? atof(e) * 1e-6 : 0.0; }();
+      return s;
+   }
 
    class Group;
 
@@ -399,6 +408,7 @@ namespace GroupStep
       int a = -1, b = -1, s = -1;
       bool touching = false;
       V3 xi;                          // the shear spring's stretch (in the contact plane)
+      RubberContact::RollAngle ra;    // the rolling and twist springs' angles (roll_model 1)
       double dZero = 0.0;             // the depth its squash counts from: a ball found inside has stored nothing (no energy without the work that stored it; only ever down)
       // the held law
       double kH = 0.0, cL = 0.0, hL = 0.0, reff = 0.0, ktPerA = 0.0, E = 0.0, mRed = 0.0, mt = 0.0;
@@ -518,6 +528,10 @@ namespace GroupStep
       }
       double A(double d) const { return d > 0.0 ? std::sqrt(reff * Uc(d)) : 0.0; }   // contact patch radius
       double Kt(double d) const { return ktPerA * A(d); }
+      // the rolling and twist springs of the patch (roll_model 1): tilting (4/3) E* a^3 and torsion (16/3) G* a^3 of a Hertz contact, G* = E* (1 - nu) / 2 with nu 0.3
+      // (E* = 3 kH / (4 sqrt(reff)): the normal law's own contact modulus, a pair's compliances added)
+      double Kr(double d) const { const double a = A(d); return kH / std::sqrt(reff) * a * a * a; }
+      double Ktw(double d) const { const double a = A(d); return 16.0 / 3.0 * 0.35 * 0.75 * kH / std::sqrt(reff) * a * a * a; }
       double KtSlope(double d) const
       {
          if (d <= 0.0)
@@ -765,6 +779,8 @@ namespace GroupStep
                Hit hp;
                Probe(item[k], ball, hp);
                e += item[k].V(hp.delta) + 0.5 * item[k].Kt(hp.delta) * item[k].xi.Dot(item[k].xi);
+               if (set.rollModel == 1)
+                  e += 0.5 * item[k].Kr(hp.delta) * item[k].ra.th.Dot(item[k].ra.th) + 0.5 * item[k].Ktw(hp.delta) * item[k].ra.tw * item[k].ra.tw;
             }
          for (int p = 0; p < np; p++)
             e += part[p]->Energy(ball, nb);
@@ -801,7 +817,7 @@ namespace GroupStep
          {
             const double h = capStep(std::min(ChooseStep(), dt - done));
             const double taken = Step(h);
-            if (books.failed || taken <= 0.0 || ++guard > 3000)
+            if (books.failed || taken <= 0.0 || (++guard > 3000 && GroupFixedStepS() <= 0.0))
                return false;
             done += taken;
             afterStep();
@@ -823,7 +839,7 @@ namespace GroupStep
             aLast[i] = alphaLast[i] = V3();
       }
       // After Configure: a part's own contact goes on as it was kept (touching, stretch, zero); one not touching that is already inside has stored nothing, its depth is its zero
-      void SetShapeItem(const int k, const bool wasTouching, const double zero, const V3 &xi)
+      void SetShapeItem(const int k, const bool wasTouching, const double zero, const V3 &xi, const RubberContact::RollAngle &ra = RubberContact::RollAngle())
       {
          Item &it = item[k];
          Hit hp;
@@ -836,12 +852,16 @@ namespace GroupStep
          else
             it.dZero = zero;
          it.xi = xi;
+         it.ra = ra;
          Probe(it, ball, hp);
          it.touching = hp.delta > 0.0;
          if (it.touching)
             TakeLaw(it, hp);
          else
+         {
             it.xi = V3();
+            it.ra = RubberContact::RollAngle();
+         }
       }
 
       // After Configure: a ball pair found inside with no work done counts from its zero, as a part's own contact does
@@ -855,7 +875,10 @@ namespace GroupStep
          if (it.touching)
             TakeLaw(it, hp);
          else
+         {
             it.xi = V3();
+            it.ra = RubberContact::RollAngle();
+         }
       }
 
       // What set the last ChooseStep (diagnostics for the offline trace; always kept): the rule (0 hMax, 1 normal stiffness, 2 shear stiffness, 3 arrival,
@@ -1168,6 +1191,7 @@ namespace GroupStep
          bool active = false, slipping = false;
          double d0 = 0.0, d1 = 0.0;
          V3 xi1;
+         RubberContact::RollAngle ra1;   // the rolling and twist springs' end angles (roll_model 1)
          double normalLoss = 0.0, slip = 0.0, shearDamp = 0.0, twist = 0.0, roll = 0.0;
       };
       Buf<Item> law;             // the law each contact uses in this step (held, or taken at the step's start)
@@ -1725,9 +1749,100 @@ namespace GroupStep
             for (int j = 0; j < nq; j++)
                wr = wr - hm.c[j].W() * (dq[3 + j] / h);
             const double am = L.A(dm);
-            double kTw = 0.0, sRo = 0.0, rhoR = 0.0, wlR = 0.0;
+            double kTw = 0.0, sRo = 0.0, rhoR = 0.0, wlR = 0.0, kkTw = 0.0;
             V3 wtR;
-            if (L.twist && N > 0.0 && am > 0.0)
+            M3 RmS;
+            bool rollS = false;
+            e.ra1 = RubberContact::RollAngle();
+            if (set.rollModel == 1)
+            {
+               // the rolling and twist stick springs (roll_model 1): the patch's tilting and torsion springs with a damper side by side, in series with rolling
+               // (twisting) at the limit, taken as the shear spring is (patch rule, midpoint torque, stick or roll on the total trial torque)
+               RubberContact::RollAngle r0 = it.touching ? it.ra : RubberContact::RollAngle();
+               {
+                  const double l0 = r0.th.Length();
+                  const V3 tp = r0.th - nm * r0.th.Dot(nm);
+                  const double lp = tp.Length();
+                  r0.th = lp > 1e-300 ? tp * (l0 / lp) : V3();
+               }
+               const double kr0 = L.Kr(d0), kr1 = L.Kr(d1), kw0 = L.Ktw(d0), kw1 = L.Ktw(d1);
+               const double held = 0.5 * kr0 * r0.th.Dot(r0.th) + 0.5 * kw0 * r0.tw * r0.tw;
+               if (kr1 > kr0)
+                  r0.th = r0.th * (kr0 / kr1);
+               if (kw1 > kw0)
+                  r0.tw *= kw0 / kw1;
+               e.roll = held - 0.5 * kr1 * r0.th.Dot(r0.th) - 0.5 * kw1 * r0.tw * r0.tw;   // the patch's change: a loss >= 0
+               const double Ir = L.mRed * A.R * A.R;   // with 1.4: the ball's inertia about its contact point; with 0.4: about its centre (the contact's mass)
+               if (L.twist && kw1 > 0.0 && N > 0.0 && am > 0.0)
+               {
+                  const double wn = wr.Dot(nm);
+                  const double cw = L.shearTan * std::sqrt(kw1 * 0.4 * Ir);
+                  const double twTr = r0.tw + wn * h;
+                  double Mw = 0.5 * kw1 * (r0.tw + twTr) + cw * wn;
+                  const double limW = 3.0 * kPi / 16.0 * L.mu * am * N;
+                  double tw1 = twTr;
+                  kkTw = 0.5 * kw1 * h + cw;   // the resisting torque's slope in wn while it sticks; 0 at the limit
+                  if (std::fabs(Mw) > limW)
+                  {
+                     Mw = Mw > 0.0 ? limW : -limW;
+                     const double cs = 0.5 * kw1 + cw / h;
+                     tw1 = (Mw - r0.tw * (0.5 * kw1 - cw / h)) / cs;
+                     e.twist = Mw * (twTr - tw1) + cw * (tw1 - r0.tw) * (tw1 - r0.tw) / h;
+                     kkTw = 0.0;
+                  }
+                  else
+                     e.twist = cw * wn * wn * h;
+                  e.ra1.tw = tw1;
+                  kTw = kkTw > 0.0 ? 1.0 : 0.0;   // (the Jacobian's gate)
+                  M[it.a] = M[it.a] - nm * Mw;
+                  if (pr)
+                     M[it.b] = M[it.b] + nm * Mw;
+                  for (int j = 0; j < nq; j++)
+                     qf[j] += Mw * nm.Dot(hm.c[j].W());
+               }
+               if ((L.tanDelta > 0.0 || L.rollingMu > 0.0) && N > 0.0 && am > 0.0 && kr1 > 0.0)
+               {
+                  const V3 wt = wr - nm * wr.Dot(nm);
+                  const double pa = N / (kPi * am * am);
+                  const double muRr = std::max(std::min(2.34 * (pa / L.E) * L.tanDelta, RubberContact::kRollingMuMax), L.rollingMu);
+                  const double lim = muRr * A.R * N;
+                  const double cr = L.shearTan * std::sqrt(kr1 * 1.4 * Ir);
+                  const V3 thTr = r0.th + wt * h;
+                  V3 Mr = (r0.th + thTr) * (0.5 * kr1) + wt * cr;
+                  V3 th1 = thTr;
+                  const double ml = Mr.Length(), sl = 0.5 * kr1 * h + cr;
+                  const M3 Pt = M3::Tangent(nm);
+                  if (ml > lim)
+                  {
+                     // rolls: the torque at the limit along the trial; the roll thTr - th1 lies along it, its loss Mr . roll >= 0
+                     Mr = Mr * (lim / ml);
+                     const double cs = 0.5 * kr1 + cr / h;
+                     th1 = (Mr - r0.th * (0.5 * kr1 - cr / h)) * (1.0 / cs);
+                     const V3 dth = th1 - r0.th;
+                     e.roll += Mr.Dot(thTr - th1) + cr * dth.Dot(dth) / h;
+                     const V3 mh = Mr * (1.0 / lim);
+                     const M3 Q = M3::Outer(mh, mh);
+                     for (int i = 0; i < 3; i++)
+                        for (int j = 0; j < 3; j++)
+                           RmS.a[i][j] = lim / ml * sl * (Pt.a[i][j] - Q.a[i][j]);
+                  }
+                  else
+                  {
+                     e.roll += cr * wt.Dot(wt) * h;
+                     for (int i = 0; i < 3; i++)
+                        for (int j = 0; j < 3; j++)
+                           RmS.a[i][j] = sl * Pt.a[i][j];
+                  }
+                  e.ra1.th = th1;
+                  rollS = true;
+                  M[it.a] = M[it.a] - Mr;
+                  if (pr)
+                     M[it.b] = M[it.b] + Mr;
+                  for (int j = 0; j < nq; j++)
+                     qf[j] += Mr.Dot(hm.c[j].W());
+               }
+            }
+            else if (L.twist && N > 0.0 && am > 0.0)
             {
                const double wn = wr.Dot(nm);
                kTw = 3.0 * kPi / 16.0 * L.mu * am * N;
@@ -1739,7 +1854,7 @@ namespace GroupStep
                   qf[j] -= Mtw * nm.Dot(hm.c[j].W());
                e.twist = -Mtw * wn * h;
             }
-            if ((L.tanDelta > 0.0 || L.rollingMu > 0.0) && N > 0.0 && am > 0.0)
+            if (set.rollModel != 1 && (L.tanDelta > 0.0 || L.rollingMu > 0.0) && N > 0.0 && am > 0.0)
             {
                const V3 wt = wr - nm * wr.Dot(nm);
                const double wl = wt.Length();
@@ -1878,8 +1993,8 @@ namespace GroupStep
                   const M3 nn = M3::Outer(nm, nm);
                   for (int p = 0; p < nbod; p++)
                      for (int q = 0; q < nbod; q++)
-                        AddBlock(J, 6 * bi[p] + 3, 6 * bi[q] + 3, nn, h * kTw * 0.25 * sh * sh * sg[p] * sg[q]);
-                  const double kk = kTw * 0.5 * sh * sh;   // dMtw / d(wn) = -kk; d(wn) / d(dq) = -nw / h
+                        AddBlock(J, 6 * bi[p] + 3, 6 * bi[q] + 3, nn, set.rollModel == 1 ? h * 0.5 * kkTw * sg[p] * sg[q] : h * kTw * 0.25 * sh * sh * sg[p] * sg[q]);
+                  const double kk = set.rollModel == 1 ? kkTw : kTw * 0.5 * sh * sh;   // dMtw / d(wn) = -kk; d(wn) / d(dq) = -nw / h
                   const int iw = 6 * it.a + 3;
                   for (int i = 0; i < nq; i++)
                   {
@@ -1897,11 +2012,13 @@ namespace GroupStep
                      }
                   }
                }
-               if (sRo > 0.0)
+               if (sRo > 0.0 || rollS)
                {
-                  // the rolling torque -rho tanh(|wt| / s) wt^ : its derivative along wt^ is rho sech^2 / s, across it rho tanh / |wt| (sRo)
+                  // the rolling torque -rho tanh(|wt| / s) wt^ : its derivative along wt^ is rho sech^2 / s, across it rho tanh / |wt| (sRo); roll_model 1: the spring's (RmS)
                   M3 Rm;
-                  if (wlR > 1e-9)
+                  if (rollS)
+                     Rm = RmS;
+                  else if (wlR > 1e-9)
                   {
                      const V3 wh = wtR * (1.0 / wlR);
                      const M3 Q = M3::Outer(wh, wh);
@@ -2527,11 +2644,13 @@ namespace GroupStep
                }
                it.touching = true;
                it.xi = e.xi1;
+               it.ra = e.ra1;
             }
             else
             {
                it.touching = false;
                it.xi = V3();
+               it.ra = RubberContact::RollAngle();
             }
             if (it.dZero > 0.0)   // backing out, with nothing stored: the zero follows
                it.dZero = std::max(0.0, std::min(it.dZero, it.dZero + e.d1));
@@ -2556,12 +2675,6 @@ namespace GroupStep
       }
    };
 
-   // VPX_GROUP_HFIX=<us> (a diagnostic, read once): every step of a group holding a part on the group step, and of a part alone, is this long, not the step rule's (the energy's step sweep)
-   inline double GroupFixedStepS()
-   {
-      static const double s = []() { const char *const e = getenv("VPX_GROUP_HFIX"); return e != nullptr && *e ? atof(e) * 1e-6 : 0.0; }();
-      return s;
-   }
    // The one energy book of every group, with or without balls (a diagnostic, read once). VPX_GROUP_BOOK=<file>: one row per cycle: its books, and how much the energy rose over them.
    // VPX_GROUP_BOOK_STEPS=1: the rises per step too (an energy sum per step). A part's own split stays the part's.
    inline FILE *GroupBookFile()
