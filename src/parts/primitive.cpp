@@ -201,7 +201,8 @@ void Primitive::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    // the playfield primitive takes the [Playfield] material ([Features] playfield_contact = 1), any other primitive its own [Primitive:<name>] rubber = 1
    const bool playfieldModel = !isUI && m_useAsPlayfield && HitRubber::LoadPlayfieldSettings(rubberSettings, rubberIni, m_ptable->m_overridePhysics ? m_ptable->m_fOverrideContactFriction : m_ptable->m_friction);
    if (playfieldModel)
-      PLOGI << "Primitive " << GetName() << ": the playfield's law, mu " << rubberSettings.mu << " (table friction " << m_ptable->m_friction << ", override physics " << m_ptable->m_overridePhysics << ", override friction " << m_ptable->m_fOverrideContactFriction << ")";
+      PLOGI << "Primitive " << GetName() << ": the playfield's law, mu " << rubberSettings.mu << " (table friction " << m_ptable->m_friction << ", override physics " << m_ptable->m_overridePhysics
+            << (m_ptable->m_overridePhysics ? ", override friction " + std::to_string(m_ptable->m_fOverrideContactFriction) : std::string()) << ")";
    bool hardSurface = false;   // unified engine: a primitive without the rubber flag is a hard surface of the contact model
    if (playfieldModel || (!isUI && !m_useAsPlayfield && HitRubber::LoadSurfaceSettings(rubberSettings, rubberIni, "primitive", GetName())))
       rubberFaces = std::make_shared<RubberSurface>();

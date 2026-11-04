@@ -2606,7 +2606,7 @@ struct ContactSystemImpl
          for (int a = 0; a < g.nHalveDiag; a++)
          {
             const GroupStep::Group::HalveDiag &hd = g.halveDiag[a];
-            snprintf(s, sizeof s, " [%c h %.3g us rounds %d]", hd.why, hd.h * 1e6, hd.rounds);
+            snprintf(s, sizeof s, " [%c h %.3g us rounds %d move %.3g rim %.3g slipFlips %d touchFlips %d sliding %d]", hd.why, hd.h * 1e6, hd.rounds, hd.moveC, hd.moveW, hd.slipFlips, hd.touchFlips, hd.maxSliding);
             msg += s;
          }
          snprintf(s, sizeof s, " last %c, touching", g.failWhy);
@@ -2625,8 +2625,21 @@ struct ContactSystemImpl
                }
                msg += s;
             }
-         for (const ContactMovingPart *const mp : parts)
+         for (ContactMovingPart *const mp : parts)
+         {
             msg += "; " + mp->StateNote();
+            // each failed attempt's last round, as the part kept it (the halvings above, in order)
+            if (GroupStep::Part *const gp = mp->GroupPart())
+               for (int a = 0; a < g.nHalveDiag; a++)
+               {
+                  const std::string note = gp->FailNote(a);
+                  if (!note.empty())
+                  {
+                     snprintf(s, sizeof s, " [%.3g us: ", g.halveDiag[a].h * 1e6);
+                     msg += s + note + "]";
+                  }
+               }
+         }
          msg += ". A net, not expected to fire: keep vpinball.log and report it";
          if (g_partEnergyLines == kPartEnergyLines)
             msg += " (no more of these lines this table start: the totals come at its end)";

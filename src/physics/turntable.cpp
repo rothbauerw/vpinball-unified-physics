@@ -41,6 +41,7 @@ namespace Turntables
          bool clockwise = true;                // direction a positive voltage turns the disc, seen from above
          double massG = 800;                   // disc and hub: inertia = 1/2 m r^2 unless inertia_kgm2 is given
          double inertia = 0;                   // kg m^2, 0 = from the mass
+         bool massSet = false, inertiaSet = false;   // pivot_model 1: neither key acts (the inertia comes from ramp_down_s and friction_nm)
          double freeRpm = 250;                 // max_rpm: the speed at supply_volts with no load (the Whirlwind discs top out at 200 - 300 rpm)
          double ratedVolts = 12;               // supply_volts
          double spinupS = 1.0;                 // ramp_up_s: time from rest to 95% of max_rpm at supply_volts, no load
@@ -119,7 +120,18 @@ namespace Turntables
          m.stallTorque = t.stallTorque;
          m.frictionNm = t.frictionNm;
          m.dir = t.clockwise ? 1.0 : -1.0;
+         m.pivotModel = ContactSettings::Get().pivotModel;
+         m.dynRatio = ContactSettings::Get().muDynamicRatio;
+         m.radiusM = r;
          m.Derive();
+         if (m.pivotModel == 1)
+         {
+            if (t.massSet || t.inertiaSet)
+               PLOGW << "Turntable " << t.name << ": " << (t.massSet && t.inertiaSet ? "mass_g and inertia_kgm2 no longer act" : t.massSet ? "mass_g no longer acts" : "inertia_kgm2 no longer acts") << " (inertia comes from ramp_down_s and friction_nm)";
+            PLOGI << "Turntable " << t.name << ": inertia " << m.I << " kg m^2 from ramp_down_s " << t.rampDownS << " s and the sliding torque " << m.tSlide << " N m (" << m.dynRatio << " x friction_nm " << t.frictionNm << "), drag " << m.b << " N m s"
+                  << (m.floorApplied ? "; floor applied: the friction alone would stop the disc's own inertia (1/8 in steel plate) too soon, the drag makes up the rest" : "; no floor");
+            return;
+         }
          if (m.frictionFaster)
             PLOGI << "Turntable " << t.name << ": friction_nm alone stops the disc from max_rpm in " << m.coastFrictionS << " s, sooner than ramp_down_s " << t.rampDownS << " s: the coast-down is " << m.coastFrictionS << " s (lower friction_nm or raise the inertia for a longer one)";
          if (m.dragClamped)
@@ -231,8 +243,8 @@ namespace Turntables
             else if (key == "radius_mm") cur->radiusMm = v;
             else if (key == "gap_mm") cur->gapMm = v;
             else if (key == "direction") cur->clockwise = !(sval == "ccw" || sval == "counterclockwise" || sval == "counter-clockwise");
-            else if (key == "mass_g") cur->massG = v;
-            else if (key == "inertia_kgm2") cur->inertia = v;
+            else if (key == "mass_g") { cur->massG = v; cur->massSet = true; }
+            else if (key == "inertia_kgm2") { cur->inertia = v; cur->inertiaSet = true; }
             else if (key == "max_rpm" || key == "free_rpm") cur->freeRpm = v;
             else if (key == "supply_volts" || key == "rated_volts") cur->ratedVolts = v;
             else if (key == "ramp_up_s" || key == "spinup_s") cur->spinupS = v;
@@ -344,6 +356,8 @@ namespace Turntables
          const RubberObjectSettings ps = ContactHost::TurntableSettings(t.mu, t.rollingResistance);
          ContactPartHost *const host = new ContactPartHost(table, t.part, std::make_unique<DiscAdapter>(t.part, t.name, note), ps, file, t.name, "turntable", lo, hi);
          t.part->gp.Build(t.part->gp.motor, GroupStep::V3(t.x * UM, t.y * UM, t.z * UM), t.radiusMm * 1e-3, (double)zBottom * UM, ps.edgeRadiusMm * 1e-3);
+         t.part->gp.dynRatio = ContactSettings::Get().muDynamicRatio;
+         t.part->gp.SetPivotModel(ContactSettings::Get().pivotModel);   // the bearing's law for this play
          t.part->rp = ps.ToParams();
          t.part->layerM = host->LayerM();
          hosts.push_back(host);   // the physics engine owns it and deletes it with itself (the host is in the process-wide registry: a leaked one is tested against every ball in every later session)

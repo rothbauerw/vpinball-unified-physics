@@ -13,6 +13,7 @@
 #include "physics/contactgate.h"
 #include "physics/contactspinner.h"
 #include "physics/contactbumper.h"
+#include "physics/wireswitchgroup.h"
 
 namespace PartsIni
 {
@@ -159,7 +160,7 @@ namespace PartsIni
          else if (k == "pivot_height_mm") s.pivotHeightMm = v;
          else if (k == "wire_d_mm") s.wireDMm = v;
          else if (k == "density_kg_m3") s.density = v;
-         else if (k == "mu_pivot") s.muPivot = v;
+         else if (k == "mu_pivot") { s.muPivot = v; s.muPivotSpring = v; }
          else if (k == "damping") s.damping = v;
          else if (k == "switch") s.sw = lv == "none" ? SpinnerModel::Switch::None : lv == "opto" ? SpinnerModel::Switch::Opto : lv == "micro" ? SpinnerModel::Switch::Micro : SpinnerModel::Switch::Leaf;
          else if (k == "switch_angle_deg") s.switchAngleDeg = v;
@@ -180,6 +181,23 @@ namespace PartsIni
          else if (k == "hit_window_deg") s.hitWindowDeg = v;
          else if (k == "rubber") {}
          else PLOGW << "Spinner " << name << ": unknown key '" << k << "' ignored";
+      });
+   }
+
+   // Wire trigger settings over `s` (runs/2026-11-03-switch-requirements/design-wire.md topic 4): [Triggers] for all, then [Trigger:<name>]. Lengths in mm, forces in N.
+   inline void LoadWireSwitch(WireSwitchGroup::Settings &s, const std::filesystem::path &file, const std::string &name)
+   {
+      ReadSections(file, "triggers", "trigger:" + name, [&](const std::string &k, double v, const std::string &) {
+         if (k == "peak_mm") s.peakMm = v;
+         else if (k == "stop_below_mm") s.stopBelowMm = v;
+         else if (k == "close_mm") s.closeMm = v;
+         else if (k == "release_mm") s.releaseMm = v;
+         else if (k == "spring_n") s.springN = v;
+         else if (k == "spring_full_n") s.springFullN = v;
+         else if (k == "wire_d_mm") s.wireDMm = v;
+         else if (k == "hinge_offset_mm") s.hingeOffsetMm = v;
+         else if (k == "hinge_depth_mm") s.hingeDepthMm = v;
+         else PLOGW << "Trigger " << name << ": unknown key '" << k << "' ignored";
       });
    }
 }

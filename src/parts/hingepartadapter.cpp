@@ -7,6 +7,7 @@
 #include "parts/gate.h"
 #include "parts/spinner.h"
 #include "physics/contacthingepart.h"
+#include "physics/contactsettings.h"
 #include "physics/contactsystem.h"
 #include "physics/hitrubber.h"
 #include "ui/live/LiveUI.h"
@@ -14,6 +15,9 @@
 HingePartAdapter::HingePartAdapter(std::shared_ptr<HingeModel::Engine> model, Gate *gate, Spinner *spinner, float *angle, float *angleSpeed, const std::string &name)
    : m_model(std::move(model)), m_gate(gate), m_spinner(spinner), m_angle(angle), m_angleSpeed(angleSpeed), m_name(name)
 {
+   const ContactSettings &cs = ContactSettings::Get();
+   m_model->gp.dynRatio = cs.muDynamicRatio;
+   m_model->gp.SetPivotModel(cs.pivotModel);   // the pin's law for this play
 }
 
 void HingePartAdapter::Publish()

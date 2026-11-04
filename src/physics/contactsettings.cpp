@@ -97,6 +97,12 @@ namespace
             ClampKey("roll_model", m, 0.0, 1.0);
             s.rollModel = (int)std::lround(m);
          }
+         else if (key == "pivot_model" && num)
+         {
+            double m = d;
+            ClampKey("pivot_model", m, 0.0, 1.0);
+            s.pivotModel = (int)std::lround(m);
+         }
          else if (key == "arrival_depth_um" && num)
             s.arrivalDepthUm = d;
          else if (key == "ball_reach_mm" && num)
@@ -149,7 +155,7 @@ namespace
          s.ballContact = true;   // one contact path: on the unified engine a ball pair is never left to the stock collision (ball_contact no longer acts there)
       cur = s;
       PLOGI << "Contact settings loaded from " << path.string() << ": " << (s.enable ? "on" : "off") << ", dynamic ratio " << s.muDynamicRatio
-            << ", rolling resistance " << s.rollingResistance << ", twist " << (s.twist ? "on" : "off") << " patch " << s.twistPatchMm << " mm, ball contact " << (s.ballContact ? "on" : "off");
+            << ", rolling resistance " << s.rollingResistance << ", twist " << (s.twist ? "on" : "off") << " patch " << s.twistPatchMm << " mm, ball contact " << (s.ballContact ? "on" : "off") << ", roll_model " << s.rollModel << ", pivot_model " << s.pivotModel;
    }
 }
 

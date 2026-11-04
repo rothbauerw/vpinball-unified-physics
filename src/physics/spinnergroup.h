@@ -34,7 +34,8 @@ namespace SpinnerGroup
       double wireDMm = 1.2;
       double density = 7850.0;
       double muPivot = 0.1;           // pin wire in its hole; 0.1 by feel in play (user 2026-10-15: 0.3 spun 1/2 - 3/4 as much as a real spinner)
-      double damping = 0.9879;        // stock Damping: angular speed kept per 10 ms of free spin
+      double damping = 0.9879;        // stock Damping: angular speed kept per 10 ms of free spin (pivot_model 0 only)
+      double muPivotSpring = 0.3;     // pivot_model 1: the pin wire in its hole, steel on steel (mu_pivot sets it too); no stock damping, the blade's air drag instead
       Switch sw = Switch::Leaf;
       double switchAngleDeg = 180.0;  // where the crank / the flag acts (body angle; 180 = blade upside down, so a blade at rest is free)
       double optoHalfWidthDeg = 10.0;
@@ -74,8 +75,6 @@ namespace SpinnerGroup
          FinishShape(std::sqrt(hw * hw + bot * bot) + 8e-3);
          width = 2.0 * hw;
          blowest = s.pivotHeightMm * mm - bot;
-         // viscous loss from the stock Damping (exact for a free exponential spin-down)
-         cViscous = s.damping > 0.0 && s.damping < 1.0 ? -mp.I * std::log(s.damping) / 0.01 : 0.0;
          // optional stops (a spinner used as a flap)
          stopMax = stopMin = -1;
          if (s.angleMaxDeg > s.angleMinDeg)
@@ -107,11 +106,37 @@ namespace SpinnerGroup
             cm.c = s.switchLossNsPerM;
             cams.push_back(cm);
          }
+         bladeA = 0.5 * H - e;
+         bladeB = bot;
+         ApplyModel();
          prevWrapped = Wrap(q - switchAngle);
          SetContactLaw(s.elasticity, s.friction, b);
          CycleBegin();
       }
       double BladeLowestM() const { return blowest; }   // above the surface, hanging straight
+      void SetPivotModel(const int m) override
+      {
+         pivotModel = m;
+         ApplyModel();
+      }
+      // pivot_model 1: the leaf (micro) switch rests on the shaft's actuator at every angle and rubs, its friction in the pin's limit (the same stick spring)
+      double FrictionLimit(const double th, const double om, const V3 &ballForce) const override
+      {
+         const double L = HingeGroup::Part::FrictionLimit(th, om, ballForce);
+         return pivotModel == 1 ? L + rubNm : L;
+      }
+      // pivot_model 1: the blade's air drag, a flat plate turning about an axis in its plane: 0.5 rho Cd W w|w| (a^4 + b^4) / 4 at the step's mid rate (a loss, >= 0)
+      double StoredChord(const double th, const double dq, const double h, double &slope, double &lossF, double &lossSlope) const override
+      {
+         const double chord = HingeGroup::Part::StoredChord(th, dq, h, slope, lossF, lossSlope);
+         if (pivotModel == 1 && dragC > 0.0)
+         {
+            const double r = dq / h;
+            lossF += dragC * r * std::fabs(r);
+            lossSlope += 2.0 * dragC * std::fabs(r) / h;
+         }
+         return chord;
+      }
       // bend stiffness of the blade at the distance y from the axis
       double BendKb(const double y) const override
       {
@@ -155,6 +180,19 @@ namespace SpinnerGroup
       }
 
    private:
+      // the losses that depend on the pin's law: pivot_model 0 the stock Damping as a viscous loss (exact for a free exponential spin-down), the switch blade's viscous
+      // loss and mu_pivot; 1 none of those, the pin at mu_pivot_spring, the switch's rub and the blade's air drag (air 1.2 kg/m^3, flat plate Cd 1.2)
+      void ApplyModel()
+      {
+         const bool pin = pivotModel == 1;
+         cViscous = !pin && set.damping > 0.0 && set.damping < 1.0 ? -mp.I * std::log(set.damping) / 0.01 : 0.0;
+         muPivot = pin ? set.muPivotSpring : set.muPivot;
+         for (HingeBody::Cam &cm : cams)
+            cm.c = pin ? 0.0 : set.switchLossNsPerM;
+         const double leafF = set.sw == Switch::Leaf ? set.leafForceN : set.sw == Switch::Micro ? set.microForceN : 0.0;
+         rubNm = pin ? leafF * muPivot * set.camRMm * 1e-3 : 0.0;
+         dragC = pin ? 0.5 * 1.2 * 1.2 * width * (std::pow(bladeA, 4) + std::pow(bladeB, 4)) / 4.0 : 0.0;
+      }
       void SetSwitch(const bool closed)
       {
          if (closed == switchClosed)
@@ -164,7 +202,7 @@ namespace SpinnerGroup
          if (closed)
             swLog.push_back(2);
       }
-      double width = 0.0, blowest = 0.0, switchAngle = 0.0, closeD = 0.0, openD = 0.0;
+      double width = 0.0, blowest = 0.0, switchAngle = 0.0, closeD = 0.0, openD = 0.0, bladeA = 0.0, bladeB = 0.0, rubNm = 0.0, dragC = 0.0;
       int stopMax = -1, stopMin = -1;
    };
 }

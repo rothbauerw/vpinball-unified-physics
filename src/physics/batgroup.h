@@ -260,6 +260,9 @@ namespace BatGroup
          if (nDof == 0)
          {
             TakeCoil(CoilOver(0.0, h));
+            nM1 = rigid ? 0.0 : xp - k0.x * 1e-3;
+            nLink = rigid ? 'r' : 'h';
+            nFrac1 = gFrac0;
             return true;
          }
          const double dphi = x[off], dx = nDof == 2 ? x[off + 1] : 0.0;
@@ -310,6 +313,7 @@ namespace BatGroup
          double Qx = 0.0;
          {
             const double dClose = rigid ? CloseOfBat(dphi, k1, lm) : -dx;
+            nFrac1 = (gX0 - dClose - xMin) / bobbin;
             const CoilMove m = CoilOver(dClose, h);
             TakeCoil(m);
             if (rigid)
@@ -366,6 +370,8 @@ namespace BatGroup
             Qphi += T * gdP;
             Qx += T * gdX;
             gLossLink = -(T + Fe) * dm;
+            nM1 = m1;
+            nLink = clamped ? 'c' : (m1 < 0.0 ? 'p' : (m1 > slop ? 'f' : 's'));
             if (J)
             {
                const bool in = m1 < 0.0 || m1 > slop;
@@ -379,6 +385,11 @@ namespace BatGroup
                jpx += kn * gP * gX;
                jxx += kn * gX * gX + h * dF;   // (the magnet's pull: a negative stiffness)
             }
+         }
+         if (rigid)
+         {
+            nM1 = 0.0;
+            nLink = 'r';
          }
          Res[off] = pEnd - gP0 - h * Qphi;
          if (nDof == 2)
@@ -521,6 +532,30 @@ namespace BatGroup
             x[off + 1] -= Res[off + 1] * h / (2.0 * mp);
       }
 
+      void KeepFailNote(const int slot, const double *Res, const int off) override
+      {
+         if (slot < 0 || slot >= GroupStep::Group::kHalveDiag)
+            return;
+         FailNoteData &d = failNote[slot];
+         d.nDof = nDof;
+         d.resPhi = nDof >= 1 ? Res[off] : 0.0;
+         d.resX = nDof == 2 ? Res[off + 1] : 0.0;
+         d.m1 = nM1;
+         d.link = nLink;
+         d.iP = gCoil.iHigh * (s.vSupply / s.rP);
+         d.iH = gCoil.iLow * (s.vSupply / s.rH);
+         d.frac = nFrac1;
+      }
+      std::string FailNote(const int slot) const override
+      {
+         if (slot < 0 || slot >= GroupStep::Group::kHalveDiag)
+            return std::string();
+         const FailNoteData &d = failNote[slot];
+         char t[200];
+         snprintf(t, sizeof t, "dof %d res phi %.3g N m s x %.3g N s, link %c m %.4g mm, coil %.3g A / %.3g A, frac %.5f", d.nDof, d.resPhi, d.resX, d.link, d.m1 * 1e3, d.iP, d.iH, d.frac);
+         return t;
+      }
+
       double InertiaNow() const { return rigid ? Inertia(phi) : If; }   // what the balls feel
       double InertiaRead() const { return rigid || xp - X(phi) <= 0.0 ? Inertia(phi) : If; }   // what a script reads (Mass): with the plunger's reflected mass while the link is loaded, as before
       double Inertia(const double ph) const { return If + mp * Sq(Kin(ph).lever * 1e-3); }
@@ -660,7 +695,7 @@ namespace BatGroup
          gCoil.iHigh = m.a.i1 / (s.vSupply / s.rP);
          gCoil.iLow = (gLoop ? m.a.i1 : m.b.i1) / (s.vSupply / s.rH);
       }
-      double FracFloor() const { return -0.5 * std::min(s.x0P, s.x0H); }
+      double FracFloor() const { return -0.5 * (s.single ? s.x0P : std::min(s.x0P, s.x0H)); }   // (single: the power winding alone; there is no hold winding's curve to stop short of)
       // The plunger's move toward the closed end for a bat's move: the link's chord; over a move so small that it would be rounding, the lever
       double CloseOfBat(const double dphi, const FM::Kin &k1, const double lm) const { return std::fabs(dphi) > 1e-5 ? (k0.x - k1.x) * 1e-3 : lm * dphi; }
       static double BatTorque(const double f, const double dphi, const double dClose, const double lm) { return std::fabs(dphi) > 1e-5 ? f * dClose / dphi : f * lm; }
@@ -740,6 +775,12 @@ namespace BatGroup
       bool gLoop = false, gDeadP = false, gDeadH = false, gCoilLive = false;
       double gX0 = 0.0, gFrac0 = 0.0, gVolts = 0.0, gIP0 = 0.0, gIH0 = 0.0;
       double gDrive = 0.0, gLossRest = 0.0, gLossLink = 0.0, gLossB = 0.0;
+      // the last evaluation, for the failure notes: the link's mismatch at the move's end (m), its state (r rigid, h plunger pinned, s slack, p pushing,
+      // f pressed at the slop's far end, c clamped: its damper would pull, so its force is 0) and the coil's place at the move's end (frac of the bobbin)
+      double nM1 = 0.0, nFrac1 = 0.0;
+      char nLink = '?';
+      struct FailNoteData { int nDof = 0; double resPhi = 0.0, resX = 0.0, m1 = 0.0, iP = 0.0, iH = 0.0, frac = 0.0; char link = '?'; };
+      FailNoteData failNote[GroupStep::Group::kHalveDiag];
       bool gPreEos = true;
    };
 }

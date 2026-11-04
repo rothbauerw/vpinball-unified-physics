@@ -49,10 +49,20 @@ namespace HingeGroup
       // Where gravity alone hangs it: on a sloped table not theta 0 (6 deg on a 6 deg table)
       double HangAngle() const { return std::atan2(GravB(), GravA()); }
       double PendulumArm() const { const V3 cm = mp.Cm(); return std::sqrt(cm.y * cm.y + cm.z * cm.z); }
-      // The most the stored energy can push it with (the speed bound)
+      // The most the stored energy can push it with (the speed bound). The blade's largest torque is at the farthest angle the body can reach, k (theta_max - a): the
+      // highest stop on the + side (a driven one at the farther of its place and target); a preloaded blade (a < 0, a wire switch) is pressed over its whole travel. No + stop: half a radian past a.
       double MaxStoredTorque() const
       {
-         double tau = mp.m * g.Length() * PendulumArm() + kBlade * 0.5;
+         double thMax = aBlade + 0.5;
+         bool bounded = false;
+         for (const GroupStep::BodyStop &s : stops)
+            if (s.side > 0)
+            {
+               const double stopAt = s.rate > 0.0 ? std::max(s.at, s.target) : s.at;
+               thMax = bounded ? std::max(thMax, stopAt) : stopAt;
+               bounded = true;
+            }
+         double tau = mp.m * g.Length() * PendulumArm() + kBlade * std::max(thMax - aBlade, 0.0);
          for (const HingeBody::Cam &cm : cams)
             tau += (cm.F0 + cm.k * cm.r) * cm.r;
          return tau;
@@ -167,12 +177,19 @@ namespace HingeGroup
          }
          return chord;
       }
-      double FrictionLimit(const double th, const double om, const V3 &ballForce) const override
+      double FrictionLimit(const double th, const double om, const V3 &ballForce) const override { return muPivot * rPin * PinLoad(th, om, ballForce); }
+      // the pin on its hole wall: Mindlin's sideways spring 8 G* a of the Hertz patch, times r^2 (steel on steel, E* 115 GPa, G* 23.8 GPa)
+      double PinStiffness(const double th, const double om, const V3 &ballForce) const override
+      {
+         const double N = PinLoad(th, om, ballForce), a = std::cbrt(3.0 * N * rPin / (4.0 * 115e9));
+         return 8.0 * 23.8e9 * a * rPin * rPin;
+      }
+      double PinLoad(const double th, const double om, const V3 &ballForce) const   // the hole's force on the pin, across the axis, N
       {
          const V3 cm = mp.Cm(), rcm = Down(th) * cm.y + Front(th) * cm.z, load = g * mp.m + ballForce;
          V3 pin = rcm * (-mp.m * om * om) - load;
          pin = pin - E * pin.Dot(E);
-         return muPivot * rPin * pin.Length();
+         return pin.Length();
       }
       void AfterMove() override { UpdateSwitches(); }
       void SaveState() override

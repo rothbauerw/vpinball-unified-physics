@@ -398,6 +398,10 @@ namespace GroupStep
       virtual void ScaleSpeeds(double) {}
       virtual void AfterEnergyStep() {}
       virtual void HoldArcs() {}   // no solve in this attempt: what the part solves within itself stays as it is
+      // diagnostics (rule 8): an attempt of a step failed and was halved (slot: its place in Group::halveDiag); the part keeps what its last round evaluated, Res
+      // the residual of that round (its rows from off). Told only when an energy step is reported
+      virtual void KeepFailNote(int, const double *, int) {}
+      virtual std::string FailNote(int) const { return std::string(); }
       virtual void BallsMoved(const Ball *, int) {}              // the balls were moved with no step of its own
       virtual void ExplicitMove(const double *, int, double, double *) const {}   // its own unknowns in an energy step's explicit round
       virtual double EndResidual() const { return 0.0; }         // > 0: a step of a group holding this part counts as solved only with its residual within this (m/s; Settings::tolEndRes)
@@ -1169,6 +1173,8 @@ namespace GroupStep
                HalveDiag &hd = halveDiag[nHalveDiag++];
                hd.why = failWhy;
                hd.h = h;
+               for (int p = 0; p < np; p++)
+                  part[p]->KeepFailNote(nHalveDiag - 1, resS, partOff[p]);
                hd.rounds = lastRounds;
                const RoundDiag &rl = roundDiag[std::max(0, std::min(lastRounds, kRounds) - 1)];
                hd.moveC = rl.moveC;
