@@ -237,4 +237,36 @@ inline WireBody Build(Shape shape, const float* verts, size_t nVerts, size_t str
    return wb;
 }
 
+// The drawn wire (requirements.md section 4: the drawn switch is the collidable switch): each mesh vertex posed by the body's transform, then put on the
+// tube around the nearest capsule (radius r, the wire_d_mm the physics uses), its normal the radial direction. Positions and normals with a stride in floats
+// (Vertex3D_NoTex2: 8) in and out. Returns the worst |distance to the chain - r| of the result, VPU (round-off).
+inline double PoseDrawn(const WireBody& wb, const float* verts, size_t nVerts, size_t stride, float* out, size_t outStride)
+{
+   double worst = 0.;
+   for (size_t i = 0; i < nVerts; i++)
+   {
+      const float* v = verts + i * stride;
+      const V3 p = wb.xf.Apply(V3(v[0], v[1], v[2]));
+      const V3 n0 = wb.xf.ApplyDir(V3(v[3], v[4], v[5]));
+      double best = 1e30; V3 c;
+      for (const Capsule& cp : wb.caps)
+      {
+         const V3 ab = cp.b - cp.a;
+         const double l2 = ab.Dot(ab);
+         const double t = l2 > 0. ? std::clamp((p - cp.a).Dot(ab) / l2, 0., 1.) : 0.;
+         const V3 q = cp.a + ab * t;
+         const double d = (p - q).Len();
+         if (d < best) { best = d; c = q; }
+      }
+      const double r = wb.caps.empty() ? 0. : wb.caps[0].r;
+      const V3 n = best > 1e-9 ? (p - c) * (1. / best) : n0;   // (a vertex on the centreline: an end cap's centre keeps its own normal)
+      const V3 w = c + n * r;
+      float* o = out + i * outStride;
+      o[0] = (float)w.x; o[1] = (float)w.y; o[2] = (float)w.z;
+      o[3] = (float)n.x; o[4] = (float)n.y; o[5] = (float)n.z;
+      worst = std::max(worst, std::fabs(DistToChain(V3(o[0], o[1], o[2]), wb.caps) - r));
+   }
+   return worst;
+}
+
 } // namespace WireShape

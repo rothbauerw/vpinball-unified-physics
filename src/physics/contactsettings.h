@@ -35,6 +35,7 @@ struct ContactSettings
    bool staticModel = true;          // static_model (default 1 since 2026-11-03): 1 = every static surface (walls, primitives, ramps, playfield) takes a ball to the group step as a rubber does (ring_model, GroupStepDesign 14); 0 = only rubbers
    int rollModel = 1;                // roll_model (default 1): 0 = the rolling and twist torques smoothed through zero spin (roll_smooth_rad_s); 1 = rolling and twist stick springs at the contact (group step)
    int pivotModel = 1;               // pivot_model (default 1): 1 = a 1-dof part's pin (gate, spinner, wire switch) holds on a stick spring and slides at mu_dynamic_ratio times its static limit; 0 = the slip direction, stuck state and turn event
+   int stepModel = 0;                // step_model (default 0): 0 = a steady contact is stepped at omegaHRest / its frequency at the expected depth; 1 = by the motion in its mode: h <= sqrt(12 eps / A) / omega at its real depth (A the mode's amplitude), never shorter than rule 0
    double rollSmoothRadS = 0.05;     // roll_smooth_rad_s: the rolling torque's smoothing through zero spin in the group step, rad/s
    double arrivalDepthUm = 2.0;      // arrival_depth_um: the deepest a ball may start a contact before the step is taken again (rewind), um
    static const ContactSettings& Get();   // checks the file for changes about twice a second of game time

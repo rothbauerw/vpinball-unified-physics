@@ -151,7 +151,7 @@ void Trigger::WriteRegDefaults()
 namespace
 {
    // The table side of a wire trigger's rollover wire switch (contactwireswitch.h): the switch's close is the trigger's Hit, its open the Unhit; ActiveBall is the ball
-   // nearest the wire (one ball presses a wire at a time, design-wire.md topic 6). The drawn mesh keeps the stock dip.
+   // nearest the wire (one ball presses a wire at a time, design-wire.md topic 6). It publishes the part's angle, which turns the drawn switch (Trigger::Render).
    class WireSwitchAdapter final : public PartAdapter
    {
    public:
@@ -166,6 +166,7 @@ namespace
       {
          m_model->Collect();
          m_model->bookMs = (int)g_pplayer->m_time_msec;
+         m_trigger->m_partAngle = (float)m_model->part.q;   // (the angle the renderer turns the drawn switch by)
          if (!m_notice.empty() && g_pplayer->m_liveUI != nullptr)   // the load-time detector, on screen once the player runs
          {
             g_pplayer->m_liveUI->PushNotification(m_notice, 10000);
@@ -369,6 +370,41 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
             }
             adapterChain = wb.caps;
             m_partModel->Build(s, (double)floorZ * U, chain, RubberContact::BallSI());
+            // the drawn wire is the physics' wire (requirements.md section 4): the same body transform and tube (wireshape.h PoseDrawn)
+            const StaticMeshData md = SetupMeshData(m_d.m_shape);
+            m_partDrawn.assign(md.vertices.size() * 8, 0.f);
+            m_partDrawWorst = WireShape::PoseDrawn(wb, &md.vertices[0].x, md.vertices.size(), 8, m_partDrawn.data(), 8);
+            for (size_t i = 0; i < md.vertices.size(); i++)
+            {
+               m_partDrawn[i * 8 + 6] = md.vertices[i].tu;
+               m_partDrawn[i * 8 + 7] = md.vertices[i].tv;
+            }
+         }
+         {
+            // the drawn switch turns with the part about its hinge (Render); the check (rule 8 log): rest vertices against the physics shape, the drawn top above the playfield
+            const HingeGroup::Part &g = m_partModel->part;
+            m_hingeA = Vertex3Ds((float)(g.A.x / U), (float)(g.A.y / U), (float)(g.A.z / U));
+            m_hingeE = Vertex3Ds((float)g.E.x, (float)g.E.y, (float)g.E.z);
+            m_hingeN = Vertex3Ds((float)g.N.x, (float)g.N.y, (float)g.N.z);
+            m_hingeZ = Vertex3Ds((float)g.Z.x, (float)g.Z.y, (float)g.Z.z);
+            m_partAngle = (float)g.q;
+            m_partDraw = true;
+            Vertex3Ds sphere;
+            const std::unique_ptr<std::vector<Vertex3D_NoTex2>> drawn = GenerateMesh(sphere);
+            double worst = m_partDrawWorst, topZ = -1e30;
+            for (const Vertex3D_NoTex2 &v : *drawn)
+            {
+               topZ = std::max(topZ, (double)v.z);
+               if (inder)   // the blade's faces are the drawn triangles: each drawn vertex against its nearest face corner
+               {
+                  double d = 1e30;
+                  for (const RubberContact::V3 &p : blade.tri)
+                     d = std::min(d, (RubberContact::V3(v.x, v.y, v.z) - p / U).Length());
+                  worst = std::max(worst, d);
+               }
+            }
+            PLOGI << "Trigger " << GetName() << ": drawn on the physics pose: rest vertices off the physics shape by at most " << worst * WireShape::kMmPerVpu * 1e3 << " um, drawn top "
+                  << (topZ - playfieldZ) * WireShape::kMmPerVpu << " mm above the playfield (" << (topZ - floorZ) * WireShape::kMmPerVpu << " mm above its surface)";
          }
          RubberObjectSettings hs;
          ContactHost::LoadHardSurfaceSettings(hs, ini, "trigger", GetName(), s.elasticity, s.friction);
@@ -463,6 +499,9 @@ void Trigger::PhysicRelease(PhysicsEngine* physics, const bool isUI)
       m_ptriggerhitpoly = nullptr;
       m_partModel = nullptr;   // (the host is owned by the physics engine)
       m_partHost = nullptr;
+      m_partDraw = false;
+      m_partDrawn.clear();
+      m_partAngle = 0.f;
    }
 }
 
@@ -544,6 +583,13 @@ void Trigger::UpdateAnimation(const float diff_time_msec)
       case TriggerWireD:  animLimit = 25.0f; break;
       case TriggerInder:  animLimit = 25.0f; break;
       default:            animLimit = 32.0f; break;
+   }
+
+   if (m_partDraw)   // a converted switch moves by its hinge angle (Render), not the stock slide
+   {
+      m_hitEvent = m_unhitEvent = m_doAnimation = false;
+      m_animHeightOffset = 0.0f;
+      return;
    }
 
    if (m_hitEvent)
@@ -636,8 +682,26 @@ void Trigger::Render(const unsigned int renderMask)
    if (m_d.m_shape == TriggerWireA || m_d.m_shape == TriggerWireB || m_d.m_shape == TriggerWireC || m_d.m_shape == TriggerWireD || m_d.m_shape == TriggerInder)
       m_renderer->m_renderDevice->SetRenderState(RenderState::CULLMODE, RenderState::CULL_NONE);
    m_renderer->m_renderDevice->m_basicShader->SetBasic(m_ptable->GetMaterial(m_d.m_szMaterial), nullptr);
+   if (m_partDraw)
+   {
+      // a converted switch: the rest mesh turned rigidly by the part's angle about its hinge, as hingegroup.h turns the body (Down(th) = -Z cos + N sin, Front(th) = N cos + Z sin):
+      // world = A + E (r.E) + Down (-r.Z) + Front (r.N), one matrix per frame (row vectors), no vertex rewrite
+      const float c = cosf(m_partAngle), s = sinf(m_partAngle);
+      const Vertex3Ds &E = m_hingeE, &N = m_hingeN, &Z = m_hingeZ, &A = m_hingeA;
+      const Vertex3Ds D = Z * -c + N * s, F = N * c + Z * s;
+      float m[3][3];
+      for (int i = 0; i < 3; i++)
+         for (int j = 0; j < 3; j++)
+            m[i][j] = (&E.x)[i] * (&E.x)[j] - (&Z.x)[i] * (&D.x)[j] + (&N.x)[i] * (&F.x)[j];
+      float t[3];
+      for (int j = 0; j < 3; j++)
+         t[j] = (&A.x)[j] - (A.x * m[0][j] + A.y * m[1][j] + A.z * m[2][j]);
+      m_renderer->UpdateBasicShaderMatrix(Matrix3D(m[0][0], m[0][1], m[0][2], 0.f, m[1][0], m[1][1], m[1][2], 0.f, m[2][0], m[2][1], m[2][2], 0.f, t[0], t[1], t[2], 1.f));
+   }
    m_renderer->m_renderDevice->DrawMesh(
       m_renderer->m_renderDevice->m_basicShader, false, m_boundingSphereCenter, 0.f, m_meshBuffer, RenderDevice::TRIANGLELIST, 0, m_meshBuffer->m_ib->m_count);
+   if (m_partDraw)
+      m_renderer->UpdateBasicShaderMatrix();
 }
 
 #pragma endregion
@@ -730,6 +794,8 @@ std::unique_ptr<std::vector<Vertex3D_NoTex2>> Trigger::GenerateMesh(Vertex3Ds &b
          outVerts[i].y += outVerts[i].ny * m_d.m_wireThickness;
          outVerts[i].z += outVerts[i].nz * m_d.m_wireThickness;
       }
+      if (m_partDrawn.size() == verts.size() * 8)   // a converted wire (WireA-D): the physics' pose (PhysicSetup, wireshape.h PoseDrawn)
+         memcpy(&outVerts[i].x, &m_partDrawn[i * 8], 6 * sizeof(float));
    }
    return triggerVertices;
 }

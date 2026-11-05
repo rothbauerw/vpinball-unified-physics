@@ -257,6 +257,11 @@ namespace GroupStep
       // vSteady 0 = every contact strict. 0.02 m/s and 2.4 from 750 real hits against their 1 us runs (runs/2026-10-31-static-group).
       double vSteady = 0.02;                   // m/s
       double omegaHRest = 2.4;
+      // stepModel 1 ([Contact] step_model): a steady touching contact is stepped by the motion in its mode, not its frequency. The midpoint step keeps the mode's energy at any h; its error is the
+      // phase, (omega h)^2 / 12 of the mode's amplitude A = sqrt((closing rate / omega)^2 + (net normal push / (m omega^2))^2) per radian, so h <= sqrt(12 epsRest / A) / omega, with omega at the real
+      // depth. Never shorter than rule 0 (omegaHRest / omega); arrivals, impacts and slips keep their rules. 0 (default) = rule 0 alone.
+      int stepModel = 0;
+      double epsRest = 1e-8;                   // m: the phase error a steady contact may carry (estimate, 0.01 um)
       double turnMaxRad = 2.0 * kPi / 180.0;   // a ball rolling round a post or another ball turns at most this per step
       double tauShare = 0.25, fieldShare = 0.25;   // a part's own time constant is resolved to this share of it; a body moves at most this share of a distance over which its force changes (StepFactList; no part uses them yet; the bat's values)
       double vFloor = 0.01;                    // m/s: the closing speed below which a contact's expected depth is taken at this speed
@@ -1046,7 +1051,17 @@ namespace GroupStep
                   steady = dDot <= set.vSteady;
             }
             const double om = steady ? omN : (set.shearInStep ? std::max(omN, omT) : omN);
-            const double hs = om > 0.0 ? (steady ? set.omegaHRest : set.omegaH) / om : set.hMax;
+            double hs = om > 0.0 ? (steady ? set.omegaHRest : set.omegaH) / om : set.hMax;
+            if (set.stepModel == 1 && steady && hp.delta > 0.0)   // by the motion in its mode (Settings::stepModel)
+            {
+               const double omR = std::sqrt(L.K(hp.delta) / L.mRed);
+               V3 aRel = fNet[it.a] * (1.0 / A.m);
+               if (it.b >= 0)
+                  aRel = aRel - fNet[it.b] * (1.0 / ball[it.b].m);
+               const double x = dDot / omR, y = aRel.Dot(hp.n) / (omR * omR), amp = std::sqrt(x * x + y * y);
+               const double hm = amp > 0.0 ? std::sqrt(12.0 * set.epsRest / amp) / omR : set.hMax;
+               hs = std::max(hs, std::min(hm, set.hMax));
+            }
             const auto lim = [&](const double c, const int rule) {
                if (c < h)
                {

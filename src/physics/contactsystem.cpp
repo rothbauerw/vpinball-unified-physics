@@ -2205,6 +2205,7 @@ struct ContactSystemImpl
       g.set.pair = cy.rpBall;
       g.set.rollSmooth = cy.cs->rollSmoothRadS;
       g.set.rollModel = cy.cs->rollModel;
+      g.set.stepModel = cy.cs->stepModel;
       if (ring)   // (cy.rpBall holds the old loop's halved modulus, and the group halves it for a pair itself; its rolling resistance is on the pair's radius, R / 2)
       {
          g.set.pair.eMpa = cy.cs->ballEMpa;

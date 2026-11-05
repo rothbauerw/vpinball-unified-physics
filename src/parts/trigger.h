@@ -110,6 +110,8 @@ public:
    void OnHit(bool hit);
    // unified engine: a wire trigger (WireA-D) is a rollover wire switch of the contact system, no stock sensor (trigger.cpp, design-wire.md)
    bool OnWirePart() const { return m_partHost != nullptr; }
+   // the switch part's angle about its hinge, rad, published by the physics each cycle (trigger.cpp WireSwitchAdapter::Publish); the renderer turns the drawn switch by it
+   float m_partAngle = 0.f;
 
    // Fills 'outline' with the 2D outline of wire-shaped triggers for editor display (empty for other shapes)
    void GetWireOutline(vector<Vertex2D> &outline) const;
@@ -153,6 +155,11 @@ private:
    float m_vertexBuffer_animHeightOffset = -FLT_MAX;
    bool m_doAnimation = false;
    bool m_moveDown = false;
+   // a converted switch (WireA-D, Inder; set by PhysicSetup, which runs before RenderSetup): drawn on the physics' pose (wireshape.h PoseDrawn), turned about its hinge (axis point, VPU; axis frame)
+   std::vector<float> m_partDrawn;   // WireA-D: the drawn rest vertices, Vertex3D_NoTex2 layout (empty: Inder draws GenerateMesh, which its blade is built from)
+   bool m_partDraw = false;
+   double m_partDrawWorst = 0.;      // the drawn rest vertices' worst distance from the physics shape, VPU
+   Vertex3Ds m_hingeA, m_hingeE, m_hingeN, m_hingeZ;
 
 // ITrigger
 public:
