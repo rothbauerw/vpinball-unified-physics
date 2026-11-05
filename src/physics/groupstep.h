@@ -303,6 +303,11 @@ namespace GroupStep
       // swingCap ([Contact] step_swing_cap, with stepModel 1): the phase error is at most the mode's whole swing 2 A (the midpoint step keeps its energy, so its
       // amplitude), so a mode whose 2 A is within epsRest sets no limit; the other rules still bound the step. false (default) = the phase law alone.
       bool swingCap = true;
+      // shearMotion ([Contact] shear_step_motion): an unsteady contact's shear clock by the motion, as stepModel 1 does the normal one. The shear spring's stretch is bounded by Coulomb,
+      // A = mu N / Kt at the expected depth (a spring past mu N slides), so its phase error per step is at most (omT h)^2 / 12 of A: h <= sqrt(12 epsRest / A) / omT, never shorter than
+      // omegaH / omT, and no limit when its whole swing 2 A is within epsRest. A weak press (a light wire) then cannot hold the step to its shear clock; a hard hit keeps it (A large).
+      // true (default) = by the motion; false = the shear clock at omegaH / omT.
+      bool shearMotion = true;
       double turnMaxRad = 2.0 * kPi / 180.0;   // a ball rolling round a post or another ball turns at most this per step
       double tauShare = 0.25, fieldShare = 0.25;   // a part's own time constant is resolved to this share of it; a body moves at most this share of a distance over which its force changes (StepFactList; no part uses them yet; the bat's values)
       double vFloor = 0.01;                    // m/s: the closing speed below which a contact's expected depth is taken at this speed
@@ -1081,6 +1086,7 @@ namespace GroupStep
          double delta = 0.0, dDot = 0.0, omN = 0.0, omT = 0.0;
          int unsteady = 0;                   // the steady test the contact failed, the first in order: 0 none (steady, or no test), 1 closing speed, 2 acceleration, 3 slip
          double unsteadyVal = 0.0, unsteadyLim = 0.0;   // that test's value and limit (m/s, m/s^2, m/s)
+         double aShear = 0.0;                // the shear spring's Coulomb stretch bound mu N / Kt at the expected depth (m), shearMotion on or off
       };
       mutable StepDiag diag;
 
@@ -1210,6 +1216,15 @@ namespace GroupStep
             }
             const double om = steady ? omN : (set.shearInStep ? std::max(omN, omT) : omN);
             double hs = om > 0.0 ? (steady ? set.omegaHRest : set.omegaH) / om : set.hMax;
+            const double aT = ktE > 0.0 ? L.mu * L.F(dE) / ktE : 0.0;   // the shear spring's stretch bound (Coulomb)
+            bool shearSets = set.shearInStep && omT > omN;
+            if (set.shearMotion && shearSets && !steady)   // the shear clock by the motion (Settings::shearMotion); the normal clock as it is
+            {
+               const double hN = omN > 0.0 ? set.omegaH / omN : set.hMax;
+               const double hT = 2.0 * aT <= set.epsRest ? set.hMax : std::max(set.omegaH / omT, std::min(std::sqrt(12.0 * set.epsRest / aT) / omT, set.hMax));
+               hs = std::min(hN, hT);
+               shearSets = hT < hN;
+            }
             if (set.stepModel == 1 && steady && hp.delta > 0.0)   // by the motion in its mode (Settings::stepModel)
             {
                const double omR = std::sqrt(L.K(hp.delta) / L.mRed);
@@ -1235,15 +1250,16 @@ namespace GroupStep
                   dg.unsteady = why;
                   dg.unsteadyVal = whyVal;
                   dg.unsteadyLim = whyLim;
+                  dg.aShear = aT;
                }
             };
             if (hp.delta < 0.0 && dDot > 0.0)   // reached in about two steps, not overshot
             {
                const double ha = 0.5 * -hp.delta / dDot;
-               lim(std::max(ha, hs), ha > hs ? 3 : (set.shearInStep && omT > omN ? 2 : 1));
+               lim(std::max(ha, hs), ha > hs ? 3 : (shearSets ? 2 : 1));
             }
             else
-               lim(hs, steady ? 7 : (set.shearInStep && omT > omN ? 2 : 1));
+               lim(hs, steady ? 7 : (shearSets ? 2 : 1));
             if (hp.curvDist > 0.0 && hp.delta > -1e-4)   // rolling round a post or a ball
             {
                const V3 vt = vr - hp.n * vr.Dot(hp.n);
