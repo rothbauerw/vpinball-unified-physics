@@ -23,6 +23,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -175,7 +176,16 @@ namespace GroupStep
       double d, slope, s;
       V3 n;
    };
-   static constexpr int kTermMax = 40;
+   // a contact's terms: kInline held in the Hit (no allocation for a usual list), the rest on the heap, grown as needed (storage, not a limit). A Hit copies only its nt terms
+   struct HitTerms
+   {
+      static constexpr int kInline = 12;
+      HitTerm &operator[](const int i) { return i < kInline ? in[i] : ex[(size_t)(i - kInline)]; }
+      const HitTerm &operator[](const int i) const { return i < kInline ? in[i] : ex[(size_t)(i - kInline)]; }
+      void Fit(const int n) { if (n > kInline && ex.size() < (size_t)(n - kInline)) ex.resize((size_t)(n - kInline)); }
+      HitTerm in[kInline];
+      std::vector<HitTerm> ex;
+   };
    struct Hit
    {
       double delta = -1.0;
@@ -187,7 +197,7 @@ namespace GroupStep
       int nc = 0;              // the columns in use; 0 = a fixed surface
       Column c[7];             // one rigid body's 6 coordinates and 1 given motion of its frame: a physical size, not a table limit
       int nt = 0;              // > 0: the union's terms (hinge_piece_sum), the same list in the same order at every place of the ball; delta, n, c are the union's
-      HitTerm t[kTermMax];
+      HitTerms t;
       Hit() {}
       Hit(const Hit &o) { *this = o; }
       Hit &operator=(const Hit &o)
@@ -202,6 +212,7 @@ namespace GroupStep
          for (int j = 0; j < nc; j++)
             c[j] = o.c[j];
          nt = o.nt;
+         t.Fit(nt);
          for (int j = 0; j < nt; j++)
             t[j] = o.t[j];
          return *this;
@@ -217,6 +228,11 @@ namespace GroupStep
       mutable const double *trial = nullptr;   // a carried surface: each of its part's coordinates moved by this for the probe; null = where they are now
       virtual ~Shape() = default;
       virtual void Probe(const V3 &c, double R, Hit &h) const = 0;
+      // [Contact] hinge_piece_sum, a surface made of pieces: the pieces a ball at c can reach while it moves at most reach and its part turns at most swing (rad), and
+      // every piece within minReach of it (the far test's own bound), in the pieces' own order. False: not a surface of pieces (its probe takes no list)
+      virtual bool NearPieces(const V3 &, double, double, double, double, std::vector<int> &) const { return false; }
+      // the pieces off the list are off the ball at c with its part moved by dq (trial): a distance bound, no probe
+      virtual bool NearHolds(const V3 &, double, double, const std::vector<int> &) const { return true; }
    };
    // A flat face through p with unit normal n (the ball's side); unbounded
    class PlaneShape : public Shape
@@ -393,6 +409,7 @@ namespace GroupStep
    {
    public:
       virtual ~Part() = default;
+      mutable const std::vector<int> *nearNow = nullptr;   // [Contact] hinge_piece_sum: the probe of a surface it carries takes only these pieces (this attempt's list); null = all
       // what it is
       virtual int NumDof() const = 0;
       virtual int MaxDof() const { return NumDof(); }   // the most its NumDof can be inside a cycle (the group's storage is sized between cycles)
@@ -451,6 +468,7 @@ namespace GroupStep
    struct Item
    {
       int a = -1, b = -1, s = -1;
+      int nearK = -1;                 // >= 0: inside an attempt its probes take the group's list nearL[nearK] (a surface of pieces, hinge_piece_sum)
       bool touching = false;
       V3 xi;                          // the shear spring's stretch (in the contact plane)
       RubberContact::RollAngle ra;    // the rolling and twist springs' angles (roll_model 1)
@@ -1260,6 +1278,7 @@ namespace GroupStep
       // otherwise a stop passed shortens the step to end on it.
       double Step(double hTry)
       {
+         const NearOff nearOff(nearOn);
          double h = hTry;
          nHalveDiag = 0;
          failContactBuf.clear();
@@ -1679,6 +1698,67 @@ namespace GroupStep
       int nUnk = 0;              // unknowns of the step being solved
       bool partEvalFailed = false;
       Buf<char> farNow;          // not touching and out of reach in this attempt
+      // [Contact] hinge_piece_sum: per contact, the pieces of its surface the ball can reach in this attempt (Shape::NearPieces), built at its start; every probe
+      // of the attempt (start, middle, end, every Newton try) takes the same list. A piece off it has depth <= 0 at every place of the step (checked after the
+      // solve: NearStillNear), so the union's sum, forces and energy are those of all its pieces. Outside an attempt (the step's choice, events) a probe takes all
+      std::vector<std::vector<int>> nearL;
+      std::vector<std::array<double, 4>> tgS;   // (Eval, hinge_piece_sum: each term's gradient, its chord slope and whether it presses; kept to save the allocation)
+      std::vector<double> tkS;
+      std::vector<char> tOnS;
+      bool nearOn = false;
+      struct NearOff { bool &f; explicit NearOff(bool &b) : f(b) { f = false; } ~NearOff() { f = false; } };   // a step's lists end with it (Step, EnergyStep)
+      double nearGrow = 1.0;     // the reach's factor: x4 each time a solve's end left its list (the lists then grow to all the pieces)
+      static bool NearAllOn() { static const bool on = []() { const char *const e = getenv("VPX_HINGE_NEAR_ALL"); return e != nullptr && atoi(e) != 0; }(); return on; }   // diagnostics: every list = all pieces (A/B)
+      // the lists of this attempt (after the parts' BeginStep: their rates now). The reach: the ball's travel 2 |v| h and the part's turn 2 |rate| h (times nearGrow),
+      // and never less than the far test's bound (OutOfReach), so a contact that is not far has its deepest piece listed and its gap, normal and law are those of all
+      // its pieces. The far test's second solve (farOff) and the diagnostic VPX_HINGE_NEAR_ALL take every piece
+      void BuildNear(const double h)
+      {
+         nearOn = false;
+         if (nearL.size() < (size_t)ni)
+            nearL.resize((size_t)ni);
+         const bool all = farOff || NearAllOn() || nearGrow > 1e6;
+         for (int k = 0; k < ni; k++)
+         {
+            Item &it = item[k];
+            it.nearK = -1;
+            if (it.b >= 0 || shape[it.s]->part < 0)
+               continue;
+            const Shape *const sh = shape[it.s];
+            const Part *const pp = part[sh->part];
+            const Ball &A = ball[it.a];
+            double rate = 0.0, sp = A.v.Length();
+            for (int c = 0; c < pp->NumCoords(); c++)
+            {
+               const CoordInfo q = pp->Coord(c);
+               rate += std::fabs(q.rate);
+               sp += std::fabs(q.rate) * q.reach;
+            }
+            const double reach = all ? INFINITY : 2.0 * A.v.Length() * h * nearGrow + 1e-4, swing = all ? INFINITY : 2.0 * rate * h * nearGrow;
+            if (sh->NearPieces(A.c, A.R, reach, swing, 2.0 * sp * h + 1e-4, nearL[(size_t)k]))
+               it.nearK = k;
+         }
+         nearOn = true;
+      }
+      // after the solve: every piece off a list is off its ball at the move's middle and end (the start: by its building)
+      bool NearStillNear(const double *xv)
+      {
+         if (carried)
+            SetTrials(xv);
+         for (int k = 0; k < ni; k++)
+         {
+            const Item &it = item[k];
+            if (it.nearK < 0 || farNow[k])
+               continue;
+            const Shape *const sh = shape[it.s];
+            const Ball &A = ball[it.a];
+            const V3 dc(xv[6 * it.a], xv[6 * it.a + 1], xv[6 * it.a + 2]);
+            const double *const qe = (const double *)qEnd + coordOff[sh->part], *const qm = (const double *)qMid + coordOff[sh->part];
+            if (!sh->NearHolds(A.c + dc, A.R, qe[0], nearL[(size_t)k]) || !sh->NearHolds(A.c + dc * 0.5, A.R, qm[0], nearL[(size_t)k]))
+               return false;
+         }
+         return true;
+      }
       Buf<double> fieldE0;       // what each ball's place stores at the start of the attempt
       // out of reach: the gap is more than both bodies' speeds can close in twice the step, with a margin. A body that picks up speed inside the step is what the check after the solve is for
       bool OutOfReach(const Item &it, const double d0, const double h, const Hit &h0) const
@@ -1813,7 +1893,12 @@ namespace GroupStep
          if (it.b < 0)
          {
             const Shape *const sh = shape[it.s];
+            const bool listed = nearOn && it.nearK >= 0 && sh->part >= 0;
+            if (listed)
+               part[sh->part]->nearNow = &nearL[(size_t)it.nearK];
             sh->Probe(A.c, A.R, hp);
+            if (listed)
+               part[sh->part]->nearNow = nullptr;
             hp.delta -= it.dZero;
             return;
          }
@@ -2124,10 +2209,18 @@ namespace GroupStep
             // any G, so no misfit reaches the part through it. (A massless part's spring is in its U*: not here.)
             const Hit &h0 = h0s[k];
             const bool terms = hm.nt > 0 && h1.nt == hm.nt && h0.nt == hm.nt && nq == 1;
-            double tg[kTermMax][4], tk[kTermMax], dd = d1 - d0, feT = 0.0;
-            bool tOn[kTermMax];
+            std::vector<std::array<double, 4>> &tg = tgS;
+            std::vector<double> &tk = tkS;
+            std::vector<char> &tOn = tOnS;
+            double dd = d1 - d0, feT = 0.0;
             if (terms)
             {
+               if (tk.size() < (size_t)hm.nt)
+               {
+                  tg.resize((size_t)hm.nt);
+                  tk.resize((size_t)hm.nt);
+                  tOn.resize((size_t)hm.nt);
+               }
                double Fel[4] = { 0.0, 0.0, 0.0, 0.0 };
                for (int t = 0; t < hm.nt; t++)
                {
@@ -2138,7 +2231,7 @@ namespace GroupStep
                   const V3 &tn = hm.t[t].n;
                   tg[t][0] = -tn.x; tg[t][1] = -tn.y; tg[t][2] = -tn.z; tg[t][3] = hm.t[t].slope;
                   double gdT[kGradMax];
-                  Gonzalez(tg[t], a1 - a0, noiseD, dq, W, 4, gdT);
+                  Gonzalez(tg[t].data(), a1 - a0, noiseD, dq, W, 4, gdT);
                   const double fT = L.Chord(a0, a1);
                   for (int j = 0; j < 4; j++)
                      Fel[j] += s * fT * gdT[j];
@@ -2703,6 +2796,8 @@ namespace GroupStep
       double EnergyStep(const double hTry)
       {
          struct InEnergy { bool &f; explicit InEnergy(bool &b) : f(b) { f = true; } ~InEnergy() { f = false; } } inEnergy(histInEnergy);   // (diagnostics: the history's label)
+         const NearOff nearOff(nearOn);
+         nearGrow = INFINITY;   // (its explicit moves are not checked against a list: every piece)
          const double E0 = Energy();
          Ball *const b0 = esB0;
          Item *const i0 = esI0;
@@ -2875,10 +2970,11 @@ namespace GroupStep
       {
          PhaseScope ps(phBegin);
          const int nU = nUnk = NumUnk();
+         BuildNear(h);
          for (int k = 0; k < ni; k++)
          {
             Hit h0;
-            if (nowStamp == stamp)
+            if (nowStamp == stamp && item[k].nearK < 0)   // (a listed contact's start takes its list's terms: probed again)
                h0 = hNow[k];
             else
                Probe(item[k], ball, h0);
@@ -2928,17 +3024,23 @@ namespace GroupStep
       // Solve one step of h from the state now (the end values stay in x and ie[])
       bool Solve(double h)
       {
-         farOff = false;
-         if (!SolveOnce(h))
-            return false;
-         if (!FarStillFar(x))
+         nearGrow = 1.0;
+         for (;;)
          {
-            farOff = true;
-            const bool ok = SolveOnce(h);
             farOff = false;
-            return ok;
+            if (!SolveOnce(h))
+               return false;
+            if (!FarStillFar(x))
+            {
+               farOff = true;
+               const bool ok = SolveOnce(h);
+               farOff = false;
+               return ok;   // (its lists hold every piece)
+            }
+            if (NearStillNear(x))
+               return true;
+            nearGrow *= 4.0;   // a piece off a list was reached: the lists anew from a longer reach, the attempt again
          }
-         return true;
       }
       bool farOff = false;
       // diagnostics, off by default (VPX_GROUP_ROUND_TRACE=1): each round of an attempt, the residual by row in speed units and the parts' row terms; the first failed attempt of a step kept in failRoundBuf
@@ -3331,6 +3433,7 @@ namespace GroupStep
 
       void Accept(double h, bool onStop)
       {
+         nearOn = false;   // (from here the balls are at the step's end: the probes take every piece)
          const bool hist = np > 0 && HistoryTraceOn();   // (diagnostics, read only)
          const HistE histS0 = hist ? HistEnergy() : HistE();
          const Books histBk0 = hist ? books : Books();

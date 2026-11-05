@@ -1876,6 +1876,11 @@ struct ContactSystemImpl
       double heldKb = 0.0;     // the bend this touch started with, for the same reason
       ContactMovingPart *mp = nullptr;   // a part on the group: its own surface, which moves with it
       int surface = 0;
+      bool NearPieces(const V3 &c, const double R, const double reach, const double swing, const double minReach, std::vector<int> &list) const override
+      {
+         return mp != nullptr && mp->GroupNearPieces(surface, c, R, reach, swing, minReach, list);
+      }
+      bool NearHolds(const V3 &c, const double R, const double dq, const std::vector<int> &list) const override { return mp == nullptr || mp->GroupNearHolds(surface, c, R, dq, list); }
       void Probe(const V3 &c, double R, GroupStep::Hit &h) const override
       {
          if (mp != nullptr)

@@ -102,6 +102,8 @@ public:
    virtual GroupStep::Part *GroupPart() { return nullptr; }
    virtual int GroupSurfaces() const { return 1; }                                                   // its surfaces a ball can meet: one shape per ball and surface, each with its own contact and state
    virtual void GroupProbe(int, const V3 &, double, const double *, GroupStep::Hit &) const {}       // a surface for a ball centre and radius, its coordinates moved by trial (null = where they are); fills the hit's columns
+   virtual bool GroupNearPieces(int, const V3 &, double, double, double, double, std::vector<int> &) const { return false; }   // a surface of pieces: the step's list (GroupStep::Shape::NearPieces)
+   virtual bool GroupNearHolds(int, const V3 &, double, double, const std::vector<int> &) const { return true; }                // (GroupStep::Shape::NearHolds)
    virtual const RubberContact::RubberParams *GroupLaw(int, double &) const { return nullptr; }      // the surface's material and layer; null = the host's
    virtual void CycleBegin() {}                                                                      // a group holding it is being built this cycle
    virtual void TouchBegan(int, int, double) {}                                                      // this surface, this ball of the group, closing at vn (m/s): a touch began. A part's Hit is what it decides

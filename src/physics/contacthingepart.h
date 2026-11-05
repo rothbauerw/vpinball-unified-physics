@@ -116,6 +116,14 @@ namespace HingeModel
          if (!collidable)
             h.delta = -1.0;
       }
+      bool GroupNearPieces(const int surface, const V3 &c, const double R, const double reach, const double swing, const double minReach, std::vector<int> &list) const override
+      {
+         if (!gp.pieceSum)
+            return false;
+         gp.NearPieces(surface, c, R, reach, swing, minReach, list);
+         return true;
+      }
+      bool GroupNearHolds(const int surface, const V3 &c, const double R, const double dq, const std::vector<int> &list) const override { return gp.NearHolds(surface, c, R, dq, list); }
       const RubberContact::RubberParams *GroupLaw(int, double &layerM) const override
       {
          layerM = 0.0;

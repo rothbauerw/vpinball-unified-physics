@@ -161,8 +161,7 @@ namespace
          const ContactSettings &cs = ContactSettings::Get();
          m_model->gp.dynRatio = cs.muDynamicRatio;
          m_model->gp.SetPivotModel(cs.pivotModel);
-         if (!m_model->gp.SetPieceSum(cs.hingePieceSum) && cs.hingePieceSum)
-            PLOGW << "hinge_piece_sum: part " << m_name << " has more pieces than a contact's terms hold (" << GroupStep::kTermMax << "): its contact stays the deepest piece";
+         m_model->gp.SetPieceSum(cs.hingePieceSum);
       }
       void Publish() override
       {

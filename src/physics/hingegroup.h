@@ -200,21 +200,45 @@ namespace HingeGroup
       // Faces: one term per flat quad (AddPlate), minus a capsule along each line two touchable elements share (a fold edge, a wire along a plate edge;
       // FinishShape). Open: a wire end lying on a face has no overlap term (FinishShape's overlapWarn).
       const std::string &OverlapWarn() const { return overlapWarn; }   // (FinishShape: a wire end on a face, empty if none)
-      bool SetPieceSum(const bool on)
+      void SetPieceSum(const bool on)
       {
          BuildJoints();
-         bool fits = true;
-         for (int sf = 0; sf < surfaces; sf++)
+         pieceSum = on;
+      }
+      // [Contact] hinge_piece_sum, the step's list (GroupStep::Shape::NearPieces): a piece is listed unless the ball cannot reach it in the step. In body coordinates at
+      // the angle now the ball is at cb, rho0 from the axis; over the step it moves at most reach and the part turns at most swing, so in the body frame the ball's
+      // centre moves at most reach + swing (rho0 + reach). A piece whose bound |cb - m| - half - (R + rr) is past that (and past minReach, the far test's bound) has
+      // depth < 0 at every place of the step: off the list, the sum is the same. Order kept
+      void NearPieces(const int surface, const V3 &c, const double R, const double reach, const double swing, const double minReach, std::vector<int> &list) const
+      {
+         BuildJoints();
+         list.clear();
+         const V3 dn = Down(q), fr = Front(q), rel = c - A, cb(rel.Dot(E), rel.Dot(dn), rel.Dot(fr));
+         const double rho0 = std::sqrt(cb.y * cb.y + cb.z * cb.z);
+         const double tot = std::max(minReach, reach + swing * (rho0 + reach));
+         const std::vector<Piece> &ps = pieces[(size_t)surface];
+         for (int i = 0; i < (int)ps.size(); i++)
+            if (!(tot < INFINITY) || (cb - ps[i].m).Length() - ps[i].half - (R + ps[i].rr) <= tot)
+               list.push_back(i);
+      }
+      // every piece off the list is off the ball at c with the part at its angle now + dq (the same bound, at that place)
+      bool NearHolds(const int surface, const V3 &c, const double R, const double dq, const std::vector<int> &list) const
+      {
+         const double th = q + dq;
+         const V3 dn = Down(th), fr = Front(th), rel = c - A, cb(rel.Dot(E), rel.Dot(dn), rel.Dot(fr));
+         const std::vector<Piece> &ps = pieces[(size_t)surface];
+         size_t l = 0;
+         for (int i = 0; i < (int)ps.size(); i++)
          {
-            int n = sf == 0 ? (int)(quads.size() + lines.size()) : 0;
-            for (const Seg &w : wires)
-               n += w.surface == sf ? 1 : 0;
-            for (const Joint &j : joints)
-               n += j.surface == sf ? 1 : 0;
-            fits = fits && n <= GroupStep::kTermMax;
+            if (l < list.size() && list[l] == i)
+            {
+               l++;
+               continue;
+            }
+            if ((cb - ps[i].m).Length() - ps[i].half - (R + ps[i].rr) <= 0.0)
+               return false;
          }
-         pieceSum = on && fits;
-         return fits;
+         return true;
       }
       void ProbeTerms(const int surface, const V3 &cb, const BallSI &b, const V3 &dn, const V3 &fr, Hit &h) const
       {
@@ -244,9 +268,16 @@ namespace HingeGroup
                bestReff = reff;
             }
          };
-         for (const Seg &w : wires)
-            if (w.surface == surface)
+         // the pieces: this attempt's list (nearNow, GroupStep::Group::BuildNear) or all, in their order
+         const std::vector<Piece> &ps = pieces[(size_t)surface];
+         const int nList = nearNow != nullptr ? (int)nearNow->size() : (int)ps.size();
+         h.t.Fit(nList);
+         for (int li = 0; li < nList; li++)
+         {
+            const Piece &pc = ps[(size_t)(nearNow != nullptr ? (*nearNow)[(size_t)li] : li)];
+            if (pc.kind == 0)
             {
+               const Seg &w = wires[(size_t)pc.i];
                const V3 pts[2] = { w.a, w.b };
                GroupStep::envStats.capsules++;
                const TubeProbe pr = RubberContact::ProbeTube(b, pts, 2, rho, cb);
@@ -255,22 +286,21 @@ namespace HingeGroup
                else
                   add(-S, bestN, 1.0, 0.0);   // (a piece of no length: never touched, kept so the list is the same everywhere)
             }
-         for (const Joint &j : joints)
-            if (j.surface == surface)
+            else if (pc.kind == 1)
             {
+               const Joint &j = joints[(size_t)pc.i];
                const V3 cv = cb - j.v;
                const double dist = cv.Length();
                add(S - dist, dist > 1e-12 ? cv / dist : bestN, -(double)j.weight, 0.0);
             }
-         if (surface == 0)
-         {
-            for (const Quad &qd : quads)   // each flat quad by its own two triangles (convex and flat: its nearest point is exact)
+            else if (pc.kind == 2)   // each flat quad by its own two triangles (convex and flat: its nearest point is exact)
             {
-               const TubeProbe pr = RubberContact::ProbeTriangles(b, tris, qd.cand, halfT, cb, nullptr, 0, halfT);
+               const TubeProbe pr = RubberContact::ProbeTriangles(b, tris, quads[(size_t)pc.i].cand, halfT, cb, nullptr, 0, halfT);
                add(pr.seg >= 0 ? pr.delta : -S, pr.seg >= 0 ? pr.normal : bestN, 1.0, pr.seg >= 0 ? pr.reff : 0.0);
             }
-            for (const Line &l : lines)   // a shared line, taken back once: where both nearest points are on it, the smaller element's depth is its own and cancels
+            else   // a shared line, taken back once: where both nearest points are on it, the smaller element's depth is its own and cancels
             {
+               const Line &l = lines[(size_t)pc.i];
                const V3 pts[2] = { l.a, l.b };
                GroupStep::envStats.capsules++;
                const TubeProbe pr = RubberContact::ProbeTube(b, pts, 2, l.r, cb);
@@ -587,7 +617,35 @@ namespace HingeGroup
                if (m >= 2 && !known)
                   joints.push_back({ v, w.surface, m - 1 });
             }
+         // the union's terms of each side in their order (ProbeTerms): wires, joints, then (side 0) the faces' quads and shared lines. Each with a ball's
+         // distance bound: its middle m, half its extent, its own radius rr (the ball touches it only within R + rr + half of m)
+         pieces.assign((size_t)std::max(surfaces, 1), std::vector<Piece>());
+         for (int sf = 0; sf < surfaces; sf++)
+         {
+            std::vector<Piece> &ps = pieces[(size_t)sf];
+            for (int i = 0; i < (int)wires.size(); i++)
+               if (wires[i].surface == sf)
+                  ps.push_back({ 0, i, wires[i].m, wires[i].half, rho });
+            for (int i = 0; i < (int)joints.size(); i++)
+               if (joints[i].surface == sf)
+                  ps.push_back({ 1, i, joints[i].v, 0.0, rho });
+            if (sf != 0)
+               continue;
+            for (int i = 0; i < (int)quads.size(); i++)
+            {
+               const Quad &qd = quads[i];
+               const V3 m = (qd.p[0] + qd.p[1] + qd.p[2] + qd.p[3]) * 0.25;
+               double half = 0.0;
+               for (const V3 &c : qd.p)
+                  half = std::max(half, (c - m).Length());
+               ps.push_back({ 2, i, m, half, halfT });
+            }
+            for (int i = 0; i < (int)lines.size(); i++)
+               ps.push_back({ 3, i, (lines[i].a + lines[i].b) * 0.5, 0.5 * (lines[i].b - lines[i].a).Length(), lines[i].r });
+         }
       }
+      struct Piece { int kind, i; V3 m; double half, rr; };   // kind 0 wire, 1 joint, 2 quad, 3 shared line
+      mutable std::vector<std::vector<Piece>> pieces;
       std::vector<RubberContact::SurfaceTri> tris;
       std::vector<int> cand;
       struct Quad { V3 p[4]; std::vector<int> cand; };   // an AddPlate face: its corners and its two triangles (hinge_piece_sum's face terms)
@@ -619,5 +677,13 @@ namespace HingeGroup
       const Part *owner = nullptr;
       int surface = 0;
       void Probe(const V3 &c, const double R, Hit &h) const override { owner->ProbeSurface(surface, c, R, trial != nullptr ? trial[0] : 0.0, h); }
+      bool NearPieces(const V3 &c, const double R, const double reach, const double swing, const double minReach, std::vector<int> &list) const override
+      {
+         if (!owner->pieceSum)
+            return false;
+         owner->NearPieces(surface, c, R, reach, swing, minReach, list);
+         return true;
+      }
+      bool NearHolds(const V3 &c, const double R, const double dq, const std::vector<int> &list) const override { return owner->NearHolds(surface, c, R, dq, list); }
    };
 }
