@@ -308,6 +308,11 @@ namespace GroupStep
       // omegaH / omT, and no limit when its whole swing 2 A is within epsRest. A weak press (a light wire) then cannot hold the step to its shear clock; a hard hit keeps it (A large).
       // true (default) = by the motion; false = the shear clock at omegaH / omT.
       bool shearMotion = true;
+      // termArrival ([Contact] term_arrival): a contact made of terms (Hit::t, hinge_piece_sum) gives each term not yet pressing (d_t < 0) the arrival rule of any contact:
+      // its closing rate dDot_t = -v . n_t + slope_t * rate (the term's exact gradient), and when closing the step is at most max(0.5 * -d_t / dDot_t, hs_t) with hs_t the
+      // clock an untouched approaching contact gets there (rule 3). The union's depth sees only the deepest piece, so a second piece arriving inside a step is otherwise invisible.
+      // true (default) = on; false = the union's rule alone.
+      bool termArrival = true;
       double turnMaxRad = 2.0 * kPi / 180.0;   // a ball rolling round a post or another ball turns at most this per step
       double tauShare = 0.25, fieldShare = 0.25;   // a part's own time constant is resolved to this share of it; a body moves at most this share of a distance over which its force changes (StepFactList; no part uses them yet; the bat's values)
       double vFloor = 0.01;                    // m/s: the closing speed below which a contact's expected depth is taken at this speed
@@ -1087,6 +1092,7 @@ namespace GroupStep
          int unsteady = 0;                   // the steady test the contact failed, the first in order: 0 none (steady, or no test), 1 closing speed, 2 acceleration, 3 slip
          double unsteadyVal = 0.0, unsteadyLim = 0.0;   // that test's value and limit (m/s, m/s^2, m/s)
          double aShear = 0.0;                // the shear spring's Coulomb stretch bound mu N / Kt at the expected depth (m), shearMotion on or off
+         int term = -1;                      // >= 0: the contact's term (Hit::t) whose arrival set the step (termArrival); delta and dDot are then that term's
       };
       mutable StepDiag diag;
 
@@ -1141,38 +1147,67 @@ namespace GroupStep
             const V3 vr = it.b >= 0 ? A.v - ball[it.b].v : A.v - vs;
             const double dDot = -vr.Dot(hp.n);   // closing speed
             const double vc = std::max(dDot, set.vFloor);
-            if (hp.delta <= 0.0 && -hp.delta >= vc * set.hMax + 1e-9)
+            // termArrival: each term's closing rate by its own gradient, -v . n_t + slope_t * rate (the part's one coordinate, column 0)
+            const bool terms = set.termArrival && hp.nt > 0 && nq > 0;
+            const double qRate = terms ? part[shape[it.s]->part]->Coord(hp.c[0].coord).rate : 0.0;
+            const auto termDot = [&](const HitTerm &ht) { return -A.v.Dot(ht.n) + ht.slope * qRate; };
+            bool termNear = false;   // a term the longest step can reach though the union's depth cannot be
+            for (int t = 0; terms && !termNear && t < hp.nt; t++)
+               termNear = hp.t[t].d > 0.0 || -hp.t[t].d < std::max(termDot(hp.t[t]), set.vFloor) * set.hMax + 1e-9;
+            if (hp.delta <= 0.0 && -hp.delta >= vc * set.hMax + 1e-9 && !termNear)
                continue;   // cannot be reached within the longest step
             Item L = it;
             if (!it.touching)
                TakeLaw(L, hp);
             if (invQ > 0.0)
                L.mRed = 1.0 / (1.0 / A.m + invQ);
-            // the depth this approach reaches (all the closing energy into the squash): the stiffness while it lasts
-            const double eC = 0.5 * L.mRed * vc * vc;
-            double lo = std::pow(2.5 * eC / L.kH, 0.4);   // the Hertz spring alone; a layer only makes it shallower
-            if (L.cL > 0.0)
-            {
-               double hi = std::min(lo, L.hL);
-               lo = 0.0;
-               for (int r = 0; r < 50 && hi - lo > 1e-4 * hi; r++)
+            // the depth an approach at closing speed v reaches (all the closing energy into the squash): the stiffness while it lasts
+            const auto reachDepth = [&](const double v) {
+               const double eC = 0.5 * L.mRed * v * v;
+               double lo = std::pow(2.5 * eC / L.kH, 0.4);   // the Hertz spring alone; a layer only makes it shallower
+               if (L.cL > 0.0)
                {
-                  const double mid = 0.5 * (lo + hi);
-                  (L.V(mid) < eC ? lo : hi) = mid;
+                  double hi = std::min(lo, L.hL);
+                  lo = 0.0;
+                  for (int r = 0; r < 50 && hi - lo > 1e-4 * hi; r++)
+                  {
+                     const double mid = 0.5 * (lo + hi);
+                     (L.V(mid) < eC ? lo : hi) = mid;
+                  }
                }
-            }
-            if (L.kb > 0.0)   // springs in series (the bend): the closing energy shared by them, the squash the Hertz part of it
-            {
-               const double cS = 1.0 / L.kb;
-               double uLo = 0.0, uHi = lo;
-               for (int r = 0; r < 30 && uHi - uLo > 1e-3 * uHi; r++)
+               if (L.kb > 0.0)   // springs in series (the bend): the closing energy shared by them, the squash the Hertz part of it
                {
-                  const double u = 0.5 * (uLo + uHi), f = L.kH * u * std::sqrt(u);
-                  (0.4 * f * u + 0.5 * f * f * cS < eC ? uLo : uHi) = u;
+                  const double cS = 1.0 / L.kb;
+                  double uLo = 0.0, uHi = lo;
+                  for (int r = 0; r < 30 && uHi - uLo > 1e-3 * uHi; r++)
+                  {
+                     const double u = 0.5 * (uLo + uHi), f = L.kH * u * std::sqrt(u);
+                     (0.4 * f * u + 0.5 * f * f * cS < eC ? uLo : uHi) = u;
+                  }
+                  const double fE = L.kH * uHi * std::sqrt(uHi);
+                  lo = uHi + (L.kb > 0.0 ? fE / L.kb : 0.0);   // (the bend is in the depth; the part's give is in its solved angle, not in the depth)
                }
-               const double fE = L.kH * uHi * std::sqrt(uHi);
-               lo = uHi + (L.kb > 0.0 ? fE / L.kb : 0.0);   // (the bend is in the depth; the part's give is in its solved angle, not in the depth)
-            }
+               return lo;
+            };
+            const double lo = reachDepth(vc);
+            // an unsteady contact's clock at the expected depth dE: the normal one, and the shear one (Settings::shearInStep, shearMotion); shearSets: the shear clock binds
+            const auto unsteadyClock = [&](const double dE, bool &shearSets, double &omN) {
+               const double ktE = L.Kt(dE);
+               omN = std::sqrt(L.K(dE) / L.mRed);
+               const double omT = std::sqrt(ktE / L.mt);
+               const double om = set.shearInStep ? std::max(omN, omT) : omN;
+               double hs = om > 0.0 ? set.omegaH / om : set.hMax;
+               const double aT = ktE > 0.0 ? L.mu * L.F(dE) / ktE : 0.0;
+               shearSets = set.shearInStep && omT > omN;
+               if (set.shearMotion && shearSets)
+               {
+                  const double hN = omN > 0.0 ? set.omegaH / omN : set.hMax;
+                  const double hT = 2.0 * aT <= set.epsRest ? set.hMax : std::max(set.omegaH / omT, std::min(std::sqrt(12.0 * set.epsRest / aT) / omT, set.hMax));
+                  hs = std::min(hN, hT);
+                  shearSets = hT < hN;
+               }
+               return hs;
+            };
             const double dE = std::max(hp.delta, lo);
             const double ktE = L.Kt(dE);
             const double omN = std::sqrt(L.K(dE) / L.mRed), omT = std::sqrt(ktE / L.mt);
@@ -1251,6 +1286,7 @@ namespace GroupStep
                   dg.unsteadyVal = whyVal;
                   dg.unsteadyLim = whyLim;
                   dg.aShear = aT;
+                  dg.term = -1;
                }
             };
             if (hp.delta < 0.0 && dDot > 0.0)   // reached in about two steps, not overshot
@@ -1260,6 +1296,30 @@ namespace GroupStep
             }
             else
                lim(hs, steady ? 7 : (shearSets ? 2 : 1));
+            // termArrival: each term not yet pressing is an approaching contact of its own: the arrival rule with the clock an untouched contact gets there
+            // (unsteady, at the depth its own closing speed reaches), not the contact's (a resting contact's clock can be hMax)
+            for (int t = 0; terms && t < hp.nt; t++)
+            {
+               const HitTerm &ht = hp.t[t];
+               const double dDotT = termDot(ht);
+               if (ht.d >= 0.0 || dDotT <= 0.0)
+                  continue;
+               const double ha = 0.5 * -ht.d / dDotT;
+               if (ha >= h)
+                  continue;   // (max(ha, hsT) >= h: no limit; the clock is not needed)
+               bool shT = false;
+               double omNT = 0.0;
+               const double hsT = unsteadyClock(reachDepth(std::max(dDotT, set.vFloor)), shT, omNT);
+               if (std::max(ha, hsT) < h)
+               {
+                  lim(std::max(ha, hsT), ha > hsT ? 3 : (shT ? 2 : 1));
+                  dg.term = t;
+                  dg.delta = ht.d;
+                  dg.dDot = dDotT;
+                  dg.omN = omNT;
+                  dg.unsteady = 1, dg.unsteadyVal = dDotT, dg.unsteadyLim = set.vSteady;
+               }
+            }
             if (hp.curvDist > 0.0 && hp.delta > -1e-4)   // rolling round a post or a ball
             {
                const V3 vt = vr - hp.n * vr.Dot(hp.n);
