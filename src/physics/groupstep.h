@@ -144,6 +144,16 @@ namespace GroupStep
    // What a surface reports for a ball centre: the signed depth (> 0 = squashed; the ball's radius plus a tube's radius minus the distance), the normal (surface -> ball
    // centre) and the Hertz effective radius. The depth must be continuous in the ball's position (the step takes exact differences of it).
    // How a surface point moves with one coordinate of the part that carries it. Plain numbers with no starting values, so that a fixed surface's hit costs nothing.
+   // VPX_STEP_RULE counters (diagnostic only, read and reset by contactsystem.cpp per step; nothing reads them for the physics): massless-part solves and their cost
+   struct EnvStats
+   {
+      long solves = 0, hits = 0, misses = 0, iters = 0, capsules = 0, terms = 0;   // (terms: hinge_piece_sum's union terms probed)
+      double us = 0.0;   // wall time inside EnvAt's solves (misses)
+      long missBy[7] = {};   // the solves (misses) by caller (envWho): 0 a contact's probe, 1 residual end, 2 residual middle, 3 attempt start, 4 the step rule's rate, 5 the angle after a step, 6 energy
+   };
+   inline EnvStats envStats;
+   inline int envWho = 0;   // (diagnostics: who asks EnvAt now, for EnvStats::missBy)
+
    struct Column
    {
       int coord;           // the part's coordinate number, the same whether or not it has an unknown now
@@ -159,6 +169,14 @@ namespace GroupStep
       V3 V() const { return V3(v[0], v[1], v[2]); }
       V3 W() const { return V3(w[0], w[1], w[2]); }
    };
+   // [Contact] hinge_piece_sum: one term of a contact's union (a wire piece +1, a joint shared by m pieces -(m - 1), a part's faces +1): its own depth, its
+   // normal (world) and its column's slope; the group steps each term by its own exact difference (Eval)
+   struct HitTerm
+   {
+      double d, slope, s;
+      V3 n;
+   };
+   static constexpr int kTermMax = 40;
    struct Hit
    {
       double delta = -1.0;
@@ -167,8 +185,11 @@ namespace GroupStep
       double curvDist = 0.0;   // > 0: the ball turns round a centre this far away while it rolls along the surface (a post, a tube): the step's turning rule
       double grad = 1.0;       // the depth's gradient is n x grad (below 1 where the contact patch spans a fold of the surface)
       double kb = 0.0;         // > 0: the surface bends in series with the contact here (N/m along the normal): a massless spring, taken with the law when a touch starts and held while it lasts
+      double kS = 0.0;         // > 0: the surface's own give in series with the contact here (N/m along the normal): a massless part's series stiffness off its stops (Part::Envelope); 0 = rigid
       int nc = 0;              // the columns in use; 0 = a fixed surface
       Column c[7];             // one rigid body's 6 coordinates and 1 given motion of its frame: a physical size, not a table limit
+      int nt = 0;              // > 0: the union's terms (hinge_piece_sum), the same list in the same order at every place of the ball; delta, n, c are the union's
+      HitTerm t[kTermMax];
       Hit() {}
       Hit(const Hit &o) { *this = o; }
       Hit &operator=(const Hit &o)
@@ -179,9 +200,13 @@ namespace GroupStep
          curvDist = o.curvDist;
          grad = o.grad;
          kb = o.kb;
+         kS = o.kS;
          nc = o.nc;
          for (int j = 0; j < nc; j++)
             c[j] = o.c[j];
+         nt = o.nt;
+         for (int j = 0; j < nt; j++)
+            t[j] = o.t[j];
          return *this;
       }
    };
@@ -262,6 +287,9 @@ namespace GroupStep
       // depth. Never shorter than rule 0 (omegaHRest / omega); arrivals, impacts and slips keep their rules. 0 (default) = rule 0 alone.
       int stepModel = 0;
       double epsRest = 1e-8;                   // m: the phase error a steady contact may carry (estimate, 0.01 um)
+      // swingCap ([Contact] step_swing_cap, with stepModel 1): the phase error is at most the mode's whole swing 2 A (the midpoint step keeps its energy, so its
+      // amplitude), so a mode whose 2 A is within epsRest sets no limit; the other rules still bound the step. false (default) = the phase law alone.
+      bool swingCap = false;
       double turnMaxRad = 2.0 * kPi / 180.0;   // a ball rolling round a post or another ball turns at most this per step
       double tauShare = 0.25, fieldShare = 0.25;   // a part's own time constant is resolved to this share of it; a body moves at most this share of a distance over which its force changes (StepFactList; no part uses them yet; the bat's values)
       double vFloor = 0.01;                    // m/s: the closing speed below which a contact's expected depth is taken at this speed
@@ -278,8 +306,8 @@ namespace GroupStep
       int noProgressRounds = 12;               // an attempt gives up (the step is halved, as at maxRounds) when this many rounds have not halved its best move
       double maxMoveM = 2e-3, maxSpinStep = 500.0;   // a round moves a ball at most this far, and changes its spin by at most this (rad/s)
       // diagnostics: 1 = also form the Jacobian by central differences of the residual each round and keep both (jacAna, jacFd of the last round); 2 = solve with
-      // the difference Jacobian. 0 = off (normal).
-      int jacMode = 0;
+      // the difference Jacobian. 0 = off (normal). Its default from VPX_GROUP_JAC_MODE (diagnostics, read once; unset = 0); with VPX_GROUP_ROUND_TRACE=1 each round prints the parts' rows and columns both ways
+      int jacMode = []() { static const int m = []() { const char *const e = getenv("VPX_GROUP_JAC_MODE"); return e != nullptr ? std::max(0, std::min(2, atoi(e))) : 0; }(); return m; }();
    };
 
    // Energy books (losses positive) and counters
@@ -414,8 +442,18 @@ namespace GroupStep
       virtual std::string StopNote() const { return std::string(); }    // diagnostics (VPX_GROUP_STOP_TRACE): its state at a stop check   // after an energy step: the state it saved at the step's start, full precision (for an exact replay)
       virtual std::string SearchNote(const double *, int, double) const { return std::string(); }   // diagnostics (VPX_GROUP_SEARCH_TRACE): the part's state for the move x over h
       virtual std::string RowNote() const { return std::string(); }   // diagnostics (VPX_GROUP_ROUND_TRACE): the terms of its rows at its last evaluation
+      virtual std::string LastProbeNote() const { return std::string(); }   // diagnostics (VPX_GROUP_ROUND_TRACE): what its last surface probe found (a wire's pieces)
+      virtual std::string ContactNote(const double *, int, double, const double *) const { return std::string(); }
+      virtual std::string HistoryNote() const { return std::string(); }   // diagnostics (VPX_GROUP_HISTORY_TRACE): its state and energies after an accepted step (read only)   // diagnostics (VPX_GROUP_CONTACT_TRACE): its state and row terms for the move x over h, its residual Res (read only)
       virtual void BallsMoved(const Ball *, int) {}              // the balls were moved with no step of its own
       virtual void ExplicitMove(const double *, int, double, double *) const {}   // its own unknowns in an energy step's explicit round
+      // A massless part (Envelope true): its one coordinate q is no unknown; the group solves it within, from all the balls on its shapes at once (Group::EnvSolve),
+      // U*(balls) = min over [lo, hi] of EnvPotential(q) + its shapes' contact springs (the items' own law). The group takes U* as one stored energy on the balls (discrete
+      // gradient: its work the exact difference) in place of those contacts' own springs (their damping and friction stay per contact). Its probes take q - q0 as the trial.
+      // NumDof and NumCoords 0; its Energy leaves out what U* holds
+      virtual bool Envelope() const { return false; }
+      virtual void EnvRange(double &q0, double &lo, double &hi) const { q0 = lo = hi = 0.0; }
+      virtual double EnvPotential(double, double *d1, double *d2) const { *d1 = *d2 = 0.0; return 0.0; }
       virtual double EndResidual() const { return 0.0; }         // > 0: a step of a group holding this part counts as solved only with its residual within this (m/s; Settings::tolEndRes)
    };
 
@@ -432,6 +470,7 @@ namespace GroupStep
       double alpha = 0.0, gammaKK = 0.0, tanDelta = 0.0, shearTan = 0.0, mu = 0.0, rollingMu = 0.0;
       bool normalLoss = false, twist = false;
       double kb = 0.0;                // the surface's bend in series with the contact (0 = none): V(d) = min over u of Hertz(u) + 1/2 kb (d - u)^2, kH u^1.5 = kb (d - u)
+      bool env = false;               // its shape's part is massless (Part::Envelope): its spring is in the part's U*, not here
       // the contact's share of the depth
       double Uc(const double d) const
       {
@@ -485,6 +524,7 @@ namespace GroupStep
          }
          return f;
       }
+      double KS(const double d, const double kS) const { const double k = K(d); return kS > 0.0 ? k * kS / (k + kS) : k; }   // with a part's give in series (Hit::kS; 0 = rigid)
       double K(double d) const
       {
          if (d <= 0.0)
@@ -596,6 +636,59 @@ namespace GroupStep
    class Group
    {
    public:
+      // VPX_GROUP_PHASE_TIMING=<file> (a diagnostic, read once; unset = off: no clock is read, nothing changes): one row per step, the wall time in each phase,
+      // each phase's own (a phase entered inside another pauses it: a probe inside Eval counts as a probe, not as Eval). steady_clock (QueryPerformanceCounter on MSVC).
+      enum Phase { phChoose, phBegin, phProbeEval, phProbeOther, phEvalRest, phLinear, phPartAfter, phAfter, phDiag, phN };
+      struct PhaseClock
+      {
+         double us[phN] = {};
+         long n[phN] = {};   // (the times each phase was entered)
+         int cur = -1;
+         std::chrono::steady_clock::time_point t0;
+      };
+      static FILE *PhaseFile()
+      {
+         static FILE *const f = []() -> FILE * {
+            const char *const e = getenv("VPX_GROUP_PHASE_TIMING");
+            FILE *const o = e != nullptr && *e ? fopen(e, "w") : nullptr;
+            if (o != nullptr)
+               fprintf(o, "t_ms,step,h_us,rounds,step_us,choose_us,begin_us,eval_probe_us,inrange_probe_us,eval_rest_us,linear_us,part_after_us,step_other_us,after_us,diag_us,attempts,evals,lin_solves,halvings,capsules,terms\n");
+            return o;
+         }();
+         return f;
+      }
+      static PhaseClock &Clock() { static PhaseClock c; return c; }
+      struct PhaseScope
+      {
+         int ph = -1, prev = -1;
+         explicit PhaseScope(const int p)
+         {
+            if (PhaseFile() == nullptr)
+               return;
+            PhaseClock &c = Clock();
+            const auto now = std::chrono::steady_clock::now();
+            if (c.cur >= 0)
+               c.us[c.cur] += std::chrono::duration<double, std::micro>(now - c.t0).count();
+            prev = c.cur;
+            ph = p;
+            c.cur = p;
+            c.n[p]++;
+            c.t0 = now;
+         }
+         ~PhaseScope()
+         {
+            if (ph < 0)
+               return;
+            PhaseClock &c = Clock();
+            const auto now = std::chrono::steady_clock::now();
+            c.us[ph] += std::chrono::duration<double, std::micro>(now - c.t0).count();
+            c.cur = prev;
+            c.t0 = now;
+         }
+      };
+      uint32_t phaseMs = 0;   // (the owner's game time, for the phase rows)
+      long phaseStep = 0;
+
       Settings set;
       Books books;
       int nb = 0, ns = 0, ni = 0, np = 0, nf = 0;
@@ -633,6 +726,8 @@ namespace GroupStep
          esA0.Grow(n);
          esAl0.Grow(n);
          fieldE0.Grow(n);
+         envG.Grow(n);
+         envQ.Grow(12 * n);
          warmA.Grow(n);
          warmAl.Grow(n);
       }
@@ -692,6 +787,7 @@ namespace GroupStep
             h1c.Grow(n);
             hmc.Grow(n);
             d0s.Grow(n);
+            h0s.Grow(n);
             ie.Grow(n);
             farNow.Grow(n);
             prevSlipS.Grow(n);
@@ -778,6 +874,8 @@ namespace GroupStep
          }
          books = Books();
          stamp++;
+         if (WireD0TraceOn())
+            d0TryStamp = -1;   // (a new cycle: its first step's tries count from 0)
       }
 
       // VPX_GROUP_BOOK_STEPS=2 (a diagnostic): every stored term of the group, one string: per ball place, kinetic, height; per item its depth, zero, squash, shear, roll; per part its energy
@@ -811,6 +909,7 @@ namespace GroupStep
       }
       double Energy() const
       {
+         EnvForget();   // (the contacts' laws may have changed since)
          double e = 0.0;
          for (int i = 0; i < nb; i++)
          {
@@ -824,12 +923,16 @@ namespace GroupStep
             {
                Hit hp;
                Probe(item[k], ball, hp);
-               e += item[k].V(hp.delta) + 0.5 * item[k].Kt(hp.delta) * item[k].xi.Dot(item[k].xi);
+               e += (item[k].env ? 0.0 : item[k].V(hp.delta)) + 0.5 * item[k].Kt(hp.delta) * item[k].xi.Dot(item[k].xi);   // (a massless part's: in its Energy, U*)
                if (set.rollModel == 1)
                   e += 0.5 * item[k].Kr(hp.delta) * item[k].ra.th.Dot(item[k].ra.th) + 0.5 * item[k].Ktw(hp.delta) * item[k].ra.tw * item[k].ra.tw;
             }
          for (int p = 0; p < np; p++)
-            e += part[p]->Energy(ball, nb);
+         {
+            envWho = 6;
+            e += part[p]->Energy(ball, nb) + (part[p]->Envelope() ? EnvSolve(p, ball, nullptr) : 0.0);   // (a massless part: U*, its own potential and its contacts' springs)
+            envWho = 0;
+         }
          e += FormEnergy(ball);
          return e;
       }
@@ -862,17 +965,57 @@ namespace GroupStep
          overWhy = '?';
          stopBuf.clear();
          stopLines = 0;
+         EnvForget();   // (once a cycle: the parts' gravity and the contacts are this cycle's)
+         FILE *const pf = PhaseFile();
          while (done < dt - 1e-12)
          {
-            const double h = capStep(std::min(ChooseStep(), dt - done));
+            const double hChoice = std::min(ChooseStep(), dt - done);
+            double h;
+            {
+               PhaseScope ps(phDiag);   // (the owner's cap and its STEP_RULE row)
+               h = capStep(hChoice);
+            }
+            double usIn[phN];
+            const long rounds0 = books.rounds, halv0 = books.halvings, caps0 = envStats.capsules, terms0 = envStats.terms;
+            std::chrono::steady_clock::time_point tStep;
+            if (pf != nullptr)
+            {
+               for (int i = 0; i < phN; i++)
+                  usIn[i] = Clock().us[i];
+               tStep = std::chrono::steady_clock::now();
+            }
             const double taken = Step(h);
+            double stepUs = 0.0, inStep = 0.0;
+            if (pf != nullptr)
+            {
+               stepUs = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - tStep).count();
+               for (int i = 0; i < phN; i++)
+                  inStep += Clock().us[i] - usIn[i];
+            }
             if (books.failed || taken <= 0.0 || (++guard > 3000 && GroupFixedStepS() <= 0.0))
             {
                overWhy = books.failed ? 'F' : taken <= 0.0 ? 'Z' : 'G';   // why the cycle was lost: F a failed step, Z a step of no length, G 3000 steps
                return false;
             }
             done += taken;
-            afterStep();
+            {
+               PhaseScope ps(phAfter);
+               afterStep();
+            }
+            if (pf != nullptr)
+            {
+               PhaseClock &c = Clock();
+               // (the counts: attempts = BeginAttempt calls, every solve of the step incl. failed ones, the halvings' and the stop search's; evals = Eval calls;
+               // lin_solves = SolveLinear calls; capsules and terms: the hinge probes' capsule checks and union terms over the step)
+               fprintf(pf, "%u,%ld,%.4f,%ld,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%ld,%ld,%ld,%ld,%ld,%ld\n", phaseMs, ++phaseStep, h * 1e6, books.rounds - rounds0, stepUs, c.us[phChoose], c.us[phBegin],
+                       c.us[phProbeEval], c.us[phProbeOther], c.us[phEvalRest], c.us[phLinear], c.us[phPartAfter], stepUs - inStep, c.us[phAfter], c.us[phDiag],
+                       c.n[phBegin], c.n[phEvalRest], c.n[phLinear], books.halvings - halv0, envStats.capsules - caps0, envStats.terms - terms0);
+               for (int i = 0; i < phN; i++)
+               {
+                  c.us[i] = 0.0;
+                  c.n[i] = 0;
+               }
+            }
          }
          return true;
       }
@@ -896,13 +1039,15 @@ namespace GroupStep
          Item &it = item[k];
          Hit hp;
          it.dZero = 0.0;
+         EnvForget();   // (a massless part's angle: solved again with this contact as it is now set)
          if (!wasTouching && zero <= 0.0)
          {
-            Probe(it, ball, hp);
-            it.dZero = std::max(hp.delta, 0.0);
+            Probe(it, ball, hp);   // (a massless part: solved with this ball on it, so it gives way first; only depth left on its bottom stop is stored)
+            it.dZero = EnvGivesWay(it) ? 0.0 : std::max(hp.delta, 0.0);
          }
          else
             it.dZero = zero;
+         EnvForget();
          it.xi = xi;
          it.ra = ra;
          Probe(it, ball, hp);
@@ -940,12 +1085,15 @@ namespace GroupStep
       {
          int rule = 0, item = -1, partRule = -1;
          double delta = 0.0, dDot = 0.0, omN = 0.0, omT = 0.0;
+         int unsteady = 0;                   // the steady test the contact failed, the first in order: 0 none (steady, or no test), 1 closing speed, 2 acceleration, 3 slip
+         double unsteadyVal = 0.0, unsteadyLim = 0.0;   // that test's value and limit (m/s, m/s^2, m/s)
       };
       mutable StepDiag diag;
 
       // The step choice from the state now (accuracy only)
       double ChooseStep() const
       {
+         PhaseScope ps(phChoose);
          double h = set.hMax;
          StepDiag dg;
          V3 *const fNet = fNetS;   // the net force on each ball now: gravity, each touching contact's spring and shear stretch
@@ -960,11 +1108,24 @@ namespace GroupStep
             }
          }
          FormEnergy(ball, fNet);
+         envRateNow.assign((size_t)np, 0.0);   // a massless part's angle rate now (EnvRate): its surface moves with the balls on it
+         for (int p = 0; p < np; p++)
+            if (part[p]->Envelope())
+            {
+               envWho = 4;
+               envRateNow[p] = EnvRate(p);
+               envWho = 0;
+            }
          for (int k = 0; k < ni; k++)
          {
             const Item &it = item[k];
             Hit &hp = hNow[k];   // kept: the step's start probes the same positions
             Probe(it, ball, hp);
+            if (WireD0TraceOn() && it.b < 0 && shape[it.s]->part >= 0)
+            {
+               nowNote.resize((size_t)ni);
+               nowNote[k] = part[shape[it.s]->part]->LastProbeNote();
+            }
             if (it.touching && hp.delta > 0.0)
             {
                const V3 f = hp.n * it.F(hp.delta) - it.xi * it.Kt(hp.delta);
@@ -990,6 +1151,8 @@ namespace GroupStep
                vs = vs + hp.c[j].V() * q.rate;
                invQ += sl * sl * (pq.DofOf(hp.c[j].coord) >= 0 ? q.invM : q.blockedSide == 0 || q.blockedSide * sl > 0.0 ? q.invMFree : 0.0);
             }
+            if (it.b < 0 && shape[it.s]->part >= 0 && part[shape[it.s]->part]->Envelope())
+               vs = hp.c[0].V() * envRateNow[shape[it.s]->part];   // a massless part's point: its column (the probe's, kept though nc is 0) at the solved angle's rate
             const V3 vr = it.b >= 0 ? A.v - ball[it.b].v : A.v - vs;
             const double dDot = -vr.Dot(hp.n);   // closing speed
             const double vc = std::max(dDot, set.vFloor);
@@ -1013,23 +1176,26 @@ namespace GroupStep
                   (L.V(mid) < eC ? lo : hi) = mid;
                }
             }
-            if (L.kb > 0.0)
+            if (L.kb > 0.0 || hp.kS > 0.0)   // springs in series (the bend, a massless part's give): the closing energy shared by them, the squash the Hertz part of it
             {
+               const double cS = (L.kb > 0.0 ? 1.0 / L.kb : 0.0) + (hp.kS > 0.0 ? 1.0 / hp.kS : 0.0);
                double uLo = 0.0, uHi = lo;
                for (int r = 0; r < 30 && uHi - uLo > 1e-3 * uHi; r++)
                {
                   const double u = 0.5 * (uLo + uHi), f = L.kH * u * std::sqrt(u);
-                  (0.4 * f * u + 0.5 * f * f / L.kb < eC ? uLo : uHi) = u;
+                  (0.4 * f * u + 0.5 * f * f * cS < eC ? uLo : uHi) = u;
                }
                const double fE = L.kH * uHi * std::sqrt(uHi);
-               lo = uHi + fE / L.kb;
+               lo = uHi + (L.kb > 0.0 ? fE / L.kb : 0.0);   // (the bend is in the depth; the part's give is in its solved angle, not in the depth)
             }
             const double dE = std::max(hp.delta, lo);
             const double ktE = L.Kt(dE);
-            const double omN = std::sqrt(L.K(dE) / L.mRed), omT = std::sqrt(ktE / L.mt);
+            const double omN = std::sqrt(L.KS(dE, hp.kS) / L.mRed), omT = std::sqrt(ktE / L.mt);
             // steady (Settings): by the motion, at the contact's own time scale. At the friction limit (Coulomb): a spring within mu N holds at most (mu N)^2 / (2 kt) of energy, so a slip with more than that
             // in 1/2 mt u^2 cannot be stopped by it: the contact slides, its force is mu N whatever the spring's stiffness, and the spring's time scale is not in the motion.
             bool steady = false;
+            int why = 0;
+            double whyVal = 0.0, whyLim = 0.0;
             if (set.vSteady > 0.0)
             {
                if (hp.delta > 0.0)
@@ -1037,30 +1203,45 @@ namespace GroupStep
                   V3 u = A.v + A.w.Cross(hp.n * (-(A.R - 0.5 * hp.delta)));
                   if (it.b >= 0)
                      u = u - (ball[it.b].v + ball[it.b].w.Cross(hp.n * (ball[it.b].R - 0.5 * hp.delta)));
-                  else if (nq > 0)
-                     u = u - vs;
+                  else
+                     u = u - vs;   // (a fixed surface: 0)
                   const V3 ut = u - hp.n * u.Dot(hp.n);
                   const double slipNow = ut.Length();
                   V3 aRel = fNet[it.a] * (1.0 / A.m);
                   if (it.b >= 0)
                      aRel = aRel - fNet[it.b] * (1.0 / ball[it.b].m);
-                  const double omNow = std::sqrt(L.K(hp.delta) / L.mRed);
+                  const double omNow = std::sqrt(L.KS(hp.delta, hp.kS) / L.mRed);
                   steady = std::fabs(dDot) <= set.vSteady && std::fabs(aRel.Dot(hp.n)) <= set.vSteady * omNow && (slipNow <= set.vSteady || (set.slideFree && slipNow * std::sqrt(ktE * L.mt) > L.mu * L.F(dE)));
+                  if (!steady)
+                  {
+                     if (std::fabs(dDot) > set.vSteady)
+                        why = 1, whyVal = dDot, whyLim = set.vSteady;
+                     else if (std::fabs(aRel.Dot(hp.n)) > set.vSteady * omNow)
+                        why = 2, whyVal = aRel.Dot(hp.n), whyLim = set.vSteady * omNow;
+                     else
+                        why = 3, whyVal = slipNow, whyLim = set.vSteady;
+                  }
                }
                else
+               {
                   steady = dDot <= set.vSteady;
+                  if (!steady)
+                     why = 1, whyVal = dDot, whyLim = set.vSteady;
+               }
             }
             const double om = steady ? omN : (set.shearInStep ? std::max(omN, omT) : omN);
             double hs = om > 0.0 ? (steady ? set.omegaHRest : set.omegaH) / om : set.hMax;
             if (set.stepModel == 1 && steady && hp.delta > 0.0)   // by the motion in its mode (Settings::stepModel)
             {
-               const double omR = std::sqrt(L.K(hp.delta) / L.mRed);
+               const double omR = std::sqrt(L.KS(hp.delta, hp.kS) / L.mRed);
                V3 aRel = fNet[it.a] * (1.0 / A.m);
                if (it.b >= 0)
                   aRel = aRel - fNet[it.b] * (1.0 / ball[it.b].m);
                const double x = dDot / omR, y = aRel.Dot(hp.n) / (omR * omR), amp = std::sqrt(x * x + y * y);
                const double hm = amp > 0.0 ? std::sqrt(12.0 * set.epsRest / amp) / omR : set.hMax;
                hs = std::max(hs, std::min(hm, set.hMax));
+               if (set.swingCap && 2.0 * amp <= set.epsRest)
+                  hs = set.hMax;
             }
             const auto lim = [&](const double c, const int rule) {
                if (c < h)
@@ -1072,6 +1253,9 @@ namespace GroupStep
                   dg.dDot = dDot;
                   dg.omN = omN;
                   dg.omT = omT;
+                  dg.unsteady = why;
+                  dg.unsteadyVal = whyVal;
+                  dg.unsteadyLim = whyLim;
                }
             };
             if (hp.delta < 0.0 && dDot > 0.0)   // reached in about two steps, not overshot
@@ -1117,6 +1301,7 @@ namespace GroupStep
       {
          double h = hTry;
          nHalveDiag = 0;
+         failContactBuf.clear();
          for (;;)
          {
             if (Solve(h))
@@ -1232,7 +1417,10 @@ namespace GroupStep
             {
                if (RoundTraceOn() && nHalveDiag == 0)
                   failRoundBuf = roundBuf;
+               if (ContactTraceNow() && nHalveDiag == 0)
+                  failContactBuf = contactBuf;
                HalveDiag &hd = halveDiag[nHalveDiag++];
+               hd = HalveDiag();   // (slots are reused: counts are this attempt's)
                hd.why = failWhy;
                hd.h = h;
                for (int p = 0; p < np; p++)
@@ -1271,6 +1459,177 @@ namespace GroupStep
       static constexpr int kHalveDiag = 8;
       HalveDiag halveDiag[kHalveDiag];
       std::string roundBuf, failRoundBuf;   // VPX_GROUP_ROUND_TRACE: this attempt's rounds; the first failed attempt of the step
+      mutable std::string probeTrace;       // VPX_GROUP_ROUND_TRACE: the carried surfaces' probes of the last Eval (end and mid, their pieces)
+      // diagnostics, off by default (VPX_WIRE_D0_TRACE=1, read once): a carried surface whose midpoint defect D = d1 - d0 - gm.dq is above noise: its start depth d0 (BeginAttempt's: kept
+      // from ChooseStep or probed) against a fresh probe of the start, with each probe's pieces; one line per contact per Eval, the first kWireD0Lines of a run, logged by contactsystem.cpp
+      static bool WireD0TraceOn() { static const bool on = []() { const char *const e = getenv("VPX_WIRE_D0_TRACE"); return e != nullptr && atoi(e) != 0; }(); return on; }
+      static constexpr int kWireD0Lines = 400;
+      static int &WireD0Left() { static int n = kWireD0Lines; return n; }
+      std::string wireD0Buf;
+      // VPX_GROUP_JAC_WINDOW=<t0>-<t1> (ms; with VPX_GROUP_JAC_MODE=1; a diagnostic, read once; unset = off): for solves that converge in that window, each round's
+      // residual and evaluations, and every Jacobian entry (balls and parts) where the solve's own (a) and central differences (f) differ by more than 10 % and 1e-6
+      // (jacWinBuf, written by the owner; 600 lines in all)
+      static bool JacWindow(const uint32_t ms)
+      {
+         static const double *const w = []() -> const double * {
+            static double v[2];
+            const char *const e = getenv("VPX_GROUP_JAC_WINDOW");
+            return e != nullptr && sscanf(e, "%lf-%lf", &v[0], &v[1]) == 2 ? v : nullptr;
+         }();
+         return w != nullptr && ms >= w[0] && ms <= w[1];
+      }
+      std::string jacWinBuf, jacWinTry;
+      long jacWinLines = 0, evalCount = 0, evalCountRound = 0, jacWinTryEntries = 0;   // (jacWinLines: Jacobian entry lines written, 2000 in all)
+      bool jacWinDump = false;   // the main Eval of a round in the window: each contact's state into jacWinCon (the last round's is kept with the converged solve)
+      std::string jacWinCon;
+      std::string UnkName(const int u) const
+      {
+         if (u < 6 * nb)
+         {
+            static const char *const ax[6] = { "x", "y", "z", "wx", "wy", "wz" };
+            return "b" + std::to_string(u / 6) + "." + ax[u % 6];
+         }
+         for (int c = 0; c < nCoord; c++)
+            if (cUnk[c] == u)
+               return "q" + std::to_string(c);
+         return "u" + std::to_string(u);
+      }
+      mutable std::vector<std::string> nowNote;                        // the pieces of ChooseStep's probes, per contact
+      std::vector<std::string> d0Note, endNoteC, midNoteC;             // the attempt's start, InRange's end and mid probes
+      std::vector<char> d0Kept;                                        // d0 was ChooseStep's probe (hNow)
+      mutable std::string endNote, midNote;                            // the last ProbeMove's pieces
+      int d0Try = 0, d0Round = 0;                                      // the attempt of this step, the round of the solve
+      long d0TryStamp = -1;                                            // the step count (books.steps) d0Try counts in
+      // diagnostics, off by default (VPX_GROUP_CONTACT_TRACE=1): per round of an attempt, each contact's depth, normal, push, friction against mu N, stick or slide, and each part's
+      // state and row terms (Part::ContactNote); the first failed attempt of a step kept in failContactBuf, printed for the first kContactTraceSteps energy steps of a run (contactsystem.cpp)
+      static bool ContactTraceOn() { static const bool on = []() { const char *const e = getenv("VPX_GROUP_CONTACT_TRACE"); return e != nullptr && atoi(e) != 0; }(); return on; }
+      static constexpr int kContactTraceSteps = 3;
+      static int &ContactTraceLeft() { static int n = kContactTraceSteps; return n; }   // steps still to print
+      static bool ContactTraceNow() { return ContactTraceOn() && ContactTraceLeft() > 0; }
+      struct ContactDiag { V3 n; double dm = 0.0, N = 0.0, fe = 0.0, fd = 0.0, ft = 0.0, ftTr = 0.0, lim = 0.0, ut = 0.0, qN = 0.0, qF = 0.0; int nq = 0; };   // an Eval's values, copied (never read back by the step)
+      std::vector<ContactDiag> cDiag;
+      std::string contactBuf, failContactBuf;
+      // diagnostics, off by default (VPX_GROUP_HISTORY_TRACE=1): a group with a part keeps its last kHistory accepted steps (Accept), one line each: the energy over the step against its
+      // books' change, each part, each ball, each contact touching or in play; printed with the run's first energy-step warning (contactsystem.cpp). Read only
+      static bool HistoryTraceOn() { static const bool on = []() { const char *const e = getenv("VPX_GROUP_HISTORY_TRACE"); return e != nullptr && atoi(e) != 0; }(); return on; }
+      static constexpr int kHistory = 50;
+      std::string history[kHistory];
+      long historyN = 0;          // steps kept so far (the newest at (historyN - 1) % kHistory)
+      unsigned histMs = 0;        // the caller's table time at the cycle's start (ms) and how far the cycle is (s): the steps' times
+      double histClock = 0.0;
+      bool histInEnergy = false;  // an Accept inside EnergyStep (its move may be restored)
+      long histCycle = 0;         // the caller's cycle count (a new cycle: the group was gathered again from the table)
+      // the group's energy as Energy() sums it, by where it sits (J): the balls' motion, their place (gravity and fields), the contacts' springs, each part, the pair form
+      static constexpr int kHistParts = 8;
+      struct HistE { double tot = 0.0, ke = 0.0, pe = 0.0, con = 0.0, form = 0.0, parts[kHistParts] = {}; int nb = 0, np = 0, ni = 0, touching = 0; long cycle = -1, eSteps = -1; size_t sig = 0; bool valid = false; };
+      HistE HistEnergy() const
+      {
+         HistE s;
+         for (int i = 0; i < nb; i++)
+         {
+            const Ball &b = ball[i];
+            s.ke += 0.5 * b.m * b.v.Dot(b.v) + 0.5 * b.I() * b.w.Dot(b.w);
+            s.pe += -b.m * set.g.Dot(b.c) + (nf > 0 && b.fieldScale != 0.0 ? FieldEnergy(b) : 0.0);
+         }
+         for (int k = 0; k < ni; k++)
+            if (item[k].touching)
+            {
+               Hit hp;
+               Probe(item[k], ball, hp);
+               s.con += (item[k].env ? 0.0 : item[k].V(hp.delta)) + 0.5 * item[k].Kt(hp.delta) * item[k].xi.Dot(item[k].xi);
+               if (set.rollModel == 1)
+                  s.con += 0.5 * item[k].Kr(hp.delta) * item[k].ra.th.Dot(item[k].ra.th) + 0.5 * item[k].Ktw(hp.delta) * item[k].ra.tw * item[k].ra.tw;
+               s.touching++;
+            }
+         double ep = 0.0;
+         for (int p = 0; p < np; p++)
+         {
+            const double e = part[p]->Energy(ball, nb);
+            ep += e;
+            if (p < kHistParts)
+               s.parts[p] = e;
+            s.sig = s.sig * 1000003u + (size_t)(const void *)part[p];   // which parts: the group's name across cycles
+         }
+         s.form = FormEnergy(ball);
+         s.tot = s.ke + s.pe + s.con + ep + s.form;
+         s.nb = nb;
+         s.np = np;
+         s.ni = ni;
+         s.cycle = histCycle;
+         s.eSteps = books.energySteps;
+         s.valid = true;
+         return s;
+      }
+      HistE histLast[kHistParts];   // the last accepted step's end of each group seen (by sig), oldest replaced
+      int histLastNext = 0;
+      std::string HistoryDump() const
+      {
+         std::string o;
+         for (long i = std::max(0L, historyN - kHistory); i < historyN; i++)
+            o += history[i % kHistory] + "\n";
+         return o;
+      }
+      void HistoryKeep(const double h, const HistE &s0, const Books &bk0)
+      {
+         char t[700];
+         const HistE s1 = HistEnergy();
+         const double dDrive = books.driveJ - bk0.driveJ, dLoss = books.Losses() - bk0.Losses(), E0 = s0.tot, E1 = s1.tot;
+         // the gap: this step's start against the same group's last accepted end (energy that came in between steps or cycles, outside any step's books), by where it sits
+         HistE *prev = nullptr;
+         for (HistE &l : histLast)
+            if (l.valid && l.sig == s0.sig)
+               prev = &l;
+         std::string gap;
+         if (prev == nullptr)
+            gap = " | gap: first step of this group seen";
+         else
+         {
+            const HistE &a = *prev;
+            int g = snprintf(t, sizeof t, " | gap %.5g uJ (ballKE %.4g ballPE %.4g contacts %.4g form %.4g", (s0.tot - a.tot) * 1e6, (s0.ke - a.ke) * 1e6, (s0.pe - a.pe) * 1e6, (s0.con - a.con) * 1e6, (s0.form - a.form) * 1e6);
+            for (int p = 0; p < std::min(s0.np, kHistParts) && g < 600; p++)
+               g += snprintf(t + g, sizeof t - g, " p%d %.4g", p, (s0.parts[p] - a.parts[p]) * 1e6);
+            snprintf(t + g, sizeof t - g, ")%s%s%s nb %d->%d ni %d->%d touching %d->%d", s0.cycle != a.cycle ? " NEW-CYCLE" : " same-cycle", s0.eSteps != a.eSteps ? " ENERGY-STEP-BETWEEN" : "",
+                     a.np != s0.np ? " PARTS-CHANGED" : "", a.nb, s0.nb, a.ni, s0.ni, a.touching, s0.touching);
+            gap = t;
+         }
+         if (prev == nullptr)
+         {
+            prev = &histLast[histLastNext];
+            histLastNext = (histLastNext + 1) % kHistParts;
+         }
+         *prev = s1;
+         int n = snprintf(t, sizeof t, "  #%ld grp %04zx t %u ms + %.3f us h %.4g us%s | E0 %.9g E1 %.9g uJ dE %.5g drive %.5g loss %.5g rise %.5g uJ (normal %.4g slip %.4g shear %.4g twist %.4g roll %.4g part %.4g brake %.4g)",
+                          historyN, s0.sig & 0xffff, histMs, histClock * 1e6, h * 1e6, histInEnergy ? " ENERGY-STEP" : "", E0 * 1e6, E1 * 1e6, (E1 - E0) * 1e6, dDrive * 1e6, dLoss * 1e6, (E1 - E0 - dDrive + dLoss) * 1e6,
+                          (books.normalLossJ - bk0.normalLossJ) * 1e6, (books.slipJ - bk0.slipJ) * 1e6, (books.shearDampJ - bk0.shearDampJ) * 1e6, (books.twistJ - bk0.twistJ) * 1e6,
+                          (books.rollJ - bk0.rollJ) * 1e6, (books.partLossJ - bk0.partLossJ) * 1e6, (books.spinBrakeJ - bk0.spinBrakeJ) * 1e6);
+         std::string line(t, std::max(0, std::min(n, (int)sizeof t - 1)));
+         line += gap;
+         for (int p = 0; p < np; p++)
+            line += " | p" + std::to_string(p) + " " + part[p]->HistoryNote();
+         for (int i = 0; i < nb; i++)
+         {
+            const Ball &b = ball[i];
+            snprintf(t, sizeof t, " | b%d c %.4f %.4f %.4f mm speed %.5g m/s KEt %.5g KEw %.5g uJ", i, b.c.x * 1e3, b.c.y * 1e3, b.c.z * 1e3, b.v.Length(), 0.5 * b.m * b.v.Dot(b.v) * 1e6, 0.5 * b.I() * b.w.Dot(b.w) * 1e6);
+            line += t;
+         }
+         for (int k = 0; k < ni; k++)
+         {
+            const Item &it = item[k];
+            const ItemEnd &e = ie[k];
+            if (!it.touching && !e.active)
+               continue;
+            Hit hp;
+            Probe(it, ball, hp);
+            const double vn = it.touching ? it.V(hp.delta) : 0.0, vs = it.touching ? 0.5 * it.Kt(hp.delta) * it.xi.Dot(it.xi) : 0.0;
+            const double vr = it.touching && set.rollModel == 1 ? 0.5 * it.Kr(hp.delta) * it.ra.th.Dot(it.ra.th) + 0.5 * it.Ktw(hp.delta) * it.ra.tw * it.ra.tw : 0.0;
+            const bool cd = e.active && (int)cDiag.size() >= ni;
+            snprintf(t, sizeof t, " | c%d b%d %s%d t%d d %.5g um (solve d1 %.5g zero %.4g) n_z %.4f N %.5g Ft %.4g muN %.4g %s V %.5g Vs %.4g Vr %.4g uJ", k, it.a, it.b >= 0 ? "ball b" : "s", it.b >= 0 ? it.b : it.s,
+                     it.touching ? 1 : 0, hp.delta * 1e6, e.d1 * 1e6, it.dZero * 1e6, hp.n.z, cd ? cDiag[k].N : 0.0, cd ? cDiag[k].ft : 0.0, cd ? cDiag[k].lim : 0.0, e.slipping ? "SLIDE" : "stick", vn * 1e6, vs * 1e6, vr * 1e6);
+            line += t;
+         }
+         history[historyN % kHistory] = line;
+         historyN++;
+      }
       int nHalveDiag = 0;
       char failWhy = '?';
       char overWhy = '?';                   // why StepsOver lost its cycle (F, Z, G)
@@ -1330,6 +1689,7 @@ namespace GroupStep
       Buf<Hit> h1c, hmc;
       bool trialCached = false;
       Buf<double> d0s;
+      Buf<Hit> h0s;   // the start's terms (hinge_piece_sum; nt 0 otherwise)
       Buf<Ball> b1r, bmr;        // InRange's moved balls
       Buf<ItemEnd> ie;
       Buf<double> x;             // the unknowns: per ball the move (3) and the spin change (3), then the parts' own
@@ -1371,6 +1731,9 @@ namespace GroupStep
       bool partEvalFailed = false;
       Buf<char> farNow;          // not touching and out of reach in this attempt
       Buf<double> fieldE0;       // what each ball's place stores at the start of the attempt
+      Buf<double> envE0;         // each massless part's U* at the start of the attempt (Part::Envelope; 0 for any other part)
+      Buf<V3> envG;              // a massless part's slope on each ball
+      Buf<double> envQ;          // its discrete gradient over all the balls' moves: gm, dq, W, gd (4 x 3 nb)
       // out of reach: the gap is more than both bodies' speeds can close in twice the step, with a margin. A body that picks up speed inside the step is what the check after the solve is for
       bool OutOfReach(const Item &it, const double d0, const double h, const Hit &h0) const
       {
@@ -1400,13 +1763,22 @@ namespace GroupStep
       // the probes of a move: at its end and its middle (a carried surface moves with its part's coordinates)
       void ProbeMove(const Item &it, const Ball *b1, const Ball *bm, Hit &h1, Hit &hm) const
       {
+         PhaseScope ps(Clock().cur == phEvalRest ? phProbeEval : phProbeOther);
          const Shape *const sh = it.b < 0 ? (const Shape *)shape[it.s] : nullptr;
          if (sh != nullptr && sh->part >= 0)
          {
             sh->trial = (const double *)qEnd + coordOff[sh->part];
             Probe(it, b1, h1);
+            if (RoundTraceOn())   // diagnostics: each probe's pieces, for the round trace (Eval clears it)
+               probeTrace += "    probe p" + std::to_string(sh->part) + " ball " + std::to_string(it.a) + " s" + std::to_string(it.s) + " end: " + part[sh->part]->LastProbeNote() + "\n";
+            if (WireD0TraceOn())
+               endNote = part[sh->part]->LastProbeNote();
             sh->trial = (const double *)qMid + coordOff[sh->part];
             Probe(it, bm, hm);
+            if (RoundTraceOn())
+               probeTrace += "    probe p" + std::to_string(sh->part) + " ball " + std::to_string(it.a) + " s" + std::to_string(it.s) + " mid: " + part[sh->part]->LastProbeNote() + "\n";
+            if (WireD0TraceOn())
+               midNote = part[sh->part]->LastProbeNote();
             sh->trial = nullptr;
             return;
          }
@@ -1491,14 +1863,258 @@ namespace GroupStep
          return e;
       }
 
+      // ---- a massless part (Part::Envelope): its angle solved from all the balls on its shapes ----
+      struct EnvCache
+      {
+         std::vector<V3> c;        // the ball centres it was solved for (U* is a function of them only)
+         double q = 0.0, U = 0.0, k2 = 0.0;   // the angle (absolute: a probe moves the part from its angle at that time, so a later change of the part's own angle cannot shift it), U*, d2U/dq2 at the angle
+         bool atBound = false, valid = false;
+      };
+      static constexpr int kEnvCache = 4;   // a step's ball sets: start, end, middle (and one spare)
+      mutable std::vector<EnvCache> envCache;   // kEnvCache per part
+      mutable std::vector<int> envNext;
+      mutable std::vector<double> envWarm;      // per part: its last solved angle (the next solve's first guess)
+   public:
+      void EnvForget() const   // (whenever contacts or their zeros are set)
+      {
+         for (EnvCache &e : envCache)
+            e.valid = false;
+      }
+   private:
+      // the part's own contact law at this hit: the same for every ball on its shapes, touching or not (no held or touching-only law: U* depends on the ball positions only)
+      Item EnvLaw(const Item &it, const Hit &h) const
+      {
+         Item L = it;
+         TakeLaw(L, h);
+         return L;
+      }
+      // a first touch on a massless part: the solve has pushed it off its bottom stop, so the depth left is its spring's balance, not a zero
+      bool EnvGivesWay(const Item &it) const
+      {
+         if (it.b >= 0 || shape[it.s]->part < 0 || !part[shape[it.s]->part]->Envelope())
+            return false;
+         double q0, lo, hi;
+         part[shape[it.s]->part]->EnvRange(q0, lo, hi);
+         return EnvAt(shape[it.s]->part, ball).q < hi;
+      }
+      // U(q) = the part's potential + the contact spring of every ball on its shapes (the part's own law), its slope and curvature
+      double EnvU(const int p, const Ball *bs, const double q, const double q0, double &d1, double &d2, V3 *grad) const
+      {
+         double U = part[p]->EnvPotential(q, &d1, &d2);
+         const double dq = q - q0;
+         for (int k = 0; k < ni; k++)
+         {
+            if (item[k].b >= 0 || shape[item[k].s]->part != p)
+               continue;
+            const Shape *const sh = shape[item[k].s];
+            const Ball &A = bs[item[k].a];
+            Hit h;
+            const double *const tr = sh->trial;
+            sh->trial = &dq;
+            sh->Probe(A.c, A.R, h);
+            sh->trial = tr;
+            const double d = h.delta - item[k].dZero;
+            if (d <= 0.0)
+               continue;
+            const Item L = EnvLaw(item[k], h);
+            const double f = L.F(d), sl = h.nc > 0 ? h.c[0].slope * h.grad : 0.0;
+            U += L.V(d);
+            d1 += f * sl;
+            d2 += L.K(d) * sl * sl;
+            if (grad != nullptr)
+               grad[item[k].a] = grad[item[k].a] - h.n * (f * h.grad);   // (envelope: at the solved angle the angle's own slope is 0 or held by a stop)
+         }
+         return U;
+      }
+      // the angle for these balls: U'(q) = 0 in [lo, hi], or the bound it presses on; bracketed Newton, to rounding
+      const EnvCache &EnvAt(const int p, const Ball *bs) const
+      {
+         if (envCache.size() < (size_t)np * kEnvCache)
+         {
+            envCache.assign((size_t)np * kEnvCache, EnvCache());
+            envNext.assign((size_t)np, 0);
+            envWarm.assign((size_t)np, NAN);
+         }
+         EnvCache *const set0 = &envCache[(size_t)p * kEnvCache];
+         for (int e = 0; e < kEnvCache; e++)
+         {
+            const EnvCache &ec = set0[e];
+            if (!ec.valid || (int)ec.c.size() != nb)
+               continue;
+            bool same = true;
+            for (int i = 0; i < nb && same; i++)
+               same = ec.c[i].x == bs[i].c.x && ec.c[i].y == bs[i].c.y && ec.c[i].z == bs[i].c.z;
+            if (same)
+            {
+               envStats.hits++;
+               return ec;
+            }
+         }
+         envStats.misses++;
+         envStats.missBy[envWho]++;
+         const auto envT0 = std::chrono::steady_clock::now();
+         EnvCache &ec = set0[envNext[p]];
+         envNext[p] = (envNext[p] + 1) % kEnvCache;
+         double q0, lo, hi, d1, d2;
+         part[p]->EnvRange(q0, lo, hi);
+         ec.c.resize((size_t)nb);
+         for (int i = 0; i < nb; i++)
+            ec.c[i] = bs[i].c;
+         ec.atBound = true;
+         double qE = lo, UE = EnvU(p, bs, lo, q0, d1, d2, nullptr);   // (the last evaluation: at the angle found, its U and U'' are the answer's)
+         if (d1 >= 0.0)
+            ec.q = lo;
+         else
+         {
+            qE = hi;
+            UE = EnvU(p, bs, hi, q0, d1, d2, nullptr);
+            if (d1 <= 0.0)
+               ec.q = hi;
+            else
+            {
+               ec.atBound = false;
+               double a = lo, b = hi, q = std::isfinite(envWarm[p]) ? std::min(std::max(envWarm[p], lo), hi) : 0.5 * (lo + hi);
+               for (int iter = 0; iter < 100; iter++)
+               {
+                  envStats.iters++;
+                  qE = q;
+                  UE = EnvU(p, bs, q, q0, d1, d2, nullptr);
+                  if (d1 == 0.0)
+                     break;
+                  (d1 > 0.0 ? b : a) = q;
+                  double qn = d2 > 0.0 ? q - d1 / d2 : 0.5 * (a + b);
+                  if (!(qn > a && qn < b))
+                     qn = 0.5 * (a + b);
+                  if (qn == q || b - a <= 4.0 * 2.220446049250313e-16 * std::max(std::fabs(a), std::fabs(b)) + 1e-300)
+                     break;
+                  q = qn;
+               }
+               ec.q = q;
+            }
+         }
+         envWarm[p] = ec.q;
+         if (qE != ec.q)
+            UE = EnvU(p, bs, ec.q, q0, d1, d2, nullptr);
+         ec.U = UE;
+         ec.k2 = d2;
+         ec.valid = true;
+         envStats.us += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - envT0).count();
+         return ec;
+      }
+      // the solved angle's rate for the balls as they move now: off its stops U'(q*, c) = 0 holds, so (implicit function) q* rate = -(sum over balls of d(U')/dc_i . v_i) / U''.
+      // d(U')/dc . v is taken as the derivative of the same U' (EnvU, the same laws as the solve) along the balls' motion, by a central difference over a move far below the
+      // shallowest depth on the part (a numerical derivative of a smooth function, not a limit on the motion). On a stop the angle is held: 0. For the step choice only.
+      double EnvRate(const int p) const
+      {
+         const EnvCache &ec = EnvAt(p, ball);
+         if (ec.atBound || !(ec.k2 > 0.0))
+            return 0.0;
+         envRateBalls.resize((size_t)nb);
+         double q0, lo, hi, d1, d2;
+         part[p]->EnvRange(q0, lo, hi);
+         double dMin = INFINITY, vMax = 0.0;
+         for (int k = 0; k < ni; k++)
+         {
+            if (item[k].b >= 0 || shape[item[k].s]->part != p)
+               continue;
+            Hit h;
+            const double dq = ec.q - q0, *const tr = shape[item[k].s]->trial;
+            shape[item[k].s]->trial = &dq;
+            shape[item[k].s]->Probe(ball[item[k].a].c, ball[item[k].a].R, h);
+            shape[item[k].s]->trial = tr;
+            const double d = h.delta - item[k].dZero;
+            if (d > 0.0)
+            {
+               dMin = std::min(dMin, d);
+               vMax = std::max(vMax, ball[item[k].a].v.Length());
+            }
+         }
+         if (!(vMax > 0.0) || !std::isfinite(dMin))
+            return 0.0;
+         const double tau = 1e-3 * dMin / vMax;
+         Ball *const bs = envRateBalls.data();
+         double g[2];
+         for (int s = 0; s < 2; s++)
+         {
+            for (int i = 0; i < nb; i++)
+            {
+               bs[i] = ball[i];
+               bs[i].c = ball[i].c + ball[i].v * (s == 0 ? tau : -tau);
+            }
+            EnvU(p, bs, ec.q, q0, g[s], d2, nullptr);
+         }
+         return -((g[0] - g[1]) / (2.0 * tau)) / ec.k2;
+      }
+      mutable std::vector<Ball> envRateBalls;
+      mutable std::vector<double> envRateNow;
+      // U* of part p at these balls, each ball's slope added into grad when given
+      double EnvSolve(const int p, const Ball *bs, V3 *grad) const
+      {
+         envStats.solves++;
+         const EnvCache &ec = EnvAt(p, bs);
+         if (grad == nullptr)
+            return ec.U;
+         double q0, lo, hi, d1, d2;
+         part[p]->EnvRange(q0, lo, hi);
+         return EnvU(p, bs, ec.q, q0, d1, d2, grad);
+      }
+   public:
+      // the fastest ball on a massless part now (at its solved angle): the part moves only as they push it, so its point speed is bounded by theirs
+      double EnvBallSpeed(const Part *pp) const
+      {
+         double v = 0.0;
+         for (int k = 0; k < ni; k++)
+            if (item[k].b < 0 && shape[item[k].s]->part >= 0 && part[shape[item[k].s]->part] == pp)
+            {
+               Hit hp;
+               Probe(item[k], ball, hp);
+               if (hp.delta > 0.0)
+                  v = std::max(v, ball[item[k].a].v.Length());
+            }
+         return v;
+      }
+      // a massless part's angle for the balls as they are now (the part's own after an accepted step: its drawing and switch)
+      double EnvAngleNow(const Part *pp) const
+      {
+         for (int p = 0; p < np; p++)
+            if (part[p] == pp)
+            {
+               envWho = 5;
+               const double q = EnvAt(p, ball).q;   // (no EnvForget: the cache is keyed by the ball centres, and a change of a contact's zero forgets it where it is made)
+               envWho = 0;
+               return q;
+            }
+         return 0.0;
+      }
+   private:
       void Probe(const Item &it, const Ball *bs, Hit &hp) const
       {
          const Ball &A = bs[it.a];
          hp.kb = 0.0;
+         hp.kS = 0.0;
          hp.nc = 0;   // (hits are kept and reused: a fixed surface writes no columns, and must not inherit a carried one's)
          if (it.b < 0)
          {
-            shape[it.s]->Probe(A.c, A.R, hp);
+            const Shape *const sh = shape[it.s];
+            if (sh->part >= 0 && part[sh->part]->Envelope())
+            {
+               // a massless part: at its angle solved from all these balls; its give in series off its stops: (U'' less this contact's own) / slope^2
+               const EnvCache &ec = EnvAt(sh->part, bs);
+               const double *const tr = sh->trial;
+               double q0, lo, hi;
+               part[sh->part]->EnvRange(q0, lo, hi);
+               const double dq = ec.q - q0;   // (from the part's angle now: the same absolute angle before and after AfterStep sets it)
+               sh->trial = &dq;
+               sh->Probe(A.c, A.R, hp);
+               sh->trial = tr;
+               hp.delta -= it.dZero;
+               hp.nc = 0;
+               const double sl = hp.c[0].slope * hp.grad;
+               if (!ec.atBound && hp.delta > 0.0 && std::fabs(sl) > 1e-12)
+                  hp.kS = std::max(ec.k2 - EnvLaw(it, hp).K(hp.delta) * sl * sl, 1e-12) / (sl * sl);
+               return;
+            }
+            sh->Probe(A.c, A.R, hp);
             hp.delta -= it.dZero;
             return;
          }
@@ -1527,6 +2143,7 @@ namespace GroupStep
          }
          it.reff = hp.reff;
          it.kb = it.b >= 0 ? 0.0 : hp.kb;
+         it.env = it.b < 0 && shape[it.s]->part >= 0 && part[shape[it.s]->part]->Envelope();
          it.kH = 4.0 / 3.0 * Estar * std::sqrt(it.reff);
          it.hL = it.b >= 0 ? 0.0 : shape[it.s]->layerM;
          it.cL = it.hL > 0.0 ? it.kH * rp.betaLayer * it.reff * std::sqrt(it.reff) : 0.0;
@@ -1574,6 +2191,13 @@ namespace GroupStep
                const Ball *const b1 = b1r, *const bm = bmr;
                Hit &h1 = h1c[k], &hm = hmc[k];
                ProbeMove(item[k], b1, bm, h1, hm);
+               if (WireD0TraceOn())
+               {
+                  endNoteC.resize((size_t)ni);
+                  midNoteC.resize((size_t)ni);
+                  endNoteC[k] = endNote;
+                  midNoteC[k] = midNote;
+               }
                const double lim = law[k].hL * (1.0 - 1e-9);
                if (h1.delta >= lim || hm.delta >= lim)
                   return false;
@@ -1601,6 +2225,7 @@ namespace GroupStep
       // The same elimination over the nonzero entries of each pivot row: a group's bodies touch few others
       static bool SolveLinear(const Jac A, double *b, int n, int *const idx)
       {
+         PhaseScope ps(phLinear);
          for (int col = 0; col < n; col++)
          {
             int piv = col;
@@ -1665,6 +2290,10 @@ namespace GroupStep
       // Forces of the step at the unknowns xv: the residual R (and the approximate Jacobian J when given), the contacts' end values into ie[]
       bool Eval(double h, const double *xv, double *Res, const Jac J, bool useCache)
       {
+         PhaseScope ps(phEvalRest);
+         evalCount++;
+         if (RoundTraceOn())
+            probeTrace.clear();
          const int nU = nUnk;
          V3 *const F = evF, *const M = evM, *const dc = evDc, *const dw = evDw, *const wm = evWm;
          Ball *const b1 = evB1, *const bm = evBm;
@@ -1746,6 +2375,31 @@ namespace GroupStep
             if (two)
                F[T.b] = F[T.b] + V3(gd[3], gd[4], gd[5]) * T.g;
          }
+         // a massless part's U* over all the balls at once (Part::Envelope): one discrete gradient over every ball's move, so its work is the exact change of U*. Its
+         // curvature comes in through its contacts' series stiffness (Hit::kS) in their Jacobian rows; the coupling between its balls is left out (rounds, not the answer)
+         for (int p = 0; p < np; p++)
+            if (part[p]->Envelope())
+            {
+               envWho = 1;
+               const double e1 = EnvSolve(p, b1, nullptr);
+               for (int i = 0; i < nb; i++)
+                  envG[i] = V3();
+               envWho = 2;
+               EnvSolve(p, bm, envG);
+               envWho = 0;
+               double *const gm = envQ, *const dq = gm + 3 * nb, *const W = dq + 3 * nb, *const gd = W + 3 * nb;
+               double gL = 0.0;
+               for (int i = 0; i < nb; i++)
+               {
+                  gm[3 * i] = envG[i].x; gm[3 * i + 1] = envG[i].y; gm[3 * i + 2] = envG[i].z;
+                  dq[3 * i] = dc[i].x; dq[3 * i + 1] = dc[i].y; dq[3 * i + 2] = dc[i].z;
+                  W[3 * i] = W[3 * i + 1] = W[3 * i + 2] = 1.0 / ball[i].m;
+                  gL += envG[i].Length();
+               }
+               Gonzalez(gm, e1 - envE0[p], 16.0 * 2.220446049250313e-16 * std::fabs(e1) + gL * noiseD, dq, W, 3 * nb, gd);
+               for (int i = 0; i < nb; i++)
+                  F[i] = F[i] - V3(gd[3 * i], gd[3 * i + 1], gd[3 * i + 2]);
+            }
 
          for (int k = 0; k < ni; k++)
          {
@@ -1798,7 +2452,89 @@ namespace GroupStep
                W[3 + j] = cUnk[cj] >= 0 ? ci[cj].invM : 0.0;   // (a move given to it takes none of the correction: only the unknowns do)
             }
             Gonzalez(gm, d1 - d0, noiseD, dq, W, na + nq, gd);
-            const double fe = L.Chord(d0, d1);
+            if (WireD0TraceOn() && nq > 0 && WireD0Left() > 0)   // diagnostics: is d0 on the same depth surface as the end and mid probes (read only: the fresh probe has no trial and is not kept)
+            {
+               double gq = 0.0;
+               for (int j = 0; j < na + nq; j++)
+                  gq += gm[j] * dq[j];
+               const double D = d1 - d0 - gq;
+               if (std::fabs(D) > std::max(noiseD, 1e-9))   // (impact-sized defects only: a resting touch's are 1e-14..1e-11 m)
+               {
+                  const Shape *const sh = shape[it.s];
+                  double d0f = NAN;
+                  if (!part[sh->part]->Envelope())   // (a massless part's probe goes through its solve cache: left out)
+                  {
+                     const double *const tr = sh->trial;
+                     sh->trial = nullptr;
+                     Hit hf;
+                     Probe(it, ball, hf);
+                     sh->trial = tr;
+                     d0f = hf.delta;
+                  }
+                  const bool cached = useCache && L.cL > 0.0;
+                  double cfx = 0.0;   // Gonzalez's factor: gd = gm + cf W dq (from the first entry with W dq != 0)
+                  for (int j = 0; j < na + nq; j++)
+                     if (W[j] * dq[j] != 0.0)
+                     {
+                        cfx = (gd[j] - gm[j]) / (W[j] * dq[j]);
+                        break;
+                     }
+                  char s[400];
+                  snprintf(s, sizeof s, "WIRE_D0 t %u ms + %.3f us try %d round %d h %.4g us k %d p %d d0 %.9g um d0fresh %.9g um kept %d dm %.9g um d1 %.9g um D %.6g um cf %.6g dq %.6g dqb %.4g %.4g %.4g um cachedEnd %d\n",
+                           histMs, histClock * 1e6, d0Try, d0Round, h * 1e6, k, sh->part, d0 * 1e6, d0f * 1e6, k < (int)d0Kept.size() ? (int)d0Kept[k] : -1, dm * 1e6, d1 * 1e6, D * 1e6, cfx,
+                           dq[na], dq[0] * 1e6, dq[1] * 1e6, dq[2] * 1e6, cached ? 1 : 0);
+                  wireD0Buf += s;
+                  wireD0Buf += "   start: " + (k < (int)d0Note.size() ? d0Note[k] : std::string()) + "\n   mid:   " + (cached && k < (int)midNoteC.size() ? midNoteC[k] : midNote)
+                             + "\n   end:   " + (cached && k < (int)endNoteC.size() ? endNoteC[k] : endNote) + "\n";
+                  --WireD0Left();
+               }
+            }
+            // [Contact] hinge_piece_sum: every term of the union by its own chord and its own exact gradient (each term's depth is smooth, so its midpoint gradient
+            // misses by the third order only); the elastic force sum_t s_t fe_t gd_t does sum_t s_t dU_t = dU exactly. The contact's normal force N_el and its
+            // direction G (the ball's part a unit normal) are that sum's; the damping acts along G on the rate G . dq / h: its loss cD (G . dq)^2 / h is exact for
+            // any G, so no misfit reaches the part through it. (A massless part's spring is in its U*: not here.)
+            const Hit &h0 = h0s[k];
+            const bool terms = hm.nt > 0 && h1.nt == hm.nt && h0.nt == hm.nt && nq == 1 && !it.env;
+            double tg[kTermMax][4], tk[kTermMax], dd = d1 - d0, feT = 0.0;
+            bool tOn[kTermMax];
+            if (terms)
+            {
+               double Fel[4] = { 0.0, 0.0, 0.0, 0.0 };
+               for (int t = 0; t < hm.nt; t++)
+               {
+                  const double a0 = h0.t[t].d, a1 = h1.t[t].d, am = hm.t[t].d, s = hm.t[t].s;
+                  tOn[t] = a0 > 0.0 || a1 > 0.0;
+                  if (!tOn[t])
+                     continue;
+                  const V3 &tn = hm.t[t].n;
+                  tg[t][0] = -tn.x; tg[t][1] = -tn.y; tg[t][2] = -tn.z; tg[t][3] = hm.t[t].slope;
+                  double gdT[kGradMax];
+                  Gonzalez(tg[t], a1 - a0, noiseD, dq, W, 4, gdT);
+                  const double fT = L.Chord(a0, a1);
+                  for (int j = 0; j < 4; j++)
+                     Fel[j] += s * fT * gdT[j];
+                  tk[t] = s * (std::fabs(a1 - a0) > 1e-13 ? (L.F(a1) - fT) / (a1 - a0) : 0.5 * L.K(std::max(std::max(am, a1), 0.0)));
+                  if (WireD0TraceOn() && WireD0Left() > 0)   // diagnostics: each term's misfit (read only)
+                  {
+                     const double D = a1 - a0 - (tg[t][0] * dq[0] + tg[t][1] * dq[1] + tg[t][2] * dq[2] + tg[t][3] * dq[3]);
+                     char ln[200];
+                     snprintf(ln, sizeof ln, "   term %d s %g d0 %.6g dm %.6g d1 %.6g um D %.4g um chord %.4g N\n", t, s, a0 * 1e6, am * 1e6, a1 * 1e6, D * 1e6, fT);
+                     wireD0Buf += ln;
+                  }
+               }
+               const double nEl = std::sqrt(Fel[0] * Fel[0] + Fel[1] * Fel[1] + Fel[2] * Fel[2]);
+               if (nEl > 1e-300)
+               {
+                  feT = nEl;
+                  for (int j = 0; j < 4; j++)
+                     gd[j] = Fel[j] / nEl;
+               }
+               else
+                  for (int j = 0; j < 4; j++)   // (no elastic force: the union's own mid gradient carries the damping)
+                     gd[j] = gm[j];
+               dd = gd[0] * dq[0] + gd[1] * dq[1] + gd[2] * dq[2] + gd[3] * dq[3];
+            }
+            const double fe = terms ? feT : L.Chord(d0, d1);
             double cD, kkJac = 0.0;
             if (L.gammaKK > 0.0)
             {
@@ -1808,9 +2544,9 @@ namespace GroupStep
             }
             else
                cD = L.DampC(dm, fe);
-            const double fd = cD * (d1 - d0) / h;
+            const double fd = cD * dd / h;
             const double N = std::max(0.0, fe + fd);   // a contact pushes, it cannot pull (Hertz, no adhesion)
-            e.normalLoss = (N - fe) * (d1 - d0);       // (cD (d1 - d0)^2 / h while it pushes; all the spring's release once damping would make it pull)
+            e.normalLoss = (N - fe) * dd;              // (cD dd^2 / h while it pushes; all the spring's release once damping would make it pull)
 
             // the contact point and the mid-step slip rate
             const double dmp = std::max(dm, 0.0);
@@ -1868,7 +2604,7 @@ namespace GroupStep
                const V3 dxi = xi1 - xi0;   // the damper's loss over its own stretch (ct ut^2 h while it sticks)
                e.shearDamp = slipping ? ct * dxi.Dot(dxi) / h : ct * ut.Dot(ut) * h;
             }
-            F[it.a] = F[it.a] - V3(gd[0], gd[1], gd[2]) * N - Ft;
+            F[it.a] = F[it.a] - V3(gd[0], gd[1], gd[2]) * (it.env ? N - fe : N) - Ft;   // (a massless part's contact: its spring is in the part's U*, only the damping here)
             M[it.a] = M[it.a] + rA.Cross(Ft * -1.0);
             if (pr)
             {
@@ -1881,6 +2617,24 @@ namespace GroupStep
                qf[j] = -gd[3 + j] * N + Ft.Dot(hm.c[j].V());
             if (nq > 0)
                loadF[shape[it.s]->part] = loadF[shape[it.s]->part] + V3(gd[0], gd[1], gd[2]) * N + Ft;
+            if (ContactTraceNow() || HistoryTraceOn())   // (diagnostics: copies only)
+            {
+               if ((int)cDiag.size() < ni)
+                  cDiag.resize(ni);
+               ContactDiag &cd = cDiag[k];
+               cd.n = nm;
+               cd.dm = dm;
+               cd.N = N;
+               cd.fe = fe;
+               cd.fd = fd;
+               cd.ft = Ft.Length();
+               cd.ftTr = flTr;
+               cd.lim = limS;
+               cd.ut = ut.Length();
+               cd.nq = nq;
+               cd.qN = nq > 0 ? -gd[3] * N : 0.0;
+               cd.qF = nq > 0 ? Ft.Dot(hm.c[0].V()) : 0.0;
+            }
             // twist and rolling resistance on the mid-step spin (relative to the other ball, or the surface)
             V3 wr = pr ? wm[it.a] - wm[it.b] : wm[it.a];
             for (int j = 0; j < nq; j++)
@@ -2018,7 +2772,9 @@ namespace GroupStep
                // normal: h dfN/dd1 g g^T on the centres; the chord's exact slope (F(d1) - chord) / (d1 - d0) (K / 2 for a vanishing change), the damping's
                // c / h and its change with the end depth (Hunt-Crossley 1.5 alpha x the chord's slope; Kuwabara-Kono gamma a' at dm, which moves half as far as d1)
                double kc;
-               if (std::fabs(d1 - d0) > 1e-13)
+               if (hm.kS > 0.0)   // a massless part off its stops: the contact's spring in series with the part's give
+                  kc = 0.5 * L.KS(std::max(std::max(dm, d1), 0.0), hm.kS);
+               else if (std::fabs(d1 - d0) > 1e-13)
                   kc = (L.F(d1) - fe) / (d1 - d0);
                else
                   kc = 0.5 * L.K(std::max(std::max(dm, d1), 0.0));
@@ -2029,11 +2785,52 @@ namespace GroupStep
                   ix[p] = (p < 3 ? 6 * it.a : 6 * it.b) + p % 3;
                for (int j = 0; j < nq; j++)
                   ix[3 + j] = cUnk[qc0 + hm.c[j].coord];
-               for (int p = 0; p < na + nq; p++)
-                  if (ix[p] >= 0)
-                     for (int q = 0; q < na + nq; q++)
-                        if (ix[q] >= 0)
-                           J[ix[p]][ix[q]] += kn * gm[p] * gm[q];
+               if (terms)   // each term's own chord slope on its own gradient, the damping's on G
+               {
+                  if (fe + fd > 0.0)
+                  {
+                     const double kd = L.gammaKK > 0.0 ? kkJac : cD + cDp * dd;
+                     for (int p = 0; p < 4; p++)
+                        if (ix[p] >= 0)
+                           for (int q = 0; q < 4; q++)
+                              if (ix[q] >= 0)
+                              {
+                                 double a = kd * gd[p] * gd[q];
+                                 for (int t = 0; t < hm.nt; t++)
+                                    if (tOn[t])
+                                       a += h * tk[t] * tg[t][p] * tg[t][q];
+                                 J[ix[p]][ix[q]] += a;
+                              }
+                  }
+               }
+               else
+                  for (int p = 0; p < na + nq; p++)
+                     if (ix[p] >= 0)
+                        for (int q = 0; q < na + nq; q++)
+                           if (ix[q] >= 0)
+                              J[ix[p]][ix[q]] += kn * gm[p] * gm[q];
+               if (jacWinDump)   // VPX_GROUP_JAC_WINDOW: this contact's state at this Eval (read only)
+               {
+                  const int sp = !pr && shape[it.s] != nullptr ? shape[it.s]->part : -1;
+                  char with[40], ln[700];
+                  if (pr)
+                     snprintf(with, sizeof with, "ball %d", it.b);
+                  else if (sp >= 0)
+                     snprintf(with, sizeof with, "part %d (shape %d)", sp, it.s);
+                  else
+                     snprintf(with, sizeof with, "surface (shape %d)", it.s);
+                  snprintf(ln, sizeof ln, "  contact k %d ball %d with %s: d0 %.5g dm %.5g d1 %.5g um n (%.4f %.4f %.4f) N %.5g fe %.5g fd %.5g cD %.4g kc %.5g kn %.5g | %s ut (%.3g %.3g %.3g) m/s xi0 (%.3g %.3g %.3g) xi1 (%.3g %.3g %.3g) um Ft (%.4g %.4g %.4g) muN %.4g k1 %.4g ct %.4g terms %d\n",
+                           k, it.a, with, d0 * 1e6, dm * 1e6, d1 * 1e6, nm.x, nm.y, nm.z, N, fe, fd, cD, kc, kn, slipping ? "slide" : "stick", ut.x, ut.y, ut.z, xi0.x * 1e6, xi0.y * 1e6, xi0.z * 1e6,
+                           xi1.x * 1e6, xi1.y * 1e6, xi1.z * 1e6, Ft.x, Ft.y, Ft.z, limS, k1, ct, terms ? hm.nt : 0);
+                  jacWinCon += ln;
+                  if (terms)
+                     for (int t = 0; t < hm.nt; t++)
+                     {
+                        snprintf(ln, sizeof ln, "    term %d s %g d0 %.5g dm %.5g d1 %.5g um n (%.4f %.4f %.4f) slope %.5g on %d tk %.5g\n", t, hm.t[t].s, h0.t[t].d * 1e6, hm.t[t].d * 1e6, h1.t[t].d * 1e6,
+                                 hm.t[t].n.x, hm.t[t].n.y, hm.t[t].n.z, hm.t[t].slope, tOn[t] ? 1 : 0, tOn[t] ? tk[t] : 0.0);
+                        jacWinCon += ln;
+                     }
+               }
                // shear: the tangential force Ft changes with the slip rate ut (dFt/dut = Cm, in the contact plane) and with the depth d1 (dFt/dd1 = fd1).
                // ut = sp (dc_p / h + 1/2 Skew(r_p)^T dw_p) projected, d1 changes by -sq n . dc_q; on ball p the force is -sp Ft at r_p. So, for the residual of p:
                //    d/d dc_q: sp sq [Cm; Skew(r_p) Cm] - h sp sq [fd1; Skew(r_p) fd1] n^T,   d/d dw_q: 1/2 h sp sq [Cm; Skew(r_p) Cm] Skew(r_q)^T
@@ -2046,10 +2843,26 @@ namespace GroupStep
                const int bi[2] = { it.a, it.b };
                const V3 rr[2] = { rA, rB };
                const double sg[2] = { 1.0, -1.0 };
+               // hinge_piece_sum: the normal force's own slope over the unknowns (ball centre, column), h dN/du: each pressing term's chord slope on its gradient,
+               // projected on the force's direction, and the damping's on G. (The summed depth's slope kn along one normal is not N's: two terms at an angle.)
+               double kv[4] = { 0.0, 0.0, 0.0, 0.0 };
+               if (terms && fe + fd > 0.0)
+               {
+                  const double kd = L.gammaKK > 0.0 ? kkJac : cD + cDp * dd;
+                  for (int t = 0; t < hm.nt; t++)
+                     if (tOn[t])
+                     {
+                        const double w = h * tk[t] * (gd[0] * tg[t][0] + gd[1] * tg[t][1] + gd[2] * tg[t][2]);
+                        for (int u = 0; u < 4; u++)
+                           kv[u] += w * tg[t][u];
+                     }
+                  for (int u = 0; u < 4; u++)
+                     kv[u] += kd * gd[u];
+               }
                if (k1 > 0.0)
                {
                   M3 Cm;
-                  V3 fd1;
+                  V3 fd1, fN;   // fN: sliding, the limit's change per unit of N (hinge_piece_sum: taken on kv, not in fd1)
                   const double kp = L.KtSlope(d1);
                   const V3 g = ((k1 > k0 ? V3() : xi0) + ut * (0.5 * h)) * kp;
                   const V3 gc = ut * (0.5 * L.shearTan * std::sqrt(L.mt / k1) * kp);
@@ -2077,9 +2890,21 @@ namespace GroupStep
                      const V3 gt = g + gc;
                      const V3 Pg(Pf.a[0][0] * gt.x + Pf.a[0][1] * gt.y + Pf.a[0][2] * gt.z, Pf.a[1][0] * gt.x + Pf.a[1][1] * gt.y + Pf.a[1][2] * gt.z,
                                  Pf.a[2][0] * gt.x + Pf.a[2][1] * gt.y + Pf.a[2][2] * gt.z);
-                     fd1 = fh * (L.mu * dN) + Pg * r;
+                     if (terms)
+                     {
+                        fN = fh * L.mu;
+                        fd1 = Pg * r;
+                     }
+                     else
+                        fd1 = fh * (L.mu * dN) + Pg * r;
                   }
                   const M3 Dn = M3::Outer(fd1, nm);
+                  if (terms)   // (only a ball on a part: nbod 1) the limit's change with N: mu f^ (h dN/du)
+                  {
+                     const M3 Nn = M3::Outer(fN, V3(kv[0], kv[1], kv[2]));
+                     AddBlock(J, 6 * it.a, 6 * it.a, Nn, 1.0);
+                     AddBlock(J, 6 * it.a + 3, 6 * it.a, M3::Skew(rA) * Nn, 1.0);
+                  }
                   for (int p = 0; p < nbod; p++)
                      for (int q = 0; q < nbod; q++)
                      {
@@ -2100,7 +2925,7 @@ namespace GroupStep
                      if (qi >= 0)   // its row against the ball: -vi^T Cm + h (vi . fd1) n^T; against the spin: -1/2 h vi^T Cm Skew(r)^T
                      {
                         const V3 cTv = MulV(Cm.T(), vi);
-                        const V3 rc = cTv * -1.0 + nm * (h * vi.Dot(fd1));
+                        const V3 rc = cTv * -1.0 + nm * (h * vi.Dot(fd1)) - (terms ? V3(kv[0], kv[1], kv[2]) * vi.Dot(fN) : V3());
                         const V3 rw = MulV(M3::Skew(rA), cTv) * (-0.5 * h);
                         const int ia = 6 * it.a;
                         J[qi][ia] += rc.x; J[qi][ia + 1] += rc.y; J[qi][ia + 2] += rc.z;
@@ -2109,7 +2934,7 @@ namespace GroupStep
                      const double li = hm.c[i].slope * hm.grad;
                      if (qi >= 0)   // the ball's rows against it: h dFt / dq = -Cm v + h slope fd1
                      {
-                        const V3 dFq = MulV(Cm, vi) * -1.0 + fd1 * (h * li);
+                        const V3 dFq = MulV(Cm, vi) * -1.0 + fd1 * (h * li) + (terms ? fN * kv[3] : V3());
                         const V3 dMq = MulV(M3::Skew(rA), dFq);
                         const int ia = 6 * it.a;
                         J[ia][qi] += dFq.x; J[ia + 1][qi] += dFq.y; J[ia + 2][qi] += dFq.z;
@@ -2119,7 +2944,7 @@ namespace GroupStep
                      {
                         const int qj = cUnk[qc0 + hm.c[j].coord];
                         if (qj >= 0)
-                           J[qi][qj] += vi.Dot(MulV(Cm, hm.c[j].V())) - h * vi.Dot(fd1) * hm.c[j].slope * hm.grad;
+                           J[qi][qj] += vi.Dot(MulV(Cm, hm.c[j].V())) - h * vi.Dot(fd1) * hm.c[j].slope * hm.grad - (terms ? vi.Dot(fN) * kv[3] : 0.0);
                      }
                   }
                }
@@ -2257,6 +3082,7 @@ namespace GroupStep
       // is taken shorter; speeds too small to pay for any move turn back: no move, no change in energy. The next step starts from a new state and goes back to the solve.
       double EnergyStep(const double hTry)
       {
+         struct InEnergy { bool &f; explicit InEnergy(bool &b) : f(b) { f = true; } ~InEnergy() { f = false; } } inEnergy(histInEnergy);   // (diagnostics: the history's label)
          const double E0 = Energy();
          Ball *const b0 = esB0;
          Item *const i0 = esI0;
@@ -2427,6 +3253,7 @@ namespace GroupStep
       // The start of an attempt: the law of each touch, the first guess
       bool BeginAttempt(double h)
       {
+         PhaseScope ps(phBegin);
          const int nU = nUnk = NumUnk();
          for (int k = 0; k < ni; k++)
          {
@@ -2436,6 +3263,25 @@ namespace GroupStep
             else
                Probe(item[k], ball, h0);
             d0s[k] = h0.delta;
+            if (h0.nt > 0)
+               h0s[k] = h0;
+            else
+               h0s[k].nt = 0;
+            if (WireD0TraceOn())
+            {
+               if (k == 0)
+               {
+                  d0Try = d0TryStamp == books.steps ? d0Try + 1 : 0;   // (per step: a retry's Restore bumps stamp but leaves the step count)
+                  d0TryStamp = books.steps;
+                  d0Round = 0;   // (Evals before the solve's rounds)
+                  d0Note.resize((size_t)ni);
+                  d0Kept.resize((size_t)ni);
+                  nowNote.resize((size_t)ni);
+               }
+               const bool kept = nowStamp == stamp;
+               d0Kept[k] = kept ? 1 : 0;
+               d0Note[k] = item[k].b < 0 && shape[item[k].s]->part >= 0 ? (kept ? nowNote[k] : part[shape[item[k].s]->part]->LastProbeNote()) : std::string();
+            }
             farNow[k] = !farOff && OutOfReach(item[k], h0.delta, h, h0);
             if (farNow[k])
                continue;
@@ -2445,6 +3291,11 @@ namespace GroupStep
          }
          for (int i = 0; nf > 0 && i < nb; i++)
             fieldE0[i] = ball[i].fieldScale != 0.0 ? FieldEnergy(ball[i]) : 0.0;
+         envE0.Grow((size_t)np + 1);
+         envWho = 3;   // (no EnvForget: within a cycle a solve depends on the ball centres it is keyed by and on the contacts' zeros, whose changes forget it)
+         for (int p = 0; p < np; p++)
+            envE0[p] = part[p]->Envelope() ? EnvSolve(p, ball, nullptr) : 0.0;
+         envWho = 0;
          for (int i = 0; i < nb; i++)
          {
             // the first guess: the last step's accelerations carried on, or in the stop search this step's own from its last solve (a guess only: the solve's
@@ -2499,6 +3350,11 @@ namespace GroupStep
       {
          if (RoundTraceOn())
             roundBuf.clear();
+         if (ContactTraceNow())
+            contactBuf.clear();
+         jacWinTry.clear();
+         jacWinCon.clear();
+         jacWinTryEntries = 0;
          if (!BeginAttempt(h))
             return false;
          const int nU = nUnk;
@@ -2516,6 +3372,8 @@ namespace GroupStep
          double stallMin = 0.0, bestMove = INFINITY;
          for (; round <= set.maxRounds; round++)
          {
+            if (WireD0TraceOn())
+               d0Round = round;
             if (set.jacMode != 0)
                NumericJacobian(h);   // into jacFd (the Eval calls it makes are undone by the Eval below)
             partEvalFailed = false;
@@ -2536,7 +3394,21 @@ namespace GroupStep
                   break;
                }
             }
-            if (!Eval(h, x, Res, J, trialCached))
+            jacWinDump = set.jacMode != 0 && jacWinLines < 2000 && JacWindow(phaseMs);
+            if (jacWinDump)   // VPX_GROUP_JAC_WINDOW: the balls at the start and this round's move (read only)
+            {
+               jacWinCon.clear();
+               char ln[300];
+               for (int i = 0; i < nb; i++)
+               {
+                  snprintf(ln, sizeof ln, "  ball %d v (%.5g %.5g %.5g) m/s w (%.5g %.5g %.5g) rad/s move (%.5g %.5g %.5g) um unknowns 3-5 (%.5g %.5g %.5g)\n", i, ball[i].v.x, ball[i].v.y, ball[i].v.z,
+                           ball[i].w.x, ball[i].w.y, ball[i].w.z, x[6 * i] * 1e6, x[6 * i + 1] * 1e6, x[6 * i + 2] * 1e6, x[6 * i + 3], x[6 * i + 4], x[6 * i + 5]);
+                  jacWinCon += ln;
+               }
+            }
+            const bool evOk = Eval(h, x, Res, J, trialCached);
+            jacWinDump = false;
+            if (!evOk)
             {
                failWhy = partEvalFailed ? 'B' : 'N';
                lastRounds = round;
@@ -2564,6 +3436,26 @@ namespace GroupStep
             }
             rn += CoordRes2(Res);
             rn = std::sqrt(rn);
+            if (set.jacMode != 0 && jacWinLines < 2000 && JacWindow(phaseMs))   // VPX_GROUP_JAC_WINDOW (diagnostics, read only)
+            {
+               char ln[240];
+               snprintf(ln, sizeof ln, "JACWIN t %u ms h %.4g us round %d rn %.6g evals %ld%s\n", phaseMs, h * 1e6, round, rn, evalCount - evalCountRound,
+                        round > 1 && !gripMoved && rn > rnPrev * (1.0 - 1e-4) && rn > set.tolV ? " (no drop: backtrack)" : "");
+               jacWinTry += ln;
+               evalCountRound = evalCount;
+               const Jac Ja = JacAna(), Jf = JacFd();
+               for (int r = 0; r < nU; r++)
+                  for (int c = 0; c < nU; c++)
+                  {
+                     const double a = Ja[r][c], f = Jf[r][c], d = std::fabs(a - f);
+                     if (d > 1e-6 && d > 0.1 * std::max(std::fabs(a), std::fabs(f)))
+                     {
+                        snprintf(ln, sizeof ln, "  row %s col %s a %.6g f %.6g\n", UnkName(r).c_str(), UnkName(c).c_str(), a, f);
+                        jacWinTry += ln;
+                        jacWinTryEntries++;
+                     }
+                  }
+            }
             // (a part's grip changed since the last round: the residual moved for that too, so no comparison this round)
             if (round > 1 && !gripMoved && rn > rnPrev * (1.0 - 1e-4) && rn > set.tolV && back < 30)
             {
@@ -2697,6 +3589,63 @@ namespace GroupStep
                for (int p = 0; p < np; p++)
                   roundBuf += " || " + part[p]->RowNote();
                roundBuf += "\n";
+               roundBuf += probeTrace;
+               if (set.jacMode != 0)   // VPX_GROUP_JAC_MODE: each part coordinate's row and column, the solve's own Jacobian (a) vs central differences (f), against itself and each ball it couples to (move x y z, spin x y z)
+                  for (int c = 0; c < nCoord; c++)
+                  {
+                     const int qi = cUnk[c];
+                     if (qi < 0)
+                        continue;
+                     const Jac Ja = JacAna(), Jf = JacFd();
+                     char jl[200];
+                     snprintf(jl, sizeof jl, "    jac q%d (round %d): qq a %.6g f %.6g\n", c, jacRound, Ja[qi][qi], Jf[qi][qi]);
+                     roundBuf += jl;
+                     const double floorF = 1e-9 * std::fabs(Jf[qi][qi]);
+                     for (int i = 0; i < nb; i++)
+                     {
+                        bool any = false;
+                        for (int a = 0; a < 6; a++)
+                           any = any || Ja[qi][6 * i + a] != 0.0 || Ja[6 * i + a][qi] != 0.0 || std::fabs(Jf[qi][6 * i + a]) > floorF || std::fabs(Jf[6 * i + a][qi]) > floorF;
+                        if (!any)
+                           continue;
+                        for (int side = 0; side < 2; side++)   // 0: the coordinate's row against the ball's unknowns; 1: the ball's rows against the coordinate
+                        {
+                           int n = snprintf(jl, sizeof jl, "      %s b%d:", side == 0 ? "row q vs" : "col q in", i);
+                           for (int a = 0; a < 6 && n < 180; a++)
+                           {
+                              const double va = side == 0 ? Ja[qi][6 * i + a] : Ja[6 * i + a][qi], vf = side == 0 ? Jf[qi][6 * i + a] : Jf[6 * i + a][qi];
+                              n += snprintf(jl + n, sizeof jl - n, " %.4g/%.4g", va, vf);
+                           }
+                           snprintf(jl + n, sizeof jl - n, "\n");
+                           roundBuf += jl;
+                        }
+                     }
+                  }
+            }
+            if (ContactTraceNow() && (int)cDiag.size() >= ni)
+            {
+               // the values of this round's evaluation at x (before its Newton move): forces N, depths um, slip speed mm/s, generalized forces on the part's coordinate (N m for a hinge)
+               char line[600];
+               snprintf(line, sizeof line, "  r%d h %.4g us rn %.4g ch %.3g scale %.3g grip %.3g moved %d\n", round, h * 1e6, rn, ch, scale, gch, moved ? 1 : 0);
+               contactBuf += line;
+               for (int k = 0; k < ni; k++)
+               {
+                  const Item &it = item[k];
+                  const ItemEnd &e = ie[k];
+                  const ContactDiag &cd = cDiag[k];
+                  int n = snprintf(line, sizeof line, "    c%d b%d %s%d", k, it.a, it.b >= 0 ? "ball b" : "s", it.b >= 0 ? it.b : it.s);
+                  if (!e.active)
+                     snprintf(line + n, sizeof line - n, " off d0 %.4g d1 %.4g um\n", e.d0 * 1e6, e.d1 * 1e6);
+                  else
+                     snprintf(line + n, sizeof line - n, " d0 %.4g d1 %.4g dm %.4g um n %.4f %.4f %.4f (nz %.4f) N %.5g (spring %.5g damp %.4g) Ft %.5g lim muN %.5g trial %.5g %s slip %.4g mm/s | q-force N %.4g F %.4g\n",
+                              e.d0 * 1e6, e.d1 * 1e6, cd.dm * 1e6, cd.n.x, cd.n.y, cd.n.z, cd.n.z, cd.N, cd.fe, cd.fd, cd.ft, cd.lim, cd.ftTr, e.slipping ? "SLIDE" : "stick", cd.ut * 1e3, cd.qN, cd.qF);
+                  contactBuf += line;
+               }
+               for (int p = 0; p < np; p++)
+               {
+                  snprintf(line, sizeof line, "    p%d ", p);
+                  contactBuf += line + part[p]->ContactNote(xPrev, partOff[p], h, Res) + "\n";   // (xPrev: the point this round evaluated)
+               }
             }
             if (searchTrace)
             {
@@ -2767,6 +3716,16 @@ namespace GroupStep
             return false;
          }
          failWhy = 'E';
+         if (!jacWinTry.empty())   // (VPX_GROUP_JAC_WINDOW: a solve that converged)
+         {
+            if (jacWinLines < 2000)   // (the rounds' lines, then the contacts as the last round's Eval had them)
+            {
+               jacWinBuf += jacWinTry;
+               jacWinBuf += "  contacts at the last round:\n" + jacWinCon;
+               jacWinLines += jacWinTryEntries;
+            }
+            jacWinTry.clear();
+         }
          if (endValuesHere)
             return true;
          return Eval(h, x, Res, nullptr, trialCached);   // the end values at the solution
@@ -2774,6 +3733,9 @@ namespace GroupStep
 
       void Accept(double h, bool onStop)
       {
+         const bool hist = np > 0 && HistoryTraceOn();   // (diagnostics, read only)
+         const HistE histS0 = hist ? HistEnergy() : HistE();
+         const Books histBk0 = hist ? books : Books();
          for (int p = 0; p < np; p++)   // before the balls move: a part reads their state at the step's start
          {
             double dJ = 0.0, lJ = 0.0;
@@ -2823,7 +3785,10 @@ namespace GroupStep
                it.ra = RubberContact::RollAngle();
             }
             if (it.dZero > 0.0)   // backing out, with nothing stored: the zero follows
+            {
                it.dZero = std::max(0.0, std::min(it.dZero, it.dZero + e.d1));
+               EnvForget();
+            }
             books.normalLossJ += e.normalLoss;
             books.slipJ += e.slip;
             books.shearDampJ += e.shearDamp;
@@ -2840,8 +3805,15 @@ namespace GroupStep
          books.rounds += lastRounds;
          books.maxRounds = std::max(books.maxRounds, lastRounds);
          books.hMinUsed = std::min(books.hMinUsed, h);
-         for (int p = 0; p < np; p++)
-            part[p]->AfterStep(*this);
+         {
+            PhaseScope ps(phPartAfter);
+            for (int p = 0; p < np; p++)
+               part[p]->AfterStep(*this);
+         }
+         if (hist)
+            HistoryKeep(h, histS0, histBk0);
+         if (hist || WireD0TraceOn())
+            histClock += h;
       }
    };
 

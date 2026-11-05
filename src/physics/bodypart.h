@@ -453,6 +453,22 @@ namespace GroupStep
          Load(sv);
          stopEvents.resize(svEvents);
       }
+      // after an energy step: the state it saved at the step's start, full precision (for an exact replay; rad, rad/s, the ball load in N m and N). The books are left out (counted, never read by a step)
+      std::string StartNote() const override
+      {
+         char s[700];
+         snprintf(s, sizeof s, "q %.17g rate %.17g qStart %.17g pendDrive %.17g pendLoss %.17g ballQ %.17g ballF %.17g %.17g %.17g given %.17g pin %d dir %d stuck %d pinnedInStep %d pinHolds %d pinS %.17g pinK %.17g pivotModel %d stops %d",
+            sv.q, sv.rate, sv.qAtStepStart, sv.pendDrive, sv.pendLoss, sv.gBallQ, sv.gBallF.x, sv.gBallF.y, sv.gBallF.z, sv.gGiven, sv.pin, sv.dir, (int)sv.stuck, (int)sv.pinnedInStep, (int)sv.pinHolds,
+            sv.pinS, sv.pinK, pivotModel, (int)stops.size());
+         std::string msg = s;
+         for (size_t i = 0; i < stops.size() && i < kMaxStops; i++)
+         {
+            snprintf(s, sizeof s, " {stop %d side %d at %.17g target %.17g rate %.17g speed %.17g enabled %d armed %d touching %d}", (int)i, stops[i].side,
+               sv.stop[i].at, sv.stop[i].target, sv.stop[i].rate, sv.stop[i].speed, (int)sv.stop[i].enabled, (int)sv.stop[i].armed, (int)sv.stop[i].touching);
+            msg += s;
+         }
+         return msg;
+      }
       double EndResidual() const override { return 1e-8; }   // a noise stop can land past a steep onset (a light body's first touch): 0.45 uJ, runs/2026-10-31-gate-spinner-disc
       void ScaleSpeeds(const double f) override { rate *= f; }
       void ExplicitMove(const double *Res, const int off, const double h, double *x) const override
@@ -479,6 +495,46 @@ namespace GroupStep
          snprintf(line, sizeof line, "row: inertia %.4g stored %.4g visc %.3g pin %.4g balls %.4g (sum %.3g) | pin K %.4g lim %.4g holds %d s1 %.6g dq %.4g gBallF %.5g",
                   rowT[0], rowT[1], rowT[2], rowT[3], rowT[4], rowT[0] + rowT[1] + rowT[2] + rowT[3] + rowT[4], rowT[5], rowT[6], (int)rowT[7], rowT[8], rowT[9], gBallF.Length());
          return line;
+      }
+      // diagnostics (VPX_GROUP_HISTORY_TRACE): after an accepted step (energies in uJ)
+      std::string HistoryNote() const override
+      {
+         char line[300];
+         snprintf(line, sizeof line, "q %.6f deg rate %.5g rad/s KE %.5g stored %.9g pinJ %.5g uJ pinS %.4g holds %d stuck %d pinStop %d", q * 57.29577951308232, rate, KineticJ() * 1e6, StoredEnergy(q) * 1e6,
+                  PinSpringJ() * 1e6, pinS, pinHolds ? 1 : 0, stuck ? 1 : 0, pinStop);
+         return line;
+      }
+      // diagnostics (VPX_GROUP_CONTACT_TRACE): the move x over h as this round evaluated it (read only; torques in N m, the ball load as the last Loads gave it), its stops, its residual
+      std::string ContactNote(const double *x, const int off, const double h, const double *Res) const override
+      {
+         const int dof = NumDof();
+         const double dq = dof == 1 ? x[off] : 0.0, r = dq / h, qm = q + 0.5 * dq;
+         char line[600];
+         int n = snprintf(line, sizeof line, "q %.6f deg rate %.4g rad/s dq %.4g rad dof %d stuck %d pinStop %d pivotModel %d dirF %d | ballQ %.5g ballF %.4g N", q * 57.29577951308232, rate, dq, dof,
+                          Stuck() ? 1 : 0, pinStop, pivotModel, dirF, gBallQ, gBallF.Length());
+         if (dof == 1)
+         {
+            double slope = 0.0, lossF = 0.0, lossSlope = 0.0;
+            const double Vp = StoredChord(q, dq, h, slope, lossF, lossSlope), lim = FrictionLimit(qm, r, gBallF);
+            n += snprintf(line + n, sizeof line - n, " stored %.5g visc %.4g drive %.4g", -Vp - lossF, -Viscous() * r, DriveForce());
+            if (pivotModel == 1)
+            {
+               const PinMove pm = PinStep(dq, h);
+               n += snprintf(line + n, sizeof line - n, " pin %.5g lim %.5g holds %d (K %.4g s0 %.4g s1 %.4g)", pm.M, lim, pm.holds ? 1 : 0, pm.K, pinS, pm.s1);
+            }
+            else
+               n += snprintf(line + n, sizeof line - n, " pin %.5g lim %.5g", -dirF * lim, lim);
+            n += snprintf(line + n, sizeof line - n, " | res %.5g N m s (%.4g m/s)", Res[off], Res[off] / mass * reach);
+         }
+         std::string note = line;
+         for (size_t i = 0; i < stops.size(); i++)
+         {
+            const BodyStop &s = stops[i];
+            snprintf(line, sizeof line, " {stop %d side %d at %.5f deg excess %.4g deg en %d armed %d touching %d}", (int)i, s.side, s.at * 57.29577951308232, s.side * (q + dq - s.at) * 57.29577951308232,
+                     (int)s.enabled, (int)s.armed, (int)s.touching);
+            note += line;
+         }
+         return note;
       }
       std::string SearchNote(const double *x, const int off, const double h) const override
       {

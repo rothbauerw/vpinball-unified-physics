@@ -198,6 +198,8 @@ namespace PartsIni
          else if (k == "hinge_back_mm") s.hingeBackMm = v;
          else if (k == "lever_node") s.leverNode = (int)v;
          else if (k == "hinge_below_mm") s.hingeBelowMm = v;
+         else if (k == "wire_model") s.wireModel = (int)v;
+         else if (k == "wire_sum") s.wireSum = (int)v;
          else PLOGW << "Trigger " << name << ": unknown key '" << k << "' ignored";
       });
    }

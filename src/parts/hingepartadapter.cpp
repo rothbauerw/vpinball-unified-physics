@@ -18,6 +18,10 @@ HingePartAdapter::HingePartAdapter(std::shared_ptr<HingeModel::Engine> model, Ga
    const ContactSettings &cs = ContactSettings::Get();
    m_model->gp.dynRatio = cs.muDynamicRatio;
    m_model->gp.SetPivotModel(cs.pivotModel);   // the pin's law for this play
+   if (!m_model->gp.SetPieceSum(cs.hingePieceSum) && cs.hingePieceSum)
+      PLOGW << "hinge_piece_sum: part " << m_name << " has more pieces than a contact's terms hold (" << GroupStep::kTermMax << "): its contact stays the deepest piece";
+   if (cs.hingePieceSum && !m_model->gp.OverlapWarn().empty())
+      PLOGW << "hinge_piece_sum: part " << m_name << ": " << m_model->gp.OverlapWarn();
 }
 
 void HingePartAdapter::Publish()

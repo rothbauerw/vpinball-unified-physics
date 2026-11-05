@@ -61,6 +61,8 @@ namespace HingeModel
       // Its speed now plus what gravity, the blades and a driven stop can add in a cycle
       double SurfaceSpeedBound(const double cycleS) const override
       {
+         if (gp.Envelope())   // a massless part moves only with the balls on it: its last step's speed
+            return std::fabs(gp.rate) * gp.reach;
          double drive = 0.0;
          for (const GroupStep::BodyStop &s : gp.stops)
             drive = std::max(drive, std::fabs(s.SpeedNow()));
@@ -152,6 +154,19 @@ namespace HingeModel
       {
          if (dt <= 0.0 || (idle && !gp.AnyStopMoving()))
             return 0;
+         if (gp.Envelope())   // a massless part with no ball on it: its spring holds it on its rest stop (EnvRange's lo)
+         {
+            double q0, lo, hi;
+            gp.EnvRange(q0, lo, hi);
+            gp.rate = 0.0;
+            if (gp.q != lo)
+            {
+               gp.q = lo;
+               gp.UpdateSwitches();
+            }
+            idle = true;
+            return 0;
+         }
          gp.ClearLoads();
          gp.CycleBegin();
          GroupStep::Books bk;
@@ -163,13 +178,14 @@ namespace HingeModel
          return (int)bk.steps;
       }
 
-      // The dynamic state, plain bytes (the settings and the shape are not state). Restoring drops the events since: the replay makes them again
+      // The dynamic state, plain bytes (the settings and the shape are not state). Restoring drops the events since the save (the replay makes them again) and keeps those before it
       struct Dyn
       {
          GroupStep::BodyPart::Dyn b;
          V3 g;
          double steppedS, markQ, prevWrapped;
          bool idle, steppedThisCycle, collidable, marked, switchClosed;
+         uint32_t nSwLog, nStopEvents, nEvents;   // the events made before the save: a restore keeps them (only those since are made again by the replay)
       };
       void SaveState(State &out) const override
       {
@@ -185,6 +201,9 @@ namespace HingeModel
          d.collidable = collidable;
          d.marked = marked;
          d.switchClosed = gp.switchClosed;
+         d.nSwLog = (uint32_t)gp.swLog.size();
+         d.nStopEvents = (uint32_t)gp.stopEvents.size();
+         d.nEvents = (uint32_t)events.size();
          out.used = 0;
          Put(out, d);
       }
@@ -197,15 +216,15 @@ namespace HingeModel
          gp.g = d.g;
          gp.switchClosed = d.switchClosed;
          gp.prevWrapped = d.prevWrapped;
-         gp.swLog.clear();
-         gp.stopEvents.clear();
+         gp.swLog.resize(std::min<size_t>(gp.swLog.size(), d.nSwLog));
+         gp.stopEvents.resize(std::min<size_t>(gp.stopEvents.size(), d.nStopEvents));
          steppedS = d.steppedS;
          markQ = d.markQ;
          idle = d.idle;
          steppedThisCycle = d.steppedThisCycle;
          collidable = d.collidable;
          marked = d.marked;
-         events.clear();
+         events.resize(std::min<size_t>(events.size(), d.nEvents));
       }
       std::string StateNote() const override
       {

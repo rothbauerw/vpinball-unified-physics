@@ -2206,6 +2206,8 @@ struct ContactSystemImpl
       g.set.rollSmooth = cy.cs->rollSmoothRadS;
       g.set.rollModel = cy.cs->rollModel;
       g.set.stepModel = cy.cs->stepModel;
+      g.set.swingCap = cy.cs->stepSwingCap;
+      g.set.epsRest = cy.cs->epsRestUm * 1e-6;   // (0.01 um gives 1e-8 m exactly, the Settings default)
       if (ring)   // (cy.rpBall holds the old loop's halved modulus, and the group halves it for a pair itself; its rolling resistance is on the pair's radius, R / 2)
       {
          g.set.pair.eMpa = cy.cs->ballEMpa;
@@ -2425,6 +2427,15 @@ struct ContactSystemImpl
          const SurfaceShape *const sh = static_cast<const SurfaceShape *>((const GroupStep::Shape *)g.shape[it.s]);
          const SurfaceState &kept = sh->it->Surf(sh->surface);
          g.SetShapeItem(k, kept.touching, kept.zero, kept.xi, kept.ra);
+      }
+      // ... then each kept touch's depth now against its end depth, with every contact set (a massless part's angle is solved from all of them, as it was at the step's end)
+      for (int k = 0; k < g.ni; k++)
+      {
+         GroupStep::Item &it = g.item[k];
+         if (it.b >= 0 || it.s >= nSurf)
+            continue;
+         const SurfaceShape *const sh = static_cast<const SurfaceShape *>((const GroupStep::Shape *)g.shape[it.s]);
+         const SurfaceState &kept = sh->it->Surf(sh->surface);
          if (ring && it.touching && g_contactKeptEnd(balls[it.a]))
          {
             GroupStep::Hit hp;
@@ -2645,6 +2656,13 @@ struct ContactSystemImpl
          if (g_partEnergyLines == kPartEnergyLines)
             msg += " (no more of these lines this table start: the totals come at its end)";
          PLOGW << msg;
+         // VPX_GROUP_HISTORY_TRACE=1: the accepted steps before the run's first energy step (the last ones marked ENERGY-STEP are its own tries, maybe undone)
+         static bool historyDumped = false;
+         if (GroupStep::Group::HistoryTraceOn() && !historyDumped)
+         {
+            historyDumped = true;
+            PLOGW << "Group step: history, the last " << std::min<long>(g.historyN, GroupStep::Group::kHistory) << " accepted steps before the run's first energy step (energies uJ):\n" << g.HistoryDump();
+         }
          // the state the energy step saved at the step's start, full precision, for an exact replay (balls in m, m/s, rad/s; contacts: their springs; parts: their own)
          snprintf(s, sizeof s, "Group step: energy step start state, t=%u ms + %.17g s, h %.17g s", g_pplayer->m_time_msec, done - hTaken, hTaken);
          msg = s + g.StartNote();
@@ -2654,12 +2672,78 @@ struct ContactSystemImpl
          PLOGW << msg;
          if (!g.failRoundBuf.empty())   // VPX_GROUP_ROUND_TRACE=1: the rounds of the step's first failed attempt
             PLOGW << "Group step: energy step, first failed attempt's rounds:\n" << g.failRoundBuf;
+         // VPX_GROUP_CONTACT_TRACE=1: the first failed attempt's rounds, contact by contact and part by part, for the first kContactTraceSteps energy steps of the run; the contacts named first
+         if (!g.failContactBuf.empty() && GroupStep::Group::ContactTraceLeft() > 0)
+         {
+            const int left = --GroupStep::Group::ContactTraceLeft();
+            msg = "Group step: contact trace, t=" + std::to_string(g_pplayer->m_time_msec) + " ms, first failed attempt's rounds (" + std::to_string(left) + " more steps to print). Contacts:";
+            for (int k = 0; k < g.ni; k++)
+            {
+               const GroupStep::Item &it = g.item[k];
+               if (it.b >= 0)
+                  snprintf(s, sizeof s, " [c%d ball %d on ball %d]", k, it.a, it.b);
+               else
+               {
+                  const SurfaceShape *const sh = it.s < nSurf ? static_cast<const SurfaceShape *>(g.shape[it.s]) : nullptr;
+                  snprintf(s, sizeof s, " [c%d ball %d on s%d %s/%d part p%d]", k, it.a, it.s, sh != nullptr ? sh->r->Name().c_str() : "post", sh != nullptr ? sh->surface : 0, g.shape[it.s]->part);
+               }
+               msg += s;
+            }
+            PLOGW << msg << "\n" << g.failContactBuf;
+            g.failContactBuf.clear();
+         }
       };
       // VPX_GROUP_STATS=<file> (a diagnostic, read once): the group step's totals over the run, rewritten every 200 ms of table time: cycles, time per cycle, steps, solve rounds, halvings,
       // energy steps, failed cycles (the behaviour check's step statistics)
       static const char *const statsPath = []() -> const char * { const char *const e = getenv("VPX_GROUP_STATS"); return e != nullptr && *e ? e : nullptr; }();
       const uint64_t statsT0 = statsPath != nullptr ? usec() : 0;
-      const bool ok = g.StepsOver(cy.dt, done, [&](const double h) { return hFix > 0.0 ? std::min(hFix, cy.dt - done) : ringCap(h); }, [&]() { ringStep(); book.AfterStep(); partEnergy(); });
+      if (GroupStep::Group::WireD0TraceOn() && !g.wireD0Buf.empty())   // VPX_WIRE_D0_TRACE=1: the last cycle's lines
+      {
+         PLOGI << "Group step: wire d0 trace (" << GroupStep::Group::WireD0Left() << " lines left):\n" << g.wireD0Buf;
+         g.wireD0Buf.clear();
+      }
+      if (!g.jacWinBuf.empty())   // VPX_GROUP_JAC_WINDOW: the last cycle's converged solves' rounds
+      {
+         PLOGI << "Group step: Jacobian window:\n" << g.jacWinBuf;
+         g.jacWinBuf.clear();
+      }
+      if (GroupStep::Group::HistoryTraceOn() || GroupStep::Group::WireD0TraceOn())   // (diagnostics: the history's step times)
+      {
+         static long cycles = 0;
+         g.histMs = g_pplayer->m_time_msec;
+         g.histClock = done;
+         g.histCycle = ++cycles;
+      }
+      // VPX_STEP_RULE=<file> (a diagnostic, read once; off: nothing changes): one row per step: what ChooseStep's rule was (StepDiag), its h and the h after ringCap, the solve rounds and the wall time of the step before
+      static FILE *const ruleF = []() -> FILE * {
+         const char *const e = getenv("VPX_STEP_RULE");
+         FILE *const o = e != nullptr && *e ? fopen(e, "w") : nullptr;
+         if (o != nullptr)
+            fprintf(o, "t_ms,done_us,h_us,hcap_us,rule,partRule,item,itemPart,touching,b,delta_um,dDot,omN,prevRounds,prevUs,envSolves,envIters,capsules,envHits,envMisses,envUs,unsteady,unsteadyVal,unsteadyLim,missProbe,missEnd,missMid,missStart,missRate,missAngle,missEnergy\n");
+         return o;
+      }();
+      long ruleRounds = g.books.rounds;
+      auto ruleT = std::chrono::steady_clock::now();
+      const auto ruleCap = [&](const double h) {
+         const double hc = hFix > 0.0 ? std::min(hFix, cy.dt - done) : ringCap(h);
+         if (ruleF != nullptr)
+         {
+            const auto now = std::chrono::steady_clock::now();
+            const GroupStep::Group::StepDiag &dg = g.diag;
+            const bool hasItem = dg.rule != 8 && dg.item >= 0 && dg.item < g.ni;
+            const GroupStep::EnvStats es = GroupStep::envStats;   // (the massless parts' solves since the last row: the step before and this choice)
+            GroupStep::envStats = GroupStep::EnvStats();
+            fprintf(ruleF, "%u,%.3f,%.4f,%.4f,%d,%d,%d,%d,%d,%d,%.4f,%.5f,%.1f,%ld,%.1f,%ld,%ld,%ld,%ld,%ld,%.1f,%d,%.6g,%.6g,%ld,%ld,%ld,%ld,%ld,%ld,%ld\n", g_pplayer->m_time_msec, done * 1e6, h * 1e6, hc * 1e6, dg.rule, dg.partRule, dg.item,
+                    hasItem && g.item[dg.item].b < 0 ? g.shape[g.item[dg.item].s]->part : -9, hasItem ? (int)g.item[dg.item].touching : -1, hasItem ? g.item[dg.item].b : -9, dg.delta * 1e6, dg.dDot, dg.omN,
+                    g.books.rounds - ruleRounds, std::chrono::duration<double, std::micro>(now - ruleT).count(), es.solves, es.iters, es.capsules, es.hits, es.misses, es.us, dg.unsteady, dg.unsteadyVal, dg.unsteadyLim,
+                    es.missBy[0], es.missBy[1], es.missBy[2], es.missBy[3], es.missBy[4], es.missBy[5], es.missBy[6]);
+            ruleRounds = g.books.rounds;
+            ruleT = now;
+         }
+         return hc;
+      };
+      g.phaseMs = g_pplayer->m_time_msec;   // (VPX_GROUP_PHASE_TIMING rows)
+      const bool ok = g.StepsOver(cy.dt, done, ruleCap, [&]() { ringStep(); book.AfterStep(); partEnergy(); });
       if (statsPath != nullptr)
       {
          static long n = 0, steps = 0, rounds = 0, eSteps = 0, fails = 0, halv = 0;
