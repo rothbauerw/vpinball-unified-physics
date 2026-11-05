@@ -295,7 +295,8 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       return;
 
    const float height = m_ptable->GetSurfaceHeight(m_d.m_szSurface, m_d.m_vCenter.x, m_d.m_vCenter.y);
-   const bool wire = m_d.m_shape == TriggerWireA || m_d.m_shape == TriggerWireB || m_d.m_shape == TriggerWireC || m_d.m_shape == TriggerWireD;
+   const bool inder = m_d.m_shape == TriggerInder;
+   const bool wire = m_d.m_shape == TriggerWireA || m_d.m_shape == TriggerWireB || m_d.m_shape == TriggerWireC || m_d.m_shape == TriggerWireD || inder;
    if (!isUI && ContactSystem::Unified())
    {
       const std::filesystem::path ini = ContactHost::IniPathFor(m_ptable->m_filename);
@@ -304,7 +305,7 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       if (s_noted != g_pplayer)
       {
          s_noted = g_pplayer;
-         PLOGI << "Triggers: [Features] triggers = " << (on ? 1 : 0) << (on ? ": WireA-D are rollover wire switches of the contact system (group step); None, Star, Button and Inder stay stock sensors (not converted yet)" : ": every trigger is a stock sensor");
+         PLOGI << "Triggers: [Features] triggers = " << (on ? 1 : 0) << (on ? ": WireA-D and Inder are rollover switches of the contact system (group step; Inder a flat blade on its mesh triangles); None, Star and Button stay stock sensors (not converted yet)" : ": every trigger is a stock sensor");
       }
       if (on && wire)
       {
@@ -330,31 +331,52 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          pose.wireDmm = s.wireDMm;
          pose.thicknessVpu = m_d.m_wireThickness;
          const WireShape::Shape shape = m_d.m_shape == TriggerWireB ? WireShape::Shape::WireB : m_d.m_shape == TriggerWireC ? WireShape::Shape::WireC : m_d.m_shape == TriggerWireD ? WireShape::Shape::WireD : WireShape::Shape::WireA;
-         const WireShape::WireBody wb = shape == WireShape::Shape::WireD ? WireShape::Build(shape, &triggerDWireMesh[0].x, triggerDWireNumVertices, 8, pose)
-                                                                          : WireShape::Build(shape, &triggerSimple[0].x, triggerSimpleNumVertices, 8, pose);
-         if (wb.caps.empty())
-         {
-            PLOGW << "Trigger " << GetName() << ": the wire's centreline could not be traced from its mesh: no switch";
-            return;
-         }
-         std::vector<WireShape::Capsule> chain;
-         for (const WireShape::Capsule &c : wb.caps)
-         {
-            WireShape::Capsule m;
-            m.a = c.a * U;
-            m.b = c.b * U;
-            m.r = c.r * U;
-            chain.push_back(m);
-         }
+         std::vector<WireShape::Capsule> chain, adapterChain;   // the part's wire (metres); the adapter's (VPU: ActiveBall is the ball nearest it)
+         WireSwitchGroup::Blade blade;
          m_partModel = std::make_shared<WireSwitchModel::WireSwitch>();
-         m_partModel->Build(s, (double)floorZ * U, chain, RubberContact::BallSI());
+         if (inder)
+         {
+            // a flat steel blade on edge (runs/2026-11-04-inder): the drawn mesh is its collidable shape, the very vertices GenerateMesh draws (rotation, Scale X / Y, Surface, WireThickness)
+            Vertex3Ds sphere;
+            const std::unique_ptr<std::vector<Vertex3D_NoTex2>> drawn = GenerateMesh(sphere);
+            const Vertex3Ds ly = Matrix3D::MatrixRotateZ(ANGTORAD(m_d.m_rotation)).MultiplyVectorNoTranslate(Vertex3Ds(0.f, 1.f, 0.f));   // the mesh's y as drawn
+            blade = WireSwitchGroup::PoseBlade(&(*drawn)[0].x, (unsigned)drawn->size(), 8, triggerInderIndices, triggerInderNumIndices, RubberContact::V3(ly.x * m_d.m_scaleX, ly.y * m_d.m_scaleY, 0.0), U);
+            WireShape::Capsule top;   // the adapter's: the blade's top edge
+            top.a = WireShape::V3(blade.top0.x / U, blade.top0.y / U, blade.top0.z / U);
+            top.b = WireShape::V3(blade.top1.x / U, blade.top1.y / U, blade.top1.z / U);
+            top.r = 0.5 * blade.thick / U;
+            adapterChain.push_back(top);
+            m_partModel->Build(s, (double)floorZ * U, blade, RubberContact::BallSI());
+            s.peakMm = m_partModel->part.set.peakMm;   // the drawn top above the surface (the detector and the log)
+         }
+         else
+         {
+            const WireShape::WireBody wb = shape == WireShape::Shape::WireD ? WireShape::Build(shape, &triggerDWireMesh[0].x, triggerDWireNumVertices, 8, pose)
+                                                                             : WireShape::Build(shape, &triggerSimple[0].x, triggerSimpleNumVertices, 8, pose);
+            if (wb.caps.empty())
+            {
+               PLOGW << "Trigger " << GetName() << ": the wire's centreline could not be traced from its mesh: no switch";
+               m_partModel.reset();
+               return;
+            }
+            for (const WireShape::Capsule &c : wb.caps)
+            {
+               WireShape::Capsule m;
+               m.a = c.a * U;
+               m.b = c.b * U;
+               m.r = c.r * U;
+               chain.push_back(m);
+            }
+            adapterChain = wb.caps;
+            m_partModel->Build(s, (double)floorZ * U, chain, RubberContact::BallSI());
+         }
          RubberObjectSettings hs;
          ContactHost::LoadHardSurfaceSettings(hs, ini, "trigger", GetName(), s.elasticity, s.friction);
          const RubberContact::V3 &A = m_partModel->gp.A;
          const double reach = m_partModel->Reach();
          const float lo[3] = { (float)((A.x - reach) / U), (float)((A.y - reach) / U), (float)((A.z - reach) / U) };
          const float hi[3] = { (float)((A.x + reach) / U), (float)((A.y + reach) / U), (float)((A.z + reach) / U) };
-         auto adapter = std::make_unique<WireSwitchAdapter>(this, m_partModel, wb.caps);
+         auto adapter = std::make_unique<WireSwitchAdapter>(this, m_partModel, adapterChain);
          WireSwitchAdapter *const adapterRaw = adapter.get();
          m_partHost = new ContactPartHost(this, m_partModel, std::move(adapter), hs, ini, GetName(), "trigger", lo, hi);
          adapterRaw->m_host = m_partHost;
@@ -367,8 +389,12 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          physics->AddCollider(m_partHost, isUI);
          const WireSwitchGroup::Part &w = m_partModel->part;
          const WireShape::V3 tip(w.TipWorld().x / U, w.TipWorld().y / U, w.TipWorld().z / U);
-         PLOGI << "Trigger " << GetName() << ": wire switch part on the group step (shape Wire" << "ABCD"[(int)shape] << ", " << chain.size() << " capsules, wire " << 2e3 * chain[0].r
-               << " mm, scale " << m_d.m_scaleX << ", peak " << s.peakMm << " mm above its surface '" << m_d.m_szSurface << "' at z " << floorZ << " VPU (playfield z " << playfieldZ << "); lever end node " << s.leverNode << " at (" << tip.x << ", " << tip.y << ") VPU; pivot " << s.hingeBackMm << " mm back, "
+         if (inder)
+            PLOGI << "Trigger " << GetName() << ": blade switch part on the group step (shape Inder, " << blade.tri.size() / 3 << " mesh triangles as faces, blade " << blade.thick * 1e3 << " mm thick, face skin "
+                  << s.edgeMm << " mm";
+         else
+            PLOGI << "Trigger " << GetName() << ": wire switch part on the group step (shape Wire" << "ABCD"[(int)shape] << ", " << chain.size() << " capsules, wire " << 2e3 * chain[0].r << " mm";
+         PLOGI << "Trigger " << GetName() << ": scale " << m_d.m_scaleX << ", peak " << s.peakMm << " mm above its surface '" << m_d.m_szSurface << "' at z " << floorZ << " VPU (playfield z " << playfieldZ << "); lever end node " << s.leverNode << " at (" << tip.x << ", " << tip.y << ") VPU; pivot " << s.hingeBackMm << " mm back, "
                << s.hingeBelowMm << " mm below; spring " << s.springN << " N at first touch, " << s.springFullN << " N at full travel; close " << s.closeMm << " mm, release " << s.releaseMm << " mm; mass "
                << w.mp.m * 1e3 << " g, reach " << reach * 1e3 << " mm)";
          return;
