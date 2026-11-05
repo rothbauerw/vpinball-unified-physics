@@ -34,7 +34,6 @@ namespace HingeGroup
       V3 g = V3(0.0, 0.0, -9.81); // the gravity the part feels: gravity minus the cabinet acceleration
       HingeBody::MassProps mp;
       double rPin = 0.6e-3, muPivot = 0.3, cViscous = 0.0;
-      bool sumWires = false;      // [Triggers] wire_sum: every wire pressing the ball adds its own contact (ProbeSurface); off: the deepest wire alone
       bool pieceSum = false;      // [Contact] hinge_piece_sum (SetPieceSum): the contact as its union's terms, each stepped by its own exact difference (ProbeTerms)
       std::vector<HingeBody::Cam> cams;
       double kBlade = 0.0, aBlade = 0.0;   // a one-sided torsion spring: a blade pressed once theta is past aBlade
@@ -113,12 +112,6 @@ namespace HingeGroup
             if (prJ.seg >= 0)
                cut = prJ.dist * (1.0 + 1e-9) + 1e-12;
          }
-         // summing: every wire within touch, not only the nearest
-         if (sumWires)
-         {
-            cut = std::max(cut, (R + rho) * (1.0 + 1e-9) + 1e-12);
-            touching.clear();
-         }
          int bestI = -1;
          for (int i = 0; i < nw; i++)
          {
@@ -132,15 +125,13 @@ namespace HingeGroup
             if (pr.seg < 0)
                continue;
             pr.delta = R + rho - pr.dist;
-            if (sumWires && pr.delta > 0.0)
-               touching.push_back({ i, pr });
             if (pr.delta > best.delta)
             {
                best = pr;
                bestI = i;
             }
          }
-         // diagnostics (VPX_GROUP_ROUND_TRACE): the nearest piece and the second deepest, with what wire_sum makes of it, before the sum changes best (read only: no state, no counts)
+         // diagnostics (VPX_GROUP_ROUND_TRACE): the nearest piece and the second deepest (read only: no state, no counts)
          const bool noteOn = ProbeNoteOn();
          char note2[200] = "";
          if (noteOn)
@@ -168,59 +159,12 @@ namespace HingeGroup
             else
             {
                const double s2 = sAlong(i2);
-               const char *why = sumWires ? (p2.delta > 0.0 ? "touching" : "not touching") : "sum off";
-               snprintf(note2, sizeof note2, " | 2nd piece %d s %.4f depth %.4g um (%s)", i2, s2, p2.delta * 1e6, why);
+               snprintf(note2, sizeof note2, " | 2nd piece %d s %.4f depth %.4g um", i2, s2, p2.delta * 1e6);
             }
             if (bestI >= 0)
                snprintf(probeNote, sizeof probeNote, "piece %d s %.4f depth %.4g um", bestI, sAlong(bestI), best.delta * 1e6);
             else
                snprintf(probeNote, sizeof probeNote, "piece none");
-         }
-         // [Triggers] wire_sum: every place the ball presses the wire is its own Hertz contact, and their stored energies add. The wire is a chain of capsules sharing their
-         // joints, so the energy is counted as a union (inclusion-exclusion): U = sum over touching pieces U(d_i) - sum over shared joints (m - 1) U(d_v), m the touching pieces
-         // that end on that joint, d_v = R + rho - |c - v| the depth of the joint's own sphere, U(d) = 2/5 k d^2.5 (one k: every straight piece has the wire's rho and reff).
-         // A piece whose nearest point is the joint it shares has d_i = d_v and cancels; two separate touches add; each term is C1 in the ball's place, so neither force nor
-         // energy jumps across a joint, onto one, or from one touch to two. As one Hit: d^2.5 = sum d_i^2.5 - sum d_v^2.5, the depth's gradient
-         // G = (sum d_i^1.5 n_i - sum d_v^1.5 n_v) / d^1.5 = n x grad (RubberContact::FoldSum). The depth's slope with theta is G . (Down x c ...) = n's own formula at any point on
-         // the line through the ball centre along n (a rotation of the wire is the ball turned back about the axis), so pb below serves both.
-         int sumPieces = 0, sumJoints = 0;
-         bool summed = false;
-         if (sumWires && bestI >= 0 && best.delta > 0.0 && touching.size() > 1)
-         {
-            RubberContact::FoldSum sum;
-            const double S = R + rho;
-            for (size_t k = 0; k < touching.size(); k++)
-            {
-               const Touch &t = touching[k];
-               sum.Add(t.pr.delta, 1.0, t.pr.normal);
-               sumPieces++;
-               const Seg &w = wires[t.i];
-               for (const V3 &v : { w.a, w.b })
-               {
-                  bool shared = false;   // an earlier touching piece ends on this joint: this piece's share of it is taken back once
-                  for (size_t m = 0; m < k && !shared; m++)
-                  {
-                     const Seg &o = wires[touching[m].i];
-                     shared = (o.a - v).Length() < 1e-9 || (o.b - v).Length() < 1e-9;
-                  }
-                  if (!shared)
-                     continue;
-                  const V3 cv = cb - v;
-                  const double dist = cv.Length(), dv = S - dist;
-                  if (dv <= 0.0 || dist <= 1e-12)
-                     continue;
-                  const double dv15 = dv * std::sqrt(dv);
-                  sum.s25 -= dv * dv15;
-                  sum.g = sum.g - cv * (dv15 / dist);
-                  sumJoints++;
-               }
-            }
-            sum.s25 = std::max(sum.s25, 0.0);
-            if (sum.s25 > 0.0)
-            {
-               sum.Finish(best, 0.0);
-               summed = true;
-            }
          }
          if (!tris.empty() && surface == 0)
          {
@@ -228,7 +172,6 @@ namespace HingeGroup
             if (pr.seg >= 0 && pr.delta > best.delta)
             {
                best = pr;
-               summed = false;
             }
          }
          const V3 nb = best.normal;
@@ -236,23 +179,23 @@ namespace HingeGroup
          h.n = E * nb.x + dn * nb.y + fr * nb.z;
          h.reff = best.reff > 0.0 ? best.reff : R;
          h.curvDist = 0.0;
-         h.grad = summed ? best.grad : 1.0;
+         h.grad = 1.0;
          // the contact point (body coordinates), its speed per unit rate of theta (E x Down = Front, E x Front = -Down): the depth's slope with theta is the normal's part of it
          const V3 pb = cb - nb * (R - 0.5 * std::max(best.delta, 0.0));
          h.nc = 1;
          h.c[0].Set(0, nb.z * pb.y - nb.y * pb.z, fr * pb.y - dn * pb.z, E);
          h.kb = BendAlongNormal(nb, pb);
-         if (noteOn)   // (what the probe returns: the deepest after the sum or a face, its body normal and slope)
+         if (noteOn)   // (what the probe returns: the deepest piece or a face, its body normal and slope)
          {
             const size_t n0 = strlen(probeNote);
-            snprintf(probeNote + n0, sizeof probeNote - n0, " -> depth %.4g um n (%.3f %.3f %.3f) slope %.4g summed %d (pieces %d joints %d) faces %d%s", h.delta * 1e6, nb.x, nb.y, nb.z, h.c[0].slope * h.grad,
-                     summed ? 1 : 0, sumPieces, sumJoints, (int)tris.size(), note2);
+            snprintf(probeNote + n0, sizeof probeNote - n0, " -> depth %.4g um n (%.3f %.3f %.3f) slope %.4g faces %d%s", h.delta * 1e6, nb.x, nb.y, nb.z, h.c[0].slope * h.grad,
+                     (int)tris.size(), note2);
          }
       }
 
       // [Contact] hinge_piece_sum: the contact as its union's terms, each a smooth depth of its own: every touchable piece of this side (+1), every joint shared by
       // m of them (-(m - 1)), the faces as one term (+1). U = sum s_t U(max(d_t, 0)) at every place of the ball: a piece off the ball has d_i <= 0 and its joints
-      // d_v <= d_i, so the fixed list is the union (wire_sum's) wherever the ball is. The group steps each term by its own exact difference (Hit::t); the Hit's own
+      // d_v <= d_i, so the fixed list is the union wherever the ball is. The group steps each term by its own exact difference (Hit::t); the Hit's own
       // depth, normal and slope are the union's (FoldSum; the deepest piece's while none presses), for the step choice and arrival.
       // Faces: one term per flat quad (AddPlate), minus a capsule along each line two touchable elements share (a fold edge, a wire along a plate edge;
       // FinishShape). Open: a wire end lying on a face has no overlap term (FinishShape's overlapWarn).
@@ -489,10 +432,8 @@ namespace HingeGroup
    protected:
       struct Seg { V3 a, b; int surface; V3 m; double half; };   // m, half: its middle and half length (the probe's nearest-first bound)
       mutable std::vector<double> segBound;   // (ProbeSurface's per-wire bound, kept to save the allocation)
-      struct Touch { int i; TubeProbe pr; };
-      mutable std::vector<Touch> touching;    // (ProbeSurface with sumWires: the wires pressing the ball)
       mutable char probeNote[480] = "";       // diagnostics (VPX_GROUP_ROUND_TRACE): ProbeSurface's last probe, its pieces (LastProbeNote)
-      static bool ProbeNoteOn() { static const bool on = []() { const char *const e = getenv("VPX_GROUP_ROUND_TRACE"), *const w = getenv("VPX_WIRE_D0_TRACE"); return (e != nullptr && atoi(e) != 0) || (w != nullptr && atoi(w) != 0); }(); return on; }
+      static bool ProbeNoteOn() { static const bool on = []() { const char *const e = getenv("VPX_GROUP_ROUND_TRACE"); return e != nullptr && atoi(e) != 0; }(); return on; }
 
    public:
       std::string LastProbeNote() const override { return probeNote; }

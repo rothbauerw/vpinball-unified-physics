@@ -2697,17 +2697,12 @@ struct ContactSystemImpl
       // energy steps, failed cycles (the behaviour check's step statistics)
       static const char *const statsPath = []() -> const char * { const char *const e = getenv("VPX_GROUP_STATS"); return e != nullptr && *e ? e : nullptr; }();
       const uint64_t statsT0 = statsPath != nullptr ? usec() : 0;
-      if (GroupStep::Group::WireD0TraceOn() && !g.wireD0Buf.empty())   // VPX_WIRE_D0_TRACE=1: the last cycle's lines
-      {
-         PLOGI << "Group step: wire d0 trace (" << GroupStep::Group::WireD0Left() << " lines left):\n" << g.wireD0Buf;
-         g.wireD0Buf.clear();
-      }
       if (!g.jacWinBuf.empty())   // VPX_GROUP_JAC_WINDOW: the last cycle's converged solves' rounds
       {
          PLOGI << "Group step: Jacobian window:\n" << g.jacWinBuf;
          g.jacWinBuf.clear();
       }
-      if (GroupStep::Group::HistoryTraceOn() || GroupStep::Group::WireD0TraceOn())   // (diagnostics: the history's step times)
+      if (GroupStep::Group::HistoryTraceOn())   // (diagnostics: the history's step times)
       {
          static long cycles = 0;
          g.histMs = g_pplayer->m_time_msec;

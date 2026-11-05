@@ -61,8 +61,6 @@ namespace HingeModel
       // Its speed now plus what gravity, the blades and a driven stop can add in a cycle
       double SurfaceSpeedBound(const double cycleS) const override
       {
-         if (gp.Envelope())   // a massless part moves only with the balls on it: its last step's speed
-            return std::fabs(gp.rate) * gp.reach;
          double drive = 0.0;
          for (const GroupStep::BodyStop &s : gp.stops)
             drive = std::max(drive, std::fabs(s.SpeedNow()));
@@ -154,19 +152,6 @@ namespace HingeModel
       {
          if (dt <= 0.0 || (idle && !gp.AnyStopMoving()))
             return 0;
-         if (gp.Envelope())   // a massless part with no ball on it: its spring holds it on its rest stop (EnvRange's lo)
-         {
-            double q0, lo, hi;
-            gp.EnvRange(q0, lo, hi);
-            gp.rate = 0.0;
-            if (gp.q != lo)
-            {
-               gp.q = lo;
-               gp.UpdateSwitches();
-            }
-            idle = true;
-            return 0;
-         }
          gp.ClearLoads();
          gp.CycleBegin();
          GroupStep::Books bk;

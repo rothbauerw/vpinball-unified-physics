@@ -48,8 +48,6 @@ namespace WireSwitchGroup
       double steelEGpa = 200.0;
       double elasticity = 0.3, friction = 0.02;   // ball contact: the wire's restitution at 1 m/s, friction
       double edgeMm = 0.05;           // a blade (Inder): the faces' skin and edge radius, ESTIMATE (the triangle probe needs one > 0; the blade acts 2 x edge_mm thicker)
-      int wireModel = 1;              // [Triggers] wire_model: 1 = a massless lever (runs/2026-11-04-massless-wire/design.md), 0 = the hinge body with its mass. Wires only: a blade keeps the body
-      int wireSum = 0;                // [Triggers] wire_sum: 1 = every wire piece pressing the ball adds its own contact (one summed force where two pieces meet), 0 = the deepest piece alone
    };
 
    // A blade trigger as VPX draws it (the caller passes the drawn vertices, Trigger::GenerateMesh: the author's rotation, x * Scale X, y * Scale Y, z unscaled on the trigger's
@@ -122,7 +120,6 @@ namespace WireSwitchGroup
          lane = lane / lane.Length();
          Begin(V3(tip.x, tip.y, surfaceZ) - lane * (s.hingeBackMm * mm) - V3(0.0, 0.0, s.hingeBelowMm * mm), lane * -1.0, gravity);
          muPivot = s.muPivot;
-         sumWires = s.wireSum != 0;
          rho = chain.empty() ? 0.5 * s.wireDMm * mm : chain[0].r;
          rPin = rho;
          const double lam = s.density * GroupStep::kPi * rho * rho;
@@ -238,86 +235,6 @@ namespace WireSwitchGroup
       double MakeAngle() const { return switchMake; }
       double BreakAngle() const { return switchBreak; }
 
-      // ---- wire_model 1: a massless lever (runs/2026-11-04-massless-wire/design.md). No inertia, no unknown, no pivot friction, no stop impacts: the group solves its angle
-      // from all the balls on it at once, the minimum of the spring + weight + their contacts' springs between the rest stop and full travel (Group::EnvSolve), and takes that
-      // one energy U* over the balls' moves. Its angle after each step is the one solved for the balls where they end (AfterStep): the switch and the drawing read it.
-      bool Massless() const { return set.wireModel == 1 && bladeH == 0.0; }
-      bool Envelope() const override { return Massless(); }
-      void EnvRange(double &q0, double &lo, double &hi) const override
-      {
-         q0 = q;
-         lo = 0.0;
-         hi = thFull;
-      }
-      double EnvPotential(const double th, double *d1, double *d2) const override
-      {
-         const double e = 1e-6;   // (the curvature only steers the solve and the step rule; the energy and slope are exact)
-         *d1 = -StoredForce(th);
-         *d2 = (StoredForce(th - e) - StoredForce(th + e)) / (2.0 * e);
-         return StoredEnergy(th);
-      }
-      int NumDof() const override { return Massless() ? 0 : BodyPart::NumDof(); }
-      int MaxDof() const override { return Massless() ? 0 : BodyPart::MaxDof(); }
-      int NumCoords() const override { return Massless() ? 0 : BodyPart::NumCoords(); }
-      int DofOf(const int c) const override { return Massless() ? -1 : BodyPart::DofOf(c); }
-      double KineticJ() const override { return Massless() ? 0.0 : BodyPart::KineticJ(); }
-      double Energy(const GroupStep::Ball *b, const int nb) const override { return Massless() ? 0.0 : BodyPart::Energy(b, nb); }   // (massless: all of it is in the group's U*)
-      void StepFacts(const GroupStep::Ball *b, const int nb, const GroupStep::Settings &st, GroupStep::StepFactList &f) override
-      {
-         if (!Massless())
-            BodyPart::StepFacts(b, nb, st, f);
-      }
-      bool BeginStep(const GroupStep::Ball *b, const int nb, const double h, double *x, const int off) override
-      {
-         hStep = h;
-         return Massless() ? true : BodyPart::BeginStep(b, nb, h, x, off);
-      }
-      bool Eval(const double *x, const int off, const double h, V3 *F, V3 *M, double *Res, GroupStep::Jac J) override { return Massless() ? true : BodyPart::Eval(x, off, h, F, M, Res, J); }
-      void Loads(const double *qf, const V3 &F) override
-      {
-         if (!Massless())
-            BodyPart::Loads(qf, F);
-      }
-      double StopExcess(const double *x, const int off, const unsigned mask = ~0u) const override { return Massless() ? -INFINITY : BodyPart::StopExcess(x, off, mask); }
-      unsigned CrossingStops(const double *x, const int off) const override { return Massless() ? 0u : BodyPart::CrossingStops(x, off); }
-      bool PinOnStop(const double *x, const int off) override { return Massless() ? false : BodyPart::PinOnStop(x, off); }
-      bool FreedByStep() override { return Massless() ? false : BodyPart::FreedByStep(); }
-      void Accept(const double *x, const int off, const double h, const bool onStop, double &driveJ, double &lossJ, bool &through) override
-      {
-         if (!Massless())
-         {
-            BodyPart::Accept(x, off, h, onStop, driveJ, lossJ, through);
-            return;
-         }
-         driveJ = lossJ = 0.0;
-         through = false;
-      }
-      void AfterStep(const GroupStep::Group &g) override
-      {
-         if (!Massless())
-            return;
-         const double qn = g.EnvAngleNow(this);
-         const double vBall = g.EnvBallSpeed(this);   // (its tip moves no faster than the balls on it: the speed bound and the rest test; it carries no energy)
-         rate = qn == q || reach <= 0.0 ? 0.0 : std::copysign(vBall / reach, qn - q);
-         q = qn;
-         UpdateSwitches();
-      }
-      void ExplicitMove(const double *Res, const int off, const double h, double *x) const override
-      {
-         if (!Massless())
-            BodyPart::ExplicitMove(Res, off, h, x);
-      }
-      double EndResidual() const override { return Massless() ? 0.0 : BodyPart::EndResidual(); }
-      std::string ContactNote(const double *x, const int off, const double h, const double *Res) const override
-      {
-         if (!Massless())
-            return HingeGroup::Part::ContactNote(x, off, h, Res);
-         char t[120];
-         snprintf(t, sizeof t, " massless wire q %.6g deg switch %d", q * 57.29577951308232, (int)switchClosed);
-         return t;
-      }
-      std::string SearchNote(const double *x, const int off, const double h) const override { return Massless() ? std::string(" massless wire") : BodyPart::SearchNote(x, off, h); }
-      std::string RowNote() const override { return Massless() ? std::string(" massless wire") : BodyPart::RowNote(); }
 
       // The trigger's Hit is the switch closing (swLog), not a touch
       bool NearStart(double) const override { return false; }
@@ -360,7 +277,6 @@ namespace WireSwitchGroup
       }
       double peakY = 0.0, peakZ = 0.0, thFull = 0.0, switchMake = 0.0, switchBreak = 0.0;
       double bladeH = 0.0;   // a blade's height (0: a wire)
-      double hStep = 0.0;    // the step being taken (massless: its angle's change over it as a rate)
       V3 tip, tipBody;   // the switch leg's end (the lever tip): world, body coordinates
       int stopRest = -1, stopFull = -1;
    };

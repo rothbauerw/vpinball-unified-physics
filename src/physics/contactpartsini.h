@@ -198,8 +198,13 @@ namespace PartsIni
          else if (k == "hinge_back_mm") s.hingeBackMm = v;
          else if (k == "lever_node") s.leverNode = (int)v;
          else if (k == "hinge_below_mm") s.hingeBelowMm = v;
-         else if (k == "wire_model") s.wireModel = (int)v;
-         else if (k == "wire_sum") s.wireSum = (int)v;
+         else if (k == "wire_model" || k == "wire_sum")   // removed 2026-11-05 (the wire has its mass; hinge_piece_sum is the union): read and ignored, said once
+         {
+            static bool said = false;
+            if (!said)
+               PLOGI << "[Triggers] " << k << " is no longer used (2026-11-05): ignored";
+            said = true;
+         }
          else PLOGW << "Trigger " << name << ": unknown key '" << k << "' ignored";
       });
    }
