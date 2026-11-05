@@ -232,7 +232,9 @@ namespace GroupStep
       }
       // > 0: the move carries the body past a stop (how far), or past the speed's zero with friction acting (the rate past it).
       // With no move (the group's test of where the step starts): a body leaving a stop isn't on it, and how far off it counts by its rate, so the search for the next arrival does not start at the stop it left (the jet bumper's ring does the same)
-      double StopExcess(const double *x, const int off) const override
+      // stops: bit i its stop i (the last bit for any beyond), bit 31 the speed's zero (pivot_model 0's friction turn)
+      static unsigned StopBit(const int i) { return 1u << std::min(i, 30); }
+      double StopExcess(const double *x, const int off, const unsigned mask = ~0u) const override
       {
          const bool wentBack = gExcessTurn;   // (the solved move, tested last, went back past the speed's zero)
          gExcessStop = -1;
@@ -244,18 +246,16 @@ namespace GroupStep
          for (int i = 0; i < (int)stops.size(); i++)
          {
             const BodyStop &s = stops[i];
-            if (!s.enabled || !s.armed)
+            if (!s.enabled || !s.armed || !(mask & StopBit(i)))
                continue;
-            double ex = s.side * (q1 - (dq == 0.0 ? s.at : s.AfterStep(gH)));
-            if (dq == 0.0 && ex > -kNearStop && s.side * (rate - s.SpeedNow()) < 0.0)
-               ex = -std::fabs(rate - s.SpeedNow()) * gH;
+            const double ex = s.side * (q1 - (dq == 0.0 ? s.at : s.AfterStep(gH)));
             if (ex > e)
             {
                e = ex;
                gExcessStop = i;
             }
          }
-         if (pivotModel != 1 && dirF != 0)
+         if (pivotModel != 1 && dirF != 0 && (mask & (1u << 31)))
          {
             // From rest the speed's zero is where it starts: an event only if the solved move goes back against the friction's way (it stays: PinOnStop). Going the friction's way there is no zero ahead, and the search for a stop must not take the start for one
             const double back = dq == 0.0 ? (rate != 0.0 ? -std::fabs(rate) : wentBack ? 0.0 : -INFINITY) : -dirF * (2.0 * dq / gH - rate);
@@ -268,6 +268,26 @@ namespace GroupStep
          }
          gDqLast = dq;
          return e;
+      }
+      unsigned CrossingStops(const double *x, const int off) const override
+      {
+         const int stop = gExcessStop;   // (what the last StopExcess found stays for ArrivingAtStop and PinOnStop)
+         const bool turn = gExcessTurn;
+         const double dqLast = gDqLast;
+         unsigned m = 0u;
+         for (int i = 0; i < (int)stops.size() && i <= 30; i++)
+         {
+            gExcessTurn = turn;
+            if (StopExcess(x, off, StopBit(i)) > 0.0)
+               m |= StopBit(i);
+         }
+         gExcessTurn = turn;
+         if (StopExcess(x, off, 1u << 31) > 0.0)
+            m |= 1u << 31;
+         gExcessStop = stop;
+         gExcessTurn = turn;
+         gDqLast = dqLast;
+         return m;
       }
       bool ArrivingAtStop() const override
       {

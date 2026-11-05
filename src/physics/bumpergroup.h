@@ -325,16 +325,30 @@ namespace BumperGroup
       }
       void Loads(const double *q, const V3 &) override { gLoad = q[kR]; }
       // The ring past a stop over the move. With no move (the group's test of where the step starts): a ring leaving a stop isn't on it, and how far off it counts by its rate, so the search for the next arrival doesn't start at the stop it left
-      double StopExcess(const double *x, const int off) const override
+      // stops: bit 0 the ring's rest, bit 1 the end of its stroke
+      double StopExcess(const double *x, const int off, const unsigned mask = ~0u) const override
       {
          if (ringStop != 0)
             return -INFINITY;
          const double dx = x[off + kR], x1 = dr + dx;
          const bool nearRest = x1 < 0.5 * stroke;
          gArriving = nearRest ? 2.0 * dx / gH - vr < 0.0 : 2.0 * dx / gH - vr > 0.0;
-         if (dx == 0.0 && (nearRest ? vr > 0.0 : vr < 0.0) && (nearRest ? dr : stroke - dr) < 1e-9)
-            return -std::fabs(vr) * gH;
-         return std::max(-x1, x1 - stroke);
+         double e = -INFINITY;
+         if (mask & 1u)
+            e = std::max(e, -x1);
+         if (mask & 2u)
+            e = std::max(e, x1 - stroke);
+         return e;
+      }
+      unsigned CrossingStops(const double *x, const int off) const override
+      {
+         const bool arriving = gArriving;   // (what the last StopExcess found stays for ArrivingAtStop)
+         unsigned m = 0u;
+         for (unsigned b = 1u; b <= 2u; b <<= 1)
+            if (StopExcess(x, off, b) > 0.0)
+               m |= b;
+         gArriving = arriving;
+         return m;
       }
       bool ArrivingAtStop() const override { return gArriving; }
       // On its stop and the move just solved would take it past: it stays, the small speed it had goes

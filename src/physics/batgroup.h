@@ -406,19 +406,33 @@ namespace BatGroup
          }
          return true;
       }
-      double StopExcess(const double *x, const int off) const override
+      // stops: bit 0 the bat's up-stop (rigid), bit 1 the plunger's closed end, bit 2 its open end (two-body)
+      double StopExcess(const double *x, const int off, const unsigned mask = ~0u) const override
       {
          if (nDof == 0)
             return -INFINITY;
          if (rigid)
-            return phi + x[off] - phiStop;
+            return (mask & 1u) ? phi + x[off] - phiStop : -INFINITY;
          if (nDof == 2)
          {
             // (a plunger slaved to a bat pressed below its rest angle starts past the open end: its stop is where it is)
             const double x1 = xp + x[off + 1];
-            return std::max(std::min(xMin, xp) - x1, x1 - std::max(xMax, xp));
+            double e = -INFINITY;
+            if (mask & 2u)
+               e = std::max(e, std::min(xMin, xp) - x1);
+            if (mask & 4u)
+               e = std::max(e, x1 - std::max(xMax, xp));
+            return e;
          }
          return -INFINITY;
+      }
+      unsigned CrossingStops(const double *x, const int off) const override
+      {
+         unsigned m = 0u;
+         for (unsigned b = 1u; b <= 4u; b <<= 1)
+            if (StopExcess(x, off, b) > 0.0)
+               m |= b;
+         return m;
       }
       // The body is on its stop (the group's test) and the free step presses it in: it stays on the stop for this step (a contact's complementarity, decided per step: no time is lost and nothing chatters); inelastic, as the stop's law
       bool PinOnStop(const double *, int) override
@@ -522,6 +536,19 @@ namespace BatGroup
          rigid = sv.rigid; wasPreEos = sv.wasPreEos; coilOffPrev = sv.coilOffPrev; plungerPinned = sv.plungerPinned; phiPinned = sv.phiPinned;
          phi = sv.phi; omega = sv.omega; xp = sv.xp; vp = sv.vp; iHigh = sv.iHigh; iLow = sv.iLow; pulse = sv.pulse;
          MovePivot();
+      }
+      std::string StartNote() const override
+      {
+         char s[400];
+         snprintf(s, sizeof s, "rigid %d preEos %d coilOffPrev %d plungerPinned %d phiPinned %d solenoid %d phi %.17g omega %.17g xp %.17g vp %.17g iHigh %.17g iLow %.17g pulse %d t %.17g amp %.17g",
+            sv.rigid, sv.wasPreEos, sv.coilOffPrev, sv.plungerPinned, sv.phiPinned, solenoid, sv.phi, sv.omega, sv.xp, sv.vp, sv.iHigh, sv.iLow, sv.pulse.active, sv.pulse.t, sv.pulse.amp);
+         return s;
+      }
+      std::string StopNote() const override
+      {
+         char s[260];
+         snprintf(s, sizeof s, "rigid %d phiPinned %d plungerPinned %d solenoid %d dof %d phi %.9g omega %.6g xp %.9g vp %.6g xMin %.9g xMax %.9g", rigid, phiPinned, plungerPinned, solenoid, nDof, phi, omega, xp, vp, xMin, xMax);
+         return s;
       }
       void ScaleSpeeds(const double f) override { omega *= f; vp *= f; }
       void ExplicitMove(const double *Res, const int off, const double h, double *x) const override

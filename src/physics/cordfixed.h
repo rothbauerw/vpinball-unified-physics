@@ -550,7 +550,22 @@ public:
       }
       return true;
    }
-   double StopExcess(const double *x, int off) const override { return pl.on && !pinned ? std::max(phi + x[off] - PhiStop(), -(phi + x[off])) : -INFINITY; }
+   // stops: bit 0 the plate's coil stop, bit 1 its rest
+   double StopExcess(const double *x, int off, unsigned mask = ~0u) const override
+   {
+      if (!pl.on || pinned)
+         return -INFINITY;
+      double e = -INFINITY;
+      if (mask & 1u)
+         e = std::max(e, phi + x[off] - PhiStop());
+      if (mask & 2u)
+         e = std::max(e, -(phi + x[off]));
+      return e;
+   }
+   unsigned CrossingStops(const double *x, int off) const override
+   {
+      return (StopExcess(x, off, 1u) > 0.0 ? 1u : 0u) | (StopExcess(x, off, 2u) > 0.0 ? 2u : 0u);
+   }
    bool PinOnStop(const double *, int) override
    {
       const bool low = phi < 0.5 * PhiStop();

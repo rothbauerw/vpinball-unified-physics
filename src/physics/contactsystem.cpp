@@ -2644,6 +2644,15 @@ struct ContactSystemImpl
          if (g_partEnergyLines == kPartEnergyLines)
             msg += " (no more of these lines this table start: the totals come at its end)";
          PLOGW << msg;
+         // the state the energy step saved at the step's start, full precision, for an exact replay (balls in m, m/s, rad/s; contacts: their springs; parts: their own)
+         snprintf(s, sizeof s, "Group step: energy step start state, t=%u ms + %.17g s, h %.17g s", g_pplayer->m_time_msec, done - hTaken, hTaken);
+         msg = s + g.StartNote();
+         for (size_t p = 0; p < parts.size(); p++)   // in the order of the names above
+            if (GroupStep::Part *const gp = parts[p]->GroupPart())
+               msg += " [part " + (p < names.size() ? names[p] : std::to_string(p)) + " " + gp->StartNote() + "]";
+         PLOGW << msg;
+         if (!g.failRoundBuf.empty())   // VPX_GROUP_ROUND_TRACE=1: the rounds of the step's first failed attempt
+            PLOGW << "Group step: energy step, first failed attempt's rounds:\n" << g.failRoundBuf;
       };
       // VPX_GROUP_STATS=<file> (a diagnostic, read once): the group step's totals over the run, rewritten every 200 ms of table time: cycles, time per cycle, steps, solve rounds, halvings,
       // energy steps, failed cycles (the behaviour check's step statistics)
@@ -2857,7 +2866,9 @@ struct ContactSystemImpl
                snprintf(s, sizeof s, " cord %s plate %.3f omega %.3f on0 %d", c->Name().c_str(), p.phi * 57.29578, p.omega, p.OnCord(0) ? 1 : 0);
                how += s;
             }
-            PLOGW << "Cord group how:" << how;
+            PLOGW << "Cord group how:" << how << " (cycle lost: " << g.overWhy << ")";
+            if (!g.stopBuf.empty())   // VPX_GROUP_STOP_TRACE=1
+               PLOGW << "Cord group stop checks this cycle:\n" << g.stopBuf;
          }
          // A hard step (GroupStepDesign 15): the balls stay as they are for the rest of the cycle and the next cycle tries again from the same state: time is lost, no energy can appear,
          // and nothing goes to stock. If it will not solve for kHeldCycles in a row the cord lets the balls go, which only takes energy away.

@@ -381,7 +381,10 @@ namespace GroupStep
       // the step's length: facts, from the state now (accuracy only; GroupStepDesign 10.3)
       virtual void StepFacts(const Ball *b, int nb, const Settings &s, StepFactList &f) = 0;
       // hard things: the events of a step, run by Group::Step
-      virtual double StopExcess(const double *, int) const { return -INFINITY; }   // > 0: the move x carries a body past a hard stop by this much (the step is shortened to end on it; piece 1 item 7)
+      // > 0: the move x carries a body past a hard stop by this much (the step is shortened to end on it; piece 1 item 7). mask: the stops counted (bit k = the part's stop k)
+      virtual double StopExcess(const double *, int, unsigned = ~0u) const { return -INFINITY; }
+      // the stops the move x carries it past, each on its own (bit k): only these shorten a step, so a stop a body is on and leaving never does
+      virtual unsigned CrossingStops(const double *x, int off) const { return StopExcess(x, off) > 0.0 ? ~0u : 0u; }
       virtual bool ArrivingAtStop() const { return true; }               // the move last tested by StopExcess is closing on what it came near
       virtual bool PinOnStop(const double *, int) { return false; }      // on its hard stop already and the move x just solved would take it on past: it stays there. False: nothing changed
       virtual bool FreedByStep() { return false; }                       // a body with no unknown: the forces of the step just solved take it off, so it has one and the step is solved again
@@ -402,6 +405,8 @@ namespace GroupStep
       // the residual of that round (its rows from off). Told only when an energy step is reported
       virtual void KeepFailNote(int, const double *, int) {}
       virtual std::string FailNote(int) const { return std::string(); }
+      virtual std::string StartNote() const { return std::string(); }
+      virtual std::string StopNote() const { return std::string(); }    // diagnostics (VPX_GROUP_STOP_TRACE): its state at a stop check   // after an energy step: the state it saved at the step's start, full precision (for an exact replay)
       virtual std::string SearchNote(const double *, int, double) const { return std::string(); }   // diagnostics (VPX_GROUP_SEARCH_TRACE): the part's state for the move x over h
       virtual std::string RowNote() const { return std::string(); }   // diagnostics (VPX_GROUP_ROUND_TRACE): the terms of its rows at its last evaluation
       virtual void BallsMoved(const Ball *, int) {}              // the balls were moved with no step of its own
@@ -849,12 +854,18 @@ namespace GroupStep
       {
          done = 0.0;
          int guard = 0;
+         overWhy = '?';
+         stopBuf.clear();
+         stopLines = 0;
          while (done < dt - 1e-12)
          {
             const double h = capStep(std::min(ChooseStep(), dt - done));
             const double taken = Step(h);
             if (books.failed || taken <= 0.0 || (++guard > 3000 && GroupFixedStepS() <= 0.0))
+            {
+               overWhy = books.failed ? 'F' : taken <= 0.0 ? 'Z' : 'G';   // why the cycle was lost: F a failed step, Z a step of no length, G 3000 steps
                return false;
+            }
             done += taken;
             afterStep();
          }
@@ -1109,18 +1120,38 @@ namespace GroupStep
                }
                // the step that ends on the stop (Illinois false position on the step length), then solved again there (its end state is the one taken)
                const double *const zero = zeroS;
+               // each stop on its own (one rule for every part): only the stops this step's move carries a body past count. A stop the body is on and leaving is none of
+               // them: taken with the others it held the search's start at 0 and every step ended after ~1e-29 s (bench F4: 3000 steps, the cycle lost)
+               crossS.assign(np, 0u);
+               for (int p = 0; p < np; p++)
+                  crossS[p] = part[p]->CrossingStops(x, partOff[p]);
                {
                   bool pinnedOne = false;
                   for (int p = 0; p < np; p++)
                   {
-                     const bool onIt = part[p]->StopExcess(zero, partOff[p]) > -kOnStop;
-                     if (part[p]->StopExcess(x, partOff[p]) > 0.0 && onIt)   // (the solved move tested last: ArrivingAtStop and PinOnStop may use what it found)
+                     if (crossS[p] == 0u)
+                        continue;
+                     const bool onIt = part[p]->StopExcess(zero, partOff[p], crossS[p]) > -kOnStop;   // on a stop the move would carry it past
+                     if (part[p]->StopExcess(x, partOff[p], crossS[p]) > 0.0 && onIt)   // (the solved move tested last: ArrivingAtStop and PinOnStop may use what it found)
                         pinnedOne = part[p]->PinOnStop(x, partOff[p]) || pinnedOne;
+                  }
+                  if (StopTraceOn() && stopLines < 12)   // diagnostics, off by default: each stop check that found a stop passed
+                  {
+                     char t[200];
+                     snprintf(t, sizeof t, "  stop check h %.6g us pinned %d:", h * 1e6, pinnedOne ? 1 : 0);
+                     stopBuf += t;
+                     for (int p = 0; p < np; p++)
+                     {
+                        snprintf(t, sizeof t, " [p%d ex0 %.6g ex %.6g %s]", p, part[p]->StopExcess(zero, partOff[p]), part[p]->StopExcess(x, partOff[p]), part[p]->StopNote().c_str());
+                        stopBuf += t;
+                     }
+                     stopBuf += "\n";
+                     stopLines++;
                   }
                   if (pinnedOne)
                      continue;
                }
-               double lo = 0.0, flo = std::min(StopExcess(zero), -1e-30), hi = h, fhi = StopExcess(), hBelow = 0.0;
+               double lo = 0.0, flo = std::min(StopExcessOf(zero), -1e-30), hi = h, fhi = StopExcessOf(x), hBelow = 0.0;
                int side = 0;
                bool solvedBelow = false;   // x holds the solve at hBelow (the search ended on it): no need to solve it again
                WarmFromSolve(h);
@@ -1141,13 +1172,13 @@ namespace GroupStep
                      return EnergyStep(hTry);
                   }
                   WarmFromSolve(hm);
-                  const double f = StopExcess();
+                  const double f = StopExcessOf(x);
                   if (f <= 0.0)
                   {
                      hBelow = hm;
                      bool arriving = true;
-                     for (int p = 0; p < np; p++)
-                        arriving = arriving && part[p]->ArrivingAtStop();
+                     for (int p = 0; p < np; p++)   // (each searched part's last StopExcess was at this move)
+                        arriving = arriving && (crossS[p] == 0u || part[p]->ArrivingAtStop());
                      if (f > -kOnStop && arriving)
                      {
                         solvedBelow = true;
@@ -1170,6 +1201,12 @@ namespace GroupStep
                }
                const bool endOk = hBelow > 0.0 && (solvedBelow || Solve(hBelow));
                warmOn = false;
+               if (StopTraceOn() && stopLines <= 12)
+               {
+                  char t[120];
+                  snprintf(t, sizeof t, "    -> hBelow %.6g us solvedBelow %d endOk %d\n", hBelow * 1e6, solvedBelow ? 1 : 0, endOk ? 1 : 0);
+                  stopBuf += t;
+               }
                if (!endOk)
                   return EnergyStep(hTry);
                Accept(hBelow, true);
@@ -1221,6 +1258,34 @@ namespace GroupStep
       std::string roundBuf, failRoundBuf;   // VPX_GROUP_ROUND_TRACE: this attempt's rounds; the first failed attempt of the step
       int nHalveDiag = 0;
       char failWhy = '?';
+      char overWhy = '?';                   // why StepsOver lost its cycle (F, Z, G)
+      std::string stopBuf;                  // VPX_GROUP_STOP_TRACE=1: this cycle's stop checks (the first 12)
+      int stopLines = 0;
+      static bool StopTraceOn() { static const bool on = []() { const char *const e = getenv("VPX_GROUP_STOP_TRACE"); return e != nullptr && atoi(e) != 0; }(); return on; }
+      // after an energy step: the balls and contacts it saved at the step's start, and the warm start then in hand, full precision (for an exact replay; m, m/s, rad/s)
+      std::string StartNote() const
+      {
+         std::string msg;
+         char z[700];
+         for (int i = 0; i < nb; i++)
+         {
+            const Ball &b = esB0[i];
+            snprintf(z, sizeof z, " [ball %d c %.17g %.17g %.17g v %.17g %.17g %.17g w %.17g %.17g %.17g m %.17g R %.17g fExt %.17g %.17g %.17g a %.17g %.17g %.17g alpha %.17g %.17g %.17g warmA %.17g %.17g %.17g warmAl %.17g %.17g %.17g warmOn %d]",
+               i, b.c.x, b.c.y, b.c.z, b.v.x, b.v.y, b.v.z, b.w.x, b.w.y, b.w.z, b.m, b.R, b.fExt.x, b.fExt.y, b.fExt.z, esA0[i].x, esA0[i].y, esA0[i].z,
+               esAl0[i].x, esAl0[i].y, esAl0[i].z, warmA[i].x, warmA[i].y, warmA[i].z, warmAl[i].x, warmAl[i].y, warmAl[i].z, (int)warmOn);
+            msg += z;
+         }
+         for (int k = 0; k < ni; k++)
+         {
+            const Item &it = esI0[k];
+            if (!it.touching && it.xi.x == 0.0 && it.xi.y == 0.0 && it.xi.z == 0.0)
+               continue;
+            snprintf(z, sizeof z, " [item %d a %d b %d s %d touching %d xi %.17g %.17g %.17g th %.17g %.17g %.17g tw %.17g dZero %.17g]",
+               k, it.a, it.b, it.s, (int)it.touching, it.xi.x, it.xi.y, it.xi.z, it.ra.th.x, it.ra.th.y, it.ra.th.z, it.ra.tw, it.dZero);
+            msg += z;
+         }
+         return msg;
+      }
       // back: a line-search round (the last move retaken shorter); grip: the parts' grip change after the move (m/s)
       struct RoundDiag { double moveC = 0.0, moveW = 0.0, scale = 1.0, grip = 0.0; int nActive = 0, nSlip = 0, nSlipFlip = 0, nOnFlip = 0, back = 0; };
       static constexpr int kRounds = 64;
@@ -1260,13 +1325,14 @@ namespace GroupStep
       // the stop search's first guess: the accelerations of this step's last solve (same start state), so a re-solve at a nearby length starts near its answer
       Buf<V3> warmA, warmAl;
       bool warmOn = false;
-      void WarmFromSolve(const double h)
+      void WarmFromSolve(double)
       {
          for (int i = 0; i < nb; i++)
          {
-            const V3 dc(x[6 * i], x[6 * i + 1], x[6 * i + 2]), dw(x[6 * i + 3], x[6 * i + 4], x[6 * i + 5]);
-            warmA[i] = (dc - ball[i].v * h) * (2.0 / (h * h));   // dc = v h + a h^2 / 2
-            warmAl[i] = dw * (1.0 / h);
+            // the force and torque the solve used (Eval's at its move), over the mass and inertia: the mean accelerations of that move (m dv = F h at a solution),
+            // bounded by the forces however short h is (from the move itself, (dc - v h) 2 / h^2 is the solve's tolerance over h^2 when h is near zero)
+            warmA[i] = evF[i] * (1.0 / ball[i].m);
+            warmAl[i] = evM[i] * (1.0 / ball[i].I());
          }
          warmOn = true;
       }
@@ -1392,6 +1458,15 @@ namespace GroupStep
             n += part[p]->NumDof();
          }
          return n;
+      }
+      std::vector<unsigned> crossS;   // per part, the stops the step's move carries it past (the stop search follows these only)
+      double StopExcessOf(const double *xv) const
+      {
+         double e = -INFINITY;
+         for (int p = 0; p < np; p++)
+            if (crossS[p] != 0u)
+               e = std::max(e, part[p]->StopExcess(xv, partOff[p], crossS[p]));
+         return e;
       }
       double StopExcess(const double *xv = nullptr) const
       {
@@ -2697,7 +2772,6 @@ namespace GroupStep
          {
             Ball &b = ball[i];
             const V3 dc(x[6 * i], x[6 * i + 1], x[6 * i + 2]), dw(x[6 * i + 3], x[6 * i + 4], x[6 * i + 5]);
-            const V3 v0 = b.v;
             if (b.brakeRate > 0.0)
             {
                const V3 wmid = b.w + dw * 0.5, wa = wmid - b.brakeAxis * wmid.Dot(b.brakeAxis);
@@ -2706,8 +2780,8 @@ namespace GroupStep
             b.c = b.c + dc;
             b.v = dc * (2.0 / h) - b.v;
             b.w = b.w + dw;
-            aLast[i] = (b.v - v0) * (1.0 / h);
-            alphaLast[i] = dw * (1.0 / h);
+            aLast[i] = evF[i] * (1.0 / b.m);         // the next step's first guess: the force and torque of the move taken (Eval's at it), not (v1 - v0) / h, which is
+            alphaLast[i] = evM[i] * (1.0 / b.I());   // the solve's tolerance over h for a step near zero long (a stop search on a stop: 5.7e12 m/s^2, a guess 88 km off)
          }
          for (int k = 0; k < ni; k++)
          {
