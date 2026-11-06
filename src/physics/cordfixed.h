@@ -1196,6 +1196,15 @@ public:
    std::vector<std::shared_ptr<StopBody>> stopBodies;   // what the obstacles point at
    // the plate's laws
    double PhiStop() const { return sl.mech.stopDeg * FlipperModel::DEG; }
+   // how far the plate can carry the cord past its rest line: the face at the coil stop (the cord is massless and the stops are hard, so it is never farther; Limit rises with the angle)
+   double PlateReachM() const
+   {
+      if (!pl.on)
+         return 0.0;
+      double y = 0.0, dy = 0.0;
+      Limit(PhiStop(), y, dy);
+      return std::max(y, 0.0);
+   }
    double Inertia(const double ph) const
    {
       const FlipperModel::Kin k = FlipperModel::Kinematics(sl.mech, der, der.theta0 + ph);

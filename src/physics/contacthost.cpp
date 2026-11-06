@@ -42,7 +42,7 @@ namespace
    };
    const BoolKey BOOL_KEYS[] = {
       { "contact", &RubberObjectSettings::contact }, { "rubber", &RubberObjectSettings::surfaceRubber }, { "normal_loss", &RubberObjectSettings::normalLoss }, { "viscoelastic_damping", &RubberObjectSettings::viscoelastic }, { "twist", &RubberObjectSettings::twist },
-      { "band_twist_loss", &RubberObjectSettings::bandTwistLoss },
+      { "band_twist_loss", &RubberObjectSettings::bandTwistLoss }, { "band_plate_reach", &RubberObjectSettings::bandPlateReach },
    };
 
    using PhysicsIni::Trim;

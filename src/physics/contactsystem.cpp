@@ -1818,13 +1818,15 @@ struct ContactSystemImpl
          if (e.band != nullptr)   // the band holds the ball until its own release rule lets go (the ball stays in its other contacts)
          {
             // off the cord and clear of it; a plate on its way out can still catch a ball close by, so it stays in the group until the plate is quiet or the ball is far
+            // (band_plate_reach: beyond the plate's stroke at the cord, CordFixed::PlateReachM, and this rule's 1 mm; otherwise 30 mm)
             CordBand &cb = *e.band->Cord();
             int slot = -1;
             for (int k = 0; k < (int)cb.slots.size(); k++)
                if (cb.slots[k] == pb)
                   slot = k;
             const double gap = slot >= 0 ? cb.Gap(slot) : 1.0;
-            if (gap > 0.03 || (gap > 0.001 && cb.PlateQuiet()))
+            const double clearM = e.band->m_set.bandPlateReach ? 0.001 + cb.fixed->PlateReachM() : 0.03;
+            if (gap > clearM || (gap > 0.001 && cb.PlateQuiet()))
                cy.bandReleases.emplace_back(pb, "clear");
             continue;
          }
@@ -3911,11 +3913,14 @@ void ContactSystemImpl::CordNear(const float dtime)
          HitRubber *const band = o->m_set.band && o->m_enabled ? o->BandHost() : nullptr;
          if (band == nullptr || !band->CordModel())
             continue;
-         // a plate on its way out carries the cord this far past its rest line (as the release rule)
-         const double plateReach = band->CordOn() && !band->Cord()->PlateQuiet() ? 0.03 : 0.0;
+         // a plate on its way out carries the cord this far past its rest line (as the release rule): band_plate_reach, the plate's stroke at the cord (CordFixed::PlateReachM); otherwise 30 mm
+         const bool bound = band->m_set.bandPlateReach;
+         const double plateReach = band->CordOn() && !band->Cord()->PlateQuiet() ? (bound ? band->Cord()->fixed->PlateReachM() : 0.03) : 0.0;
          // a real section thicker than the table's: the cord's surface stands out from the table's tube by twice the difference (its centre moves out by it, and its radius grows by it); the probe below reads the table's tube
          const double fixedRc = band->CordOn() ? band->Cord()->fixed->rc : 0.0;
-         const float reachU = pb->m_d.m_radius + (float)((2.0 * speed * dt + plateReach + (fixedRc > 0.0 ? 2.0 * fixedRc : 0.0)) / U) + 4.0f;
+         // band_plate_reach: as far past the band's box (its points and the table's tube radius) as the engage rule below can take a ball: the real section standing out, the release gap, and the farther of the plate's stroke and two cycles' closing
+         const float reachU = bound ? pb->m_d.m_radius + (float)((std::max(2.0 * (fixedRc - band->m_radiusSI), 0.0) + o->ReleaseGapM() + std::max(plateReach, 2.0 * speed * dt)) / U)
+                                    : pb->m_d.m_radius + (float)((2.0 * speed * dt + plateReach + (fixedRc > 0.0 ? 2.0 * fixedRc : 0.0)) / U) + 4.0f;
          const FRect3D &bb = o->m_hitBBox;
          if (pos.x < bb.left - reachU || pos.x > bb.right + reachU || pos.y < bb.top - reachU || pos.y > bb.bottom + reachU || pos.z < bb.zlow - reachU || pos.z > bb.zhigh + reachU)
             continue;

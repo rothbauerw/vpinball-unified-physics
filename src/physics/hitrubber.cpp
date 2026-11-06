@@ -1399,7 +1399,7 @@ void HitRubber::CordEnsure()
          PLOGI << "Band " << m_name << ": span " << j << " from (" << p.span[j].A.x / U << ", " << p.span[j].A.y / U << ") to (" << p.span[j].B.x / U << ", " << p.span[j].B.y / U << ") U";
       PLOGI << "Band " << m_name << ": fixed-height cord, " << np << " posts, " << stopBodies.size() << " stops, " << (p.pl.on ? "plate, " : "") << p.geo.nSwitches << " switches, cord " << 2e3 * rc << " mm at " << zc * 1e3
             << " mm, E " << m_set.eMpa << " MPa, EA " << p.EA << " N, tan delta " << p.tanD << ", loop " << loop * 1e3 << " mm, stretch " << stretch * 100.0 << " %, tension " << p.T0 << " N"
-            << (p.pl.on ? ", plate edges " : "") << (p.pl.on ? std::to_string(p.pl.x0 * 1e3) + " - " + std::to_string(p.pl.x1 * 1e3) + " mm of " + std::to_string(p.span[p.pl.span].len * 1e3) + " mm, originN " + std::to_string(p.pl.originN * 1e3) + " a " + std::to_string(p.pl.a * 1e3) + " h " + std::to_string(p.pl.h * 1e3) + " rest " + std::to_string(p.pl.rest * 57.29578) + " deg, " + std::to_string(p.sl.mech.vSupply) + " V" : "");
+            << (p.pl.on ? ", plate edges " : "") << (p.pl.on ? std::to_string(p.pl.x0 * 1e3) + " - " + std::to_string(p.pl.x1 * 1e3) + " mm of " + std::to_string(p.span[p.pl.span].len * 1e3) + " mm, originN " + std::to_string(p.pl.originN * 1e3) + " a " + std::to_string(p.pl.a * 1e3) + " h " + std::to_string(p.pl.h * 1e3) + " rest " + std::to_string(p.pl.rest * 57.29578) + " deg, " + std::to_string(p.sl.mech.vSupply) + " V, stroke at the cord " + std::to_string(p.PlateReachM() * 1e3) + " mm (band_plate_reach " + (m_set.bandPlateReach ? "1" : "0") + ")" : "");
    }
 }
 

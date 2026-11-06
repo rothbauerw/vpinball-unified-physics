@@ -59,6 +59,7 @@ struct RubberObjectSettings
    double bandStretchAlpha = 0.09; // Hunt-Crossley on the cord's stretch, s/m: half the ring's 0.18, for half its drop-off with speed. Fitted to the user's best guess (about 0.8 at 3 m/s), not measured
    double bandTwistScale = 1.0;    // the twist spring against its calculated stiffness (kT / 6)
    bool bandTwistLoss = true;      // the twist spring takes the rubber's tan_delta
+   bool bandPlateReach = true;     // band_plate_reach (default 1 since 2026-11-05): 1 = a ball is taken into a sling's band within the plate's own stroke at the cord (CordFixed::PlateReachM), and the band's near search reaches as far as its engage rule needs; 0 = the fixed 30 mm and the search's 4 U pad
    double bandRefHz = 20.0;       // frequency at which tan_delta (the rubber's own loss tangent, shared with the rings) applies to the stretch
    double bandCurveRadiusMm = 40.0; // a centreline vertex whose local bend radius is below this belongs to a post wrap
    double bandMinSpanMm = 20.0;   // a straight run shorter than this between two posts is not a free span
