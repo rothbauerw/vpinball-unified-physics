@@ -313,6 +313,10 @@ namespace GroupStep
       // clock an untouched approaching contact gets there (rule 3). The union's depth sees only the deepest piece, so a second piece arriving inside a step is otherwise invisible.
       // true (default) = on; false = the union's rule alone.
       bool termArrival = true;
+      // dampDirSlope ([Contact] damp_dir_slope): a contact made of terms damps along G = Fel / |Fel| (the pressing terms' summed elastic force); G turns as the terms'
+      // forces change, at h dG/du = (I - G g^T) K / fe (K = sum_t h tk_t tg_t tg_t^T, g = G's ball part). Newton's slope then takes fd h dG/du and dd = G . dq's change
+      // through G, (kd / h) G dq^T dG/du; N's slope (kv) the latter. The force is unchanged. true (default) = on; false = G held fixed in the slope.
+      bool dampDirSlope = true;
       double turnMaxRad = 2.0 * kPi / 180.0;   // a ball rolling round a post or another ball turns at most this per step
       double tauShare = 0.25, fieldShare = 0.25;   // a part's own time constant is resolved to this share of it; a body moves at most this share of a distance over which its force changes (StepFactList; no part uses them yet; the bat's values)
       double vFloor = 0.01;                    // m/s: the closing speed below which a contact's expected depth is taken at this speed
@@ -2574,6 +2578,35 @@ namespace GroupStep
                   ix[p] = (p < 3 ? 6 * it.a : 6 * it.b) + p % 3;
                for (int j = 0; j < nq; j++)
                   ix[3 + j] = cUnk[qc0 + hm.c[j].coord];
+               // dampDirSlope: G's turning, h dG/du = (I - G g^T) K / fe (K = sum_t h tk_t tg_t tg_t^T, g = G's ball part), in Newton's slope: the damping's fd along it and
+               // dd = G . dq's change through it, h dfd/du += (cD / (h fe)) (dq - dd g)^T K (gW, on kv too). The residual is unchanged.
+               const bool dirOn = terms && set.dampDirSlope && feT > 0.0 && fe + fd > 0.0;
+               double gK[4][4] = {}, gW[4] = {};
+               if (dirOn)
+               {
+                  double K[4][4] = {};
+                  for (int t = 0; t < hm.nt; t++)
+                     if (tOn[t])
+                        for (int p = 0; p < 4; p++)
+                           for (int q = 0; q < 4; q++)
+                              K[p][q] += h * tk[t] * tg[t][p] * tg[t][q];
+                  for (int q = 0; q < 4; q++)
+                  {
+                     double gKq = 0.0, w = 0.0;
+                     for (int r = 0; r < 4; r++)
+                     {
+                        if (r < 3)
+                           gKq += gd[r] * K[r][q];
+                        w += (dq[r] - (r < 3 ? dd * gd[r] : 0.0)) * K[r][q];
+                     }
+                     gW[q] = cD / (h * feT) * w;   // (fd = cD dd / h: dd's change through G takes the coefficient; cD's own depth slope is on G g^T)
+                     for (int p = 0; p < 4; p++)
+                        gK[p][q] = fd / feT * (K[p][q] - gd[p] * gKq);
+                  }
+                  for (int p = 0; p < 4; p++)
+                     for (int q = 0; q < 4; q++)
+                        gK[p][q] += gd[p] * gW[q];
+               }
                if (terms)   // each term's own chord slope on its own gradient, the damping's on G
                {
                   if (fe + fd > 0.0)
@@ -2588,6 +2621,8 @@ namespace GroupStep
                                  for (int t = 0; t < hm.nt; t++)
                                     if (tOn[t])
                                        a += h * tk[t] * tg[t][p] * tg[t][q];
+                                 if (dirOn)
+                                    a += gK[p][q];
                                  J[ix[p]][ix[q]] += a;
                               }
                   }
@@ -2646,7 +2681,7 @@ namespace GroupStep
                            kv[u] += w * tg[t][u];
                      }
                   for (int u = 0; u < 4; u++)
-                     kv[u] += kd * gd[u];
+                     kv[u] += dirOn ? kd * gd[u] + gW[u] : kd * gd[u];
                }
                if (k1 > 0.0)
                {

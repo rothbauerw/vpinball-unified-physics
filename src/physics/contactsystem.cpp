@@ -2214,6 +2214,7 @@ struct ContactSystemImpl
       g.set.swingCap = cy.cs->stepSwingCap;
       g.set.shearMotion = cy.cs->shearStepMotion;
       g.set.termArrival = cy.cs->termArrival;
+      g.set.dampDirSlope = cy.cs->dampDirSlope;
       g.set.epsRest = cy.cs->epsRestUm * 1e-6;   // (0.01 um gives 1e-8 m exactly, the Settings default)
       if (ring)   // (cy.rpBall holds the old loop's halved modulus, and the group halves it for a pair itself; its rolling resistance is on the pair's radius, R / 2)
       {
