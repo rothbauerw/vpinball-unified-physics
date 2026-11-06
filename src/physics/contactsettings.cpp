@@ -131,6 +131,8 @@ namespace
             s.ballReachMm = d;
          else if (key == "island_reach")
             s.islandReach = on;
+         else if (key == "ball_pair_reach")
+            s.ballPairReach = on;
          else if (key == "sleep")
             s.sleep = on;
          else if (key == "sleep_speed_mm_s" && num)

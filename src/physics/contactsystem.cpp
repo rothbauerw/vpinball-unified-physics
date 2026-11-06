@@ -499,6 +499,58 @@ struct ContactSystemImpl
    // A ball's travel: the speeds of every ball of its group (a hit hands speed on), what their forces add, and twice the speed of each part in the group (a ball leaves a moving surface at up to twice
    // its speed). A part's travel: its whole range of motion once a ball can reach it (a hit can move it anywhere it can go), else what its own drives give it (SurfaceSpeedBound). Grown to a fixed point:
    // the bounds only grow. A part no ball can reach is left out of every ball's solve (partOut) and moves alone; one a ball reaches is in that ball's island only. The gap is to its real surface (Probe).
+   // ball_pair_reach: the one ball-ball reach test (island pairing in ReachLinks, the sleep wake in SleepInStep). V = a ball's speed bound over the cycle: the kinetic energy
+   // that can reach it (spin included) given all to it, sqrt(2 E / m), plus what forces and moving parts add; a held (sleeping) ball has V = 0 at its held position
+   static double BallSpeedBound(const double e, const double m, const double add) { return std::sqrt(2.0 * e / m) + add; }
+   static bool BallsMayMeet(const double gap, const double vi, const double vj, const double T) { return gap < (vi + vj) * T + 100e-6; }   // (100 um: the contact law's approach margin)
+
+   // ball_pair_reach rule 8: two balls in different islands last cycle that overlap at this cycle's start were missed by the bound
+   inline static std::vector<std::pair<const HitBall *, uintptr_t>> s_ballGroupLast;   // (ball, its group) of the last cycle: its island's root ball, or its sleep group (held balls)
+   static void BallPairMissCheck(const Cycle &cy, const std::vector<double> &bgap)
+   {
+      const int nw = (int)cy.bodies.size();
+      const auto rootOf = [](const HitBall *pb) -> uintptr_t { for (const auto &g : s_ballGroupLast) if (g.first == pb) return g.second; return 0; };
+      for (int i = 0; i < nw; i++)
+         for (int j = i + 1; j < nw; j++)
+            if (bgap[(size_t)i * nw + j] < 0.0)
+            {
+               const uintptr_t ri = rootOf(cy.bodies[i].pb), rj = rootOf(cy.bodies[j].pb);
+               if (ri == 0 || rj == 0 || ri == rj)
+                  continue;
+               static int warned = 0;
+               const char *const ni = TestDriver::BallName(cy.bodies[i].pb), *const nj = TestDriver::BallName(cy.bodies[j].pb);
+               std::ostringstream o;
+               o << "Ball pair reach: balls " << (ni != nullptr ? ni : "") << " and " << (nj != nullptr ? nj : "") << " overlap " << -bgap[(size_t)i * nw + j] * 1e3 << " mm, in different islands last cycle (a missed contact)";
+               PLOGW << o.str();
+               if (warned++ == 0 && g_pplayer->m_liveUI != nullptr)
+                  g_pplayer->m_liveUI->PushNotification(o.str(), 6000);
+            }
+   }
+   // ball_pair_reach diagnostic: a pair only the closure groups (the pairwise rule would not), logged when that grouping starts, with the terms of each V (200 lines at most)
+   inline static std::vector<std::pair<const HitBall *, const HitBall *>> s_pairReachLast, s_pairReachNow;
+   template <class Terms> static void BallPairReachLog(const Cycle &cy, const int i, const int j, const double gap, Terms terms)
+   {
+      const std::pair<const HitBall *, const HitBall *> key(cy.bodies[i].pb, cy.bodies[j].pb);
+      s_pairReachNow.push_back(key);
+      static int lines = 0;
+      if (lines >= 200 || std::find(s_pairReachLast.begin(), s_pairReachLast.end(), key) != s_pairReachLast.end())
+         return;
+      lines++;
+      const char *const ni = TestDriver::BallName(cy.bodies[i].pb), *const nj = TestDriver::BallName(cy.bodies[j].pb);
+      const V3 &ci = cy.bodies[i].c, &cj = cy.bodies[j].c;
+      PLOGI << "Ball pair reach t=" << g_pplayer->m_time_msec << ": " << (ni != nullptr ? ni : "?") << " (" << ci.x << " " << ci.y << " " << ci.z << ") and " << (nj != nullptr ? nj : "?") << " (" << cj.x << " "
+            << cj.y << " " << cj.z << ") gap " << gap * 1e3 << " mm < (Vi + Vj) T: i " << terms(i) << "; j " << terms(j);
+   }
+   template <class Find> static void BallPairMissKeep(const Cycle &cy, Find &find)
+   {
+      s_ballGroupLast.clear();
+      for (int i = 0; i < (int)cy.bodies.size(); i++)
+         s_ballGroupLast.emplace_back(cy.bodies[i].pb, (uintptr_t)cy.bodies[find(i)].pb);
+      for (auto *const b : g_pplayer->m_vball)   // held (asleep) this cycle: grouped by sleep group, checked at its held position when it wakes
+         if (b->m_hitBall.m_sleepGroup != 0)
+            s_ballGroupLast.emplace_back(&b->m_hitBall, (uintptr_t)b->m_hitBall.m_sleepGroup);
+   }
+
    static void ReachLinks(Cycle &cy)
    {
       constexpr double kApproachM = 100e-6;   // m: the contact law's approach margin (SetupIsland kApproachMarginM): a gap under it is stepped as a contact
@@ -532,7 +584,8 @@ struct ContactSystemImpl
                      parts.push_back(mp);
                   edges.push_back({ i, p, &it, gap, false });
                }
-      if (edges.empty())
+      const bool ballPairs = cy.cs->ballPairReach && cy.cs->ballContact && nw >= 2;
+      if (edges.empty() && !ballPairs)
          return;
       std::vector<int> root(nw);
       for (int i = 0; i < nw; i++)
@@ -546,6 +599,10 @@ struct ContactSystemImpl
       const int np = (int)parts.size();
       std::vector<double> sPart(np, -1.0), range(np, 0.0);
       std::vector<int> partBall(np, -1);   // the first ball that can reach it
+      std::vector<const std::string *> partName(np, nullptr);
+      for (const Edge &ed : edges)
+         if (partName[ed.p] == nullptr)
+            partName[ed.p] = &ed.it->r->Name();
       for (const Edge &ed : edges)
          if (sPart[ed.p] < 0.0)
          {
@@ -553,15 +610,35 @@ struct ContactSystemImpl
             sPart[ed.p] = parts[ed.p]->SurfaceSpeedBound(T);
             range[ed.p] = parts[ed.p]->MotionRange();
          }
-      std::vector<double> vc(nw);
+      // ball_pair_reach: balls i, j share an island when gap_ij < (V_i + V_j) T + margin, V = the group speed bound below (plain sum: walls and hits can turn a ball, so |vi - vj| is no bound)
+      std::vector<char> paired;
+      std::vector<double> bgap;
+      if (ballPairs)
+      {
+         paired.assign((size_t)nw * nw, 0);
+         bgap.resize((size_t)nw * nw);
+         for (const auto &pr : cy.pairs)
+            paired[(size_t)pr.first * nw + pr.second] = 1;
+         for (int i = 0; i < nw; i++)
+            for (int j = i + 1; j < nw; j++)
+               bgap[(size_t)i * nw + j] = (cy.bodies[i].c - cy.bodies[j].c).Length() - cy.bodies[i].bs.R - cy.bodies[j].bs.R;
+         BallPairMissCheck(cy, bgap);
+      }
+      // ball_pair_reach: the balls' part of a ball's speed bound is the group's kinetic energy (spin included) given all to that ball, sqrt(2 E / m): a hit only shares energy out
+      // (a light ball hit by a heavy one leaves at up to twice its speed, beyond the sum of speeds); equal masses: sqrt(sum v^2) <= sum |v|. Without it: the sum of the group's speeds.
+      std::vector<double> vc(nw), eg(ballPairs ? nw : 0);
+      const auto V = [&](const int i) { const int g = find(i); return ballPairs ? BallSpeedBound(eg[g], cy.bodies[i].bs.m, vc[g]) : vc[g]; };
       for (bool grew = true; grew;)
       {
          grew = false;
          std::fill(vc.begin(), vc.end(), 0.0);
+         std::fill(eg.begin(), eg.end(), 0.0);
          for (int i = 0; i < nw; i++)
          {
             const Body &w = cy.bodies[i];
-            vc[find(i)] += w.v.Length() + (w.extBaseVS.Length() / PHYSICS_STEPTIME_S + w.magAcc + w.F.Length() / w.bs.m) * T;
+            vc[find(i)] += (ballPairs ? 0.0 : w.v.Length()) + (w.extBaseVS.Length() / PHYSICS_STEPTIME_S + w.magAcc + w.F.Length() / w.bs.m) * T;
+            if (ballPairs)
+               eg[find(i)] += 0.5 * w.bs.m * w.v.Dot(w.v) + 0.5 * w.bs.Inertia() * w.w.Dot(w.w);
          }
          for (int p = 0; p < np; p++)
             if (partBall[p] >= 0)
@@ -571,7 +648,7 @@ struct ContactSystemImpl
             if (ed.on)
                continue;
             const double travelPart = partBall[ed.p] >= 0 ? range[ed.p] : sPart[ed.p] * T;
-            if (ed.gap < vc[find(ed.i)] * T + travelPart + kApproachM)
+            if (ed.gap < V(ed.i) * T + travelPart + kApproachM)
             {
                ed.on = grew = true;
                if (partBall[ed.p] < 0)
@@ -580,6 +657,35 @@ struct ContactSystemImpl
                   unite(ed.i, partBall[ed.p]);
             }
          }
+         if (ballPairs)
+            for (int i = 0; i < nw; i++)
+               for (int j = i + 1; j < nw; j++)
+                  if (!paired[(size_t)i * nw + j] && BallsMayMeet(bgap[(size_t)i * nw + j], V(i), V(j), T))
+                  {
+                     BallPairReachLog(cy, i, j, bgap[(size_t)i * nw + j], [&](const int k) {   // (the terms of V, read before the pair joins the groups)
+                        const int g = find(k);
+                        std::ostringstream o;
+                        double parts2S = 0.0;
+                        o << "V " << V(k) << " = energy " << std::sqrt(2.0 * eg[g] / cy.bodies[k].bs.m);
+                        for (int p = 0; p < np; p++)
+                           if (partBall[p] >= 0 && find(partBall[p]) == g)
+                           {
+                              parts2S += 2.0 * sPart[p];
+                              o << " + 2S " << 2.0 * sPart[p] << " (" << *partName[p] << ")";
+                           }
+                        o << " + forces " << vc[g] - parts2S << ", |v| " << cy.bodies[k].v.Length();
+                        return o.str(); });
+                     paired[(size_t)i * nw + j] = 1;
+                     cy.pairs.emplace_back(i, j);
+                     unite(i, j);
+                     grew = true;
+                  }
+      }
+      if (ballPairs)
+      {
+         BallPairMissKeep(cy, find);
+         std::swap(s_pairReachLast, s_pairReachNow);
+         s_pairReachNow.clear();
       }
       for (const Edge &ed : edges)
       {
@@ -3428,12 +3534,23 @@ struct ContactSystemImpl
       for (bool woke = !g_sleep.empty(); woke;)
       {
          woke = false;
+         // ball_pair_reach: the islands' test (BallsMayMeet) with the groups not built yet: the energy of every awake ball can reach an awake ball, J (spin included)
+         const bool pairReach = cy.cs->ballPairReach && cy.cs->islandReach;
+         double eAwake = 0.0;
+         if (pairReach)
+            for (auto *const a : g_pplayer->m_vball)
+            {
+               const HitBall &h = a->m_hitBall;
+               if (h.m_sleepGroup == 0 && !h.m_d.m_lockedInKicker)
+                  eAwake += 0.5 * (h.m_d.m_mass * ContactSystem::kMassUnitKg * h.m_d.m_vel.Dot(h.m_d.m_vel) * VS * VS + h.m_angularmomentum.Dot(h.m_angularmomentum) / h.Inertia() * ContactSystem::kMassUnitKg * VS * VS);
+            }
          for (auto *const a : g_pplayer->m_vball)
          {
             const HitBall *const pa = &a->m_hitBall;
             if (pa->m_sleepGroup != 0 || pa->m_d.m_lockedInKicker)
                continue;
             const double ra = (double)pa->m_d.m_radius * U, va = std::sqrt((double)pa->m_d.m_vel.Dot(pa->m_d.m_vel)) * VS;
+            const double va2 = pairReach ? BallSpeedBound(eAwake, pa->m_d.m_mass * ContactSystem::kMassUnitKg, 0.0) : 0.0;
             for (auto *const b : g_pplayer->m_vball)
             {
                const HitBall *const pb = &b->m_hitBall;
@@ -3441,7 +3558,7 @@ struct ContactSystemImpl
                   continue;
                const Vertex3Ds d = pa->m_d.m_pos - pb->m_d.m_pos;
                const double gap = std::sqrt((double)d.Dot(d)) * U - ra - (double)pb->m_d.m_radius * U;
-               if (gap < cy.cs->ballReachMm * 1e-3 + 2.0 * va * cy.dt)
+               if (gap < cy.cs->ballReachMm * 1e-3 + 2.0 * va * cy.dt || (pairReach && BallsMayMeet(gap, va2, 0.0, cy.dt)))   // the islands' pairing: the pairwise rule, or the closure (sleeper V = 0)
                {
                   SleepWakeBall(pb, "an awake ball within reach", true);
                   woke = true;
