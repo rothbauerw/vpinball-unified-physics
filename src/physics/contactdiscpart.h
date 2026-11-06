@@ -43,6 +43,7 @@ namespace DiscModel
       V3 Origin() const override { return gp.centre; }
       double Reach() const override { return gp.R; }
       double SurfaceSpeedBound(double) const override { return 0.0; }   // no point of the disc moves along its own normal (discgroup.h)
+      double MotionRange() const override { return 0.0; }               // (nor over any time: turning moves no gap)
       RubberContact::TubeProbe Probe(const V3 &c) const override
       {
          GroupStep::Hit h;

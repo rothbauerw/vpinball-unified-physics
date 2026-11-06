@@ -129,6 +129,8 @@ namespace
             s.arrivalDepthUm = d;
          else if (key == "ball_reach_mm" && num)
             s.ballReachMm = d;
+         else if (key == "island_reach")
+            s.islandReach = on;
          else if (key == "sleep")
             s.sleep = on;
          else if (key == "sleep_speed_mm_s" && num)

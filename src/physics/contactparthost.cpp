@@ -87,8 +87,15 @@ void ContactPartHost::Refresh(SurfaceContact &it, double, double, const RubberCo
    it.candV.clear();
 }
 
-RubberContact::TubeProbe ContactPartHost::Probe(const RubberContact::BallSI &bs, const SurfaceContact &, const RubberContact::V3 &c) const
+RubberContact::TubeProbe ContactPartHost::Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const
 {
+   if (it.partOut)   // (island_reach: solved in another island or alone this cycle; the ball cannot reach it)
+   {
+      RubberContact::TubeProbe pr;
+      pr.dist = INFINITY;
+      pr.delta = -INFINITY;
+      return pr;
+   }
    m_part->SetBall(bs);
    return m_part->Probe(c);
 }

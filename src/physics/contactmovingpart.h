@@ -83,6 +83,7 @@ public:
    virtual void SetGravity(const V3 &g) = 0;
    virtual V3 Origin() const = 0;                              // the part's reference point (world, m): the host's box and the log
    virtual double Reach() const = 0;                           // the swept reach about it (m)
+   virtual double MotionRange() const { return 2.0 * Reach(); }   // the farthest any point of its surface can move from where it is, over its whole range of motion (m); every moving point is within Reach of Origin
    virtual RubberContact::TubeProbe Probe(const V3 &c) const = 0;
    virtual RubberContact::ContactResult ContactItem(int ballIndex, SurfaceContact &it, const V3 &c, const V3 &v, const V3 &w, double h) = 0;
    virtual void SurfaceVelocity(const V3 &point, V3 &v, V3 &w) const = 0;

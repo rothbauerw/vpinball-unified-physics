@@ -58,6 +58,23 @@ namespace HingeModel
       }
       V3 Origin() const override { return gp.A; }
       double Reach() const override { return gp.reach; }
+      // From its angle to the farther of its stops (a driven stop counted at the far end of its move), as a chord at its reach; a side with no stop: any angle
+      double MotionRange() const override
+      {
+         double lo = INFINITY, hi = -INFINITY;
+         for (const GroupStep::BodyStop &s : gp.stops)
+            if (s.enabled)
+            {
+               if (s.side > 0)
+                  hi = std::max(hi, s.rate != 0.0 ? std::max(s.at, s.target) : s.at);
+               else
+                  lo = std::min(lo, s.rate != 0.0 ? std::min(s.at, s.target) : s.at);
+            }
+         if (!std::isfinite(lo) || !std::isfinite(hi))
+            return 2.0 * gp.reach;   // a side with no stop: any angle
+         const double sweep = std::max(gp.q - lo, hi - gp.q);
+         return sweep >= GroupStep::kPi ? 2.0 * gp.reach : 2.0 * gp.reach * std::sin(0.5 * std::max(sweep, 0.0));
+      }
       // Its speed now plus what gravity, the blades and a driven stop can add in a cycle
       double SurfaceSpeedBound(const double cycleS) const override
       {

@@ -53,6 +53,8 @@ struct SurfaceContact
    double hcStep = 0.0, hcSpeed = 0.0, hcDelta = 0.0;   // the arrival-time loop's step for this contact and the speed and compression it was computed for (it is reused while they hold)
    double fnLast = 0.0;           // normal force of this contact at the last substep (N): the resting test compares the ball's leftover force with it
    bool hcRest = false;           // hcStep came from the resting rule   // 6-ball stall: hcStep came from the resting (quasi-static) rule
+   bool partOut = false;          // island_reach: a moving part this ball cannot reach this cycle, solved in another island or alone: left out of this ball's solve (cleared at the cycle's end)
+   bool partOutLast = false;      // it was left out last cycle (the next cycle's check: the ball must not be inside it)
    bool partTouching = false;     // a moving part's own release-gap hysteresis for its Hit event (HingePart::Part::Contact)
    // The last probe of this surface in the arrival loop: the gap (m, < 0 = overlap; probeT < 0 = none yet this cycle), where the ball was and when (s into the cycle). A static
    // surface's gap can shrink by no more than the ball has moved since, so a surface the ball cannot reach in the rest of the cycle is not probed again (ProbeBody).

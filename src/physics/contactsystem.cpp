@@ -332,6 +332,8 @@ struct ContactSystemImpl
          const TubeProbe pr = it.r->Probe(w.bs, it, w.c);
          if (pr.dist <= 0.0)
             continue;
+         if (it.partOut)   // (island_reach: a part out of this ball's reach this cycle)
+            continue;
          V3 vs, ws;
          if (it.r->MovingPart() != nullptr)
             it.r->VelocityAt(pr, vs, ws);
@@ -493,6 +495,113 @@ struct ContactSystemImpl
       }
    }
 
+   // island_reach: a ball and a moving part share an island only if the ball can reach the part's surface within this cycle (the reachable set over the cycle, runs/2026-11-05-island-reach/design.md).
+   // A ball's travel: the speeds of every ball of its group (a hit hands speed on), what their forces add, and twice the speed of each part in the group (a ball leaves a moving surface at up to twice
+   // its speed). A part's travel: its whole range of motion once a ball can reach it (a hit can move it anywhere it can go), else what its own drives give it (SurfaceSpeedBound). Grown to a fixed point:
+   // the bounds only grow. A part no ball can reach is left out of every ball's solve (partOut) and moves alone; one a ball reaches is in that ball's island only. The gap is to its real surface (Probe).
+   static void ReachLinks(Cycle &cy)
+   {
+      constexpr double kApproachM = 100e-6;   // m: the contact law's approach margin (SetupIsland kApproachMarginM): a gap under it is stepped as a contact
+      const int nw = (int)cy.bodies.size();
+      const double T = cy.dt;
+      struct Edge { int i, p; SurfaceContact *it; double gap; bool on; };
+      std::vector<Edge> edges;
+      std::vector<ContactMovingPart *> parts;
+      for (int i = 0; i < nw; i++)
+         if (cy.bodies[i].e != nullptr)
+            for (SurfaceContact &it : cy.bodies[i].e->items)
+               if (ContactMovingPart *const mp = it.r->MovingPart())
+               {
+                  it.partOut = false;
+                  const Body &w = cy.bodies[i];
+                  mp->SetBall(w.bs);
+                  const double gap = -mp->Probe(w.c).delta;
+                  if (it.partOutLast && gap < 0.0)   // left out last cycle, and the ball is inside it now: the bound missed a contact (rule 8)
+                  {
+                     static int warned = 0;
+                     const char *const name = TestDriver::BallName(w.pb);
+                     std::ostringstream o;
+                     o << "Island reach: ball " << (name != nullptr ? name : "") << " is " << -gap * 1e3 << " mm inside " << it.r->Name() << ", which it was left out of last cycle (a missed contact)";
+                     PLOGW << o.str();
+                     if (warned++ == 0 && g_pplayer->m_liveUI != nullptr)
+                        g_pplayer->m_liveUI->PushNotification(o.str(), 6000);
+                  }
+                  it.partOutLast = false;
+                  const int p = (int)(std::find(parts.begin(), parts.end(), mp) - parts.begin());
+                  if (p == (int)parts.size())
+                     parts.push_back(mp);
+                  edges.push_back({ i, p, &it, gap, false });
+               }
+      if (edges.empty())
+         return;
+      std::vector<int> root(nw);
+      for (int i = 0; i < nw; i++)
+         root[i] = i;
+      const auto find = [&](int i) { while (root[i] != i) i = root[i] = root[root[i]]; return i; };
+      const auto unite = [&](const int a, const int b) { root[find(a)] = find(b); };
+      for (const auto &pr : cy.pairs)
+         unite(pr.first, pr.second);
+      for (const auto &lk : cy.links)
+         unite(lk.first, lk.second);
+      const int np = (int)parts.size();
+      std::vector<double> sPart(np, -1.0), range(np, 0.0);
+      std::vector<int> partBall(np, -1);   // the first ball that can reach it
+      for (const Edge &ed : edges)
+         if (sPart[ed.p] < 0.0)
+         {
+            parts[ed.p]->SetBall(cy.bodies[ed.i].bs);
+            sPart[ed.p] = parts[ed.p]->SurfaceSpeedBound(T);
+            range[ed.p] = parts[ed.p]->MotionRange();
+         }
+      std::vector<double> vc(nw);
+      for (bool grew = true; grew;)
+      {
+         grew = false;
+         std::fill(vc.begin(), vc.end(), 0.0);
+         for (int i = 0; i < nw; i++)
+         {
+            const Body &w = cy.bodies[i];
+            vc[find(i)] += w.v.Length() + (w.extBaseVS.Length() / PHYSICS_STEPTIME_S + w.magAcc + w.F.Length() / w.bs.m) * T;
+         }
+         for (int p = 0; p < np; p++)
+            if (partBall[p] >= 0)
+               vc[find(partBall[p])] += 2.0 * sPart[p];
+         for (Edge &ed : edges)
+         {
+            if (ed.on)
+               continue;
+            const double travelPart = partBall[ed.p] >= 0 ? range[ed.p] : sPart[ed.p] * T;
+            if (ed.gap < vc[find(ed.i)] * T + travelPart + kApproachM)
+            {
+               ed.on = grew = true;
+               if (partBall[ed.p] < 0)
+                  partBall[ed.p] = ed.i;
+               else if (find(ed.i) != find(partBall[ed.p]))
+                  unite(ed.i, partBall[ed.p]);
+            }
+         }
+      }
+      for (const Edge &ed : edges)
+      {
+         const int pb = partBall[ed.p];
+         if (pb < 0 || find(ed.i) != find(pb))
+            ed.it->partOut = true;   // solved in another island, or alone
+         else if (ed.on && ed.i != pb)
+            cy.links.emplace_back(pb, ed.i);
+      }
+   }
+
+   // The cycle's island_reach marks end with it (other searches between cycles see every part); a part left out is checked at the next cycle's start (ReachLinks)
+   static void ReachClear()
+   {
+      for (BallContact &e : g_engaged)
+         for (SurfaceContact &it : e.items)
+         {
+            it.partOutLast = it.partOut;
+            it.partOut = false;
+         }
+   }
+
    // Bodies whose surfaces are within reach of each other (plus what they can close in this cycle) interact: they form islands
    static void FindIslands(Cycle &cy)
    {
@@ -518,6 +627,9 @@ struct ContactSystemImpl
                   cy.links.emplace_back(j, i);
                   break;
                }
+      if (cs.islandReach)
+         ReachLinks(cy);
+      else
       for (int i = 0; i < nw; i++)   // balls touching the same gate or spinner are one island: the part takes all their reactions
          if (cy.bodies[i].e != nullptr)
             for (const SurfaceContact &it : cy.bodies[i].e->items)
@@ -623,7 +735,7 @@ struct ContactSystemImpl
       for (const int i : isl.members)
          if (cy.bodies[i].e != nullptr)
             for (const SurfaceContact &it : cy.bodies[i].e->items)
-               if (ContactMovingPart *const hg = it.r->MovingPart())
+               if (ContactMovingPart *const hg = it.partOut ? nullptr : it.r->MovingPart())   // (island_reach: a part out of this ball's reach is solved elsewhere)
                {
                   if (std::find(cy.islandParts.begin(), cy.islandParts.end(), hg) == cy.islandParts.end())
                   {
@@ -668,7 +780,7 @@ struct ContactSystemImpl
       for (SurfaceContact &it : e.items)
       {
          const size_t k = itemIdx++;
-         if (it.NoFaces(w.c))   // a surface of faces with none within reach of the ball this cycle: no contact
+         if (it.partOut || it.NoFaces(w.c))   // a surface of faces with none within reach of the ball this cycle (or a part out of its reach, island_reach): no contact
          {
             it.st.Reset();
             it.touching = false;
@@ -1003,8 +1115,8 @@ struct ContactSystemImpl
          for (SurfaceContact &it : w.e->items)
          {
             const TubeProbe &pr = w.probes[k++];
-            if (!pr.overlap && pr.dist < 0.0)
-               continue;   // far
+            if (it.partOut || (!pr.overlap && pr.dist < 0.0))
+               continue;   // far (or a part out of its reach, island_reach)
             // a moving part closes on the ball too: its present speed and what its drive can add (SurfaceSpeedBound, linear in the time) join the ball's closing speed and acceleration
             ContactMovingPart *const mp = it.r->MovingPart();
             double vSurf = 0.0, aSurf = 0.0;
@@ -1256,7 +1368,7 @@ struct ContactSystemImpl
             const TubeProbe &pr = w.probes[k];
             const double prevGap = sn.gap[d.itemBase + k];
             // the closing speed of ball and surface: a moving part adds its own speed and what its drive can add in the substep (SurfaceSpeedBound)
-            const double vnPrev = std::max(sn.vn[d.itemBase + k], 0.0) + (it.r->MovingPart() != nullptr ? it.r->MovingPart()->SurfaceSpeedBound(sn.h) : 0.0);
+            const double vnPrev = std::max(sn.vn[d.itemBase + k], 0.0) + (!it.partOut && it.r->MovingPart() != nullptr ? it.r->MovingPart()->SurfaceSpeedBound(sn.h) : 0.0);
             k++;
             if (!pr.overlap)
                continue;
@@ -1836,7 +1948,7 @@ struct ContactSystemImpl
          {
             for (SurfaceContact &it : w.e->items)
             {
-               driven = driven || it.r->MovingPart() != nullptr;
+               driven = driven || (!it.partOut && it.r->MovingPart() != nullptr);
                held += ContactHolds(it, w.bs, w.c, w.e->groupLoop, it.endDepth);
             }
             w.e->endStored = held;
@@ -1937,7 +2049,7 @@ struct ContactSystemImpl
       for (const int i : isl.members)
          if (cy.bodies[i].e != nullptr)
             for (const SurfaceContact &it : cy.bodies[i].e->items)
-               if (ContactMovingPart *const mp = it.r->MovingPart(); mp != nullptr && mp->GroupPart() != nullptr)
+               if (ContactMovingPart *const mp = it.r->MovingPart(); mp != nullptr && !it.partOut && mp->GroupPart() != nullptr)
                   return true;
       return false;
    }
@@ -1956,6 +2068,8 @@ struct ContactSystemImpl
             continue;
          for (const SurfaceContact &it : w.e->items)
          {
+            if (it.partOut)   // (island_reach: a part out of this ball's reach is not in its solve; the ball keeps the loop it has without it)
+               continue;
             if (it.r->MovingPart() != nullptr)
                return false;
             if (want)
@@ -2123,7 +2237,7 @@ struct ContactSystemImpl
          acc = std::max(acc, w.extBaseVS.Length() / PHYSICS_STEPTIME_S + w.magAcc + w.F.Length() / w.bs.m);
          if (w.e != nullptr)
             for (const SurfaceContact &it : w.e->items)
-               if (ContactMovingPart *const mp = it.r->MovingPart(); mp != nullptr && !mp->AtRest())
+               if (ContactMovingPart *const mp = it.r->MovingPart(); mp != nullptr && !it.partOut && !mp->AtRest())
                {
                   mp->SetBall(w.bs);
                   vPart = std::max(vPart, mp->SurfaceSpeedBound(cy.dt));
@@ -2137,7 +2251,7 @@ struct ContactSystemImpl
             for (SurfaceContact &it : w.e->items)
             {
                ContactMovingPart *const mp = it.r->MovingPart();
-               if (mp == nullptr || mp->GroupPart() == nullptr || std::find(in.begin(), in.end(), mp) != in.end())
+               if (mp == nullptr || it.partOut || mp->GroupPart() == nullptr || std::find(in.begin(), in.end(), mp) != in.end())
                   continue;
                bool joins = !mp->AtRest();
                const int surfaces = mp->GroupSurfaces();
@@ -2320,6 +2434,8 @@ struct ContactSystemImpl
                   it.gs.zero = it.gs.reff = 0.0;
                   continue;
                }
+               if (it.partOut)   // (island_reach: a part out of this ball's reach is solved elsewhere)
+                  continue;
                ContactMovingPart *const mp = it.r->MovingPart() != nullptr && it.r->MovingPart()->GroupPart() != nullptr ? it.r->MovingPart() : nullptr;
                if (mp != nullptr && std::find(partsIn.begin(), partsIn.end(), mp) == partsIn.end())
                   continue;
@@ -3639,6 +3755,8 @@ void ContactSystemImpl::StepBalls(const float dtime)
          }
       }
    }
+   if (cy.cs->islandReach)
+      ReachClear();
    s_pendingCy = &cy;   // its events are dispatched by ContactSystem::Dispatch, after the free balls have moved
    lap(g_last.writeUs);
    if (ContactProf::On())
