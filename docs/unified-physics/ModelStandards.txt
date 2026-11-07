@@ -11,9 +11,12 @@ a. Name the closest existing model and read its files first:
       static surface                   -> contactsurface.h, hitrubber.cpp (hard surfaces, ramps)
       ball contact law                 -> rubbercontact.h ContactCore (Hertz + damping + friction + twist)
 b. Read section 6 (known traps) of this file.
-c. Write the design in docs/<Model>Design.txt: the physical laws, the bodies and their stiffest internal contact, the cost estimate, what it breaks (rule 7),
+c. Before the design, write what the model must do (requirements), apart from how it's modelled, and review them with the user one at a time
+   (runs/2026-11-01-cord-requirements/requirements.md is the pattern). Then write the design in docs/unified-physics/<Model>Design.txt: the physical laws, the bodies and their stiffest internal contact, the cost estimate, what it breaks (rule 7),
    and every way energy enters the model (coil, spring preload, motor), showing that only those add energy (ProjectAssessment-2026-10-27.txt 3.0).
 d. Ask the user before engine code.
+e. Keep a simple model simple: time every piece you add, and keep it only if it measurably improves the result.
+f. Don't take a stock VPX property into a model because it exists; use it only if the physics needs it.
 
 
 2. The contract every model meets
@@ -23,7 +26,8 @@ a. One interface. A part that moves implements ContactMovingPart (contactmovingp
    This is the rule until ProjectAssessment 3.0 (energy by construction) is built. The target: a part only describes itself (bodies, masses, springs, contact laws,
    stops, drives) and the engine steps part and balls together; the interface then shrinks to that description.
    The target's interface exists since 2026-10-31 (GroupStepDesign 18), though no real part uses it yet: a part on the group step implements GroupStep::Part (coordinates, stored energy and its forces, step facts, stop events, Loads) and ContactMovingPart's GroupPart, GroupSurfaces, GroupProbe, GroupLaw, TouchBegan, with Probe, SurfaceSpeedBound, Origin, Reach and SaveState / RestoreState as before. ContactItem, BallStep and StepInIsland are not called for it. A new part goes this way, not the old loop's. A part must keep no shapes of its own, and its AdvanceAlone calls GroupStep::AdvanceAlone.
-b. One loop. Balls touching the model are stepped by the shared loop (SubstepsArrival). It gives the shared guards for free:
+b. One path. Balls touching the model are stepped by the group step, the one shared path (the old loop, SubstepsArrival, is being deleted: to-do G1;
+   some guard names below are the old loop's). It gives the shared guards for free:
       arrival steps        NextStep
       closing speed        relative to the surface, plus SurfaceSpeedBound
       depth check          RwLate, every substep, touching contacts included
@@ -45,6 +49,7 @@ e. Pure SI maths with no VPX types in the model's header, so the same code runs 
 f. Events go into the part's event list (or DeferEvent) and are fired after the step. No script runs inside the step.
 g. Settings come from the table's physics ini through the settings reader. Environment variables are for diagnostics only, read once, and listed in
    NewPhysicsReference.txt. Duplicate or unknown keys raise a notification (rule 8).
+   A new setting goes beside its neighbours (same ini section, struct and loader), reloads like them and is written to the log.
 h. Energy enters only through named drives (coil, motor, spring preload, gravity, nudge). The model reports their work so the energy books close every cycle.
 
 
@@ -60,9 +65,8 @@ d. Steep fields count as stiff too: a force that rises sharply over a short dist
 
 4. Cost
 -------
-a. Frame budget at 144 Hz: physics over any 7 consecutive cycles <= 3 ms, including the worst case (confirmed by the user 2026-11-03 for ball piles); single cycle <= 1.5 ms (proposed). Burst exception (user 2026-11-03): within 0.2 s after a hit event (a landing, a flip, a fast ball into a pile) up to 10 ms per 7 cycles; everything else, every pile at rest included, stays at 3 ms.
-b. Per active object (proposed): <= 30 us per 1 ms cycle with one ball on it; state the cost with 2 and 6 balls.
-   (User, 2026-11-06: 30 us in EACH 1 ms cycle for the object with the ball(s) on it (user, 2026-11-06), worst cycle counts. Not a 7-cycle window, not other objects.)
+a. Limits: DevelopmentRules rule 5 (the one cost rule: per object, frame, burst).
+b. State an object's cost with 1, 2 and 6 balls.
 c. Measure with VPX_CONTACT_TIMING (per-cycle CSV) and VPX_CONTACT_PROFILE (scopes, CPROF). Report: worst 7-cycle window, p99, maximum, and what the slow cycles
    spent their time on. Profile before optimising: a guess at the cost is not a finding.
 d. New step code: no allocation, no string building, no getenv, no dynamic_cast in loops. Existing allocations are tidied when that code is next touched (user,
@@ -83,7 +87,7 @@ b. In the engine: its rows in the test matrix with numeric pass/fail, and the sn
    2. Inputs repeat exactly: the table script's inputs follow physics time, not a timer, so the same build gives the same result.
    3. Offline first: most checks run on the model alone in seconds; the engine runs only what needs the whole table.
    4. Results are saved with the build they came from; nothing is rerun just to compare.
-   The design (limits, test driver, stress table, cases per model, offline split, run time) is in docs/unified-physics/TestMatrixDesign.txt (user-approved 2026-10-27). Not built yet.
+   The design (limits, test driver, stress table, cases per model, offline split, run time) is in docs/unified-physics/TestMatrixDesign.txt (user-approved 2026-10-27). The accuracy part exists (the 750-hit bench against 1 us); the performance tests are not built (to-do N10).
 c. Play-speed cases: 1 m/s typical, 3 m/s extreme; two balls on the part; a ball between two parts; table restart; the part switched off.
    Plus the cases that have launched balls before: a contact found late, a ball pinched between two moving parts, a part hit while its coil drives it.
 d. Use run.ps1 and the test matrix in docs/unified-physics/TestMatrixDesign.txt (shared offline bench, engine test driver, stress table), not the old batch_*.ps1 matrix. A new script is
@@ -160,7 +164,8 @@ Each trap names the test that now catches it ("none yet" until one exists); the 
 
 8. Keeping what we learn
 ------------------------
-a. The to-do list is a short list of OPEN items, one line each, with a link to detail. History goes to an archive file, not the list.
+a. The to-do (docs/unified-physics/TODO.md) holds OPEN items only, one line each; finished items are deleted and git history is the archive.
+   Progress notes go in the lead log (CLAUDE.md). A hook checks the limits (.claude/hooks/check_todo.py).
 b. A new trap goes into section 6 the day it is found.
 c. A memory that names a file, branch or flag is checked when it is read; a stale one is fixed at once.
 d. Every session reads this file first; CLAUDE.md points to it.
@@ -175,5 +180,6 @@ e. Clean-up to bring things in line (one step at a time, each with the user's OK
 9. Rules for one model only
 ---------------------------
 Magnets (user, 2026-10-18; moved here from CLAUDE.md 2026-10-27):
+- Matching the FEM reference (e.g. within 10 %) is a target, not a limit; efficiency and behaviour come first.
 - Do not generalize the magnet physics. It is too complex: state results for the case measured only.
 - Off-axis data for magnet decisions. On-axis is the least likely pinball case; label on-axis results as such and never base a decision on them alone.

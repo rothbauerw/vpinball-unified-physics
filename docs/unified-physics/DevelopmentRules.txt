@@ -1,4 +1,4 @@
-DEVELOPMENT RULES for the physics work (rubber-contact branch)
+DEVELOPMENT RULES for the physics work (branch unified-physics)
 ==============================================================
 Set by the project owner. They apply to every change, by a person or an assistant. A change that breaks one of them is reverted, not defended.
 
@@ -9,6 +9,8 @@ Set by the project owner. They apply to every change, by a person or an assistan
    c. Before touching engine code, test the hypothesis against the data already in hand (the per-cycle timing CSV, the trace, the watchdog log). If the data contradicts it, drop it.
    d. Engine code is not edited to "try" a theory. Temporary instrumentation is allowed: mark it /* TEMP */, keep it out of the commit, remove it when done.
    e. Order of work for a reported fault: collect the log -> build the timeline -> check every cheap source -> replay the exact state -> locate the mechanism with instrumentation -> only then fix.
+      When the user's play feels wrong, first check the table's ini and the log: which model and which values actually ran. Reproduce on the table where it
+      happened, unchanged, before building any test scene. A simplified scene may be used to isolate a mechanism; a fix is proven on the real model and table.
    f. If a reported fault cannot be reproduced, add always-on, cheap diagnostics (like the fast-ball watchdog) and wait for the next occurrence. Do not "fix" what cannot be seen.
 
 2. NO HACKS
@@ -19,22 +21,33 @@ Set by the project owner. They apply to every change, by a person or an assistan
 3. GENERAL FIXES, PROVED ON A MATRIX
    Fix the general rule, grep for every other place with the same special case, and prove it on the test matrix (docs/unified-physics/TestMatrixDesign.txt: fixed limits per run, cases per model, stress table)
    with numeric pass/fail including the cost per cycle. A fix is done when the matrix passes, not the one scene. The old scenario matrix (runs/2026-10-09-slow-contact: batch_matrix.ps1,
-   matrix_compare.py) was judged a fail by the user on 2026-10-27 and is not used; until the new one is built, say which checks were run and that the matrix was not.
+   matrix_compare.py) was judged a fail by the user on 2026-10-27 and is not used. The accuracy part of the new one exists (the 750-hit bench against a 1 us reference); the performance tests are not built
+   (to-do N10). Say which checks were run.
 
 4. RUNS
    Group several changes before a full regression; the user decides when a matrix is run. Timing and event-timing tests run focused (run.ps1 -Focused) and the user is told first so the machine is idle.
    Always call run.ps1 with explicit full paths and check the ini that was loaded.
+   How to build, run and diagnose: docs/unified-physics/TestingPlaybook.md (read before any test).
+   Bench first. VPX only through the test driver, for one named question. The bench must match VPX, so moving to VPX is a formality (user, 2026-10-31).
+   Design every measurement a test needs up front, down to the cause, and save everything a run computes, so follow-ups need no rerun.
+   Time one case alone before a batch. Long runs log progress and a time-left estimate from measured timings, never a guess.
+   A session may close VPX to test, unless the user has said they are using it.
+   A test that starts with a ball inside a ball or an object is a broken test, never an engine fault.
 
-5. PERFORMANCE (frame budget updated 2026-10-27, user-approved; detail in docs/unified-physics/ModelStandards.txt section 4)
+5. PERFORMANCE (the one cost rule; ModelStandards section 4 points here)
    Every model is tuned for speed: measure the cost per cycle (VPX_CONTACT_TIMING), expose knobs.
-   Physics, the table script and the frame preparation share one thread; at 144 Hz a frame (6.9 ms) holds about 7 physics cycles. Budget (proposed, to be
-   confirmed on the stress table): physics over any 7 consecutive cycles <= 3 ms, no single cycle > 1.5 ms; per active object <= 30 us per 1 ms cycle with one
-   ball. Judge by the worst 7-cycle window and the worst single cycle, never the average.
-   Per object (user, 2026-11-06): 30 us in EACH 1 ms cycle for the object with the ball(s) on it (user, 2026-11-06), worst cycle counts. Not a 7-cycle window, not other objects.
+   Physics, the table script and the frame preparation share one thread; at 144 Hz a frame (6.9 ms) holds about 7 physics cycles.
+   Per object (user, 2026-11-06): 30 us in EACH 1 ms cycle for the object with the ball(s) on it; the worst cycle counts. Not a 7-cycle window, not other objects.
+   Frame (user, 2026-11-03): physics over any 7 consecutive cycles <= 3 ms, ball piles included; within 0.2 s after a hit event (a landing, a flip, a fast ball
+   into a pile) up to 10 ms per 7 cycles. Single cycle <= 1.5 ms: proposed, not confirmed by the user.
+   Judge by the worst cycle and the worst window, never the average.
 
 6. DOCUMENTATION AND HISTORY
    Every feature, key, script call and environment variable goes into docs/unified-physics/NewPhysicsReference.txt with a dated change-log entry, in the same change. Names follow the physical part (flipper, sling, rubber), never a table.
    Nothing is committed or pushed until the user says so. Convention differences from stock VPX are stated and documented.
+   New work goes behind an ini setting, on by default while it is tested; 0 gives the old path unchanged. Once the user accepts the new path, the old path and its
+   setting are deleted after the code is committed (the change log names that commit); ask first only if removal is high risk or later A/B tests need it.
+   A dropped idea's code and setting are deleted. Private source copies only for offline test programs.
    Every item the user states goes into the to-do list at once; the to-do list is the single source of open work.
 
 7. WHAT BREAKS, AND WHAT THE DESIGN DOES ABOUT IT (user, 2026-10-13)
@@ -64,7 +77,8 @@ Set by the project owner. They apply to every change, by a person or an assistan
 11. TESTING IS CAPPED AND THE BUILD GOES TO THE USER FIRST (user, 2026-11-01, after two leads in a row broke the testing rules and kept the user waiting over an hour)
    a. The user's time comes first, and the user's play is the real test. As soon as a model builds, loads and does its job on a table, the session stops and the build goes to the user, before any test list.
    b. A test goes in a brief only if its result changes a decision being made now. A list approved earlier is not carried over whole: each item is justified again or left out. A left-out item is noted, not run.
-   c. Every session brief carries three lines. DECISION: what result changes which decision. TOTAL CAP: runs and wall minutes for the whole job, not per run; default 30 runs, 15 minutes; more needs the user's OK before it starts. HAND OVER: the point the session stops and the build or answer goes to the user. A hook refuses a brief without them (.claude/hooks/check_brief.py).
+   c. Every session brief carries three lines. DECISION: what result changes which decision. TOTAL CAP: runs and wall minutes for the whole job, not per run; default 10 runs or 15 minutes, whichever comes first; more needs the user's OK before it starts. HAND OVER: the point the session stops and the build or answer goes to the user. A hook refuses a brief without them (.claude/hooks/check_brief.py).
    d. At the cap a session stops and reports, even part way. No grid, sweep or second batch without the lead's OK. The lead gives it only for a named benefit and tells the user.
    e. Before starting, the lead tells the user how long they will wait. On every note from a running session the lead reads its run count, elapsed time and context, and stops it at the cap. Never relay "still running".
    f. A cap and a list do not make a test worth running. The lead answers for what is in the brief; the hook only checks the lines are there.
+   g. The lead checks that a brief's commands and bench features exist before sending it, and checks time and cap claims against the real clock before passing them on.
