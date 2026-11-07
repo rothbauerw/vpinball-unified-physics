@@ -71,7 +71,7 @@ Set by the project owner. They apply to every change, by a person or an assistan
    c. Cost is measured and tuned once the model works, unless it stops the model working or is a real question whether the model is feasible.
    d. The cost in rules 3 and 5 applies when a model is called done, not on each fix.
 
-10. STRESS TESTS (user, 2026-11-01; defines "push the engine until it breaks" in ProjectLeadBrief.txt)
+10. STRESS TESTS (user, 2026-11-01)
    a. When: once per model or law change, when it already works on typical hits and before it is promoted; and when a specific failure is suspected. Never for routine changes.
    b. What: a small fixed stress set for that part, about 10 - 20 shots with a time cap: 6 m/s (twice the extreme), grazing hits, deep overlap starts, repeated hits, stacked contacts, a few step sizes.
       An overlap start is declared in the driver file and judged only on recovery: no crash, no hang, and the ball leaves with no more energy than it had before the

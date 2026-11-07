@@ -352,6 +352,7 @@ R8 | Friction tilt test: user's best estimate 20-30 deg = mu 0.36-0.58 (~0.47 at
 --------------------------------------------------
 Plunger lane groove: half-round, 1.25 in diameter (0.625 in radius), 12 - 20 inches long; 0.188 in deep at the plunger.
 Switch slots: 0.198 in wide; 1/8 in groove, 1.5 - 2 mm deep at the lip.
+Cut-outs: rectangle, circle, triangle.
 
 8. SENSORS (user, 2026-11-07, as given)
 ---------------------------------------
