@@ -1,4 +1,4 @@
-// The cord in the engine: one band's model (cordfixed.h) and what the contact system keeps for it between cycles (docs/GroupStepDesign.txt 8, 11)
+// The cord in the engine: one band's model (cordfixed.h) and what the contact system keeps for it between cycles (docs/unified-physics/GroupStepDesign.txt 8, 11)
 #pragma once
 
 #include "physics/cordfixed.h"

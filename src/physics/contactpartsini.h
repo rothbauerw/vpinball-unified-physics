@@ -1,6 +1,6 @@
 // license:GPLv3+
 //
-// Settings of the rebuilt gates and spinners (docs/GateSpinnerDesign.txt section 10) from the unified vpx_physics.ini: [Gates] / [Spinners] for all, then
+// Settings of the rebuilt gates and spinners (docs/unified-physics/GateSpinnerDesign.txt section 10) from the unified vpx_physics.ini: [Gates] / [Spinners] for all, then
 // [Gate:<name>] / [Spinner:<name>] for one part. Values not stated by the user are UNVERIFIED defaults (see the design document and NewPhysicsReference).
 
 #pragma once
@@ -89,7 +89,7 @@ namespace PartsIni
       });
    }
 
-   // Jet bumper settings over `p` (docs/JetBumperDesign.txt section 5): [Bumpers] for all, then [Bumper:<name>]. Lengths in mm, masses in g, spring rates in N/mm unless the key says otherwise.
+   // Jet bumper settings over `p` (docs/unified-physics/JetBumperDesign.txt section 5): [Bumpers] for all, then [Bumper:<name>]. Lengths in mm, masses in g, spring rates in N/mm unless the key says otherwise.
    // ignored: the keys the model on the group step does not have (the old loop's own step, the spoon as a body, the way back to stock), for the caller to tell (rule 8)
    inline void LoadBumper(JetBumper::Params &p, const std::filesystem::path &file, const std::string &name, std::string *const ignored = nullptr)
    {

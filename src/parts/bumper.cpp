@@ -218,7 +218,7 @@ void Bumper::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    const std::filesystem::path ini = ContactHost::IniPathFor(m_ptable->m_filename);
    if (!isUI && ContactSystem::Unified())
    {
-      // the physical bumper (docs/JetBumperDesign.txt): no stock collider, no stock ring or skirt animation. A unified table has no other bumper: what would have asked for stock is ignored, and told
+      // the physical bumper (docs/unified-physics/JetBumperDesign.txt): no stock collider, no stock ring or skirt animation. A unified table has no other bumper: what would have asked for stock is ignored, and told
       constexpr double U = ContactSystem::kMetresPerUnit;
       JetBumper::Params prm;
       std::string ignored;

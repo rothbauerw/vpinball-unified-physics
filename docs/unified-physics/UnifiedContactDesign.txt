@@ -345,4 +345,4 @@ band and disc special cases leave contactsystem.cpp. Pieces: 12.1 disc, 12.2 fli
         The band's explicit force stepping makes energy (contact, spans touching, merges; see NewPhysicsReference change log 2026-10-29). The 0.4 x chord range has no physical
         reason (a blow-up detector from the first band model). User 2026-10-29: stop patching; rebuild the band on energy-conserving stepping (ProjectAssessment item 0)
         as the first model built that way, offline first; 12.3's engine wiring waits for it.
-        2026-10-29: the new band is a massless cord (docs/BandCordDesign.txt, approved): src/physics/bandcord.h + runs/2026-10-29-band-cord, built, offline run pending.
+        2026-10-29: the new band is a massless cord (docs/unified-physics/BandCordDesign.txt, approved): src/physics/bandcord.h + runs/2026-10-29-band-cord, built, offline run pending.

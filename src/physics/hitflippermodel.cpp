@@ -69,7 +69,7 @@ FlipperMoverObject *FlipperMoverObject::NudgeFindTarget()
 FlipperMoverObject::~FlipperMoverObject() = default;
 
 // ---------------------------------------------------------------------------
-// The bat as a moving part of the contact system, on the group step (unified engine; docs/UnifiedContactDesign.txt 12.2). The part (contactbatpart.h) steps the bat with its
+// The bat as a moving part of the contact system, on the group step (unified engine; docs/unified-physics/UnifiedContactDesign.txt 12.2). The part (contactbatpart.h) steps the bat with its
 // balls; this adapter is the table side: the state the script and the renderer read, the stroke events, the nudge of the other bat, the flipper's Hit event.
 
 namespace

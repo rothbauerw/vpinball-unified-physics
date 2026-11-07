@@ -1,6 +1,6 @@
 // license:GPLv3+
 //
-// What a part on one horizontal axis is made of (a gate, a spinner; docs/GateSpinnerDesign.txt section 3): its mass properties from its shape, its switch blade. The moving is the group's (hingegroup.h, bodypart.h). Pure SI maths with no VPX types.
+// What a part on one horizontal axis is made of (a gate, a spinner; docs/unified-physics/GateSpinnerDesign.txt section 3): its mass properties from its shape, its switch blade. The moving is the group's (hingegroup.h, bodypart.h). Pure SI maths with no VPX types.
 //
 // Frame: the axis passes through A along E (unit, horizontal). N is the direction a ball moves when it passes from the front, Z = E x N is up, E = N x Z.
 // theta = 0: the body as built (a gate hangs straight down); a positive theta swings the lower part toward N (a rotation about +E). A point of the body is given in

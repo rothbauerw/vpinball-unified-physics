@@ -1,6 +1,6 @@
 // license:GPLv3+
 //
-// A turntable disc as a part of the group step (docs/GroupStepDesign.txt 21; runs/2026-11-02-disc): a flat disc set into the playfield, turned about its vertical axis by a DC motor, held back by its bearing, turned by the balls on it. One unknown: the turn over a step (bodypart.h).
+// A turntable disc as a part of the group step (docs/unified-physics/GroupStepDesign.txt 21; runs/2026-11-02-disc): a flat disc set into the playfield, turned about its vertical axis by a DC motor, held back by its bearing, turned by the balls on it. One unknown: the turn over a step (bodypart.h).
 //   motor    powered, I dw/dt = Ts V / Vrated - kTot w - Tf sign(w): the torque-speed line as a held torque whose work is counted (DriveForce) and its slope as a viscous loss (Viscous). Energy enters only here.
 //   bearing  unpowered, I dw/dt = -b w - Tf sign(w). Tf: the Coulomb friction, BodyPart's stick rule: a still disc stays until the other forces exceed it.
 //   balls    the contact law of every surface with the surface moving at w x r: a carried surface of the group (the Hit's column), its reaction on the disc in the same solve.

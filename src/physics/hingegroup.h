@@ -1,6 +1,6 @@
 // license:GPLv3+
 //
-// What every part on one horizontal axis shares as a part of the group step (a gate, a spinner; docs/GateSpinnerDesign.txt sections 3 and 6): its touchable shape (wire capsules and sheet triangles in body coordinates), its stored energy
+// What every part on one horizontal axis shares as a part of the group step (a gate, a spinner; docs/unified-physics/GateSpinnerDesign.txt sections 3 and 6): its touchable shape (wire capsules and sheet triangles in body coordinates), its stored energy
 // (gravity on the centre of mass, a switch blade), the pivot's friction. Its body is a BodyPart (bodypart.h); the moving is the group's. Pure SI, no VPX types.
 //
 // Frame: the axis through A along E (horizontal). N: the way a ball passes from the front; Z = E x N, up. Body coordinates: x along E, y down at theta = 0, z front at theta = 0; a positive theta swings the lower part toward N.

@@ -9,7 +9,7 @@
 //    with supply_volts and no load, so the speed is proportional to the voltage. Ts is chosen so the disc reaches 95% of its speed in ramp_up_s (or given as stall_torque_nm).
 //    V = 0 is an unpowered motor: the disc coasts down through the bearing drag alone. A PWM drive is its average voltage (duty x supply_volts): the motor inductance and the
 //    disc inertia filter the switching, so the mean is what the disc responds to.
-//  - balls: the disc is a moving part of the unified contact model on the group step (DiscModel::Engine, contactdiscpart.h; docs/UnifiedContactDesign.txt 12.1). The disc is a flat surface whose
+//  - balls: the disc is a moving part of the unified contact model on the group step (DiscModel::Engine, contactdiscpart.h; docs/unified-physics/UnifiedContactDesign.txt 12.1). The disc is a flat surface whose
 //    points move at w x r; the friction of the contact law (Coulomb, mu of the textured surface) carries a ball along, and the equal and opposite force and torque of every ball
 //    act on the disc in the same substep (a ball dropped on the rim slows it, a heavy load stalls it). Throw-off, slip and spin-up of the ball come from the contact law: nothing
 //    about them is set. The motor and the disc are advanced by the contact system with the balls, and alone (ContactPartHost::PartAdvance) when no ball is near.

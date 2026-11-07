@@ -183,7 +183,7 @@ void Spinner::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       m_phitspinner = new HitSpinner(this, height);
 
       const std::filesystem::path hingeIni = ContactHost::IniPathFor(m_ptable->m_filename);
-      if (!isUI && ContactSystem::Unified() && ContactHost::HingeWanted(hingeIni, "spinner", GetName()))   // unified engine: the spinner is a physical model of the contact system (docs/GateSpinnerDesign.txt)
+      if (!isUI && ContactSystem::Unified() && ContactHost::HingeWanted(hingeIni, "spinner", GetName()))   // unified engine: the spinner is a physical model of the contact system (docs/unified-physics/GateSpinnerDesign.txt)
       {
          // the real spinner: steel blade on an offset shaft, pin friction, the Damping as a viscous loss, opto / leaf / micro switch; no stock collider, mover or bracket circles
          constexpr double U = ContactSystem::kMetresPerUnit;

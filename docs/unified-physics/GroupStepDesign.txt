@@ -2,7 +2,7 @@ GROUP STEP DESIGN: the engine moves balls and parts together (ProjectAssessment-
 ==========================================================================================================
 Started 2026-10-29 with the user, one piece at a time. Replaces the band wiring of UnifiedContactDesign.txt 12.3 (written for the old node band).
 Decision (user, 2026-10-29): no part moves its own balls. The engine moves every ball and part of a touching group together, with the band's discrete-gradient
-solve (docs/BandCordDesign.txt section 3: forces from exact energy differences, losses on mid-step speeds, drives as counted work). The band cord (src/physics/
+solve (docs/unified-physics/BandCordDesign.txt section 3: forces from exact energy differences, losses on mid-step speeds, drives as counted work). The band cord (src/physics/
 bandcord.h, proved offline) is the first part. Gates, spinners, bumpers, the turntable disc and the flipper bats keep today's coupling (force out, reaction a step
 later) until each moves over with its own offline proof (to-do 1.3).
 

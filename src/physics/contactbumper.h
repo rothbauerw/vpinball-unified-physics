@@ -1,6 +1,6 @@
 // license:GPLv3+
 //
-// Jet bumper (docs/JetBumperDesign.txt): a skirt that rocks on its base rim, a stem that pushes a spoon switch down, and a steel ring driven by the AE-23-800 coil.
+// Jet bumper (docs/unified-physics/JetBumperDesign.txt): a skirt that rocks on its base rim, a stem that pushes a spoon switch down, and a steel ring driven by the AE-23-800 coil.
 //
 // The settings, the shapes, the masses and the materials, pure SI with no VPX types. The moving is the group step's: BumperGroup::Part (bumpergroup.h), JetBumper::EnginePart (contactbumperpart.h).
 //

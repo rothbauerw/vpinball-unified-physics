@@ -1,6 +1,6 @@
 // license:GPLv3+
 //
-// The group step (docs/GroupStepDesign.txt; ProjectAssessment-2026-10-27.txt item 0 b): the balls of a touching group and their contacts moved together in one solve,
+// The group step (docs/unified-physics/GroupStepDesign.txt; ProjectAssessment-2026-10-27.txt item 0 b): the balls of a touching group and their contacts moved together in one solve,
 // so that energy is kept by construction. Balls, fixed surfaces, ball pairs and moving parts.
 //
 // Laws (the shared contact law restated as stored energy plus losses, design pieces 4 and 5):
@@ -288,8 +288,8 @@ namespace GroupStep
       // the step (ChooseStep): accuracy only
       double omegaH = 0.6;                     // h <= omegaH / omega of the stiffest contact (normal, and shear when shearInStep)
       bool shearInStep = true;                 // the shear spring's stiffness counts in the step choice (false: the normal stiffness only; the solve is stable either way)
-      bool slideFree = true;                   // a slide at the friction limit counts as steady (docs/GroupStepDesign.txt 16: its force is mu N, the spring's stiffness is not in the motion)
-      // The step rule by motion (docs/GroupStepDesign.txt 9, 16, 17): a contact that is steady only needs its normal stiffness resolved to omegaHRest; an impact, a slip the spring can still catch or a fast
+      bool slideFree = true;                   // a slide at the friction limit counts as steady (docs/unified-physics/GroupStepDesign.txt 16: its force is mu N, the spring's stiffness is not in the motion)
+      // The step rule by motion (docs/unified-physics/GroupStepDesign.txt 9, 16, 17): a contact that is steady only needs its normal stiffness resolved to omegaHRest; an impact, a slip the spring can still catch or a fast
       // arrival keeps the strict rule above. Steady is motion, not load: its closing rate is within vSteady, the net force on its bodies cannot change that rate by more in the contact's own time (at a hit's
       // turnaround the rate is zero and the net force is the whole contact force; under a pile the net force is near zero whatever the load), and its slip is within vSteady or at the friction limit.
       // vSteady 0 = every contact strict. 0.02 m/s and 2.4 from 750 real hits against their 1 us runs (runs/2026-10-31-static-group).

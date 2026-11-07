@@ -1160,7 +1160,7 @@ void HitRubber::BandAdvance(const float dtime)
    CordFinish(dtime);
 }
 
-// ---- The cord in the group step (docs/GroupStepDesign.txt 8, 11) ----
+// ---- The cord in the group step (docs/unified-physics/GroupStepDesign.txt 8, 11) ----
 void HitRubber::CordEnsure()
 {
    if (m_cord != nullptr || !m_set.band || m_bandPosts.size() < 2)

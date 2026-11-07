@@ -47,7 +47,7 @@ public:
       double value = 0.0;   // Hit: normal approach speed (m/s); Limit: angular speed (deg/s); BandHit: the cord's largest deflection under the ball (m); SlingFire: 1 = the script's trigger
    };
 
-   // A saved copy of a part's dynamic state, for rewinding an island (docs/UnifiedContactDesign.txt section 11, point 2): plain bytes, no allocation. A part packs the values that change while it
+   // A saved copy of a part's dynamic state, for rewinding an island (docs/unified-physics/UnifiedContactDesign.txt section 11, point 2): plain bytes, no allocation. A part packs the values that change while it
    // runs (position, speed, switch and drive state, stop contacts, held forces), not its settings or shape.
    struct State
    {
@@ -99,7 +99,7 @@ public:
    virtual double SurfaceSpeedBound(double cycleS) const = 0;
    // the part's state as a short text for the log (an engagement of a ball with a part that is moving is the case to look at)
    virtual std::string StateNote() const { return std::string(); }
-   // A part on the group step (docs/GroupStepDesign.txt 18): the engine moves it with the balls in one solve and holds its shapes. Null: the part is on the old loop until it moves over. No part implements these yet.
+   // A part on the group step (docs/unified-physics/GroupStepDesign.txt 18): the engine moves it with the balls in one solve and holds its shapes. Null: the part is on the old loop until it moves over. No part implements these yet.
    virtual GroupStep::Part *GroupPart() { return nullptr; }
    virtual int GroupSurfaces() const { return 1; }                                                   // its surfaces a ball can meet: one shape per ball and surface, each with its own contact and state
    virtual void GroupProbe(int, const V3 &, double, const double *, GroupStep::Hit &) const {}       // a surface for a ball centre and radius, its coordinates moved by trial (null = where they are); fills the hit's columns

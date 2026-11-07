@@ -1,0 +1,122 @@
+REVIEW OF THE UNIFIED PHYSICS PROJECT  (2026-11-06, asked for by the user)
+=========================================================================
+Covers: the engine code on branch unified-physics (committed + uncommitted), the rules (CLAUDE.md, DevelopmentRules.txt,
+ModelStandards.txt, ProjectLeadBrief.txt, lead memories), the to-do list, and the run folders and to-do entries 10-27..11-06.
+Measured = counted or read in the files today. Inferred = my judgement from them.
+
+
+VERDICT
+-------
+The project has drifted from its objective. The objective (ProjectAssessment item 0, to-do 1.1) is one shared contact system
+where every part only describes itself, the engine steps it, and energy enters only through drives. That foundation is still
+open after 10 days, while the work went into new parts (wire switches, Inder blade, magnets, disc, piles) built on top of it.
+Each new part then fails in the unfinished foundation (solver not converging, step rules, cost) and gets a patch to the step
+choice instead of a fix to the model. The rules did not stop this because sessions do not, and cannot, read them all.
+
+
+1. THE ENGINE AGAINST THE OBJECTIVE
+-----------------------------------
+1a. Foundation items still open since 10-27 (measured, to-do section 1):
+    1.1 energy by construction, 1.2 one shared step rule (4 drifted copies), 1.7 remove every stock route (13 left),
+    8.1 test matrix. CORRECTED 2026-11-06 (user): the accuracy part exists: the 750-hit bench (real hits replayed
+    against a 1 us reference, VPX_BENCH). What is missing is the performance tests (cost per object, frame budget on the
+    stress table); the to-do still lists the matrix as not built, which is wrong.
+
+1b. Two stepping paths are still in the tree (measured). Every moving part (bat, bumper, disc, hinge) now returns a GroupPart,
+    but the old loop (contactsystem.cpp SubstepsArrival, StepInIsland, BallStep calls at 853, 1316, 1629, 1703, 1711) is
+    still compiled and reachable. contactsystem.cpp is 5,165 lines, groupstep.h 3,818. "One shared contact path" is met in
+    use, not in code. Brief rule 2 ("delete before optimizing") is not being followed.
+
+1c. Old laws kept as switches instead of deleted (measured, contactsettings.h): static_model 0, roll_model 0,
+    pivot_model 0, step_model 0, island_reach 0, ball_pair_reach 0 all keep the old code alive. ball_rest_substep_us is
+    marked "no longer used, still read". 34 contact settings in all.
+
+1d. CORRECTED 2026-11-06 (user): new settings on by default during testing is the user's choice, so a test never misses a
+    switch and a lead can still turn one off. Not a fault. The fault is that CLAUDE.md still says "off by default": the
+    written rule and the real one differ.
+
+1e. (Corrected 2026-11-06: each of these had the user's OK in the to-do; the point below is about the pattern, not approval.)
+    Step-choice patches instead of model fixes (inferred from the settings and 11-05/11-06 runs). shear_step_motion,
+    term_arrival, damp_dir_slope, step_swing_cap, part_guess_accel (today, uncommitted, off), VPX_GROUP_JAC_MODE, a 15 ps
+    leftover-step fix (pulled) all change how the solver steps or guesses, not the physical law. The user said on 11-06
+    that cost comes out by modelling correctly so the solver can solve. These are the "special cases" rule 2 forbids, moved
+    from the contact law into the step chooser.
+
+1f. Environment variables that change behaviour (measured): VPX_OMEGAH_SCALE (contactmovingpart.h:32, scales the step
+    rule) and VPX_ARRIVAL (overrides arrival_step). ModelStandards 2g: env vars are for diagnostics only. 44 VPX_ env
+    vars in the source in all.
+
+1g. Stock: kicker, plunger, targets and triggers are still on the allowed-stock list (stockcount.cpp:51). That is honest
+    and allowed as the development fallback. The 13 stock routes inside converted objects (to-do 1.7) are not.
+
+1h. Give-up rule in the cord (measured, contactsystem.cpp:3188-3203): a step that will not solve holds the ball for the
+    rest of the cycle; after 20 cycles the cord lets the ball go. It takes energy only and reports on screen, so it is a
+    net, not a stock hand-back. But it hides a solver that cannot solve, which the user called a fault on 11-06.
+
+1i. What is right (measured): every converted part is on the group step; nothing hands back to stock in a converted
+    model's code; the stock counter, energy check and snapshot self-test exist; notifications are wired for refusals.
+
+
+2. THE LAST THREE DAYS (11-04..11-06), the clearest example
+-----------------------------------------------------------
+Measured from the to-do and runs/: three wire-switch designs in three days, 79 run folders (27, 33, 19).
+  11-04  wire switch on the group step built; Inder blade built.
+  11-05  massless wire, ~620 lines, built and handed over with no load of the user's table; two bugs showed in the
+         first seconds of the log. Then deleted.
+  11-06  riding wire: designed 14:58, approved, built from 15:39, check failed 16:23 (43 ms and 108 ms cycles,
+         +132 % energy on the bench, NaN in the book), five rechecks and fixes, pulled at 22:50 back to 15:30.
+What went wrong each time (inferred): the design was not checked on paper against every standard case with numbers
+before building (CLAUDE.md, efficiency rule 2); the build was larger than one 15-minute piece; fixes were tried before
+the cause was known ("joint fix changed NOTHING, inferred cause wrong", 16:58), which is rule 1 broken.
+Today's uncommitted change (part_guess_accel, default off, kept with the user's OK; clamp trace print) is a solver
+first-guess tweak, failed its own test, waits for a retest.
+
+
+3. WHY THE RULES ARE NOT FOLLOWED
+---------------------------------
+3a. Too much to read, and the rules forbid reading it (measured). A lead must read CLAUDE.md, ProjectLeadBrief (7 KB),
+    DevelopmentRules (8.5 KB), ModelStandards (24 KB, 45 traps), lead operating rules (8 KB), the to-do (88 KB) and the
+    MEMORY index (~70 entries) before the first reply. The same files say the lead's context is the biggest cost, to grep
+    rather than read, and to hand off by 30 % (CLAUDE.md) or 40 % (memory). Both cannot be met; sessions pick one and skip
+    reading. The 11-06 entry in the lead rules records exactly that: the two core docs were not read.
+
+3b. The to-do is not a to-do (measured). It claims "~14 KB, 3 lines per item, history to the archive". It is 88 KB:
+    62 KB is "Parked", 10 KB is a timestamped diary ("Current state", 11-03..11-06), 34 lines are over 600 characters.
+    Nobody, person or session, can see from it what is open and what comes next.
+
+3c. Rules grow by reaction and are never pruned (measured). Every failure adds a rule or a trap; none is removed or
+    merged. They now contradict:
+    - Cost: DevelopmentRules 5 says the frame budget is "proposed, to be confirmed"; ModelStandards 4a says it was
+      confirmed 11-03; both then add the 11-06 per-object rule (the same sentence carries "(user, 2026-11-06)" twice).
+    - Handoff at 30 % (CLAUDE.md) vs "about 40 %" and "well before 40 %" (lead memory).
+    - DevelopmentRules title still says "rubber-contact branch".
+    A rule that has two versions is not followed; the session takes the one that suits it.
+
+3d. Constant cold starts (inferred from the handoffs in the to-do and the lead rules). Leads hand off every few hours and
+    each piece goes to a fresh sub-session. Each new session relearns the project from the files in 3a, and the knowledge
+    of why something failed lives in handoff notes and run folders, not in the code or one design doc. The same failures
+    recur after being written down (11-01, 11-03, 11-04, 11-05, 11-06 in the lead rules: no table load before hand-over,
+    inferred causes acted on, scope narrowed without asking, estimates wrong).
+
+3e. The foundation is never the next item (inferred). With item 1.1 open, each new part needs its own convergence and
+    step work, so the lead is always chasing the newest part's failure. "Finish the model first" (rule 9) is applied to
+    each part, not to the contact system, which is the model everything sits on.
+
+
+4. CODE AND DESIGN QUALITY
+--------------------------
+4a. Designs are built before they are proved on paper (2, above). The rule exists (check every term and standard case
+    with numbers); the riding wire's "touch-edge Newton failure removed (inferred)" was built on an inference.
+4b. Fixes are tried to test a theory (11-06 16:58 joint fix, solver resolution floor 22:10, both reverted). Rule 1d forbids it.
+4c. The code is grown, not shaped: two loops, old laws behind switches, 34 settings, step rules added per symptom.
+    Nobody can say which code runs on a default table without reading the ini loader (1b-1e).
+4d. Not checked in this review (open): whether each converted part meets every box of ModelStandards 7; the 13 stock
+    routes one by one; the uncommitted groupstep.h change line by line.
+
+
+RECOMMENDATION
+--------------
+Stop new part work and fix the reading load first: replace the rules and to-do with one short, consistent page a
+session can read in full (one cost rule, one handoff rule, open items only, history out), with your OK on each cut.
+Then finish the foundation before any new part: delete the old loop and the old-law switches, one shared step rule,
+energy by construction, and the test matrix, in that order, each as 15-minute pieces checked on paper first.

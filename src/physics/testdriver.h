@@ -1,5 +1,5 @@
 #pragma once
-// Test driver for the harness (docs/TestMatrixDesign.txt section 2). Off unless VPX_TEST_INPUT names an input file (read once at the first cycle of a table).
+// Test driver for the harness (docs/unified-physics/TestMatrixDesign.txt section 2). Off unless VPX_TEST_INPUT names an input file (read once at the first cycle of a table).
 // The input file lists actions by physics millisecond; they are applied at the start of that cycle, before the physics step, so the same build and the same
 // file give the same result whatever the frame rate or the machine load. The driver records the balls every cycle and checks the fixed limits it can check
 // (TestMatrixDesign.txt section 1), writing balls.csv, report.txt and done.txt into VPX_TEST_OUT. It also times every cycle and frame (section 3 points 9 and 10):

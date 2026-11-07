@@ -18,7 +18,7 @@
 #include "physics/stockcount.h"
 #include "physics/contactsystem.h"
 
-// Test driver (docs/TestMatrixDesign.txt section 2; keys and file format in docs/NewPhysicsReference.txt). Harness only: off unless VPX_TEST_INPUT is set.
+// Test driver (docs/unified-physics/TestMatrixDesign.txt section 2; keys and file format in docs/unified-physics/NewPhysicsReference.txt). Harness only: off unless VPX_TEST_INPUT is set.
 // Input file: one action per line, "<t_ms> <action> <args>", '#' starts a comment; actions with the same time run in file order. Time 0 is the first cycle after the
 // table's start-up (section 3 point 10g: the first frame that took less than half the anti-hung limit), so the start-up's slow frames never skip driver time.
 //    ball NAME x y z vx vy vz [radius mass]   create a ball: x, y in VPX units, z = height of the ball's bottom above the playfield (U), velocity in m/s
@@ -644,7 +644,7 @@ namespace TestDriver
          const bool stockPass = !ContactSystem::Unified() || !StockCount::ConvertedUsed();
          const bool pass = s.skips == 0 && s.fast.n == 0 && s.below.n == 0 && s.outside.n == 0 && s.gone.n == 0 && s.errors.empty() && costPass && stockPass;
          std::ofstream o(OutPath("report.txt"));
-         o << "Test driver report (docs/TestMatrixDesign.txt)\n" << (Player::BenchMode() ? "BENCH RUN: every cost below is bench cost (no frames, no GPU, virtual frames of 7 ms); limit 6 is judged on a focused VPX run\n" : "") << "input: " << s.input << "\ncycles: " << s.cycles << " (t 0 to " << t << " ms; time 0 = engine time " << s.t0
+         o << "Test driver report (docs/unified-physics/TestMatrixDesign.txt)\n" << (Player::BenchMode() ? "BENCH RUN: every cost below is bench cost (no frames, no GPU, virtual frames of 7 ms); limit 6 is judged on a focused VPX run\n" : "") << "input: " << s.input << "\ncycles: " << s.cycles << " (t 0 to " << t << " ms; time 0 = engine time " << s.t0
            << " ms, after start-up), balls: " << s.balls.size() << ", respawns: " << s.respawns;
          if (s.respawnZOn)
             o << " (of them " << s.respawnsZ << " for a ball centre below z = " << s.respawnZ << " U)";

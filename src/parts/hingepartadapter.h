@@ -2,7 +2,7 @@
 
 #pragma once
 // The table side of a gate's or spinner's moving part (HingeModel::Engine, contacthingepart.h): the host is built here, and the adapter writes the part's angle where the
-// stock renderer and the script read it and turns the part's events into the table part's script events (docs/GateSpinnerDesign.txt, UnifiedContactDesign.txt 12.5).
+// stock renderer and the script read it and turns the part's events into the table part's script events (docs/unified-physics/GateSpinnerDesign.txt, UnifiedContactDesign.txt 12.5).
 
 #include <filesystem>
 #include <memory>

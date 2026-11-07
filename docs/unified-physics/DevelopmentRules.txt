@@ -17,7 +17,7 @@ Set by the project owner. They apply to every change, by a person or an assistan
    NOTHING IS EVER HANDED BACK TO STOCK IN A NEW MODEL (user, 2026-10-26, repeated 2026-10-30). Stock is only the development fallback for object types not yet converted.
 
 3. GENERAL FIXES, PROVED ON A MATRIX
-   Fix the general rule, grep for every other place with the same special case, and prove it on the test matrix (docs/TestMatrixDesign.txt: fixed limits per run, cases per model, stress table)
+   Fix the general rule, grep for every other place with the same special case, and prove it on the test matrix (docs/unified-physics/TestMatrixDesign.txt: fixed limits per run, cases per model, stress table)
    with numeric pass/fail including the cost per cycle. A fix is done when the matrix passes, not the one scene. The old scenario matrix (runs/2026-10-09-slow-contact: batch_matrix.ps1,
    matrix_compare.py) was judged a fail by the user on 2026-10-27 and is not used; until the new one is built, say which checks were run and that the matrix was not.
 
@@ -25,14 +25,15 @@ Set by the project owner. They apply to every change, by a person or an assistan
    Group several changes before a full regression; the user decides when a matrix is run. Timing and event-timing tests run focused (run.ps1 -Focused) and the user is told first so the machine is idle.
    Always call run.ps1 with explicit full paths and check the ini that was loaded.
 
-5. PERFORMANCE (frame budget updated 2026-10-27, user-approved; detail in docs/ModelStandards.txt section 4)
+5. PERFORMANCE (frame budget updated 2026-10-27, user-approved; detail in docs/unified-physics/ModelStandards.txt section 4)
    Every model is tuned for speed: measure the cost per cycle (VPX_CONTACT_TIMING), expose knobs.
    Physics, the table script and the frame preparation share one thread; at 144 Hz a frame (6.9 ms) holds about 7 physics cycles. Budget (proposed, to be
    confirmed on the stress table): physics over any 7 consecutive cycles <= 3 ms, no single cycle > 1.5 ms; per active object <= 30 us per 1 ms cycle with one
    ball. Judge by the worst 7-cycle window and the worst single cycle, never the average.
+   Per object (user, 2026-11-06): 30 us in EACH 1 ms cycle for the object with the ball(s) on it (user, 2026-11-06), worst cycle counts. Not a 7-cycle window, not other objects.
 
 6. DOCUMENTATION AND HISTORY
-   Every feature, key, script call and environment variable goes into docs/NewPhysicsReference.txt with a dated change-log entry, in the same change. Names follow the physical part (flipper, sling, rubber), never a table.
+   Every feature, key, script call and environment variable goes into docs/unified-physics/NewPhysicsReference.txt with a dated change-log entry, in the same change. Names follow the physical part (flipper, sling, rubber), never a table.
    Nothing is committed or pushed until the user says so. Convention differences from stock VPX are stated and documented.
    Every item the user states goes into the to-do list at once; the to-do list is the single source of open work.
 
@@ -40,7 +41,7 @@ Set by the project owner. They apply to every change, by a person or an assistan
    a. Every new design and every fix includes a step that lists the scenarios it would NOT handle or would break: other sources of the same case, other objects and modes, restart and teardown, extreme values
       (zero, huge, many balls), order of events, a table without the feature, a second use in the same process.
    b. Where it is possible, the design handles or prevents those scenarios (an ownership rule, a guard that is a safety net, a test in the matrix). Where it is not, the limit is written down in
-      docs/NewPhysicsReference.txt and the to-do list, with the reason.
+      docs/unified-physics/NewPhysicsReference.txt and the to-do list, with the reason.
    c. The list is part of the report: say which scenarios were checked, how (measured or only reasoned), and which remain open. A scenario that is only reasoned about is marked INFERRED (rule 1b).
 
 8. UNWANTED OR TRACKED BEHAVIOUR IS SHOWN ON SCREEN (user, 2026-10-13)

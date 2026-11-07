@@ -1,7 +1,7 @@
 BALL MAGNET LAW IN THE CONTACT SUBSTEPS - DESIGN, REV 2 (2026-10-13)
 =====================================================================
 Status: DESIGN ONLY. No engine code is changed. Rev 1 (segment-wise force with refreshed multipole evaluations) is REPLACED: it could not meet the cost criterion (see 2).
-Rules: docs/DevelopmentRules.txt. The multipole law (runs/2026-10-13-cpp-proto/ballmag.h) stays the REFERENCE and the generator of the correction table; it does not run in the engine.
+Rules: docs/unified-physics/DevelopmentRules.txt. The multipole law (runs/2026-10-13-cpp-proto/ballmag.h) stays the REFERENCE and the generator of the correction table; it does not run in the engine.
 
 1. DESIGN CRITERIA (agreed with the user 2026-10-13; [u] = stated by the user, [i] = inferred by the assistant, to be confirmed)
  1 [u] Measure before fixing; measured and inferred reported separately (rule 1).      2 [u] No hacks: every term names a physical law; no cutoffs, caps, per-source cases (rule 2).

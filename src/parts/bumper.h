@@ -146,7 +146,7 @@ public:
    STDMETHOD(get_RotX)(/*[out, retval]*/ float *pVal);
    STDMETHOD(get_RotY)(/*[out, retval]*/ float *pVal);
    STDMETHOD(PlayHit)();
-   // physical bumper (unified engine, docs/JetBumperDesign.txt)
+   // physical bumper (unified engine, docs/unified-physics/JetBumperDesign.txt)
    STDMETHOD(get_SkirtZ)(/*[out, retval]*/ float *pVal);
    STDMETHOD(get_SpoonZ)(/*[out, retval]*/ float *pVal);
    STDMETHOD(get_SwitchClosed)(/*[out, retval]*/ VARIANT_BOOL *pVal);

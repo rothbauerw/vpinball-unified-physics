@@ -1,6 +1,6 @@
 // license:GPLv3+
 //
-// A gate as a part of the group step: the four real gate types (docs/GateSpinnerDesign.txt section 4; runs/2026-10-31-gate-spinner-disc) on one axis (hingegroup.h, bodypart.h).
+// A gate as a part of the group step: the four real gate types (docs/unified-physics/GateSpinnerDesign.txt section 4; runs/2026-10-31-gate-spinner-disc) on one axis (hingegroup.h, bodypart.h).
 //   wire W          pins at both ends; legs from the pin ends down to two bottoms at +-width/4, a middle V that rises to apex * depth. Each side of the V is its own contact
 //   wire rectangle  legs from the pin ends down to a bottom bar
 //   plate           trapezoid, top width 27 mm, bottom 18 mm, 20 mm long, hanging from a pin wire across its top

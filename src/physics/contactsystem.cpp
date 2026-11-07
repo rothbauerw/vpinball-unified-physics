@@ -125,7 +125,7 @@ static double g_frameUsedS = 0.0;   // how much of this physics step (1 ms) the 
 static std::vector<const HitBall *> g_placed;   // the balls a script or the driver put where they are since the last cycle (NotePlaced)
 static ContactSystem::CycleStats g_last;
 static std::vector<std::function<void()>> g_deferred;      // events raised inside the step, fired after it (Finish)
-// The test driver's cost split of this cycle (docs/TestMatrixDesign.txt section 3 point 10 b-d): null unless the driver times the cycle in detail. Per island: what set each
+// The test driver's cost split of this cycle (docs/unified-physics/TestMatrixDesign.txt section 3 point 10 b-d): null unless the driver times the cycle in detail. Per island: what set each
 // substep (TestDriver::ContactCost::Why) and the smallest substep.
 static TestDriver::ContactCost *s_cc = nullptr;
 static int s_islWhy[TestDriver::ContactCost::kWhys];
@@ -2084,7 +2084,7 @@ struct ContactSystemImpl
 
    // The bats that took part: finish the cycle (the pivot's nudge, then UpdateDisplacements only publishes the angle and fires the events)
    // The island's members for the test driver's cost split: its balls (the driver's names), then the surfaces, flippers and bands they touch at the end of the step
-   // ---- An island with a cord: one group step for the whole island (docs/GroupStepDesign.txt 8, 11) ----
+   // ---- An island with a cord: one group step for the whole island (docs/unified-physics/GroupStepDesign.txt 8, 11) ----
    // A surface of a ball's contact as a shape of the group (its own list of near faces, so one ball's)
    class SurfaceShape : public GroupStep::Shape
    {
@@ -4166,7 +4166,7 @@ bool ContactSystemImpl::EngageImpl(ContactHost *const host, HitBall *const pb, c
    // The ball starts the engagement touching or a little inside the rubber (the hit was found within a step). Go back to the instant it first touched: along its
    // own velocity, by depth / closing speed, at most one physics step; if it is not closing (pushed in by something else), seat it at touching distance along the normal.
    // Nothing is stored as compression.
-   // Found inside a part with no earlier clean state (docs/UnifiedContactDesign.txt 11, point 6): CheckOverlaps found no clean start of the sub-interval, or the engagement by proximity finds the ball already inside a
+   // Found inside a part with no earlier clean state (docs/unified-physics/UnifiedContactDesign.txt 11, point 6): CheckOverlaps found no clean start of the sub-interval, or the engagement by proximity finds the ball already inside a
    // moving part (point 1 engages a ball that has a past before it touches, so a ball inside at that point was created or moved there)
    bool noPast = std::strcmp(how, "no past") == 0 && !(host != nullptr && host->MovingPart() != nullptr && host->MovingPart()->GroupPart() != nullptr);   // (a part on the group step: its zero, below)
    if (!noPast && host != nullptr && std::strcmp(how, "near") == 0)
@@ -4606,7 +4606,7 @@ const ContactSystem::CycleStats &ContactSystem::LastCycle()
 }
 
 
-// ---- The snapshot of the start of a sub-interval (docs/UnifiedContactDesign.txt section 11, point 2) ---------------------------------------------------------------------------------
+// ---- The snapshot of the start of a sub-interval (docs/unified-physics/UnifiedContactDesign.txt section 11, point 2) ---------------------------------------------------------------------------------
 // Everything a replay of the step would have to put back: every ball's position, velocity and spin, the engaged balls' contacts (the whole entry, copy-assigned in place so the list and the
 // pointers to its entries stay as they are; the vectors inside keep their capacity), the ball pairs, the saved state of every moving part, the size of the event queue. The engaged list and the pair
 // list only change in ApplyReleases, after the overlap check, so a snapshot of their contents is enough. Bats and bands are not saved yet: islands with them are not replayed.
@@ -4865,7 +4865,7 @@ void ContactSystem::SnapshotTest(const float dtime)
 }
 
 
-// ---- The overlap check and the replay of the sub-interval (docs/UnifiedContactDesign.txt section 11, point 2) ------------------------------------------------------------------------
+// ---- The overlap check and the replay of the sub-interval (docs/unified-physics/UnifiedContactDesign.txt section 11, point 2) ------------------------------------------------------------------------
 // Run after UpdateDisplacements, before the events are dispatched. A free ball found overlapping a moving part was born inside this sub-interval: it moved on a straight line (stock free flight)
 // while the part moved by its own motion. Find the time t* in the sub-interval at which the gap was zero with BOTH of them where they really were, put the snapshot of the start back, step the
 // system to t* (the engaged balls and the parts), engage the ball there with its true position and velocity, and step on to the end. The contact starts at zero depth with the real velocities.

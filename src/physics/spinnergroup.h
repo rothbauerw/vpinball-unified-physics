@@ -1,6 +1,6 @@
 // license:GPLv3+
 //
-// A spinner as a part of the group step (docs/GateSpinnerDesign.txt section 5; runs/2026-10-31-gate-spinner-disc): a flat steel blade on an offset shaft, on one axis (hingegroup.h, bodypart.h).
+// A spinner as a part of the group step (docs/unified-physics/GateSpinnerDesign.txt section 5; runs/2026-10-31-gate-spinner-disc): a flat steel blade on an offset shaft, on one axis (hingegroup.h, bodypart.h).
 //   blade   a rectangle width x height x thickness (default 39 x 31.75 x 0.8 mm), steel. The shaft runs across it with Z bends, so the axis lies IN THE PLANE of the blade, offset above the blade's centre (default 6 mm): the blade reaches height/2 - offset above the axis and height/2 + offset below it.
 //           Gravity on the offset centre of mass is the pendulum that brings the blade back toward vertical after every spin.
 //   shaft   pins beyond the blade into the bracket (mass only).

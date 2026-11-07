@@ -1,0 +1,85 @@
+# Unified physics to-do
+
+Open items only, one line each (300 characters at most), numbers kept. Finished = deleted; git history is the archive.
+No progress notes, results or time stamps here: those go in the lead log, runs/<date>-lead/log.md.
+History before 2026-11-07: memory project_todo_archive_2026-11-03_to_2026-11-06.md and the two older archives.
+A hook refuses an edit that breaks these limits (.claude/hooks/check_todo.py).
+
+## Goals (shared engine; what must be finished, in order; changes only with the user)
+G1. One shared path: the old loop and the old-law switches deleted; one shared step rule (today 4 drifted copies).
+G2. Energy by construction: energy enters only through drives; EnergyStep removed once no state needs it.
+G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md); stock detection off for them.
+G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
+
+## Now
+In flight: nothing running. Uncommitted: part_guess_accel + clamp trace (code), per-object cost line (rule docs), docs moved to docs/unified-physics, new CLAUDE.md.
+Next decision: the solution path for the wire switch not converging (N1); it decides N6. All items confirmed with the user 11-07.
+N1. Wire switch at 6 mm: Newton does not converge near touch (ringing); 252 us/ms vs 30 us limit. Shared-engine item: closes only when solved there. Riding wire pulled (poor design and code), may reopen.
+N2. Wires B, C, D as the real switches (B V wire, C angled straight wire, D arch through playfield); lever ends wrong. Derive sizes from photos (ball 1-1/16 in as scale) and parts drawings; user checks before build.
+N3. Wire switches: option for a playfield hole under each wire.
+N4. Inder blade: hinge sizes and skin are estimates; 10-17 us per step; crawls from rest. Derive sizes; user checks before build.
+N5. One reach rule from physics (speed plus force) for grouping and step length. Grouping: Gate001's 81 mm swing as one-cycle travel joins two lanes. Step length: speed only, no force. Check all parts; ball pairs of unequal mass and resting-ball wake (read only).
+N6. Bounce too lively on long steps (bench: rebound 0.83 vs law 0.51): tied to N1; stays or goes with the design review of N1's solution. Includes steel impacts (impact law or relaxed step; VPX_OMEGAH_SCALE env var).
+N7. Stress v2 bench: ball travel energy +2 % at 57 ms; spin not counted. Check total energy in the saved run (no new run).
+N8. Test driver must refuse a ball placed inside any object.
+N9. Branch: 22 commits not pushed, 59 files uncommitted. Commit the doc and rule work on its own (not with engine changes), then push: on the user's word.
+N10. Performance tests: not built. Includes the stress table driver clock after start-up and the 144 Hz frame budget.
+
+## 1. Contact system (tasks)
+10. Sleep (default off): a ball on a flipper never sleeps (bats have no rest check). Whether sleep becomes default: user.
+13. Moving script/animated primitives: details from the user.
+17. Shared-loop cost per cycle (waits until models work).
+26. Ball started inside: the solve must never keep a runaway answer. May be handled already: check.
+27. Shared stop piece (gate, spinner, disc, ring, bat, plunger).
+29. Counter columns filled only on the old path.
+30. part_guess_accel (default off): design evaluation for all moving parts, then a test plan if kept. After the shared-engine items, unless one of them needs it.
+
+## 2. Flippers
+1. Rubber separation at the end stop: details from the user.
+2. End stops as impact law.
+3. Coil winding coupling.
+4. Ball control after a flipper hit (later).
+5. Binding that limits top speed: details from the user.
+6. Shaft torque in the bushing: details from the user.
+7. Solenoids for every era: coil data from the user.
+9. Rest angle -79 vs -70 deg, crank 25.4 vs 22.2 mm: user to say.
+11. Two balls on a raised bat; table close with balls on a bat (check).
+
+## 3. Bands and slings
+2. One Switch event instead of SwitchClosed/Opened.
+3. SlingTrigger to the jet bumper Solenoid form (check).
+
+## 5. Gates and spinners
+1. Cases not covered: gate_hold, gap_back, overlap, spinner switches on a table, two-way and plate gates.
+2. Cost over 30 us; stops as impact law.
+5. Redraw to match the real parts.
+6. Deep late contacts on gates (Gate002 317 um at 1.08 m/s).
+
+## 6. Magnets (rules: ModelStandards section 9)
+2. Energy by construction for magnets (goal G2): pair force not energy exact; iron-core and plug cases unchecked.
+7. Long rod core, moving magnets.
+9. Guide tube ConstrainBall sets held balls' positions outside the group step (PhysicsEngine.cpp:866): breaks the shared path. Code read only.
+
+## 7. Turntable
+1. Constant-speed AC motor option.
+
+## 8. Testing
+1. Accuracy bench exists (750 hits vs 1 us); 36-39 hits always off the 5 % limit: fix them or set the limit (user).
+5. MCP server (later).
+8. Build-compare script compiles /fp:precise by default, so a reported difference is logic, not rounding (ModelStandards trap 10-31).
+
+## 9. Still stock (ask before converting)
+1. Stand-up and drop targets.
+2. Kickers.
+3. Switches and triggers: wire switch work in progress (N1-N4).
+4. Plunger: other tables, auto plunger, mechanical input.
+5. Ramps: wire-ramp types, rebound, cost.
+6. Playfield material values unverified: compare with the user's video of a ball rolling on a playfield.
+
+## 10. Branch and housekeeping
+3. unified = 0 against a plain upstream build; plunger fix.
+5. Stock-file hooks to separate.
+6. Editor changes to replace the ini files (panels, settings saved in the .vpx); unified off per table for release.
+7. Old keys in 14 inis, then the unknown-key notice.
+10. PR to the official repo after 3-5.
+13. Old-law switches to delete once accepted (CLAUDE.md): static/roll/pivot/step_model 0, island_reach 0, ball_pair_reach 0, ball_rest_substep_us.

@@ -1,6 +1,6 @@
 MODEL STANDARDS - how every physics model is built  (approved by the user section by section, 2026-10-27)
 =============================================================================================
-Read with docs/DevelopmentRules.txt (the rules there come first). This file says HOW a model is built so that each new one reuses the last instead of relearning.
+Read with docs/unified-physics/DevelopmentRules.txt (the rules there come first). This file says HOW a model is built so that each new one reuses the last instead of relearning.
 A model is not done until every box in section 7 is ticked.
 
 
@@ -62,6 +62,7 @@ d. Steep fields count as stiff too: a force that rises sharply over a short dist
 -------
 a. Frame budget at 144 Hz: physics over any 7 consecutive cycles <= 3 ms, including the worst case (confirmed by the user 2026-11-03 for ball piles); single cycle <= 1.5 ms (proposed). Burst exception (user 2026-11-03): within 0.2 s after a hit event (a landing, a flip, a fast ball into a pile) up to 10 ms per 7 cycles; everything else, every pile at rest included, stays at 3 ms.
 b. Per active object (proposed): <= 30 us per 1 ms cycle with one ball on it; state the cost with 2 and 6 balls.
+   (User, 2026-11-06: 30 us in EACH 1 ms cycle for the object with the ball(s) on it (user, 2026-11-06), worst cycle counts. Not a 7-cycle window, not other objects.)
 c. Measure with VPX_CONTACT_TIMING (per-cycle CSV) and VPX_CONTACT_PROFILE (scopes, CPROF). Report: worst 7-cycle window, p99, maximum, and what the slow cycles
    spent their time on. Profile before optimising: a guess at the cost is not a finding.
 d. New step code: no allocation, no string building, no getenv, no dynamic_cast in loops. Existing allocations are tidied when that code is next touched (user,
@@ -82,10 +83,10 @@ b. In the engine: its rows in the test matrix with numeric pass/fail, and the sn
    2. Inputs repeat exactly: the table script's inputs follow physics time, not a timer, so the same build gives the same result.
    3. Offline first: most checks run on the model alone in seconds; the engine runs only what needs the whole table.
    4. Results are saved with the build they came from; nothing is rerun just to compare.
-   The design (limits, test driver, stress table, cases per model, offline split, run time) is in docs/TestMatrixDesign.txt (user-approved 2026-10-27). Not built yet.
+   The design (limits, test driver, stress table, cases per model, offline split, run time) is in docs/unified-physics/TestMatrixDesign.txt (user-approved 2026-10-27). Not built yet.
 c. Play-speed cases: 1 m/s typical, 3 m/s extreme; two balls on the part; a ball between two parts; table restart; the part switched off.
    Plus the cases that have launched balls before: a contact found late, a ball pinched between two moving parts, a part hit while its coil drives it.
-d. Use run.ps1 and the test matrix in docs/TestMatrixDesign.txt (shared offline bench, engine test driver, stress table), not the old batch_*.ps1 matrix. A new script is
+d. Use run.ps1 and the test matrix in docs/unified-physics/TestMatrixDesign.txt (shared offline bench, engine test driver, stress table), not the old batch_*.ps1 matrix. A new script is
    added to the shared set with a one-line description, not left as a one-off.
 e. Every matrix run writes its pass/fail report to disk the day it runs.
 

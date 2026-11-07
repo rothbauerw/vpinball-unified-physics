@@ -237,7 +237,7 @@ void Gate::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       };
 
       const std::filesystem::path hingeIni = ContactHost::IniPathFor(m_ptable->m_filename);
-      const bool hinged = !isUI && ContactSystem::Unified() && ContactHost::HingeWanted(hingeIni, "gate", GetName());   // unified engine: the gate is a physical model of the contact system (docs/GateSpinnerDesign.txt)
+      const bool hinged = !isUI && ContactSystem::Unified() && ContactHost::HingeWanted(hingeIni, "gate", GetName());   // unified engine: the gate is a physical model of the contact system (docs/unified-physics/GateSpinnerDesign.txt)
       if (hinged)
       {
          // the real gate: wire W / rectangle / plate / long plate on its pivot, stops, switch, hold, bending; no stock collider, mover, line segment or bracket circles

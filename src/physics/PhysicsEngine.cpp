@@ -692,7 +692,7 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
 
    while (m_nextPhysicsFrameTime < initial_time_usec) // loop here until physics (=simulated) time catches up to current real time, still staying behind real time by up to one physics emulation step
    {
-      TestDriver::LoopStart();   // cycle timing (docs/TestMatrixDesign.txt section 3 point 9); nothing unless VPX_TEST_INPUT is set
+      TestDriver::LoopStart();   // cycle timing (docs/unified-physics/TestMatrixDesign.txt section 3 point 9); nothing unless VPX_TEST_INPUT is set
       const uint64_t ptIter0 = pt.On() ? usec() : 0;
       m_time_sec = max(m_time_sec, (double)(m_curPhysicsFrameTime - m_startTime_usec) / 1000000.0); // First iteration is done before precise time
       m_time_msec = (uint32_t)((m_curPhysicsFrameTime - m_startTime_usec) / 1000); // Get time in milliseconds for timers
@@ -787,7 +787,7 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
 
       {
          const TestDriver::Timed tdDriver(TestDriver::kDriver);
-         TestDriver::BeginCycle(m_time_msec);   // harness inputs by physics time (docs/TestMatrixDesign.txt section 2); nothing unless VPX_TEST_INPUT is set
+         TestDriver::BeginCycle(m_time_msec);   // harness inputs by physics time (docs/unified-physics/TestMatrixDesign.txt section 2); nothing unless VPX_TEST_INPUT is set
       }
 
       // Since we are deriving forces/accelerations from velocities by doing a simple substract without scaling by delta time, we need dtime to be constant
@@ -1086,7 +1086,7 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
 
       std::optional<TestDriver::Timed> tdContact(std::in_place, TestDriver::kContact);   // the contact system's step, to the snapshot test below
       if (ContactSystem::Unified())
-         ContactSystem::SaveStart();   // the state of the start of this sub-interval, for a replay (docs/UnifiedContactDesign.txt 11, point 2)
+         ContactSystem::SaveStart();   // the state of the start of this sub-interval, for a replay (docs/unified-physics/UnifiedContactDesign.txt 11, point 2)
       const uint64_t ctT0 = ctLog != nullptr ? usec() : 0;
       if (hittime < hittimeStart && ContactProf::On())
       {
@@ -1133,14 +1133,14 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
       if (ContactSystem::Unified())
       {
          const TestDriver::Timed tdContactOverlaps(TestDriver::kContact);
-         ContactSystem::CheckOverlaps(hittime);   // a free ball found inside a moving part: the sub-interval is replayed with the ball engaged at its first contact (docs/UnifiedContactDesign.txt 11, point 2)
+         ContactSystem::CheckOverlaps(hittime);   // a free ball found inside a moving part: the sub-interval is replayed with the ball engaged at its first contact (docs/unified-physics/UnifiedContactDesign.txt 11, point 2)
          unsigned nRep = 0, usRep = 0;
          ContactSystem::TakeReplayStats(nRep, usRep);
          s_ctReplays += nRep;
          s_ctReplayUs += usRep;
       }
 
-      // the events the contact step and the parts queued in this sub-interval: after the free balls have moved, as stock fires its collision events (docs/UnifiedContactDesign.txt 11, point 2)
+      // the events the contact step and the parts queued in this sub-interval: after the free balls have moved, as stock fires its collision events (docs/unified-physics/UnifiedContactDesign.txt 11, point 2)
       {
          const TestDriver::Timed tdDispatch(TestDriver::kContact);
          ContactSystem::Dispatch();

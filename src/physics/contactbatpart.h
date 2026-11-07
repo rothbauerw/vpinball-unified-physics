@@ -1,6 +1,6 @@
 // license:GPLv3+
 //
-// A flipper bat as a moving part of the contact system, on the group step (docs/GroupStepDesign.txt; runs/2026-10-31-flipper-engine/notes.md). The bat, its coil (plunger, link, power and hold
+// A flipper bat as a moving part of the contact system, on the group step (docs/unified-physics/GroupStepDesign.txt; runs/2026-10-31-flipper-engine/notes.md). The bat, its coil (plunger, link, power and hold
 // windings), return spring and stops are BatGroup::Part (batgroup.h): the engine moves them with the balls in one solve, so an island with a bat always goes to the group. There is no other path: no
 // old-loop contact, no impulse, no stock.
 //

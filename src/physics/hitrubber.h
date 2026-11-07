@@ -223,7 +223,7 @@ private:
    void BandRelease(HitBall *ball, const char *why);
    void BandReleaseAll(const char *why);
    void BandAdvance(const float dtime);
-   // The cord in the group step (cordband.h; docs/GroupStepDesign.txt 8, 11): the contact system steps it with its balls
+   // The cord in the group step (cordband.h; docs/unified-physics/GroupStepDesign.txt 8, 11): the contact system steps it with its balls
    HitRubber *BandHost() override { return this; }
    bool CordOn() const { return m_cord != nullptr; }
    bool CordModel() const { return m_set.band && m_bandPosts.size() >= 2; }   // this band runs on the cord: the contact system takes its balls (CordNear), no stock collision

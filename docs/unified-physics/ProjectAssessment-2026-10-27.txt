@@ -107,4 +107,4 @@ Uncommitted: today's bumper, gate/spinner and probe work. Statistical matrix run
 - 31 environment-variable reads in the engine change behaviour without showing up in the ini (the playbook lists the traps they caused).
 - NewPhysicsReference.txt has offline flipper-link notes with the spaces stripped (change log, about lines 440-460): noise in the document every session reads.
 - The rule "use the shared guards" (CLAUDE.md) does not say which functions those guards are, so a session cannot check it.
-The standards in docs/ModelStandards.txt answer these.
+The standards in docs/unified-physics/ModelStandards.txt answer these.

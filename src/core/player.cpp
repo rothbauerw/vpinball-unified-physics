@@ -2510,7 +2510,7 @@ void Player::PrepareFrame()
    #endif
 
    m_logicProfiler.NewFrame(m_time_msec);
-   TestDriver::FrameStart();   // harness frame timing (docs/TestMatrixDesign.txt section 3 point 9); nothing unless VPX_TEST_INPUT is set
+   TestDriver::FrameStart();   // harness frame timing (docs/unified-physics/TestMatrixDesign.txt section 3 point 9); nothing unless VPX_TEST_INPUT is set
    m_logicProfiler.EnterProfileSection(FrameProfiler::PROFILE_PREPARE_FRAME);
 
    m_overall_frames++; // This causes the next VPinMAME <-> VPX sync to update light status which can be heavy since it needs to perform PWM integration of all lights

@@ -1,5 +1,5 @@
 #pragma once
-// Unified contact system (docs/UnifiedContactDesign.txt). One call per 1 ms physics cycle steps every ball it owns.
+// Unified contact system (docs/unified-physics/UnifiedContactDesign.txt). One call per 1 ms physics cycle steps every ball it owns.
 // Step 1: the entry point, the engine gate and the cycle's step (gather, islands, per-island substeps, write-back) live here.
 
 #include <cstddef>
@@ -44,7 +44,7 @@ void NotePlaced(const HitBall *ball);   // a script or the driver put this ball 
    void SleepWake(const HitBall *ball, const char *cause);  // wake the group this ball sleeps in (no-op for a ball awake); within a cycle the substeps take back the gravity share the cycle start did not give
    void SleepWakeAtStart(const HitBall *ball, const char *cause);   // the same, before the balls' velocities of this cycle are updated (Magnets::Step)
 
-   // The state of everything an overlap replay would have to put back (docs/UnifiedContactDesign.txt section 11, point 2), taken at the start of a sub-interval, before Step: every ball's position,
+   // The state of everything an overlap replay would have to put back (docs/unified-physics/UnifiedContactDesign.txt section 11, point 2), taken at the start of a sub-interval, before Step: every ball's position,
    // velocity and spin, the engaged balls' contacts (shear springs, touching flags, counters), the ball pairs, the saved state of every moving part, the size of the event queue. No allocation after the
    // first few calls. RestoreStart puts it all back and discards the events queued since. LastSaveUs: what SaveStart cost, for the cost log.
    void SaveStart();
@@ -62,7 +62,7 @@ void NotePlaced(const HitBall *ball);   // a script or the driver put this ball 
    void TakeReplayStats(unsigned &count, unsigned &us);
 
    // Fires the events queued by Step and by the parts, in the order they happened. Called by the engine after the free balls have moved (UpdateDisplacements), the order of stock VPX: displacements,
-   // then collisions and script events (docs/UnifiedContactDesign.txt section 11, point 2). Nothing has reached a script when a late engagement has to rewind the interval.
+   // then collisions and script events (docs/unified-physics/UnifiedContactDesign.txt section 11, point 2). Nothing has reached a script when a late engagement has to rewind the interval.
    void Dispatch();
 
    // What the last Step did (for the cost log, VPX_CONTACT_TIMING): bodies stepped, islands, substeps summed over the islands, bats stepped

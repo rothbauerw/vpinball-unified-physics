@@ -1,6 +1,6 @@
 JET BUMPER DESIGN (unified-physics branch)
 ===========================================
-Status: DESIGN, written 2026-10-26, revision 2 the same day (user review), awaiting user review. Nothing is built. Rules: docs/DevelopmentRules.txt (2 no hacks, 5 cost, 7 what
+Status: DESIGN, written 2026-10-26, revision 2 the same day (user review), awaiting user review. Nothing is built. Rules: docs/unified-physics/DevelopmentRules.txt (2 no hacks, 5 cost, 7 what
 breaks, 8 detectors). The design is not built around anything stock: stock properties and values are used only where they fit the model, otherwise ignored with a warning.
 Source of the data: the user, 2026-10-26 (memory project_jet_bumper_data_2026-10-26). Every number below is marked  [user]  (stated by the user),  [derived]  (computed
 from user numbers) or  [guess]  (mine, unverified, to be measured or tuned by feel). Nothing marked [guess] is a finding.
@@ -245,7 +245,7 @@ Q6  Script names: answered 2026-10-26 (section 6: Switch, RotX/RotY, CurrentRing
 2026-10-26 (later) Coil: contactbumper.h now calls the shared CoilModel in coilmodel.h (T4 output identical to the inline version). Sling and flipper still have the law inline: switching them is a separate step, to be proven byte-identical.
   Collidable (user 2026-10-26): false = the bumper is not there at all: no contact, no switch, no coil, no events, parts at rest, Solenoid refused (replaces the earlier 'parts still move' line in section 6). Built + tested (T10). Open: ball overlapping the geometry at the moment Collidable becomes true (not handled).
   Sensitivity sweep T9 (out_t9.txt), coil off, ball rolling in along a line, skirt k 0.2 N/mm + 0.8 N preload, spoon 0.1 N/mm + 0.3 N [guesses]: lowest firing speed 0.25 m/s head-on (close 1.59 mm), 0.30 at 20 mm offset, 0.40 at 30 mm; close 3.18 mm: 0.50, 0.50, 1.00 m/s.
-2026-10-26 (later) STEPS 3-4 BUILT, uncommitted: engine wiring (docs/NewPhysicsReference.txt section 14). The bumper is an engine part behind the gate/spinner hooks (HingePart::Part made virtual where needed),
+2026-10-26 (later) STEPS 3-4 BUILT, uncommitted: engine wiring (docs/unified-physics/NewPhysicsReference.txt section 14). The bumper is an engine part behind the gate/spinner hooks (HingePart::Part made virtual where needed),
   one host with three surfaces (SurfaceContact::stExtra holds the extra shear states), sleeping at rest (StepHeld/AtRest), own step 4 us free / 1 us near a ring stop (offline: 4 us vs 1 us changes the
   ring maximum by 3 % and the energy residual 0.8 % -> 3.6 % of the coil work), island step from the reduced-mass rule (EnginePart::BallStep), stock meshes drawn at the physical size and animated from the model.
   Smoke test in VPX (run_bump1): events, readouts and Solenoid work; ring drop about 9 mm; a 3 m/s ball is thrown back at about 0.55 m/s (little kick, as offline).
