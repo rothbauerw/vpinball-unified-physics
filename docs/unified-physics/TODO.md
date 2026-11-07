@@ -13,7 +13,7 @@ G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
 In flight: nothing running. Uncommitted: part_guess_accel + clamp trace (engine, 7 files). CLAUDE.md, hooks and memory are outside git.
-Review left, one doc at a time with the user: 2 DevelopmentRules and ModelStandards, whole docs (next), 3 JetBumper and GateSpinner design docs, 4 TestMatrixDesign,
+Review left, one doc at a time with the user: 3 JetBumper and GateSpinner design docs (next), 4 TestMatrixDesign,
 5 PartData sections 1-6 status text, 6 ReleasePlan. To write: disc and wire-switch sections (GroupStepDesign 22). Engine work uncommitted, not compiled.
 Next decision after that: the solution path for the wire switch not converging (N1); it decides N6. All items confirmed with the user 11-07.
 N1. Wire switch at 6 mm: Newton does not converge near touch (ringing); 252 us/ms vs 30 us limit. Shared-engine item: closes only when solved there. Riding wire pulled (poor design and code), may reopen.
@@ -23,7 +23,7 @@ N4. Inder blade: hinge sizes and skin are estimates; 10-17 us per step; crawls f
 N5. One reach rule from physics (speed plus force) for grouping and step length. Grouping: Gate001's 81 mm swing as one-cycle travel joins two lanes. Step length: speed only, no force. Check all parts; ball pairs of unequal mass and resting-ball wake (read only).
 N6. Bounce too lively on long steps (bench: rebound 0.83 vs law 0.51): tied to N1; stays or goes with the design review of N1's solution. Includes steel impacts (impact law or relaxed step; VPX_OMEGAH_SCALE env var).
 N7. Stress v2 bench: ball travel energy +2 % at 57 ms; spin not counted. Check total energy in the saved run (no new run).
-N8. Test driver must refuse a ball placed inside any object.
+N8. Test driver must refuse a ball placed inside any object, unless the file declares the overlap (rule 10b: then judged on recovery, no energy gained).
 N9. Branch pushed (64ede55a3). Engine work (part_guess_accel, clamp trace) uncommitted.
 N10. Performance tests: not built. Includes the stress table driver clock after start-up and the 144 Hz frame budget. Any safety-net trip (e.g. the cord's hold and let-go) fails the run.
 N11. After N1's solution: review shear_step_motion, term_arrival, damp_dir_slope, step_swing_cap, part_guess_accel. Keep if they speed solves across the board; remove if they only treat the wire's symptom.
@@ -36,7 +36,7 @@ N11. After N1's solution: review shear_step_motion, term_arrival, damp_dir_slope
 27. Shared stop piece (gate, spinner, disc, ring, bat, plunger).
 29. Counter columns filled only on the old path.
 32. Env switches that change behaviour (rule: diagnostics only): VPX_HINGES (=0 gives the stock kick), VPX_PREVENT, VPX_PROXIMITY, VPX_VISCOELASTIC, VPX_OVERLAP_REPLAY, VPX_ARRIVAL_NOSPLIT; VPX_BUMPERS only warns. Remove each or make it an ini key.
-31. After G1: check every converted part (flipper, gates, spinners, bumper, disc, rubbers, cord) against the ModelStandards section 7 done checklist.
+31. After G1: check every converted part (flipper, gates, spinners, bumper, disc, rubbers, cord) against the ModelStandards definition of done (top of the file).
 30. part_guess_accel (default off): design evaluation for all moving parts, then a test plan if kept. After the shared-engine items, unless one of them needs it.
 
 ## 2. Flippers
@@ -60,7 +60,7 @@ N11. After N1's solution: review shear_step_motion, term_arrival, damp_dir_slope
 5. Redraw to match the real parts.
 6. Deep late contacts on gates (Gate002 317 um at 1.08 m/s).
 
-## 6. Magnets (rules: ModelStandards section 9)
+## 6. Magnets (rules: ModelStandards section 8)
 2. Energy by construction for magnets (goal G2): pair force not energy exact; iron-core and plug cases unchecked.
 7. Long rod core, moving magnets.
 9. Guide tube ConstrainBall sets held balls' positions outside the group step (PhysicsEngine.cpp:866): breaks the shared path. Code read only.
@@ -71,7 +71,7 @@ N11. After N1's solution: review shear_step_motion, term_arrival, damp_dir_slope
 ## 8. Testing
 1. Accuracy bench exists (750 hits vs 1 us); 36-39 hits always off the 5 % limit: fix them or set the limit (user).
 5. MCP server (later).
-8. Build-compare script compiles /fp:precise by default, so a reported difference is logic, not rounding (ModelStandards trap 10-31).
+8. Build-compare script compiles /fp:precise by default, so a reported difference is logic, not rounding (ModelStandards trap: a byte difference is not a logic difference).
 
 ## 9. Still stock (ask before converting)
 1. Stand-up and drop targets.

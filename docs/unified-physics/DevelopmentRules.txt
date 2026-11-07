@@ -19,27 +19,27 @@ Set by the project owner. They apply to every change, by a person or an assistan
    NOTHING IS EVER HANDED BACK TO STOCK IN A NEW MODEL (user, 2026-10-26, repeated 2026-10-30). Stock is only the development fallback for object types not yet converted.
 
 3. GENERAL FIXES, PROVED ON A MATRIX
-   Fix the general rule, grep for every other place with the same special case, and prove it on the test matrix (docs/unified-physics/TestMatrixDesign.txt: fixed limits per run, cases per model, stress table)
-   with numeric pass/fail including the cost per cycle. A fix is done when the matrix passes, not the one scene. The old scenario matrix (runs/2026-10-09-slow-contact: batch_matrix.ps1,
-   matrix_compare.py) was judged a fail by the user on 2026-10-27 and is not used. The accuracy part of the new one exists (the 750-hit bench against a 1 us reference); the performance tests are not built
-   (to-do N10). Say which checks were run.
+   Fix the general rule and grep for every other place with the same special case. A fix is done when it passes, with numeric pass/fail, not when one scene looks right:
+   the accuracy bench (750 real hits against a 1 us reference, TestingPlaybook section 3), the stress set of each part it touches (rule 10), and its cost against rule 5 in a focused
+   driver run. When the performance tests exist (to-do N10, docs/unified-physics/TestMatrixDesign.txt) they replace the focused run. Say which checks were run.
 
 4. RUNS
    Group several changes before a full regression; the user decides when a matrix is run. Timing and event-timing tests run focused (run.ps1 -Focused) and the user is told first so the machine is idle.
    Always call run.ps1 with explicit full paths and check the ini that was loaded.
    How to build, run and diagnose: docs/unified-physics/TestingPlaybook.md (read before any test).
    Bench first. VPX only through the test driver, for one named question. The bench must match VPX, so moving to VPX is a formality (user, 2026-10-31).
+   A run that cannot use the driver (load check, restart, real input, the table script acting on the game) states why with run.ps1 -NoDriver "<reason>".
    Design every measurement a test needs up front, down to the cause, and save everything a run computes, so follow-ups need no rerun.
    Time one case alone before a batch. Long runs log progress and a time-left estimate from measured timings, never a guess.
    A session may close VPX to test, unless the user has said they are using it.
-   A test that starts with a ball inside a ball or an object is a broken test, never an engine fault.
+   A test that starts with a ball inside a ball or an object is a broken test, never an engine fault, unless the driver file declares that overlap (rule 10b).
 
 5. PERFORMANCE (the one cost rule; ModelStandards section 4 points here)
    Every model is tuned for speed: measure the cost per cycle (VPX_CONTACT_TIMING), expose knobs.
    Physics, the table script and the frame preparation share one thread; at 144 Hz a frame (6.9 ms) holds about 7 physics cycles.
    Per object (user, 2026-11-06): 30 us in EACH 1 ms cycle for the object with the ball(s) on it; the worst cycle counts. Not a 7-cycle window, not other objects.
-   Frame (user, 2026-11-03): physics over any 7 consecutive cycles <= 3 ms, ball piles included; within 0.2 s after a hit event (a landing, a flip, a fast ball
-   into a pile) up to 10 ms per 7 cycles. Single cycle <= 1.5 ms: proposed, not confirmed by the user.
+   Frame: physics over any 7 consecutive cycles <= 3 ms, ball piles and the moments after a hit included (a landing, a flip, a fast ball into a pile). No burst
+   allowance (user, 2026-11-07): a window over 3 ms is a fault, recorded with its cause in the to-do. No limit on a single cycle: the 7-cycle windows judge.
    Judge by the worst cycle and the worst window, never the average.
 
 6. DOCUMENTATION AND HISTORY
@@ -49,29 +49,33 @@ Set by the project owner. They apply to every change, by a person or an assistan
    New work goes behind an ini setting, on by default while it is tested; 0 gives the old path unchanged. Once the user accepts the new path, the old path and its
    setting are deleted after the code is committed (the change log names that commit); ask first only if removal is high risk or later A/B tests need it.
    A dropped idea's code and setting are deleted. Private source copies only for offline test programs.
-   Every item the user states goes into the to-do list at once; the to-do list is the single source of open work.
+   A new to-do item, stated by the user or found by a lead, is added only after the user says whether to add it and where it goes in the priority (user, 2026-11-07);
+   until then it waits in the lead log. The to-do list is the single source of open work.
 
 7. WHAT BREAKS, AND WHAT THE DESIGN DOES ABOUT IT (user, 2026-10-13)
    a. Every new design and every fix includes a step that lists the scenarios it would NOT handle or would break: other sources of the same case, other objects and modes, restart and teardown, extreme values
       (zero, huge, many balls), order of events, a table without the feature, a second use in the same process.
    b. Where it is possible, the design handles or prevents those scenarios (an ownership rule, a guard that is a safety net, a test in the matrix). Where it is not, the limit is written down in
-      the model's design doc and the to-do list, with the reason.
+      the model's design doc with the reason, and proposed to the user for the to-do (rule 6).
    c. The list is part of the report: say which scenarios were checked, how (measured or only reasoned), and which remain open. A scenario that is only reasoned about is marked INFERRED (rule 1b).
 
 8. UNWANTED OR TRACKED BEHAVIOUR IS SHOWN ON SCREEN (user, 2026-10-13)
-   The user does not read vpinball.log. Whenever the engine detects behaviour that is unwanted or that we track (a leak, a tripped safety net, a hand-back to stock, a budget overrun, a fast ball, an
-   ignored ini key), it raises a notification on the playfield (m_liveUI->PushNotification, text says what, where and what to do) AND writes the same text to the log as WARN. The detector is always on
+   The user does not read vpinball.log. Whenever the engine detects behaviour that is unwanted or that we track (a leak, a tripped safety net, a hand-back to stock, a fast ball, an ignored ini key;
+   cost is judged by the performance tests, rule 5, not on screen), it raises a notification on the playfield (m_liveUI->PushNotification, text says what, where and what to do) AND writes the same text to the log as WARN. The detector is always on
    and cheap (rule 5), never silent. A notification is raised once per cause per table start, not every cycle. Behaviour that is only a diagnostic number stays in the log/CSV.
 
 9. FINISH THE MODEL FIRST (user, 2026-10-31)
    a. A model still being built: first build what is missing and make each piece of the model do its job. A piece that does not work is model work, not a side issue.
-   b. Other faults may only be a result of the model being incomplete. Note them and recheck them once it is finished, unless one stops the model working.
+   b. Other faults may only be a result of the model being incomplete. Note them in the lead log; once the model is finished, recheck them, and propose the ones that remain to the user for the to-do.
+      One that stops the model working is model work now (9a).
    c. Cost is measured and tuned once the model works, unless it stops the model working or is a real question whether the model is feasible.
-   d. The cost in rules 3 and 5 and in ModelStandards section 7 applies when a model is called done, not on each fix.
+   d. The cost in rules 3 and 5 applies when a model is called done, not on each fix.
 
 10. STRESS TESTS (user, 2026-11-01; defines "push the engine until it breaks" in ProjectLeadBrief.txt)
    a. When: once per model or law change, when it already works on typical hits and before it is promoted; and when a specific failure is suspected. Never for routine changes.
    b. What: a small fixed stress set for that part, about 10 - 20 shots with a time cap: 6 m/s (twice the extreme), grazing hits, deep overlap starts, repeated hits, stacked contacts, a few step sizes.
+      An overlap start is declared in the driver file and judged only on recovery: no crash, no hang, and the ball leaves with no more energy than it had before the
+      overlap (kinetic plus height, gravity counted). The overlap's stored energy came from no drive and must never reach the ball.
    c. Always a fault, at any input: a crash, a launch, an energy gain, a solver that hangs. Anything else outside typical is recorded, not fixed, unless it points to a fault that also affects typical play.
    d. Every failure is saved as a repeatable case. Only cases that found something join the set.
 

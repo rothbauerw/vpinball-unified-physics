@@ -173,7 +173,7 @@ Extra cases per model:
 4. Jet bumpers: fires with a ball on the skirt; ball between two bumpers; three-bumper triangle; pinch under the ring; Collidable switched with a ball inside
    (to-do 4.2, 4.3).
 5. Gates and spinners: both directions; back-hit on a one-way gate; hit while still swinging or spinning; ball placed inside it.
-6. Magnets (off-axis only, ModelStandards 9): pass by with the coil on; coil switched on with a ball near the pole; hold and release; 2 and 6 balls; a non-magnetic
+6. Magnets (off-axis only, ModelStandards 8): pass by with the coil on; coil switched on with a ball near the pole; hold and release; 2 and 6 balls; a non-magnetic
    ball.
 7. Turntable: ball rolls onto the spinning disc; ball at the disc edge / gap; motor starts with a ball on it; 2 and 3 balls on the spinning disc (user,
    2026-10-28: common, not rare; UnifiedContactDesign 12.1 f).
