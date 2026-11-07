@@ -4,18 +4,7 @@ GATES AND SPINNERS - REBUILD DESIGN (draft 2026-10-14, for review before code)
 Status: design only. Nothing here is built. Revision 2 (2026-10-14): the user's review decisions are in section 0. Hardware data: the user, 2026-10-14 (photos of wire W, wire rectangle, deep rectangle variant, plate gate in its
 bracket, spinner blade with its offset shaft). Values I estimated are marked UNVERIFIED and become settings.
 
-0. Review decisions (user, 2026-10-14, revision 2)
---------------------------------------------------
-- Hit fires when a ball STRIKES the gate (or spinner), not when the switch closes. One hit event per strike for now (two hit speeds for different events: liked,
-  later). Sounds are a separate project.
-- Switches fire their own events, SwitchClosed / SwitchOpened, as the band switches of rubbers and slings do (slings have them: a sling is a band with switch
-  blades). Gates and spinners get the same events; the spinner keeps Spin as well.
-- Wire gates: a setting for where on the ball the wire strikes: hit_offset_mm, distance from the ball's centre (+ up), default 0.
-- Leaf and micro switches act alike through their spring forces: one spring-switch model with two presets.
-- Pivot height default 1.25 in (31.75 mm). A lower pivot (1 in) is allowed for WIRE gates: the wire swings past 90 deg and the ball passes under the axis (the
-  wire has no cross bar at the axis; the pins only reach the bracket). A plate gate's axis wire spans the plate, so a plate gate needs pivot >= 2R + wire.
-- Draw the physical geometry (not the stock meshes).
-- Gates and spinners swing with nudges.
+[0 review decisions: moved to archive/GateSpinnerDesign_moved.txt on 2026-11-07 (diary)]
 
 1. Goal and decisions (user, 2026-10-14)
 ----------------------------------------
@@ -26,14 +15,7 @@ bracket, spinner blade with its offset shaft). Values I estimated are marked UNV
 - The old hinged plates are not tested or repaired. The user observed in play that they ADD ENERGY at some collision angles and that both parts drop the frame rate.
 - Rules that apply: DevelopmentRules 2 (physical laws), 5 (cost by the worst cycle), 7 (what breaks), 8 (on-screen detectors).
 
-2. What the 2026-10-12 version is (it is removed)
--------------------------------------------------
-Ball-plate contact through the contact law on a two-triangle plate (new); everything else stock: GateMoverObject / SpinnerMoverObject own angle and speed, gravity
-factor, damping, angle limits and the bounce at them, and the events; HitGate / HitSpinner stay in the quadtree; the plate size comes from a ball clearance rule
-(axis at least 58 U up, plate down to 2 U above the floor); 200 ms Hit filter; Collidable copied once at setup (gate) or not at all (spinner).
-INFERRED (from reading, not measured; the user asked not to test the old version): the substep choice does not see the plate's small effective mass (a 2 g plate at a
-20 mm lever meets an 80 g ball), so the plate's side of the contact can be under-resolved; that is one candidate for the energy gain. The rebuild handles it by
-construction (section 6.3) and the energy detector (section 9) catches whatever else does it.
+[2 the 2026-10-12 version (removed): moved to archive/GateSpinnerDesign_moved.txt on 2026-11-07 (diary)]
 
 3. The body: one rotation about a fixed axis (shared by gates and spinners)
 ---------------------------------------------------------------------------
@@ -186,24 +168,7 @@ reads it. Collidable is read live every cycle (a script toggle acts at once). Th
 Files: contacthinge.{h,cpp} is replaced by contactgate.{h,cpp} and contactspinner.{h,cpp} on a small shared body (contacthingebody.h: state, torques, stops,
 stick/slip, integration). The gate/spinner branches in HitRubber (SetHinge, MakeHingeHost, the hinge Probe path) move to the new surfaces.
 
-8. Stepping and cost
---------------------
-- Sleeping: a body at rest (omega = 0, held by a stop or by static pivot friction, no ball within reach, no hold change, switch not moving) costs nothing. It wakes
-  when a ball's candidate list reaches its swept volume, when the script changes Open/TwoWay/Collidable, or when the cabinet acceleration changes (nudge). Sleeping is not a
-  cutoff: the body is only asleep when the stick condition of 3b holds, i.e. it would not move anyway.
-- Swept volume: the real one (the circle of the farthest point about the axis, clipped by the stops), not a 50 U box.
-- Free swing (no ball): the body steps alone; its own step is set by the stiffest active force (stop contact when near a stop, otherwise the pendulum and the leaf
-  spring, a few substeps per ms).
-- A spinning spinner (up to about 30 rev/s, 190 rad/s): a few degrees per substep; the crank/leaf contact sets the step only while it is engaged.
-- Budget (rule 5, worst cycle): measure with VPX_CONTACT_TIMING. Targets to agree: a ball through a gate < 30 us per cycle, a spinning spinner with a leaf < 20 us,
-  a sleeping part 0.
-
-9. Detectors (rule 8)
----------------------
-- Energy audit: per ball-body contact episode (first touch to release) the energy of ball + body (kinetic, rotational, gravity potential, spring energy of the
-  switch) at the start and at the end. Contact losses mean it must not grow; growth beyond 1 % + 1 uJ is unwanted: WARN in the log and a playfield notification
-  naming the part (once per part per table start). This is how an energy gain like the user's is caught in play.
-- Unknown keys and out-of-range geometry (a gate that cannot pass a ball, 4.6): notification at table start.
+[8 stepping and cost, 9 detectors (never built): moved to archive/GateSpinnerDesign_moved.txt on 2026-11-07 (replaced / not built)]
 
 10. Settings (ini until the .vpx records exist; [Gate:<name>] / [Spinner:<name>], defaults in [Gates] / [Spinners])
 --------------------------------------------------------------------------------------------------------------------
@@ -251,141 +216,4 @@ Rendering (user: draw the physical geometry): the engine draws the body's own me
 18. Spinner decal: the Image must map onto the drawn blade the same way as on the stock mesh (orientation, both faces).                                    OPEN (visual check).
 16. Spinner stopped exactly upside down (unstable equilibrium): pivot friction holds it there if the static limit allows, which a real spinner can do.        REASONED.
 
-13. Open questions for the user
--------------------------------
-Q1-Q4 of revision 1 answered in section 0. None open.
-
-14. Build order and tests
--------------------------
- 1. Shared body (contacthingebody.h) + stops + stick/slip + sleep; unit test offline: pendulum period, decay, stop bounce energy.
- 2. Gate: wire W, rectangle (+ variant), plate, long plate geometry; tube and slab contact; switch; hold. Triangle probe thickness offset.
- 3. Spinner: blade, offset shaft, damping conversion, opto/leaf/micro switch.
- 4. Reduced-mass substep rule (6.3), general; check bat and disc unchanged.
- 5. Remove the stock objects and movers for unified tables; delete contacthinge and the HitRubber hinge branches.
- 6. Rendering of the physical geometry (tube and slab meshes, decal mapping, simple bracket); nudge in the gravity torque.
- 7. Energy detector; new events (SwitchClosed/SwitchOpened for gates and spinners, Hit for spinners) in the IDL and dispids; docs (NewPhysicsReference keys,
-    conventions, change log).
- Tests (scenario matrix additions, numeric pass/fail incl. worst-cycle cost): gate pass from the front at 0.3/1/3/8 m/s per type; ball from behind (blocked,
- lip bounce); two-way both directions; slow ball that cannot open the gate (rolls back); two balls through one gate; hold open/close with and without a ball;
- Collidable toggle; one-way/two-way toggle; spinner hit at 1/3/8 m/s with opto/leaf/micro (revolutions, Spin count = revolutions, spin-down time vs Damping);
- slow ball over the spinner; energy audit zero in all; worst cycle; restart leak check.
-
-15. Build log
--------------
-2026-10-15 STEP 1 DONE (offline; not wired into the engine, no keys yet): src/physics/contacthingebody.h (HingeBody::MassProps, Stop, SetupStop, Body).
-  Tests: runs/2026-10-14-hinge/test_body.cpp (build.bat test_body), output test_body_out.txt; energy traces dbg1.cpp / dbg2.cpp. MEASURED:
-  - mass properties exact vs closed forms (plate and rod about an edge: I/(m L^2/3) = 1.000000); plate gate 2.58 g, cm 8.31 mm below the axis, I 2.76e-7 kg m^2;
-    spinner (39 x 31.75 x 0.8 blade, 6 mm offset) 8.20 g, cm 5.69 mm, I 9.33e-7 kg m^2.
-  - pendulum period at 2 deg: 0.2275 s = theory (ratio 1.0000). Frictionless 60 deg swing over 20 s: energy within +-0.65 %, no drift.
-  - pin friction (mu 0.3): 2.54 deg lost per half swing vs 2.48 predicted (small angle, load = weight); stops in a dead band of +-1.24 deg, then sleeps (1.26 s).
-  - stop bounce (e 0.5 at 0.1 m/s): rebound 0.63 / 0.57 / 0.50 / 0.44 / 0.36 / 0.30 at 0.01 / 0.03 / 0.1 / 0.3 / 1 / 3 m/s (viscoelastic, falls with speed); energy
-    never above the start.
-  - one-way gate: rests asleep at 15 deg; pushed to 32.9 deg it returns, hits the rest stop at 766 deg/s (free fall from 32.9 deg gives 794), rattles 7 times
-    (ratio ~0.46) and sleeps after 0.2 s. Cost alone: 0.40 us per cycle while moving, 0 asleep.
-  - hold actuator to 70 deg at 900 deg/s: the gate is thrown to 79 deg and settles at 70.0; released it falls back to 15 and sleeps.
-  - stop placed behind the body (one-way switched on mid-swing): not armed until the body passes it; no energy spike.
-  - nudge 5 m/s^2 for 20 ms wakes a sleeping two-way gate and swings it 14.3 deg.
-  - spinner from 150 rad/s (stock Damping 0.9879): 9 turns, at rest after 3.05 s, 1.7 deg from vertical; 0.23 us per cycle.
-  Numerical findings fixed while testing (all measured with the energy traces):
-  - a substep chosen from the PRESENT angular speed (angle step limit) made semi-implicit Euler lose energy (a frictionless swing lost half its energy in 8 s):
-    the angle step now comes from the highest speed the body's energy allows, which is constant while the energy is.
-  - the stop arrival check ignored acceleration: a full 1 ms step started just outside the rest stop and ended inside it (energy gain up to 1 uJ, the
-    rattle never stopped). The arrival time now uses the closing acceleration (gravity, balls, viscous, plus a bound for the pin friction) with the
-    semi-implicit displacement (vc t + ac t^2).
-  - a driven stop was moved before the forces were evaluated: after the gate left the hold stop the next step grew to 0.83 ms and the stop jumped 0.75 deg into
-    the gate (1700 N, gate thrown to 24000 rad/s). The stop now moves after the forces, with the body; its speed enters the arrival check.
-  Open from step 1:
-  - spinner spin-down: at 150 rad/s the centripetal load on the pins (m d omega^2 ~ 1 N) is ~13x the weight, so pin friction dominates (9 turns from a good hit).
-    mu_pivot for spinners needs tuning by feel (and the user's Damping); maybe a lower default. INFERRED that real spinners turn longer; to compare in play.
-  - in an island the contact system must use Body::ChooseStep as one of its step limits (the energy-based angle step and the stop arrival rule).
-  - the rest stop at very low speed: the viscoelastic restitution rises toward 1, so a gate dropped gently rattles; with pin friction it settles in ~0.2 s.
-2026-10-15 STEP 2 DONE (offline; not wired into the engine): src/physics/contactgate.h (GateModel::Settings, Gate: the 4 types, stops, hold, switch, Hit,
-  BallStep), rubbercontact.h ProbeTriangles(..., halfThick) for sheets, contacthingebody.h Spring (switch blade). Tests: runs/2026-10-14-hinge/test_gate.cpp
-  (b3.bat test_gate; -cost skips the energy audit), outputs test_gate_out.txt (with audit) and test_gate_cost.txt. A ball rolls on a flat playfield into the
-  gate; ball, playfield and gate are stepped together. MEASURED (default settings, pivot 31.75 mm, ball 80 g):
-  - masses: wire W 0.75 g, wire rectangle 0.82 g, plate 2.61 g, long plate 3.29 g. Pass angles 74.9 / 74.9 / 76.2 / 80.8 deg.
-  - one-way from the front, 0.1 / 0.3 / 1 / 3 / 8 m/s: every type passes. Speed kept: wire W 93/99/100/100/100 %, rectangle 91/99/100/100/100 %, plate
-    82/97/99/99/99 %, long plate 62/95/97/97/97 % (stock leaves the ball untouched: 97-99 %; the 2026-10-12 plates kept 85-87 %). Off-centre (8 mm) same.
-  - one-way from behind at 1 and 3 m/s: every type blocks; the ball comes back with 61-79 % of its speed (long plate: off its lip, 64 / 61 %).
-  - two-way wire W: passes both ways (100 %). Held open (Open, 70 deg): the ball passes untouched (wire W) / released onto a ball under it (plate): passes.
-  - 1 in pivot (wire W): pass angle 97.7 deg; with the default 90 deg open stop CanPass() = false (the load-time notification case); with a 120 deg stop it passes.
-  - energy audit (ball + gate + contact springs): never above the start except +3e-6 .. +3.3e-5 of the ball's kinetic energy at 3-8 m/s (numerical, far below the
-    1 % detector threshold).
-  - events: one Hit per pass for wires; plates 1-2 (the plate leaves the ball by more than the 0.2 mm release gap and touches it again: a real second strike).
-    Switch closes on every front pass (opens again when the gate falls back). EOS at full open; BOS when it lands on the rest stop (rattles: 1-12).
-  - cost (offline, includes the harness playfield at a fixed 20 us step = 50 substeps per ms): fast passes 50-85 substeps per ms, 22-66 us per ms; a slow ball
-    (0.1-0.3 m/s) that rides under the gate 140-200 substeps per ms, 73-194 us per ms. OVER the 30 us target.
-  Open from step 2:
-  - COST of a slow ball under a gate. INFERRED from the step rule: the gate rests on the ball through a steel-on-steel Hertz contact with the gate's tiny effective
-    mass (I / lever^2, ~0.3 g for the wire W), so the contact frequency is very high and the substep tiny. Physical candidate (not built): the wire legs and the
-    plate are not rigid; a 1.2 mm steel wire leg 18 mm long bends with k = 3 E I / L^3 ~ 10 kN/m, about 100x softer than the Hertz contact, in series with it.
-    Modelling that compliance makes the contact softer (larger steps) and more correct. To decide with the user.
-  - from behind, the light gate is squeezed between the ball and its rest stop and rebounds forward to 70-90 deg; on the way it closes the switch (1 of 2 runs per
-    type). A real one-way gate hit from behind flaps; whether its switch fires is for the user to judge.
-  - the switch has no spring by default (switch_force_n 0); the leaf spring is built and untested in a ball run.
-2026-10-15 STEP 2b: BENDING OF THE WIRE AND PLATES (user: build it, for all gate types). contactgate.h: BendStiffness (cantilever from the axis, k = 3 E I / y^3 at
-  the contact depth y; wires: two legs share, I = pi d^4/64; plates: I = mean width x t^3 / 12; along the normal k / (out-of-plane part)^2, no bend for loads in
-  the plane), SeriesSplit (Newton: Hertz k_h u^1.5 = k_b (delta - u); the contact's damping acts on its share of the approach rate), ContactEnergy, BallStep
-  with the series stiffness, and the bent surface's tilt force -1/2 x^2 grad k_eff (central differences of the bend stiffness over the ball position),
-  applied through the ball's centre. Also Hit only near the start angle (hit_window_deg 5, revision 3).
-  MEASURED while building (energy traces, test_gate.cpp -trace wire|long):
-  - series bend alone (force only along the rigid normal) gained energy on hits from behind: +6.4 % (wire W, 3 m/s), +16 % (long plate): the contact point
-    slid toward the axis under load (bend 2-3.6 mm), where the bend is stiffer, so 1/2 k x^2 rose with no work (1/2 (3.5 mm)^2 x 5000 N/m ~ the gain).
-    Fixed with the tilt force (the envelope-theorem gradient of the bend energy).
-  - the tilt force applied at the rigid contact point spun the ball up (long plate +109 %): a frictionless force on a sphere acts through its centre. Fixed.
-  RESULTS (all 37 scenarios; test_gate_bend.txt, cost test_gate_bend_cost.txt):
-  - energy: no gain anywhere except +3.5e-6 .. +2.3e-4 of the ball's kinetic energy at 3-8 m/s (numerical).
-  - front passes as before: wires 91-99 %, plate 82-98 %, long plate 61-94 % of the speed kept. One Hit per strike in every run, none when held open.
-  - from behind: the gate no longer flaps (max 16-19 deg, switch stays open); the ball rebounds with 87-97 % of its speed (rigid gate: 61-79 %): the bend gives
-    its energy back (steel has almost no internal loss; no structural damping modelled). For the user to judge.
-  - cost (substeps per ms, the reliable number; wall-clock us varied 2-4x between identical runs because the machine was busy): slow ball under a gate
-    51-91 per ms (was 174-203), fast passes 50-73 (harness playfield alone: 50), hits from behind 65-184 (3 m/s: 95-184).
-  Open: hits from behind at 3 m/s are still 95-184 substeps per ms (the ball pressing the gate into its stiff rest stop); the stop is a rigid bracket, the
-  stop-to-plate support also shortens the plate's free length (not modelled: the cantilever runs from the axis).
-2026-10-15 STEP 3 DONE (offline; not wired into the engine): src/physics/contactspinner.h (SpinnerModel::Settings, Spinner). Shared code moved to
-  src/physics/contacthingepart.h (HingePart::Part: shape, probe, ball contact with the series bend and tilt force, Hit near the start angle, BallStep,
-  AfterStep / AdvanceAlone); contactgate.h now derives from it (all 37 gate scenarios IDENTICAL after the move). contacthingebody.h: Cam (crank on the shaft
-  pressing a switch blade: F = F0 + k delta + c delta_dot, conservative spring part), AdvanceWith (a callback after every substep). BallStep's arrival bound
-  adds the centripetal acceleration of a spinning part (gate results: 4 of 37 lines changed by a few substeps / 0.002 m/s).
-  Defaults: blade 39 x 31.75 x 0.8 mm (7.86 g with pins, I 9.33e-7 kg m^2, centre of mass 5.93 mm below the axis), pivot 31.75 mm, Damping 0.9879,
-  mu_pivot 0.3; switch at 180 deg (blade upside down, so a blade at rest is free), crank 3 mm, switch blade 2.5 mm from the shaft (0.5 mm travel: touched over
-  about +-33 deg), leaf 0.02 N at full travel, micro 0.02 N preload (both to be set by feel), opto window +-10 deg.
-  Tests: runs/2026-10-14-hinge/test_spinner.cpp (b3.bat test_spinner), output test_spinner_out2.txt. A ball rolls through the spinner at 0.3-8 m/s; after it
-  has gone the spinner runs down alone. MEASURED:
-  - the ball keeps 94-96 % of its speed. At 0.3 m/s the blade swings up (28 rad/s) but does not go over; 1 / 3 / 8 m/s: 92 / 283 / 787 rad/s.
-  - turns and spin-down (mu_pivot 0.3): 5 / 16 / 30 turns at 1 / 3 / 8 m/s, at rest after 2.9-3.5 s, 0.6-1.7 deg off vertical (the pin friction's dead band).
-    mu_pivot 0.1: 6 / 24 / 53 turns, 4.7-5.7 s. mu_pivot 0: 7 / 33 / 99 turns (viscous only, never fully at rest).
-  - Spin = turns for every switch type (opto, leaf, micro, none) and speed, after the fix below; one Hit per ball.
-  - energy: no gain except +2.2e-4 / +2.4e-4 of the ball's kinetic energy at 3 / 8 m/s (numerical).
-  - cost: with the ball 50-51 substeps per ms (= the harness playfield's own step); spinning alone 1-4 substeps per ms, under 1.1 us per ms.
-  Found and fixed while testing: the switch was checked once per 1 ms cycle while the spinner ran alone; at 787 rad/s the blade turns 45 deg per cycle and
-  skipped the opto window (28 Spins for 30 turns). The switch is now checked after every substep (AdvanceAlone).
-  Open from step 3: the spin-down feel (number of turns) is set by mu_pivot and Damping; defaults to tune by feel. Leaf / micro forces by feel (at 0.02 N the
-  switch hardly changes the turns). At mu_pivot 0 a spinner that barely goes over the top closes its switch twice (over and falling back): physical.
-2026-10-15 STEPS 4 + 5 DONE (in the engine, uncommitted). Step 4 (reduced-mass step rule): islands with a moving part keep the uniform substep; a gate or spinner sets
-  it from Part::BallStep (reduced mass of ball and part, series stiffness, arrival with gravity, the part's swing and its centripetal acceleration). The turntable
-  disc is unaffected by construction (a ball's normal on it is along the disc's axis: the normal force cannot turn it, its effective mass along the normal is
-  infinite). The bat keeps its own rubber substep (<= 20 us); its effective mass at the contact is hundreds of grams against the ball's 80 g, so the reduced mass is
-  within ~15 % of the ball's (INFERRED from the inertia, not measured; bat code paths unchanged).
-  Step 5 (wiring): HitRubber::MakePartHost (the host: proximity engagement, release, the box from the part's reach, its mover advances the part alone, writes the angle
-  to the stock HitGate / HitSpinner that the script and renderer read, fires Hit / LimitEOS / LimitBOS / Spin), ContactSurface::MovingPart / EvaluateOwn (the part's
-  own contact in SurfaceForces), Part::StepInIsland (the part's own substeps inside every island substep, with the balls' reactions held over it), PartGravitySI (the
-  balls' gravity and nudge), contactpartsini.h (the keys), gate.cpp / spinner.cpp (build the model; Open -> Hold, Collidable live; the stock HitGate / HitSpinner are
-  owned by the part, not in the physics). Removed: contacthinge.{h,cpp}, the movers' m_hingeAdvanced / FireOrDefer (collideex back to stock), the 200 ms Hit rule.
-  MEASURED in VPX (Rubber Test 2, gs8.vbs: spinner 0.5-4 m/s, Gate front 0.7 / 1.5 / 3 and back 0.7 / 3, Gate1 front 0.7 / 1.5 / 3):
-  - found and fixed: setup crash (PartGravitySI read the physics engine while it was being built: gravity is now set at every advance);
-  - found and fixed: a gate stepped with the island's 77 us substep hit its open stop (steel stop impact ~100 us long) and came back at -7427 rad/s, then swung 5 mm into
-    the ball; the ball was thrown off the playfield and every re-engagement was refused (1-12 mm overlap, "seat under the playfield") so ball and gate passed through
-    each other (2 of 4 full runs). Fixed by StepInIsland; 0 refusals and no contact deeper than 0.5 mm in the 5 full runs since;
-  - found and fixed: a ball near a gate or spinner took 201 substeps per cycle (the generic 5 us impact step of the walls around it, triggered by the gate counting as a
-    closing surface in ApproachSpeed and by the host's substep_us): parts are left out of both; their own rule sets their step;
-  - behaviour (unfocused, all game time simulated): spinner 3 / 8 / 11 / 14 Spins in the 1.2 s window at 1 / 2 / 3 / 4 m/s (0 at 0.5 m/s: the blade does not go over);
-    every gate shot fires its Hit (also from behind, which the stock gate does not); no EOS / BOS in these shots (the gates peaked at 83-87 deg, below the 90 deg
-    open stop, and were still swinging above the rest stop when each 1.2 s window ended);
-  - cost (focused, contact step + movers per 1 ms cycle): mean 31.7 us (stock 30.8), p99 394 (326), p99.9 1074 (683), max 2181 (1485); 607 cycles at 201 substeps
-    (stock 575: the walls' own 5 us impact step). Offline gate suite identical after the wiring.
-  Harness note: focused runs of gs8 skip game time (anti-hung, frames over 200 ms because the script opens its CSV every 1 ms): event counts in focused runs are low
-  for stock and new alike; behaviour numbers come from unfocused runs (VPX_PLAY_UNFOCUSED bypasses the skip).
-  Open after step 5: physical geometry drawn (step 6; the stock meshes are drawn now), SwitchClosed / SwitchOpened and spinner Hit script events (IDL, step 7), energy
-  detector (step 7), the scenario matrix with pass / fail (rule 3), engagement of a ball already deep in a part is refused ("seat under the playfield") - a safety
-  net case that should not arise now but has no physical path back, TwoWay changed while playing, Gate.Move, worst-cycle cost above stock.
+[13 open questions, 14 build order, 15 build log: moved to archive/GateSpinnerDesign_moved.txt on 2026-11-07 (diary)]

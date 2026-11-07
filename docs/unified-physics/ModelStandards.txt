@@ -48,7 +48,7 @@ d. One contact law. A ball touching anything uses ContactCore with the material'
 e. Pure SI maths with no VPX types in the model's header, so the same code runs in the offline test. VPX units only in the adapter.
 f. Events go into the part's event list (or DeferEvent) and are fired after the step. No script runs inside the step.
 g. Settings come from the table's physics ini through the settings reader. Environment variables are for diagnostics only, read once, and listed in
-   NewPhysicsReference.txt. Duplicate or unknown keys raise a notification (rule 8).
+   TestingPlaybook.md. Duplicate or unknown keys raise a notification (rule 8).
    A new setting goes beside its neighbours (same ini section, struct and loader), reloads like them and is written to the log.
 h. Energy enters only through named drives (coil, motor, spring preload, gravity, nudge). The model reports their work so the energy books close every cycle.
 
@@ -153,7 +153,7 @@ Each trap names the test that now catches it ("none yet" until one exists); the 
 [ ] shared loop, shared step rule, ContactCore                    [ ] no private constants that duplicate a shared rule
 [ ] offline test vs 1 us reference, energy balance, step sweep    [ ] matrix rows pass, snapshot self-test 0 differences
 [ ] cost on the stress table within budget                        [ ] notifications for its unwanted behaviour (rule 8)
-[ ] NewPhysicsReference.txt entry and change log                   [ ] to-do updated (open items, one line each)
+[ ] settings commented in code; diagnostics in TestingPlaybook                [ ] to-do updated (open items, one line each)
 [ ] design lists every energy source; only those add energy (1c)   [ ] energy never rises at any step size in the sweep (5a)
 [ ] past launch cases tested: late contact, pinched ball, part      [ ] matrix pass/fail report on disk (5e)
     hit while driven (5c)

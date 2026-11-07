@@ -34,6 +34,7 @@ N11. After N1's solution: review shear_step_motion, term_arrival, damp_dir_slope
 26. Ball started inside: the solve must never keep a runaway answer. May be handled already: check.
 27. Shared stop piece (gate, spinner, disc, ring, bat, plunger).
 29. Counter columns filled only on the old path.
+32. Env switches that change behaviour (rule: diagnostics only): VPX_BUMPERS, VPX_HINGES (=0 gives the stock kick), VPX_PREVENT, VPX_PROXIMITY, VPX_VISCOELASTIC, VPX_OVERLAP_REPLAY. Remove each or make it an ini key.
 31. After G1: check every converted part (flipper, gates, spinners, bumper, disc, rubbers, cord) against the ModelStandards section 7 done checklist.
 30. part_guess_accel (default off): design evaluation for all moving parts, then a test plan if kept. After the shared-engine items, unless one of them needs it.
 

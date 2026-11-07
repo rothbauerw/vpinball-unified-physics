@@ -4,7 +4,7 @@
 #include <cmath>
 #include <filesystem>
 
-// Table-wide contact settings of the unified engine (see docs/unified-physics/NewPhysicsReference.txt, [Contact]); implemented in contactsettings.cpp.
+// Table-wide contact settings of the unified engine (see docs/unified-physics/archive/NewPhysicsReference.txt, [Contact]); implemented in contactsettings.cpp.
 
 // Table-wide contact friction settings beyond the per-object friction coefficient (the surface's static mu). Read from [Contact] of the table's
 // vpx_physics.ini and reloaded when it changes. Without a file these defaults apply (off on the stock engine).

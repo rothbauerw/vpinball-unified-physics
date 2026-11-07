@@ -68,3 +68,108 @@ Model: `runs/2026-10-14-mirror/ng3d.py` (A-formulation H(curl), nograds, Newton 
 Why: the axisymmetric fem.py cannot do tilted/side balls; the earlier 3D BEM is linear only. Related: [[todo-and-parking-lot]].
 
 Limits (measured 2026-10-15): a 2-ball case at ~557k dofs commits ~15 GB, so run NG_JOBS=1 (default in the scripts) with ngsolve TaskManager threads (~5.5 min/case). At ~1.0M dofs sparsecholesky fails ("bad array new length") and umfpack needs >23 GB; pardiso is not installed (MKL). Larger meshes need an iterative solver (CG + BDDC).
+
+## Diagnostic switches (environment variables)
+
+Moved word for word from NewPhysicsReference.txt on 2026-11-07 (that file is now in archive/). Settings themselves are described beside each key in the code.
+
+```
+Diagnostics and environment variables
+-------------------------------------
+VPX_PHYSICS_INI=<file>    use this ini instead of <table>.physics.ini / vpx_physics.ini next to the table (the unified switch is the file's [Features] unified key)
+                          (VPX_UNIFIED is no longer read by the engine; the test harness run.ps1 still uses it as its own variable and writes it into the run's ini)
+VPX_PLAY_UNFOCUSED=1      keep the game running when the VPX window lacks focus (test runs)
+VPX_CONTACT_TRACE=1       per-cycle contact trace in the log (ContactEngage / ContactRelease / ContactTrace); large log; the old name VPX_RING_TRACE still works
+VPX_CONTACT_LOG=<csv>     every collision/contact of the first ball with object type and name
+VPX_CONTACT_NEAR=x,y,r     faces near a point (old name VPX_RING_NEAR still works);   VPX_RUBBERS_LOG, VPX_BAND_LOG: rubber and band logs
+VPX_PHYS_TIMING=<csv>     per-window physics timing (stock vs model cost); see the project notes
+Crash reports: crash.txt and crash.dmp next to the table; the top frame names the function.
+
+11. DIAGNOSTICS  (environment variables, no ini keys)   -- added 2026-10-13
+---------------------------------------------------------------------
+VPX_SPEED_WATCH=<m/s>   Fast-ball watchdog, on by default at 8 m/s (0 = off). When a ball (not locked in a kicker) goes faster than the threshold, a warning is written to vpinball.log, at most once per
+                        second per ball: the time, the speed, the ball's last 8 physics cycles (time, position in table units, velocity in U/T, flags 1 = held by the contact system, 2 = on a bat,
+                        4 = on a band, 8 = in a kicker) and the position and velocity of every other ball. Use it to trace a rare launch after the fact. It costs a copy of a few floats per ball per cycle.
+                        Legitimate shots can pass 8 m/s (a flipper shot is 5 - 10 m/s): raise the threshold if the log fills with them.
+VPX_GROUP_BOOK=<file>     One row per cycle of every group, with or without balls: steps, rounds, halvings, stop steps, energy steps, failed, energy at start and end, drive, loss, book, cost. Read once. Rows of two islands in one cycle are separate rows.
+VPX_GROUP_BOOK_STEPS=1    The rises per step too (an energy sum per step). Does not change a ball's bytes.
+VPX_GROUP_BOOK_STEPS=2    Also every stored term per group at each cycle's start and end (rows "T,": ball place, kinetic, height; per item depth, zero, squash, shear, roll; per part). Diagnostic, slow.
+VPX_TRACE_BALL=<name>     One log line per stage for the test driver's ball of that name: position (U, 4 decimals) and velocity at SimulateStart, EnergyCheckStart, EndCycle, AfterGuides; at EnergyCheckStart and EndCycle also held/band flags, island and the contact's item names. Also "TraceStock" lines for every stock Collide/Contact on that ball: object, class, objtype, surface host, owned for the ball, hit time and distance, position and velocity change. Off by default; does not change a ball's bytes (f1 balls.csv md5 identical).
+VPX_GROUP_HFIX=<us>       Every step of every group (balls alone, with parts, a part alone) is this long instead of the step rule's (the energy's step sweep; the 1 us reference of a behaviour check: 1). Read once. A diagnostic: it changes the result. While set, a step may halve to 1 ns (not 2 us) and a cycle may take more than 3000 steps.
+VPX_GROUP_STATS=<file>    Group-step totals over the run, the file rewritten every 200 ms of table time, one line: cycles N us/cycle X max X steps N rounds N halvings N energysteps N failed N balls N (balls: the last group's). Read once. Does not change a ball's bytes. Read by runs/2026-11-01-roll-smooth/an.py and an_rest.py (run folder sg.txt).
+VPX_CONTACT_TIMING=<csv>  Per-cycle cost of the contact system (one row per cycle that did work: step_us, bodies, islands, substeps, ...). One file for the whole process, so every Play of an editor
+                        session goes into it. tables\VPX editor - Unified timing.bat sets it for the editor.
+VPX_CONTACT_TRACE=1|2   Contact engage / release lines (1) and per-cycle ball data (2, a huge log).
+VPX_ARRIVAL_NOSPLIT=1   Test only: arrival-time substeps WITHOUT the arrival split and landing, so every contact starts late and the rewind has to catch it (it recovers the right impacts: the
+                        drop test gives the same restitution with a few hundred rewinds as without any).
+VPX_CONTACT_PROFILE=1   Scoped timers of the contact system, a table in the log every 5000 cycles (scopes ProbeBody and NextStep belong to the arrival-time loop).
+                        The timing csv (VPX_CONTACT_TIMING) has a rewinds column: substeps taken again in that cycle.
+VPX_TEST_INPUT=<file>   Test driver (harness only, added 2026-10-27, docs/unified-physics/TestMatrixDesign.txt section 2; code src/physics/testdriver.cpp). Off when unset. The file lists actions
+                        by physics millisecond, one per line: '<t_ms> <action> <args>', '#' starts a comment, same-time actions run in file order. Actions: ball NAME x y z vx vy vz
+                        [radius mass [wx wy wz]] (x, y in U; z = height of the ball's bottom above the playfield in U; velocity in m/s; default radius 25 U, mass 1; wx wy wz: the ball's spin), destroy NAME, flip
+                        FLIPPER 1|0, enabled FLIPPER 1|0, sling RUBBER, magnet NAME V and turntable NAME V (supply / motor voltage of a [Magnet:NAME] / [Turntable:NAME] in the physics
+                        ini, as the script's Magnet / Turntable calls; 0 = off; an unknown name is a WARN; added 2026-10-28), respawn Y (a ball past y = Y toward the drain is created again at its start state), respawn_z Z (a ball whose centre drops below
+                        z = Z U is created again at its start state; off by default; for pockets and subways no script kicks out; added 2026-10-28), speed_limit V
+                        (m/s, default 8), floor Z (U, ball centre; default -200 since 2026-10-28, was 0: pockets and subways go below the playfield), record N (every N cycles, default 1, 0 = off), end. They are applied at the start of the cycle, before the physics step, so
+                        the same build and file give the same result whatever the frame rate. At table start it resets the random generator to its fixed seed. Every cycle it
+                        checks each ball: over the speed limit, below the floor, outside the table, removed by the table; plus skipped cycles (anti-hung time skip). Unknown
+                        actions and bad lines are a WARN and a notification. Writes balls.csv (t_ms, ball, position U, velocity U per 10 ms, angular momentum), report.txt
+                        (pass/fail per check, and the limits it does not check) and done.txt (PASS or FAIL) into VPX_TEST_OUT. A restarted table writes balls_2.csv, ...
+                        Timing (added 2026-10-28, docs/unified-physics/TestMatrixDesign.txt section 3 point 9): every 1 ms loop pass is timed without its script time and split into
+                        physics step, magnets, turntable and rest (cycles.csv, us); every frame's physics, script, preparation, other, sleep and frame times come from
+                        VPX's frame profiler (frames.csv, us; work = physics + script + preparation). Kept in memory, written at the end. report.txt adds the cost from
+                        t = 1 s: mean, 99th percentile, worst cycle, worst 7 consecutive cycles, the 5 worst 7-cycle windows by part, frame rate, cycles per frame,
+                        frames with work over 6.9 ms; limit 6 (7 cycles <= 3 ms, one cycle <= 1.5 ms) is judged only in a focused run. Hooks: TestDriver::LoopStart /
+                        LoopEnd / Timed in PhysicsEngine::UpdatePhysics, TestDriver::FrameStart in Player::PrepareFrame.
+                        Full split (added 2026-10-28, TestMatrixDesign section 3 point 10): every part leaves out the script run inside it. cycles.csv has one row per
+                        cycle: the step split into contact system (surfaces, ball-ball pairs, flippers, bands and slings, gates/spinners/bumpers, shared), stock hit
+                        search, movers' displacement and the rest of the step; outside the step: magnets, turntable, input, script timers, the driver, nudge and
+                        plunger, movers' velocities, fast-ball watchdog, magnet guide tubes, ball trails, other; then islands, the slowest island's substeps, time,
+                        smallest step, what set its substeps (end of cycle, impact arriving, surface stiffness, ball-ball stiffness, moving part's step, ini substep_us,
+                        flipper, band, smallest step allowed, taken again) and its members (the driver's ball names and the surfaces, flippers and bands they touch).
+                        report.txt gives mean / 99th percentile / max per column and the split and slowest island of the worst cycle and the 5 worst windows.
+                        Time 0 of the input is the first cycle after start-up (the first frame shorter than 100 ms, half the anti-hung limit); balls.csv and
+                        cycles.csv use that time. Action timing detail|total: total = only the cycle total (to measure the cost of the split). Contact-system hooks:
+                        TestDriver::Contact / KindTimer in contactsystem.cpp (substep loops, NextStep's reason, StepBalls' island loop).
+VPX_TEST_OUT=<folder>   Where the test driver writes. runs/2026-10-09-slow-contact/run.ps1 -Drive <full path of the input file> sets both and runs with no table script;
+                        run.ps1 -Timing uses prefs\stress-timing (vsync off, 144 fps cap) for cost runs.
+VPX_BENCH=1             The real bench (harness only, added 2026-10-31; code src/core/playerbench.cpp, seam in Player, RenderDevice, testdriver). VPX runs the table with no frames drawn, the
+                        physics as fast as the CPU goes: BGFX Noop backend, no textures loaded, no input, virtual frames of 7 ms, one run per process, the process ends after the driver's report
+                        with no teardown. It also acts as VPX_PLAY_UNFOCUSED. The harness sets SDL_VIDEO_DRIVER=dummy and SDL_AUDIO_DRIVER=dummy (the GL exe needs a real, never-shown window
+                        instead). balls.csv is byte-identical to a VPX driver run on the cases in runs/2026-10-31-real-bench/RESULTS.md. report.txt says "BENCH RUN": its cost is bench cost (no
+                        frames, no GPU), and limit 6 is judged on a focused VPX run. Runner: runs/2026-10-31-real-bench/bench.ps1, see README.md there.
+                        Not covered: magnets on, scripts that act on the game, script and frame timers (only compared with VPX on the cases listed), drop targets (they fall per frame in
+                        HitTarget::UpdateAnimation), ROM tables (real time), drawing, real input, table restart, teardown.
+VPX_BENCH_PREROLL=<ms>  Physics time before the driver's time 0 on the bench, default 3000: the table's parts settle, as in a VPX start-up. 100 was too short on the stress table.
+VPX_BENCH_MS=<ms>       Stop at this engine time on the bench, for a run with no input file. Default: run to the driver's end.
+Stock counter           On whenever the table runs the unified engine (added 2026-10-31; code src/physics/stockcount.cpp). Off on the stock engine (no physics ini, or [Features] unified = 0): there nothing is converted, so it counts nothing and never warns (2026-11-03). Counts every stock Collide and Contact by object. A dispatch counts if the ball's position, velocity or spin changed, or if it reached Collide3DWall or HandleStaticContact, or if the object is a stock-only part (gate, spinner, plunger collider). A converted object that uses stock fails the driver run, raises a WARN and an on-screen notice once per object; the allowed list is the unconverted parts only (AllowedStock in stockcount.cpp: kicker, plunger, target, trigger; also top glass, table edge, stock wall slingshot, ball locked in a kicker). A part leaves the list the day it is converted. report.txt lists each object with its counts, first time and ball, stock.csv the same.
+                        Not counted: free flight, the hit search, a script's or a kicker's move of a ball. A host with a contact model behind it counts only the two stock laws by name. It reads the balls and never writes them: balls.csv is byte-identical with it on 9 sets (runs/2026-10-31-checks/counter/notes.md). No energy figures: the energy check stays EnergyCheckStart / End.
+VPX_CHECKS=0            Turns the stock counter off (diagnostic, for its cost). Default on.
+```
+
+### Other switches (2026-11-07: first mention found in the old reference or its change log)
+
+```
+VPX_BUMPERS: [Features] bumpers = 0, VPX_BUMPERS=0 and the keys physical, own_step_us, spoon_mass_g, spoon_travel_mm are IGNORED: a WARN in the log and one notification name them.
+VPX_CORD_TRACE: 2026-10-30  Bands in the engine, first play test (GroupStepDesign 12.1): a ball stays in the band's group until its squash on a post, stop or plate has come back (end posts were dead); a squash grows from zero, so no energy appears when a ball joins already inside a stop (it threw balls higher than they fell); a ball high on the cord no longer gets gravity twice. VPX_CORD_TRACE=<file> writes the g ...
+VPX_GROUP_CLAMP_TRACE: 2026-11-06  Diagnostic VPX_GROUP_CLAMP_TRACE prints Newton clamp lines (print only, no physics change).
+VPX_GROUP_CONTACT_TRACE: 2026-11-04  Diagnostics, off by default: VPX_GROUP_CONTACT_TRACE=1 (read once). For the first 3 energy steps of a run, every Newton round of the step's first failed attempt: each contact (ball, surface or
+VPX_GROUP_HISTORY_TRACE: 2026-11-04  VPX_GROUP_HISTORY_TRACE adds per step the gap: the step's start energy minus the same group's (same parts) last accepted end, split into ball KE, ball place, contacts, each part,
+VPX_GROUP_JAC_MODE: 2026-11-05  Diagnostics: VPX_GROUP_JAC_WINDOW=<t0>-<t1> (ms; needs VPX_GROUP_JAC_MODE=1; read once; unset = off): for solves that converge in the window, each round's line (JACWIN t, h, round, rn, evals since the last round line, "no drop: backtrack" when the move is taken back) and every Jacobian entry, balls and parts, where the solve's own (a) and central differences (f) differ by more than 10  ...
+VPX_GROUP_JAC_WINDOW: 2026-11-05  VPX_GROUP_JAC_WINDOW: each converged solve in the window also prints its contacts as the last round's Eval had them (each ball's v, w and move; per contact: what it touches, d0/dm/d1, normal, N, fe, fd, cD, kc, kn, stick/slide, ut, xi0/xi1, Ft, mu N, k1, ct, and each hinge_piece_sum term). The cap is 2000 Jacobian entry lines; round and contact lines do not count.
+VPX_GROUP_PHASE_TIMING: 2026-11-05  VPX_GROUP_PHASE_TIMING rows: six counts added after diag_us: attempts (BeginAttempt calls: every solve of the step, failed, halved and stop-search ones too), evals (Eval calls), lin_solves, halvings, capsules and terms (the hinge probes' capsule checks and hinge_piece_sum terms over the step). The rounds column counts the accepted solve's rounds only.
+VPX_GROUP_ROUND_TRACE: 2026-11-05  Diagnostics: with VPX_GROUP_ROUND_TRACE=1, each round of the printed failed attempts also shows, for each carried surface's contact, its end and mid probes. For a wire part this is the nearest piece (index, s along it, depth), what the probe returns (depth, body normal, slope, summed, faces), and the second deepest piece with its wire_sum fit and rule (included / skip and why). Read on ...
+VPX_GROUP_STOP_TRACE: 2026-11-04  Group step stop search (fix, the law unchanged): the search for where a step ends on a hard stop follows only the STOPS the step's move carries a body past, each stop on its own, one rule for every part: GroupStep::Part::StopExcess(x, off, mask) (bit k = the part's stop k) and CrossingStops(x, off); bat bit 0 up-stop (rigid), 1 plunger closed end, 2 open end; hinge bodies (gates, spinn ...
+VPX_HINGES: 2026-10-12  Unified engine, group 3. (a) Gates and spinners are hinged plates of the contact model (contacthinge.{h,cpp}; [Features] hinges = 1, VPX_HINGES=0 restores the stock kick; [Gate:<name>] / [Spinner:<name>] rubber = 0 opts a part out): a plate is two triangles (a rectangle of the part's length, hanging below the axis for a gate, ± the same extent for a spinner) that turn about a horizonta ...
+VPX_HINGE_NEAR_ALL: is probed. No term limit (a contact's terms: 12 in the Hit, more on the heap). Diagnostic VPX_HINGE_NEAR_ALL=1: every list = all pieces (same exe, A/B).
+VPX_OMEGAH_SCALE: 2026-10-27  VPX_OMEGAH_SCALE re-tested on the build with the impact-law ring stops and own_step_us 16 (focused, one ball). launch2 (16 shots): scale 1 / 2.5 / 5: substeps 434k / 284k / 213k, p99 538 / 319 / 244 us, cycles over 500 us 1.1 / 0.4 / 0.4 %, over 1 ms 0.29 / 0.10 / 0.12 % (one 16 ms cycle at scale 5, cause not looked at). bump1 (ball fired at Bumper1 at 0.3 / 1 / 3 m/s): substeps 32k /  ...
+VPX_OVERLAP_REPLAY: 2026-10-26  Overlap replay (build step 5 of the overlap standard): ContactSystem::CheckOverlaps rewinds the island to the first touch of a ball and a moving part and steps it on; env VPX_OVERLAP_REPLAY=0 switches it off, VPX_PREVENT=0 switches off point 1 (both for tests). Measured on Bumper1 (ball at rest 40 mm from the axis, ring firing): the replay engaged the ball with the ring still at its st ...
+VPX_PREVENT: 2026-10-26  Overlap replay (build step 5 of the overlap standard): ContactSystem::CheckOverlaps rewinds the island to the first touch of a ball and a moving part and steps it on; env VPX_OVERLAP_REPLAY=0 switches it off, VPX_PREVENT=0 switches off point 1 (both for tests). Measured on Bumper1 (ball at rest 40 mm from the axis, ring firing): the replay engaged the ball with the ring still at its st ...
+VPX_PROBE_CHECK: 2026-10-27  Surface probes test a short face list (SurfaceContact::cand): the faces of the Verlet list (candV, unchanged) whose bounding box is within the ball's radius plus its reach (+ 2 mm skin, SurfaceContact::kTightSkin) of the ball, filtered once per cycle in HitRubber::Refresh; a probe from a ball that has moved more than the skin since uses the whole Verlet list (SurfaceContact::Faces); a  ...
+VPX_PROXIMITY: 2026-10-12  Unified engine, step 4c (proximity engagement + deferred part hit events): at the start of every physics cycle a free ball that can touch a surface is taken into the contact model before the stock hit search runs (ContactSystem::EngageNear): a surface qualifies when the ball is within its release gap, or closing on it faster than it crosses (gap - release gap) in two cycles (reach 2 vn ...
+VPX_SNAPSHOT_TEST: 2026-10-26  Unified engine: ContactSystem::SaveStart / RestoreStart snapshot the state of the start of each sub-interval (build step 4 of the overlap standard, UnifiedContactDesign.txt section 11); the cost log (VPX_CONTACT_TIMING) has a new last column snap_us; test mode VPX_SNAPSHOT_TEST=1 (=2 is the negative control). Convention change: balls are released from the contact system, and the pair c ...
+VPX_STEP_RULE: VPX_STEP_RULE column A_um: mu N / Kt at dE for the item that set the step, in um, written on or off. Design: runs/2026-11-05-shear-step/design.md section 4.
+VPX_VISCOELASTIC: 2026-10-12  Unified engine, group 2. (a) Several balls on one bat: the one-ball-per-bat limit (FlipperMoverObject::m_rbBall) is gone in the unified engine (VPX_MULTIBAT=0 restores it): balls on the same bat are linked into one island, the bat is stepped once per substep with the summed torque of all its balls (StepBats), finishes once per cycle; a second ball touching a flipper used to be released ...
+VPX_WIRE_GAP: 2026-11-04  Wire triggers wired into the engine (design-wire.md piece 4): new [Features] triggers (default 1; physicsini.h). With it on, stock Trigger objects of shape WireA-D are a rollover wire switch of the contact system (new physics/contactwireswitch.h, a HingeModel::Engine holding WireSwitchGroup::Part; table side WireSwitchAdapter in trigger.cpp, host ContactPartHost kind "trigger"): shape  ...
+VPX_BAND_MESH_LOG, VPX_BUMPER_TRACE, VPX_CORD_ENERGY, VPX_GROUP_SEARCH_TRACE: no description found; read the code.
+```

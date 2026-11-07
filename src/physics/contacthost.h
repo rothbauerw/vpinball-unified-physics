@@ -1,7 +1,7 @@
 // license:GPLv3+
 
 #pragma once
-// A host of the contact system: the VPX-facing object that every surface or part the balls touch is registered under (docs/unified-physics/UnifiedContactDesign.txt 12.5).
+// A host of the contact system: the VPX-facing object that every surface or part the balls touch is registered under (docs/unified-physics/archive/UnifiedContactDesign.txt 12.5).
 // It holds what every host needs and nothing about a kind of object: the collision box and the Collidable switch (HitObject), the name and kind, the contact
 // settings and their reload from the table's physics ini, the list the contact system walks (Registry), and the entry points through which a stock collider or
 // the engine's contact pass hands a ball to the contact system (SurfaceCollide, SlowContact).

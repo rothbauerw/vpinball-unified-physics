@@ -12,7 +12,7 @@
 //   saturation = contact factors from the linear gap field (ball-ball: uniform-pair FEM table; face: magnetcore's ball-saturation rule), cut rule: each
 //              contact's factor scales the total linear force on the balls beyond it (tree rooted at the plug);
 //   output   = for every ball the CHANGE of its force caused by the other balls; the lone-ball pull stays MagnetCore::Model::Force.
-// Not handled (docs/unified-physics/NewPhysicsReference.txt, MAGNETS): plug off the axis (order-4 drive, accuracy unknown), two balls on one face, rings of touching balls
+// Not handled (docs/unified-physics/archive/NewPhysicsReference.txt, MAGNETS): plug off the axis (order-4 drive, accuracy unknown), two balls on one face, rings of touching balls
 // (extra contacts ignored), balls of another size (tables for the standard ball). Any magnet axis (each magnet in its own frame, 2026-10-20).
 #pragma once
 #include "physics/magnetcore.h"

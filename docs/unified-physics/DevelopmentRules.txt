@@ -43,7 +43,8 @@ Set by the project owner. They apply to every change, by a person or an assistan
    Judge by the worst cycle and the worst window, never the average.
 
 6. DOCUMENTATION AND HISTORY
-   Every feature, key, script call and environment variable goes into docs/unified-physics/NewPhysicsReference.txt with a dated change-log entry, in the same change. Names follow the physical part (flipper, sling, rubber), never a table.
+   Every setting is described in a comment beside it in the code; every diagnostic environment variable in docs/unified-physics/TestingPlaybook.md; the
+   history of a change in its commit message (user, 2026-11-07: NewPhysicsReference.txt retired to archive/). Names follow the physical part, never a table.
    Nothing is committed or pushed until the user says so. Convention differences from stock VPX are stated and documented.
    New work goes behind an ini setting, on by default while it is tested; 0 gives the old path unchanged. Once the user accepts the new path, the old path and its
    setting are deleted after the code is committed (the change log names that commit); ask first only if removal is high risk or later A/B tests need it.
@@ -54,7 +55,7 @@ Set by the project owner. They apply to every change, by a person or an assistan
    a. Every new design and every fix includes a step that lists the scenarios it would NOT handle or would break: other sources of the same case, other objects and modes, restart and teardown, extreme values
       (zero, huge, many balls), order of events, a table without the feature, a second use in the same process.
    b. Where it is possible, the design handles or prevents those scenarios (an ownership rule, a guard that is a safety net, a test in the matrix). Where it is not, the limit is written down in
-      docs/unified-physics/NewPhysicsReference.txt and the to-do list, with the reason.
+      the model's design doc and the to-do list, with the reason.
    c. The list is part of the report: say which scenarios were checked, how (measured or only reasoned), and which remain open. A scenario that is only reasoned about is marked INFERRED (rule 1b).
 
 8. UNWANTED OR TRACKED BEHAVIOUR IS SHOWN ON SCREEN (user, 2026-10-13)

@@ -47,7 +47,7 @@ public:
       double value = 0.0;   // Hit: normal approach speed (m/s); Limit: angular speed (deg/s); BandHit: the cord's largest deflection under the ball (m); SlingFire: 1 = the script's trigger
    };
 
-   // A saved copy of a part's dynamic state, for rewinding an island (docs/unified-physics/UnifiedContactDesign.txt section 11, point 2): plain bytes, no allocation. A part packs the values that change while it
+   // A saved copy of a part's dynamic state, for rewinding an island (docs/unified-physics/archive/UnifiedContactDesign.txt section 11, point 2): plain bytes, no allocation. A part packs the values that change while it
    // runs (position, speed, switch and drive state, stop contacts, held forces), not its settings or shape.
    struct State
    {

@@ -18,7 +18,7 @@
 #include "physics/stockcount.h"
 #include "physics/contactsystem.h"
 
-// Test driver (docs/unified-physics/TestMatrixDesign.txt section 2; keys and file format in docs/unified-physics/NewPhysicsReference.txt). Harness only: off unless VPX_TEST_INPUT is set.
+// Test driver (docs/unified-physics/TestMatrixDesign.txt section 2; keys and file format in docs/unified-physics/archive/NewPhysicsReference.txt). Harness only: off unless VPX_TEST_INPUT is set.
 // Input file: one action per line, "<t_ms> <action> <args>", '#' starts a comment; actions with the same time run in file order. Time 0 is the first cycle after the
 // table's start-up (section 3 point 10g: the first frame that took less than half the anti-hung limit), so the start-up's slow frames never skip driver time.
 //    ball NAME x y z vx vy vz [radius mass]   create a ball: x, y in VPX units, z = height of the ball's bottom above the playfield (U), velocity in m/s

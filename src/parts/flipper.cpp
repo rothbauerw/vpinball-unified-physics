@@ -263,7 +263,7 @@ void Flipper::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    HitFlipper *const phf = new HitFlipper(m_d.m_Center, baseRadius, endRadius, max(m_d.m_FlipperRadius, 0.01f), ANGTORAD(m_d.m_StartAngle),
       ANGTORAD(m_d.m_EndAngle), height, height + m_d.m_height, this);
    phf->m_flipperMover.m_enabled = m_d.m_enabled;
-   // unified engine: the bat is a moving part of the contact system (docs/unified-physics/UnifiedContactDesign.txt 12.2); the stock collider stays for the flipper list and
+   // unified engine: the bat is a moving part of the contact system (docs/unified-physics/archive/UnifiedContactDesign.txt 12.2); the stock collider stays for the flipper list and
    // the script's state, finds no ball (HitTest) and does not step (its mover is not listed)
    ContactPartHost *const partHost = !isUI && ContactSystem::Unified() ? phf->m_flipperMover.MakePart(phf, height, height + m_d.m_height) : nullptr;
    physics->AddCollider(phf, isUI);

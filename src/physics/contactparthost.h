@@ -1,7 +1,7 @@
 // license:GPLv3+
 
 #pragma once
-// The host of a moving part of the contact system (a gate, a spinner, a jet bumper, a turntable disc; docs/unified-physics/UnifiedContactDesign.txt 12.5). It knows only the moving-part
+// The host of a moving part of the contact system (a gate, a spinner, a jet bumper, a turntable disc; docs/unified-physics/archive/UnifiedContactDesign.txt 12.5). It knows only the moving-part
 // interface (contactmovingpart.h): the part probes, touches, steps and saves itself; the host registers it with the contact system, advances it alone when no island stepped
 // it, and hands its pose and events to the table part's adapter. The adapter is the table part's own (gate, spinner, bumper, turntable files): the host knows no kind of part.
 

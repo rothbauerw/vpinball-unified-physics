@@ -1086,7 +1086,7 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
 
       std::optional<TestDriver::Timed> tdContact(std::in_place, TestDriver::kContact);   // the contact system's step, to the snapshot test below
       if (ContactSystem::Unified())
-         ContactSystem::SaveStart();   // the state of the start of this sub-interval, for a replay (docs/unified-physics/UnifiedContactDesign.txt 11, point 2)
+         ContactSystem::SaveStart();   // the state of the start of this sub-interval, for a replay (docs/unified-physics/archive/UnifiedContactDesign.txt 11, point 2)
       const uint64_t ctT0 = ctLog != nullptr ? usec() : 0;
       if (hittime < hittimeStart && ContactProf::On())
       {
@@ -1133,14 +1133,14 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
       if (ContactSystem::Unified())
       {
          const TestDriver::Timed tdContactOverlaps(TestDriver::kContact);
-         ContactSystem::CheckOverlaps(hittime);   // a free ball found inside a moving part: the sub-interval is replayed with the ball engaged at its first contact (docs/unified-physics/UnifiedContactDesign.txt 11, point 2)
+         ContactSystem::CheckOverlaps(hittime);   // a free ball found inside a moving part: the sub-interval is replayed with the ball engaged at its first contact (docs/unified-physics/archive/UnifiedContactDesign.txt 11, point 2)
          unsigned nRep = 0, usRep = 0;
          ContactSystem::TakeReplayStats(nRep, usRep);
          s_ctReplays += nRep;
          s_ctReplayUs += usRep;
       }
 
-      // the events the contact step and the parts queued in this sub-interval: after the free balls have moved, as stock fires its collision events (docs/unified-physics/UnifiedContactDesign.txt 11, point 2)
+      // the events the contact step and the parts queued in this sub-interval: after the free balls have moved, as stock fires its collision events (docs/unified-physics/archive/UnifiedContactDesign.txt 11, point 2)
       {
          const TestDriver::Timed tdDispatch(TestDriver::kContact);
          ContactSystem::Dispatch();

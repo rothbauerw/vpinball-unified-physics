@@ -1,7 +1,7 @@
 // license:GPLv3+
 // Iron-core magnet: the core's answer to the ball (2026-10-18). Built at load per magnet, read per ball per cycle. No VPX dependencies (tested offline in runs/2026-10-14-mirror).
 //
-// Model (docs/unified-physics/NewPhysicsReference.txt, MAGNETS, core_model = cells):
+// Model (docs/unified-physics/archive/NewPhysicsReference.txt, MAGNETS, core_model = cells):
 //   core      = axisymmetric volume cells (4 x 30) of saturating steel (B-H M = Ms h / (h + Ms/chi)), solved by Newton for the coil alone and with one ball on the axis;
 //   bare field = coil + coil-only core, read out smoothly into an (r, z) table above the face (bicubic Hermite);
 //   no-reaction force = linear ball (mu 200) to order 4 in the bare field, measured on an inner sphere;

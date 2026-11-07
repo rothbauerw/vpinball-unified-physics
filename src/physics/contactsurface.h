@@ -1,5 +1,5 @@
 #pragma once
-// A surface a ball can touch (docs/unified-physics/UnifiedContactDesign.txt, "Surface"): static geometry or a driven one (the turntable's disc). The contact system asks it for the nearest
+// A surface a ball can touch (docs/unified-physics/archive/UnifiedContactDesign.txt, "Surface"): static geometry or a driven one (the turntable's disc). The contact system asks it for the nearest
 // point, normal and curvature of the part of the surface near the ball (Probe), and, for a surface that moves, the velocity of the surface at the contact and the reaction
 // on it. The contact law (Hertz + damping + Mindlin + twist + rolling resistance) and the integration are the same for every surface and live outside.
 //
