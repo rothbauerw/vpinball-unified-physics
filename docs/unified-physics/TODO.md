@@ -13,7 +13,8 @@ G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
 In flight: nothing running. Uncommitted: part_guess_accel + clamp trace (engine, 7 files). CLAUDE.md, hooks and memory are outside git.
-User's review done (rules, to-do, memory). Memory now holds only the user note and pointers; part data is in PartData.txt.
+Review left, one doc at a time with the user: 2 DevelopmentRules and ModelStandards, whole docs (next), 3 JetBumper and GateSpinner design docs, 4 TestMatrixDesign,
+5 PartData sections 1-6 status text, 6 ReleasePlan. To write: disc and wire-switch sections (GroupStepDesign 22). Engine work uncommitted, not compiled.
 Next decision after that: the solution path for the wire switch not converging (N1); it decides N6. All items confirmed with the user 11-07.
 N1. Wire switch at 6 mm: Newton does not converge near touch (ringing); 252 us/ms vs 30 us limit. Shared-engine item: closes only when solved there. Riding wire pulled (poor design and code), may reopen.
 N2. Wires B, C, D as the real switches (B V wire, C angled straight wire, D arch through playfield); lever ends wrong. Derive sizes from photos (ball 1-1/16 in as scale) and parts drawings; user checks before build.
@@ -34,7 +35,7 @@ N11. After N1's solution: review shear_step_motion, term_arrival, damp_dir_slope
 26. Ball started inside: the solve must never keep a runaway answer. May be handled already: check.
 27. Shared stop piece (gate, spinner, disc, ring, bat, plunger).
 29. Counter columns filled only on the old path.
-32. Env switches that change behaviour (rule: diagnostics only): VPX_BUMPERS, VPX_HINGES (=0 gives the stock kick), VPX_PREVENT, VPX_PROXIMITY, VPX_VISCOELASTIC, VPX_OVERLAP_REPLAY. Remove each or make it an ini key.
+32. Env switches that change behaviour (rule: diagnostics only): VPX_HINGES (=0 gives the stock kick), VPX_PREVENT, VPX_PROXIMITY, VPX_VISCOELASTIC, VPX_OVERLAP_REPLAY, VPX_ARRIVAL_NOSPLIT; VPX_BUMPERS only warns. Remove each or make it an ini key.
 31. After G1: check every converted part (flipper, gates, spinners, bumper, disc, rubbers, cord) against the ModelStandards section 7 done checklist.
 30. part_guess_accel (default off): design evaluation for all moving parts, then a test plan if kept. After the shared-engine items, unless one of them needs it.
 

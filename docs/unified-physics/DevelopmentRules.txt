@@ -75,8 +75,9 @@ Set by the project owner. They apply to every change, by a person or an assistan
    c. Always a fault, at any input: a crash, a launch, an energy gain, a solver that hangs. Anything else outside typical is recorded, not fixed, unless it points to a fault that also affects typical play.
    d. Every failure is saved as a repeatable case. Only cases that found something join the set.
 
-11. TESTING IS CAPPED AND THE BUILD GOES TO THE USER FIRST (user, 2026-11-01, after two leads in a row broke the testing rules and kept the user waiting over an hour)
-   a. The user's time comes first, and the user's play is the real test. As soon as a model builds, loads and does its job on a table, the session stops and the build goes to the user, before any test list.
+11. TESTING IS CAPPED (user, 2026-11-01, after two leads in a row broke the testing rules and kept the user waiting over an hour; 11a changed by the user 2026-11-07)
+   a. The user's time comes first. A working build is tested by the lead on the bench, within the cap. The user plays it only when the user asks. A lead that cannot say what a test
+      should measure asks the user for a pointer instead of guessing.
    b. A test goes in a brief only if its result changes a decision being made now. A list approved earlier is not carried over whole: each item is justified again or left out. A left-out item is noted, not run.
    c. Every session brief carries three lines. DECISION: what result changes which decision. TOTAL CAP: runs and wall minutes for the whole job, not per run; default 10 runs or 15 minutes, whichever comes first; more needs the user's OK before it starts. HAND OVER: the point the session stops and the build or answer goes to the user. A hook refuses a brief without them (.claude/hooks/check_brief.py).
    d. At the cap a session stops and reports, even part way. No grid, sweep or second batch without the lead's OK. The lead gives it only for a named benefit and tells the user.
