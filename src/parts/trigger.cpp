@@ -433,7 +433,7 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
             PLOGI << "Trigger " << GetName() << ": wire switch part on the group step (shape Wire" << "ABCD"[(int)shape] << ", " << chain.size() << " capsules, wire " << 2e3 * chain[0].r  << " mm: hinge body with its mass)";
          PLOGI << "Trigger " << GetName() << ": scale " << m_d.m_scaleX << ", peak " << s.peakMm << " mm above its surface '" << m_d.m_szSurface << "' at z " << floorZ << " VPU (playfield z " << playfieldZ << "); lever end node " << s.leverNode << " at (" << tip.x << ", " << tip.y << ") VPU; pivot " << s.hingeBackMm << " mm back, "
                << s.hingeBelowMm << " mm below; spring " << s.springN << " N at first touch, " << s.springFullN << " N at full travel; close " << s.closeMm << " mm, release " << s.releaseMm << " mm; mass "
-               << w.mp.m * 1e3 << " g, reach " << reach * 1e3 << " mm)";
+               << w.mp.m * 1e3 << " g, I " << w.mp.I << " kg m^2, reach " << reach * 1e3 << " mm)";
          return;
       }
    }

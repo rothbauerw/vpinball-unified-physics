@@ -33,7 +33,7 @@ struct ContactSettings
    double sleepHoldMs = 100.0;       // sleep_hold_ms: for this long without a break (a ball only passing through zero speed does not sleep)
    // Arrival-time substeps for islands of static surfaces and balls: a step never carries a ball into a surface (it ends at a small gap when an approach is predicted within it), a contact
    // is stepped by its own stiffness at the depth the impact will reach, and a ball far from every surface takes the rest of the cycle as one step.
-   bool arrivalStep = true;          // arrival_step (VPX_ARRIVAL=0/1 overrides it)
+   bool arrivalStep = true;          // arrival_step
    bool staticModel = true;          // static_model (default 1 since 2026-11-03): 1 = every static surface (walls, primitives, ramps, playfield) takes a ball to the group step as a rubber does (ring_model, GroupStepDesign 14); 0 = only rubbers
    int rollModel = 1;                // roll_model (default 1): 0 = the rolling and twist torques smoothed through zero spin (roll_smooth_rad_s); 1 = rolling and twist stick springs at the contact (group step)
    int pivotModel = 1;               // pivot_model (default 1): 1 = a 1-dof part's pin (gate, spinner, wire switch) holds on a stick spring and slides at mu_dynamic_ratio times its static limit; 0 = the slip direction, stuck state and turn event
@@ -42,6 +42,7 @@ struct ContactSettings
    bool termArrival = true;          // term_arrival (default 1 since 2026-11-05): 1 = each term of a contact made of terms (hinge_piece_sum) not yet pressing gets the arrival rule (rule 3) by its own depth and closing rate
    bool dampDirSlope = true;         // damp_dir_slope (default 1 since 2026-11-05): 1 = Newton's slope of a terms contact (hinge_piece_sum) takes the turning of the damping's direction G = Fel / |Fel| and dd's change through it (runs/2026-11-05-damp-dir-slope/design.md); the force is unchanged
    bool hingePieceSum = true;        // hinge_piece_sum (default 1 since 2026-11-05): 1 = a hinge part's contact (wire switch, gate, spinner) is the union of its pieces, each stepped by its own exact difference (runs/2026-11-05-hinge-piece-sum/design.md)
+   bool partGuessAccel = false;      // part_guess_accel (default 0, 2026-11-06): 1 = a moving part's (wire switch, gate, spinner) first guess carries its last step's acceleration, (rate + a h / 2) h, as a ball's does; Newton's start only
    int stepModel = 1;                // step_model (default 1 since 2026-11-05): 0 = a steady contact is stepped at omegaHRest / its frequency at the expected depth; 1 = by the motion in its mode: h <= sqrt(12 eps / A) / omega at its real depth (A the mode's amplitude), never shorter than rule 0
    double rollSmoothRadS = 0.05;     // roll_smooth_rad_s: the rolling torque's smoothing through zero spin in the group step, rad/s
    double arrivalDepthUm = 2.0;      // arrival_depth_um: the deepest a ball may start a contact before the step is taken again (rewind), um

@@ -228,6 +228,7 @@ namespace GroupStep
       mutable const double *trial = nullptr;   // a carried surface: each of its part's coordinates moved by this for the probe; null = where they are now
       virtual ~Shape() = default;
       virtual void Probe(const V3 &c, double R, Hit &h) const = 0;
+      virtual std::string Name() const { return std::string(); }   // diagnostics (VPX_GROUP_CLAMP_TRACE): its owner's name
       // [Contact] hinge_piece_sum, a surface made of pieces: the pieces a ball at c can reach while it moves at most reach and its part turns at most swing (rad), and
       // every piece within minReach of it (the far test's own bound), in the pieces' own order. False: not a surface of pieces (its probe takes no list)
       virtual bool NearPieces(const V3 &, double, double, double, double, std::vector<int> &) const { return false; }
@@ -312,6 +313,9 @@ namespace GroupStep
       // forces change, at h dG/du = (I - G g^T) K / fe (K = sum_t h tk_t tg_t tg_t^T, g = G's ball part). Newton's slope then takes fd h dG/du and dd = G . dq's change
       // through G, (kd / h) G dq^T dG/du; N's slope (kv) the latter. The force is unchanged. true (default) = on; false = G held fixed in the slope.
       bool dampDirSlope = true;
+      // partGuessAccel ([Contact] part_guess_accel): a part's first guess of its coordinate's move carries its last step's acceleration, (rate + a h / 2) h, a the force of the
+      // move taken over its mass, as a ball's guess does. Newton's start only: the law and the solved step are unchanged. false (default) = rate h.
+      bool partGuessAccel = false;
       double turnMaxRad = 2.0 * kPi / 180.0;   // a ball rolling round a post or another ball turns at most this per step
       double tauShare = 0.25, fieldShare = 0.25;   // a part's own time constant is resolved to this share of it; a body moves at most this share of a distance over which its force changes (StepFactList; no part uses them yet; the bat's values)
       double vFloor = 0.01;                    // m/s: the closing speed below which a contact's expected depth is taken at this speed
@@ -418,6 +422,7 @@ namespace GroupStep
    {
    public:
       virtual ~Part() = default;
+      bool guessAccel = false;   // [Contact] part_guess_accel (Settings::partGuessAccel, set by the group before BeginStep)
       mutable const std::vector<int> *nearNow = nullptr;   // [Contact] hinge_piece_sum: the probe of a surface it carries takes only these pieces (this attempt's list); null = all
       // what it is
       virtual int NumDof() const = 0;
@@ -990,6 +995,8 @@ namespace GroupStep
                tStep = std::chrono::steady_clock::now();
             }
             const double taken = Step(h);
+            if (ClampFile() != nullptr)
+               ClampFlush();
             double stepUs = 0.0, inStep = 0.0;
             if (pf != nullptr)
             {
@@ -1513,6 +1520,21 @@ namespace GroupStep
       long jacWinLines = 0, evalCount = 0, evalCountRound = 0, jacWinTryEntries = 0;   // (jacWinLines: Jacobian entry lines written, 2000 in all)
       bool jacWinDump = false;   // the main Eval of a round in the window: each contact's state into jacWinCon (the last round's is kept with the converged solve)
       std::string jacWinCon;
+      // VPX_GROUP_CLAMP_TRACE=<file> (diagnostics, read once; unset = off: nothing is formed or written): each Newton round of a step that has a carried surface's
+      // contact (a wire), the round's point (move or retake) and verdict (kept, rejected = taken back shorter, done), and each such contact's switches; a step is
+      // written only if its attempts took more than 10 rounds in all or one failed
+      static FILE *ClampFile()
+      {
+         static FILE *const f = []() -> FILE * {
+            const char *const e = getenv("VPX_GROUP_CLAMP_TRACE");
+            return e != nullptr && *e ? fopen(e, "w") : nullptr;
+         }();
+         return f;
+      }
+      bool clampDump = false;            // the main Eval of a round: each carried surface's contact into clampCon
+      std::string clampCon, clampStep;   // this round's contact lines; this step's rounds
+      int clampAttempt = 0, clampRounds = 0, clampFails = 0;
+      bool clampRetake = false;          // the next round's point is a line-search retake
       std::string UnkName(const int u) const
       {
          if (u < 6 * nb)
@@ -2043,7 +2065,7 @@ namespace GroupStep
       }
 
       // Gonzalez: gm + (df - gm . dq) / (dq^T W dq) W dq, so that the result . dq = df exactly; a mismatch within the rounding of f is left out
-      static void Gonzalez(const double *gm, double df, double dfNoise, const double *dq, const double *W, int n, double *out)
+      static void Gonzalez(const double *gm, double df, double dfNoise, const double *dq, const double *W, int n, double *out, bool *cfZero = nullptr)
       {
          double gdq = 0.0, qq = 0.0;
          for (int a = 0; a < n; a++)
@@ -2054,6 +2076,8 @@ namespace GroupStep
          const double cf = qq > 1e-300 && std::fabs(df - gdq) > dfNoise ? (df - gdq) / qq : 0.0;
          for (int a = 0; a < n; a++)
             out[a] = gm[a] + cf * W[a] * dq[a];
+         if (cfZero != nullptr)   // (VPX_GROUP_CLAMP_TRACE: the correction left out)
+            *cfZero = cf == 0.0;
       }
       // The same elimination over the nonzero entries of each pivot row: a group's bodies touch few others
       static bool SolveLinear(const Jac A, double *b, int n, int *const idx)
@@ -2235,7 +2259,16 @@ namespace GroupStep
             e.d0 = d0;
             e.d1 = d1;
             if (d0 <= 0.0 && d1 <= 0.0 && dm <= 0.0)
+            {
+               if (clampDump && it.b < 0 && hm.nc > 0)   // VPX_GROUP_CLAMP_TRACE: a carried surface's contact that is off at this Eval
+               {
+                  char ln[200];
+                  snprintf(ln, sizeof ln, "  c k %d ball %d part %d %s off d0 %.5g dm %.5g d1 %.5g um\n", k, it.a, shape[it.s] != nullptr ? shape[it.s]->part : -1, shape[it.s] != nullptr ? shape[it.s]->Name().c_str() : "-", d0 * 1e6, dm * 1e6,
+                           d1 * 1e6);
+                  clampCon += ln;
+               }
                continue;
+            }
             e.active = true;
             const bool pr = it.b >= 0;
             const int na = pr ? 6 : 3;
@@ -2259,7 +2292,9 @@ namespace GroupStep
                dq[3 + j] = qEnd[cj];
                W[3 + j] = cUnk[cj] >= 0 ? ci[cj].invM : 0.0;   // (a move given to it takes none of the correction: only the unknowns do)
             }
-            Gonzalez(gm, d1 - d0, noiseD, dq, W, na + nq, gd);
+            bool cf0U = false;
+            uint64_t tCf0 = 0;   // (VPX_GROUP_CLAMP_TRACE: the terms whose correction was left out)
+            Gonzalez(gm, d1 - d0, noiseD, dq, W, na + nq, gd, clampDump ? &cf0U : nullptr);
             // [Contact] hinge_piece_sum: every term of the union by its own chord and its own exact gradient (each term's depth is smooth, so its midpoint gradient
             // misses by the third order only); the elastic force sum_t s_t fe_t gd_t does sum_t s_t dU_t = dU exactly. The contact's normal force N_el and its
             // direction G (the ball's part a unit normal) are that sum's; the damping acts along G on the rate G . dq / h: its loss cD (G . dq)^2 / h is exact for
@@ -2288,7 +2323,10 @@ namespace GroupStep
                   const V3 &tn = hm.t[t].n;
                   tg[t][0] = -tn.x; tg[t][1] = -tn.y; tg[t][2] = -tn.z; tg[t][3] = hm.t[t].slope;
                   double gdT[kGradMax];
-                  Gonzalez(tg[t].data(), a1 - a0, noiseD, dq, W, 4, gdT);
+                  bool cf0T = false;
+                  Gonzalez(tg[t].data(), a1 - a0, noiseD, dq, W, 4, gdT, clampDump ? &cf0T : nullptr);
+                  if (cf0T && t < 64)
+                     tCf0 |= 1ull << t;
                   const double fT = L.Chord(a0, a1);
                   for (int j = 0; j < 4; j++)
                      Fel[j] += s * fT * gdT[j];
@@ -2539,6 +2577,32 @@ namespace GroupStep
             for (int j = 0; j < nq; j++)
                qF[qc0 + hm.c[j].coord] += qf[j];
 
+            if (clampDump && nq > 0)   // VPX_GROUP_CLAMP_TRACE: this carried surface's contact at this Eval (read only): the residual's switches
+            {
+               const double top = std::max(std::fabs(d0), std::fabs(d1));
+               const char kk = L.gammaKK > 0.0 ? (std::fabs(d1 - d0) > 1e-3 * top && top > 0.0 ? 'C' : 'M') : 'H';
+               std::string on, cf;
+               for (int t = 0; terms && t < hm.nt; t++)
+               {
+                  on += tOn[t] ? '1' : '0';
+                  cf += t < 64 && (tCf0 >> t & 1u) ? '1' : '0';
+               }
+               // meff: the mass along the contact's normal, 1 / sum_j W_j gd_j^2 (Newton's own W and gd), g (-1: no unknown takes the correction); ks: the law's
+               // dF/dd at d1, N/m; cD: this round's damper, N s/m; vn0: the closing rate at the step's start, the mid gradient gm on the start's speeds and rates, m/s
+               double wSum = 0.0, vn0 = 0.0;
+               for (int j = 0; j < na + nq; j++)
+                  wSum += W[j] * gd[j] * gd[j];
+               vn0 += gm[0] * A.v.x + gm[1] * A.v.y + gm[2] * A.v.z;
+               if (pr)
+                  vn0 += gm[3] * ball[it.b].v.x + gm[4] * ball[it.b].v.y + gm[5] * ball[it.b].v.z;
+               for (int j = 0; j < nq; j++)
+                  vn0 += gm[3 + j] * ci[qc0 + hm.c[j].coord].rate;
+               char ln[520];
+               snprintf(ln, sizeof ln, "  c k %d ball %d part %d %s on d0 %.5g dm %.5g d1 %.5g um fe %.6g fd %.6g N %.6g clamp %d slide %d kk %c cf0 %d terms %s tcf0 %s meff %.6g g ks %.6g N/m cD %.6g Ns/m vn0 %.6g m/s\n", k, it.a,
+                        shape[it.s] != nullptr ? shape[it.s]->part : -1, shape[it.s] != nullptr ? shape[it.s]->Name().c_str() : "-", d0 * 1e6, dm * 1e6, d1 * 1e6, fe, fd, N, fe + fd <= 0.0 ? 1 : 0, slipping ? 1 : 0, kk, cf0U ? 1 : 0,
+                        terms ? on.c_str() : "-", terms ? cf.c_str() : "-", wSum > 0.0 ? 1e3 / wSum : -1.0, L.K(d1), cD, vn0);
+               clampCon += ln;
+            }
             if (J)
             {
                // normal: h dfN/dd1 g g^T on the centres; the chord's exact slope (F(d1) - chord) / (d1 - d0) (K / 2 for a vanishing change), the damping's
@@ -3090,11 +3154,14 @@ namespace GroupStep
             x[6 * i + 3] = w0.x; x[6 * i + 4] = w0.y; x[6 * i + 5] = w0.z;
          }
          for (int p = 0; p < np; p++)
+         {
+            part[p]->guessAccel = set.partGuessAccel;
             if (!part[p]->BeginStep(ball, nb, h, x, partOff[p]))
             {
                failWhy = 'P';
                return false;
             }
+         }
          CoordsNow();
          for (int it = 0; !InRange(x); it++)   // a first guess past a layer's range is shortened
          {
@@ -3137,6 +3204,31 @@ namespace GroupStep
       std::string searchBuf;
       static bool SearchTraceOn() { static const bool on = []() { const char *const e = getenv("VPX_GROUP_SEARCH_TRACE"); return e != nullptr && atoi(e) != 0; }(); return on; }
       bool SolveOnce(double h)
+      {
+         if (ClampFile() == nullptr)
+            return SolveOnceCore(h);
+         clampAttempt++;
+         clampRetake = false;
+         const bool ok = SolveOnceCore(h);
+         if (!ok)
+            clampFails++;
+         char ln[120];
+         snprintf(ln, sizeof ln, "A att %d h %.4g us %s\n", clampAttempt, h * 1e6, ok ? "converged" : "failed");
+         clampStep += ln;
+         return ok;
+      }
+      // VPX_GROUP_CLAMP_TRACE: the step's rounds to the file if it took more than 10 rounds or an attempt failed, and it had a carried surface's contact
+      void ClampFlush()
+      {
+         if (clampStep.find("  c k ") != std::string::npos && (clampRounds > 10 || clampFails > 0))
+         {
+            fprintf(ClampFile(), "S t %u step %ld attempts %d rounds %d failed %d\n%s", phaseMs, phaseStep + 1, clampAttempt, clampRounds, clampFails, clampStep.c_str());
+            fflush(ClampFile());
+         }
+         clampStep.clear();
+         clampAttempt = clampRounds = clampFails = 0;
+      }
+      bool SolveOnceCore(double h)
       {
          if (RoundTraceOn())
             roundBuf.clear();
@@ -3194,8 +3286,11 @@ namespace GroupStep
                   jacWinCon += ln;
                }
             }
+            clampDump = ClampFile() != nullptr;
+            clampCon.clear();
             const bool evOk = Eval(h, x, Res, J, trialCached);
             jacWinDump = false;
+            clampDump = false;
             if (!evOk)
             {
                failWhy = partEvalFailed ? 'B' : 'N';
@@ -3244,6 +3339,17 @@ namespace GroupStep
                      }
                   }
             }
+            if (ClampFile() != nullptr)   // VPX_GROUP_CLAMP_TRACE: this round's point and verdict (the same test as the line search below), then its contacts
+            {
+               const bool rej = round > 1 && !gripMoved && rn > rnPrev * (1.0 - 1e-4) && rn > set.tolV && back < 30;
+               char ln[200];
+               snprintf(ln, sizeof ln, "R t %u step %ld att %d round %d %s %s rn %.6g h %.4g us\n", phaseMs, phaseStep + 1, clampAttempt, round, clampRetake ? "retake" : "move",
+                        rej ? "rejected" : "kept", rn, h * 1e6);
+               clampStep += ln;
+               clampStep += clampCon;
+               clampRounds++;
+               clampRetake = false;
+            }
             // (a part's grip changed since the last round: the residual moved for that too, so no comparison this round)
             if (round > 1 && !gripMoved && rn > rnPrev * (1.0 - 1e-4) && rn > set.tolV && back < 30)
             {
@@ -3265,6 +3371,7 @@ namespace GroupStep
                      rb.back = 1;
                      roundDiag[round - 1] = rb;
                   }
+                  clampRetake = true;   // (VPX_GROUP_CLAMP_TRACE: the next round evaluates the shorter move)
                   continue;
                }
                for (int a = 0; a < nU; a++)   // nothing shorter is in range: go on from where the move started

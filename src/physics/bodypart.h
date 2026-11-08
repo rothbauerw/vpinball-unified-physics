@@ -188,7 +188,7 @@ namespace GroupStep
             s.speed = s.SpeedNow();
          gGiven = pinStop >= 0 ? stops[pinStop].AfterStep(h) - stops[pinStop].at : 0.0;
          if (NumDof() == 1)
-            x[off] = rate * h;
+            x[off] = guessAccel ? (rate + 0.5 * aLast * h) * h : rate * h;   // ([Contact] part_guess_accel: the last step's acceleration carried on, as a ball's guess does)
          gDrive = gViscous = gFriction = 0.0;
          gBallQ = 0.0;
          gBallF = V3();
@@ -212,6 +212,7 @@ namespace GroupStep
          {
             const PinMove pm = PinStep(dq, h);
             Res[off] = mass * (2.0 * dq / h - 2.0 * rate) - h * (-Vp - lossF - cv * r + Fd + pm.M);
+            gQ = -Vp - lossF - cv * r + Fd + pm.M + gBallQ;
             rowT[0] = mass * (2.0 * dq / h - 2.0 * rate); rowT[1] = h * (Vp + lossF); rowT[2] = h * cv * r; rowT[3] = -h * pm.M; rowT[4] = -h * gBallQ; rowT[5] = pm.K; rowT[6] = FrictionLimit(qm, r, gBallF); rowT[7] = pm.holds ? 1.0 : 0.0; rowT[8] = pm.s1; rowT[9] = dq;
             if (J)
                J[off][off] += 2.0 * mass / h + h * slope + h * lossSlope + cv + (pm.holds ? h * 0.5 * pm.K + pm.c : 0.0);
@@ -223,6 +224,7 @@ namespace GroupStep
          const double lim = dirF != 0 ? FrictionLimit(qm, r, gBallF) : 0.0;
          const double Q = -Vp - lossF - cv * r + Fd - dirF * lim;
          Res[off] = mass * (2.0 * dq / h - 2.0 * rate) - h * Q;
+         gQ = Q + gBallQ;
          if (J)
             J[off][off] += 2.0 * mass / h + h * slope + h * lossSlope + cv;
          gViscous = cv * r * dq + lossF * dq;
@@ -380,6 +382,7 @@ namespace GroupStep
             const double dq = x[off];
             rate = 2.0 * dq / h - rate;
             q += dq;
+            aLast = gQ / mass;   // the next step's first guess: the force of the move taken (Eval's at it, the balls' load included), not (r1 - r0) / h (the ball's aLast says why)
             if (pivotModel == 1)
             {
                pinS = pm.s1;
@@ -387,7 +390,9 @@ namespace GroupStep
                pinHolds = pm.holds;
             }
          }
-         else if (gGiven != 0.0)
+         else
+            aLast = 0.0;
+         if (NumDof() == 0 && gGiven != 0.0)
          {
             // carried by its driven stop: the stop pays for the stored energy and the friction; its work on the balls is the group's book
             const double dq = gGiven, V0 = StoredEnergy(q);
@@ -415,7 +420,7 @@ namespace GroupStep
       static constexpr int kMaxStops = 4;
       struct Dyn
       {
-         double q, rate, pendDrive, pendLoss, qAtStepStart, gBallQ, gGiven, pinS, pinK;
+         double q, rate, pendDrive, pendLoss, qAtStepStart, gBallQ, gGiven, pinS, pinK, aLast;
          V3 gBallF;
          BodyBooks bk;
          struct { double at, target, rate, speed; bool enabled, armed, touching; } stop[kMaxStops];
@@ -425,7 +430,7 @@ namespace GroupStep
       void Fill(Dyn &d) const
       {
          assert(stops.size() <= kMaxStops);
-         d.q = q; d.rate = rate; d.pendDrive = pendDrive; d.pendLoss = pendLoss; d.qAtStepStart = qAtStepStart; d.gBallQ = gBallQ; d.gGiven = gGiven; d.gBallF = gBallF; d.bk = bk; d.pin = pinStop; d.dir = dirF; d.stuck = stuck; d.pinnedInStep = gPinnedInStep; d.pinS = pinS; d.pinK = pinK; d.pinHolds = pinHolds;
+         d.q = q; d.rate = rate; d.pendDrive = pendDrive; d.pendLoss = pendLoss; d.qAtStepStart = qAtStepStart; d.gBallQ = gBallQ; d.gGiven = gGiven; d.gBallF = gBallF; d.bk = bk; d.pin = pinStop; d.dir = dirF; d.stuck = stuck; d.pinnedInStep = gPinnedInStep; d.pinS = pinS; d.pinK = pinK; d.pinHolds = pinHolds; d.aLast = aLast;
          for (size_t i = 0; i < stops.size(); i++)
          {
             const BodyStop &s = stops[i];
@@ -434,7 +439,7 @@ namespace GroupStep
       }
       void Load(const Dyn &d)
       {
-         q = d.q; rate = d.rate; pendDrive = d.pendDrive; pendLoss = d.pendLoss; qAtStepStart = d.qAtStepStart; gBallQ = d.gBallQ; gGiven = d.gGiven; gBallF = d.gBallF; bk = d.bk; pinStop = d.pin; dirF = d.dir; stuck = d.stuck; gPinnedInStep = d.pinnedInStep; pinS = d.pinS; pinK = d.pinK; pinHolds = d.pinHolds;
+         q = d.q; rate = d.rate; pendDrive = d.pendDrive; pendLoss = d.pendLoss; qAtStepStart = d.qAtStepStart; gBallQ = d.gBallQ; gGiven = d.gGiven; gBallF = d.gBallF; bk = d.bk; pinStop = d.pin; dirF = d.dir; stuck = d.stuck; gPinnedInStep = d.pinnedInStep; pinS = d.pinS; pinK = d.pinK; pinHolds = d.pinHolds; aLast = d.aLast;
          for (size_t i = 0; i < stops.size(); i++)
          {
             BodyStop &s = stops[i];
@@ -718,6 +723,7 @@ namespace GroupStep
       double pinS = 0.0, pinK = 0.0;   // the pin's spring: its twist (rad) and stiffness at the end of the last step (pivot_model 1)
       double gH = 1e-3, gGiven = 0.0, gDrive = 0.0, gViscous = 0.0, gFriction = 0.0, pendDrive = 0.0, pendLoss = 0.0;
       double gBallQ = 0.0;
+      double aLast = 0.0, gQ = 0.0;   // the coordinate's acceleration over the last step taken (the next step's first guess, part_guess_accel; kept across cycles: it is in Dyn, so a retake is exact); the force of the last Eval
       V3 gBallF;
       mutable int gExcessStop = -1;
       mutable bool gExcessTurn = false;

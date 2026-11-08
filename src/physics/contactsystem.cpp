@@ -1666,8 +1666,7 @@ struct ContactSystemImpl
 
    static bool ArrivalOn(const Cycle &cy)
    {
-      static const int env = []() { const char *const e = getenv("VPX_ARRIVAL"); return e != nullptr && *e ? atoi(e) : -1; }();
-      return env >= 0 ? env != 0 : cy.cs->arrivalStep;
+      return cy.cs->arrivalStep;
    }
 
    // The island's substeps: at every one, all forces are summed from the current states before any body moves
@@ -2096,6 +2095,7 @@ struct ContactSystemImpl
       double heldKb = 0.0;     // the bend this touch started with, for the same reason
       ContactMovingPart *mp = nullptr;   // a part on the group: its own surface, which moves with it
       int surface = 0;
+      std::string Name() const override { return r != nullptr ? r->Name() : std::string(); }
       bool NearPieces(const V3 &c, const double R, const double reach, const double swing, const double minReach, std::vector<int> &list) const override
       {
          return mp != nullptr && mp->GroupNearPieces(surface, c, R, reach, swing, minReach, list);
@@ -2436,6 +2436,7 @@ struct ContactSystemImpl
       g.set.swingCap = cy.cs->stepSwingCap;
       g.set.termArrival = cy.cs->termArrival;
       g.set.dampDirSlope = cy.cs->dampDirSlope;
+      g.set.partGuessAccel = cy.cs->partGuessAccel;
       g.set.epsRest = cy.cs->epsRestUm * 1e-6;   // (0.01 um gives 1e-8 m exactly, the Settings default)
       if (ring)   // (cy.rpBall holds the old loop's halved modulus, and the group halves it for a pair itself; its rolling resistance is on the pair's radius, R / 2)
       {
