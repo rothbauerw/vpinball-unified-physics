@@ -303,11 +303,6 @@ namespace GroupStep
       // swingCap ([Contact] step_swing_cap, with stepModel 1): the phase error is at most the mode's whole swing 2 A (the midpoint step keeps its energy, so its
       // amplitude), so a mode whose 2 A is within epsRest sets no limit; the other rules still bound the step. false (default) = the phase law alone.
       bool swingCap = true;
-      // shearMotion ([Contact] shear_step_motion): an unsteady contact's shear clock by the motion, as stepModel 1 does the normal one. The shear spring's stretch is bounded by Coulomb,
-      // A = mu N / Kt at the expected depth (a spring past mu N slides), so its phase error per step is at most (omT h)^2 / 12 of A: h <= sqrt(12 epsRest / A) / omT, never shorter than
-      // omegaH / omT, and no limit when its whole swing 2 A is within epsRest. A weak press (a light wire) then cannot hold the step to its shear clock; a hard hit keeps it (A large).
-      // true (default) = by the motion; false = the shear clock at omegaH / omT.
-      bool shearMotion = true;
       // termArrival ([Contact] term_arrival): a contact made of terms (Hit::t, hinge_piece_sum) gives each term not yet pressing (d_t < 0) the arrival rule of any contact:
       // its closing rate dDot_t = -v . n_t + slope_t * rate (the term's exact gradient), and when closing the step is at most max(0.5 * -d_t / dDot_t, hs_t) with hs_t the
       // clock an untouched approaching contact gets there (rule 3). The union's depth sees only the deepest piece, so a second piece arriving inside a step is otherwise invisible.
@@ -1095,7 +1090,6 @@ namespace GroupStep
          double delta = 0.0, dDot = 0.0, omN = 0.0, omT = 0.0;
          int unsteady = 0;                   // the steady test the contact failed, the first in order: 0 none (steady, or no test), 1 closing speed, 2 acceleration, 3 slip
          double unsteadyVal = 0.0, unsteadyLim = 0.0;   // that test's value and limit (m/s, m/s^2, m/s)
-         double aShear = 0.0;                // the shear spring's Coulomb stretch bound mu N / Kt at the expected depth (m), shearMotion on or off
          int term = -1;                      // >= 0: the contact's term (Hit::t) whose arrival set the step (termArrival); delta and dDot are then that term's
       };
       mutable StepDiag diag;
@@ -1194,22 +1188,14 @@ namespace GroupStep
                return lo;
             };
             const double lo = reachDepth(vc);
-            // an unsteady contact's clock at the expected depth dE: the normal one, and the shear one (Settings::shearInStep, shearMotion); shearSets: the shear clock binds
+            // an unsteady contact's clock at the expected depth dE: the normal one, and the shear one (Settings::shearInStep); shearSets: the shear clock binds
             const auto unsteadyClock = [&](const double dE, bool &shearSets, double &omN) {
                const double ktE = L.Kt(dE);
                omN = std::sqrt(L.K(dE) / L.mRed);
                const double omT = std::sqrt(ktE / L.mt);
                const double om = set.shearInStep ? std::max(omN, omT) : omN;
-               double hs = om > 0.0 ? set.omegaH / om : set.hMax;
-               const double aT = ktE > 0.0 ? L.mu * L.F(dE) / ktE : 0.0;
+               const double hs = om > 0.0 ? set.omegaH / om : set.hMax;
                shearSets = set.shearInStep && omT > omN;
-               if (set.shearMotion && shearSets)
-               {
-                  const double hN = omN > 0.0 ? set.omegaH / omN : set.hMax;
-                  const double hT = 2.0 * aT <= set.epsRest ? set.hMax : std::max(set.omegaH / omT, std::min(std::sqrt(12.0 * set.epsRest / aT) / omT, set.hMax));
-                  hs = std::min(hN, hT);
-                  shearSets = hT < hN;
-               }
                return hs;
             };
             const double dE = std::max(hp.delta, lo);
@@ -1255,15 +1241,7 @@ namespace GroupStep
             }
             const double om = steady ? omN : (set.shearInStep ? std::max(omN, omT) : omN);
             double hs = om > 0.0 ? (steady ? set.omegaHRest : set.omegaH) / om : set.hMax;
-            const double aT = ktE > 0.0 ? L.mu * L.F(dE) / ktE : 0.0;   // the shear spring's stretch bound (Coulomb)
-            bool shearSets = set.shearInStep && omT > omN;
-            if (set.shearMotion && shearSets && !steady)   // the shear clock by the motion (Settings::shearMotion); the normal clock as it is
-            {
-               const double hN = omN > 0.0 ? set.omegaH / omN : set.hMax;
-               const double hT = 2.0 * aT <= set.epsRest ? set.hMax : std::max(set.omegaH / omT, std::min(std::sqrt(12.0 * set.epsRest / aT) / omT, set.hMax));
-               hs = std::min(hN, hT);
-               shearSets = hT < hN;
-            }
+            const bool shearSets = set.shearInStep && omT > omN;
             if (set.stepModel == 1 && steady && hp.delta > 0.0)   // by the motion in its mode (Settings::stepModel)
             {
                const double omR = std::sqrt(L.K(hp.delta) / L.mRed);
@@ -1289,7 +1267,6 @@ namespace GroupStep
                   dg.unsteady = why;
                   dg.unsteadyVal = whyVal;
                   dg.unsteadyLim = whyLim;
-                  dg.aShear = aT;
                   dg.term = -1;
                }
             };

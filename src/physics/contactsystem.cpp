@@ -2434,7 +2434,6 @@ struct ContactSystemImpl
       g.set.rollModel = cy.cs->rollModel;
       g.set.stepModel = cy.cs->stepModel;
       g.set.swingCap = cy.cs->stepSwingCap;
-      g.set.shearMotion = cy.cs->shearStepMotion;
       g.set.termArrival = cy.cs->termArrival;
       g.set.dampDirSlope = cy.cs->dampDirSlope;
       g.set.epsRest = cy.cs->epsRestUm * 1e-6;   // (0.01 um gives 1e-8 m exactly, the Settings default)
@@ -2946,7 +2945,7 @@ struct ContactSystemImpl
          const char *const e = getenv("VPX_STEP_RULE");
          FILE *const o = e != nullptr && *e ? fopen(e, "w") : nullptr;
          if (o != nullptr)
-            fprintf(o, "t_ms,done_us,h_us,hcap_us,rule,partRule,item,itemPart,touching,b,delta_um,dDot,omN,prevRounds,prevUs,envSolves,envIters,capsules,envHits,envMisses,envUs,unsteady,unsteadyVal,unsteadyLim,A_um,missProbe,missEnd,missMid,missStart,missRate,missAngle,missEnergy,term\n");
+            fprintf(o, "t_ms,done_us,h_us,hcap_us,rule,partRule,item,itemPart,touching,b,delta_um,dDot,omN,prevRounds,prevUs,envSolves,envIters,capsules,envHits,envMisses,envUs,unsteady,unsteadyVal,unsteadyLim,missProbe,missEnd,missMid,missStart,missRate,missAngle,missEnergy,term\n");
          return o;
       }();
       long ruleRounds = g.books.rounds;
@@ -2960,9 +2959,9 @@ struct ContactSystemImpl
             const bool hasItem = dg.rule != 8 && dg.item >= 0 && dg.item < g.ni;
             const GroupStep::EnvStats es = GroupStep::envStats;   // (the massless parts' solves since the last row: the step before and this choice)
             GroupStep::envStats = GroupStep::EnvStats();
-            fprintf(ruleF, "%u,%.3f,%.4f,%.4f,%d,%d,%d,%d,%d,%d,%.4f,%.5f,%.1f,%ld,%.1f,%ld,%ld,%ld,%ld,%ld,%.1f,%d,%.6g,%.6g,%.4g,%ld,%ld,%ld,%ld,%ld,%ld,%ld,%d\n", g_pplayer->m_time_msec, done * 1e6, h * 1e6, hc * 1e6, dg.rule, dg.partRule, dg.item,
+            fprintf(ruleF, "%u,%.3f,%.4f,%.4f,%d,%d,%d,%d,%d,%d,%.4f,%.5f,%.1f,%ld,%.1f,%ld,%ld,%ld,%ld,%ld,%.1f,%d,%.6g,%.6g,%ld,%ld,%ld,%ld,%ld,%ld,%ld,%d\n", g_pplayer->m_time_msec, done * 1e6, h * 1e6, hc * 1e6, dg.rule, dg.partRule, dg.item,
                     hasItem && g.item[dg.item].b < 0 ? g.shape[g.item[dg.item].s]->part : -9, hasItem ? (int)g.item[dg.item].touching : -1, hasItem ? g.item[dg.item].b : -9, dg.delta * 1e6, dg.dDot, dg.omN,
-                    g.books.rounds - ruleRounds, std::chrono::duration<double, std::micro>(now - ruleT).count(), es.solves, es.iters, es.capsules, es.hits, es.misses, es.us, dg.unsteady, dg.unsteadyVal, dg.unsteadyLim, dg.aShear * 1e6,
+                    g.books.rounds - ruleRounds, std::chrono::duration<double, std::micro>(now - ruleT).count(), es.solves, es.iters, es.capsules, es.hits, es.misses, es.us, dg.unsteady, dg.unsteadyVal, dg.unsteadyLim,
                     es.missBy[0], es.missBy[1], es.missBy[2], es.missBy[3], es.missBy[4], es.missBy[5], es.missBy[6], dg.term);
             ruleRounds = g.books.rounds;
             ruleT = now;

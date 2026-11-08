@@ -84,7 +84,8 @@ Whether the band now uses the same spring law is to be checked (to-do 3.0).
    An impact stays strict, shear included. A first version left the shear out of impacts too and was dropped on data: gs_test wall1_a0 went from +1.01 % to +7.43 % of its 1 us exit, because the shear's shorter step was also what resolved the hard normal hit.
    16.4 Back to sticking. Below the limit speed the spring can catch the slip. If the slip is then within vSteady the old steady rule takes it (playfield at rest: the limit speed is 0.92 mm/s against vSteady 50 mm/s, so there is no strict band between them). If not, the strict rule comes back. The change happens at most one step late, inside an implicit step whose energy is exact. Trace at 3 m/s: slip .1317 -> .0083 m/s under load, next steps rule 2 at 30 us.
    16.5 Hunt-Crossley over the step. With longer steps the damper sampled at the mid-step force lost too little, as h^2 (rebound high). Its coefficient now takes the mean spring force over the step (the chord the step already computes): the loss is 1.5 alpha x (V1 - V0) x the rate, the law's own integral at a steady rate. No new evaluation, c >= 0, the energy book unchanged, 1 us results unchanged. Item::DampC.
-   16.9 Since 2026-11-05 the shear spring's step follows the motion ([Contact] shear_step_motion, on); under review in to-do N11.
+   16.9 Dropped: an unsteady contact's shear clock lifted by its Coulomb stretch bound (shear_step_motion, 11-05 to 11-08). Same lesson as 16.3: the 750-hit bench lost
+   accuracy on slow playfield and rubber hits (speed p95 0.56 -> 1.71 %), because the shear's shorter step was also what resolved the normal hit.
 
 
 == D. Step length, guards and the hard step ==
@@ -98,7 +99,7 @@ Guards that stay: engagement (closing speed plus the part's speed bound); the sw
 overlapping a surface (the seat); halve-and-retry from the saved state when a step's solve does not settle; the group's energy books closing every cycle, a
 failure shown on screen (rule 8).
 Guards that go for groups on the new step: the extra rewinds and depth checks that existed only to catch energy being made.
-Today's step settings ([Contact] step_model 1, step_swing_cap, shear_step_motion, term_arrival, damp_dir_slope; all on) refine these rules; they are under
+Today's step settings ([Contact] step_model 1, step_swing_cap, term_arrival, damp_dir_slope; all on) refine these rules; they are under
 review in to-do N11.
 
 15. A hard step, with no stock
