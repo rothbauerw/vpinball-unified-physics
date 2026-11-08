@@ -1,7 +1,7 @@
 PART DATA - real hardware data and measurements, by part
 ==========================================================
 The user's measurements and specs, kept apart from design choices. Design docs point here. Look here before asking the user for a value.
-Sections 1-6 were moved word for word from memory notes on 2026-11-07 (each marked with its source); some still carry old status text to be trimmed.
+Sections 1-6 came from memory notes on 2026-11-07 (each marked with its source).
 
 1. FLIPPERS AND SOLENOIDS
 -------------------------
@@ -17,31 +17,12 @@ Given by the user 2026-10-26, to be used when work on flipper physics continues.
 - **Plunger material for calculations: AISI 1018 or AISI 12L14 low-carbon steel.**
 - Reference the user gave for solenoid force equations: https://industrialmonitordirect.com/blogs/knowledgebase/solenoid-force-calculation-equations-and-design-guide
 
-**Why:** the user wants these as the input numbers when flipper physics resumes.
-**How to apply:** check current flipper/coil model values against this list first and report any that differ before changing them (rule 1: no edit without data). The 5/16 in plunger is typical; the Gorgar measured values in [[project-gorgar-return-spring-and-series-coils]] and [[reference-flipper-inertia-method]] stay as they are unless the user says otherwise. The 7/8 in crank arm may conflict with the 2 in sling crank in [[project-sling-model-2026-10-07]] (different part).
+[from memory notes reference_hold_coil_breakaway_force and reference_x0_range_by_coil_power]
+- Hold-coil breakaway (user measured, 2026-10-03): Fish Tales coil FL-11629, HOLD winding only, 48 V, steady pull perpendicular to the bat at 2 in from the pivot. The flipper breaks away at ~4.5 lbf; the scale then reads 5.5-5.75 lbf as it moves (likely scale lag). The user treats it as a ballpark for all pinball hold coils.
+  Through the model geometry (lever 23.75 mm at 41.5 deg, ~1.9 N return spring included) 4.5 lbf is ~44.7 N of coil force.
+- x0 in force ~ (x0/(frac+x0))^2 is the fraction of body length at which force has fallen to ~25 % of closed force. Power coils: 0.2 to 0.45. Hold coil: ~0.0048, scaled from the 4.5 lbf breakaway.
 
-[from memory note reference_hold_coil_breakaway_force]
-rothbauerw measured (2026-10-03) the force to break the plunger away from the coil stop: 5.75 lbf at 2 in from the flipper pivot, Fish Tales coil FL-11629, HOLD winding only, 48 V. He treats it as a ballpark for all pinball hold coils.
-
-Converted with the model geometry (lever 23.75 mm at 41.5 deg): about 54.7 N at the plunger, about 56.6 N coil holding force including the ~1.9 N return spring. Assumes force perpendicular to the bat, applied quasi-statically toward rest.
-
-Refinement (2026-10-03, after watching the video): pull was perpendicular and steady, not an impulse. The flipper breaks away at ~4.5 lbf; the scale then jumps to 5.5-5.75 lbf as it moves (read as a dynamic effect, possibly scale lag). Working value 4.5 lbf = ~44.7 N coil force = x0_hold ~0.0045; upper bound 5.75 lbf = 56.6 N = x0_hold ~0.0036. Figures above use the 5.75 upper bound.
-
-Implication: hold force at closure scales as ~1/x0 in the model. x0_hold = 0.01 gives 20.2 N; about 0.0036 gives 56.6 N. The earlier "believable" x0_hold 0.04-0.07 and the 2.9-4.1 N real-hold estimate are almost certainly wrong. Force is very localized: ~7% of the closed value at 0.35 mm from the stop.
-
-Decision (2026-10-03, later): adopt x0_hold = 0.0048, scaled from the 4.5 lbf breakaway at 2 in (not the 5.75 lbf upper bound, which gave 0.0036). The earlier 0.0045 figure above was the rough conversion; 0.0048 is the scaled value to use.
-
-**Why:** resolves the item 6 contradiction (model needs ~20 N to hold the plunger on the stopper through the rebound) in favor of a small x0_hold.
-**How to apply:** use x0_hold = 0.0048 in gorgar_model.py (still 0.01 in the file as of 2026-10-03, not yet changed or rerun); see [[reference_x0_range_by_coil_power]], [[project_gorgar_return_spring_and_series_coils]].
-
-[from memory note reference_x0_range_by_coil_power]
-x0 in force ~ (x0/(frac+x0))^2 is the fraction of body length at which force has fallen to ~25% of closed force.
-
-**Power coil: 0.2 to 0.45 (still valid).** Gorgar x0_power = 0.25.
-
-**Hold coil: CORRECTED 2026-10-03 to ~0.0048.** The earlier range of ~0.04-0.07 (from rothbauerw's 2026-10-02 solenoid table, 0.04-0.07 for low-force solenoids) is WRONG for the hold winding: the measured breakaway force (4.5 lbf at 2 in, FL-11629 hold, 48 V) implies x0_hold ~0.0048 (0.0036 at the 5.75 lbf upper bound). The 2.9-4.1 N real-hold estimate behind the old range is also wrong. See [[reference_hold_coil_breakaway_force]].
-
-Solenoid table rothbauerw supplied 2026-10-02 (closed force, ~25%-force point, body length, x0 = ratio). Valid as data for general solenoids; do not use its low end as the hold-coil bound:
+Solenoid table the user supplied 2026-10-02 (closed force, ~25%-force point, body length, x0 = ratio). Data for general solenoids; its low end is not a bound for hold windings:
 
 | Solenoid | Closed force | ~25% point | Body length | x0 |
 |---|---|---|---|---|
@@ -53,97 +34,33 @@ Solenoid table rothbauerw supplied 2026-10-02 (closed force, ~25%-force point, b
 | S-06372 | 21 oz | ~1.8 mm | 38.1 mm | 0.05 |
 | S-07223 | 19 oz | ~0.9 mm | 25.0 mm | 0.04 |
 
-**Why:** a physical bound for coil x0 instead of free fitting; the hold-coil bound changed once a direct force measurement existed.
-**How to apply:** power 0.2-0.45; hold ~0.0048 for Gorgar. If a fit wants x0 far outside, suspect another part of the model compensating. Related: [[vpx_flipper_coil_full_range]], [[project_gorgar_return_spring_and_series_coils]].
+[from runs/2026-09-28-rampup0/moment_of_inertia.py, eos_only_fit.py, gorgar_model.py and memory note reference_flipper_inertia_method]
+The flipper's inertia about its pivot is the sum of its parts. Every mass and size is a per-flipper setting; the values below are one real flipper's, not defaults for all.
+- Bat (user measured, 2026-09-29; the model script calls it the Fish Tales bat): 28 g without rubber (plastic bat + steel shaft), 36 g with rubber (rubber 8 g). Shaft: steel, 3 in x 0.25 in, on the pivot axis. Bat: tapered, base diameter 19 mm, tip diameter 8 mm, 75 mm pivot to tip. Rubber mass about uniform along the bat, slightly more at the base.
+  Method: shaft = cylinder on its own axis, I = m r^2 / 2 (steel 7.85 g/cm^3 gives its mass); plastic = solid frustum, base to tip diameter over the length, mass 28 g less the shaft, integrated about the pivot; rubber = 8 g spread along the bat, shaped heavier at the base. Result 2.299e-5 kg m^2 (2.583e-5 with uniform rubber): the i_bat in use.
+- Crank: steel plate 0.25 in thick x 0.5 in wide x 1.5 in long, pivot 0.25 in from one end (source of the sizes not recorded). Method: plate mass from steel density (~24 g), I = m L^2 / 12 + m d^2, d = 0.5 in from the plate centre to the pivot; width term left out. Result 6.81e-6 kg m^2 (i_crank).
+- Plunger (user, 2026-10-04, Gorgar): steel, 7/16 in diameter x 2.25 in, less 5 % for the link groove = 41.3 g (Fish Tales: 1/2 in x 2.5 in = 63.1 g). It slides in a line, so it adds m (dx/dphi)^2 at the pivot, which changes with angle through the crank and link geometry.
+- Link: plastic, 19.05 mm (0.75 in) pin to pin (user's estimate; the crank, not the link, changed to 7/8 in). Mass not measured: ESTIMATED (lead, 2026-11-07, sizes the user judged close enough): nylon bar 1.25 in long (pin to pin + 0.25 in each end) x 0.5 in wide x 0.25 in thick (1.14 g/cm^3), less two 1/8 in pin holes = ~2.8 g. Method: the standard slider-crank split, half the link mass moves with the crank pin (adds m/2 r^2 to the inertia at the pivot) and half with the plunger (added to the plunger mass).
+- Outline method (runs/2026-10-05-harness/bat_inertia.py), for a bat without measured parts: I = m k^2, k from the VPX flipper outline (base circle, end circle, length). Gorgar outline: k = 33.0 mm.
+- The coil constants were fitted with i_bat 2.299e-5: a new inertia means rechecking the empty stroke against the real one.
 
-[from memory note reference_flipper_inertia_method]
-Method (script: `runs/2026-10-05-harness/bat_inertia.py`): the VPX flipper outline is the convex hull of a base circle (rb, at the pivot) and an end circle (re, Lc along the axis) = union of circles r(s) = rb + (re-rb)s. Treat the bat as a uniform plate: I_pivot = m k^2, k^2 = (integral of r^2 dA)/A about the vertical axis through the pivot. The outline gives only the shape factor; the MASS is the physical input (weigh a real bat).
-Gorgar (rb 20.75 U, re 11.5 U, Lc 114 U, U = 0.53975 mm): area 1332 mm^2, k = 33.0 mm, k^2 = 1.091e-3 m^2. So I = m * 1.091e-3 (m in kg).
-Current ini `i_bat = 2.299e-5` kg m^2 (hitflipper.h iBat, gorgar_model.py:47 "same as Fish Tales - rothbauerw's call") = a uniform bat of 21.1 g. 14 g -> 1.53e-5, 25 g -> 2.73e-5, 35 g -> 3.82e-5, 50 g -> 5.46e-5.
-Other inertias: `i_crank` 6.81e-6 separate; plunger adds plunger_kg * lever^2 (~1.6e-5 reflected); ball adds 0.08 * s^2 (1.4e-4 at 0.64 of the bat, 3.8e-5 at 0.28) = ~6x the bat at 0.64.
-Caveats: uniform density is crude (steel/plastic bat + lighter rubber ring). The empty stroke only pins torque/inertia, and the coil constants were fitted with 2.3e-5, so changing i_bat means re-checking the empty stroke against the real upstroke (gorgar/gorgar_model.py) and the harness (runs/2026-10-05-harness).
-Plan (deferred by user, 2026-10-05): replace i_bat with `bat_mass_g` (default 21.1 g so behaviour is unchanged), engine computes I = m k^2 from the flipper's own outline; weigh the real bat for the true value. Related: [[gorgar-trajectory-ab-2026-10-04]], the 2026-10-02 rule that the table supplies only position/geometry/rest angle (see [[gorgar-two-body-state-2026-10-02]]).
-
-[from memory note project_gorgar_return_spring_and_series_coils]
-State as of 2026-10-03.
-
-**Return spring:** K = 0.0619 N/mm (solves to 0.061868) for a 60 ms return. Measured return is 65 ms, which includes a ~4.5 ms release delay; best fit releases at data t ~4.5 ms using all points, 0.24 deg RMS. The 0.2 N preload is an ASSUMPTION (not measured).
-
-**Coils:** Gorgar coils are wired in series. Series current at 28 V is 1.0646 A; at the closed stop that gives 38.1 N, nearly all from the hold winding.
-
-**De-energize analysis (previously scratchpad-only):** series current decays with tau = 0.68 ms, force with tau = 0.34 ms.
-
-**Wiring option (added 2026-10-03):** `gorgar_model.py` now has `GORGAR_WIRING` env var = `parallel` (default, original behavior, verified identical to backup `gorgar_model_pre_series_2026-10-03.py`) or `series`. Series: EOS shorts the hold winding so only power carries current during the stroke; after EOS opens both share one loop (1.06 A steady). Windings treated as uncoupled (M=0, no data). `GORGAR_EOS_OPEN_RULE` = `flux` (default; conserve flux linkage, current drops, ~3.8 A hold spike) or `continuity` (keep power-winding current through hold). DECISION 2026-10-03 (rothbauerw): go with `flux`; `continuity` stays in the code as an option but is not used. Not verified against a real current trace (a trace at EOS opening, or knowing what snubber/diode/cap is across the switch, would settle it; mutual coupling M also matters). Series run so far was at x0_hold 0.01 and only the flux chart was looked at. Not yet ported to hitflipper.cpp.
-
-**File sync:** `runs\2026-09-28-rampup0\gorgar_model.py` has REAL_RETURN_TIME_MS = 60 (backup `gorgar_model_pre60ms_2026-10-03.py`) and x0_hold = 0.0048 (set 2026-10-03). The full model has NOT been rerun with x0_hold 0.0048 in either wiring mode. `vpinball\src\physics\hitflipper.cpp:332` still has K = 0.095223 and x0_hold 0.01, so it disagrees with the Python model (K, x0_hold, and no series option).
-
-**Closed 2026-10-03 (rothbauerw):** keep the model simple. Mutual inductance M=0 and no induced current in the shorted hold winding are the ASSUMPTIONS, not open questions; he will adjust inductance values to get realistic forces. Gorgar uses the same coil for both flippers (the Fish Tales left/right coil question does not apply). Flux rule chosen for EOS opening. Questions 1-3 below are parked, not needed now.
-
-**x0_power chosen 2026-10-03: 0.3** (series, x0_hold 0.0048, flux rule, K 0.0619). Tried 0.2 (S 65.9 N, flip ~2.5 ms late), 0.3 (S 47.6 N, peak/timing matches real), 0.35 (S 42.4 N, similar fit but runs ahead mid-stroke). In all, the model's second rise after the trough is weaker than real (~46 vs 48 deg at 45 ms) and peak speed is ~4.7 vs 5.6 deg/ms. Items 8 (ringing) and 9 (27 N step) are to be worked together.
-
-**Ringing / 27 N work 2026-10-03 (gorgar_model.py, series):** added damping in both stiff contacts (STIFF_DAMPING_RATIO 0.05, one-sided) and switched all contact damping to the flipper's reflected mass (I_FLIPPER/lever^2 ~0.0525 kg), NOT plunger mass (plunger is locked on the stop in free play). Flipper at plunger-stop: 82.3 rad/s = 1.96 m/s at the plunger axis, p ~0.103 kg m/s, KE 0.10 J. With free-play damping OFF the flipper rebounds at ~88% speed, hits the loaded wall and the link force (peak 51 N) exceeds the 38 N hold -> plunger lifts off, EOS recloses, power coil refires, big ringing. Free-play viscous zeta: 0.05 still lifts (44.7 N peak); 0.1 does NOT lift (peak link force 36.8 N vs 38 N hold, thin margin) and settles by ~100 ms. STIFF_DAMPING_RATIO sweep (free-play 0.1): 0.05 -> margin ~1 N; 0.08 -> peak link force 32.4 N (margin 5.6 N), good fit; 0.2 -> 20.9 N but second rise too weak (45 deg vs real 48); 0.12 -> 27.6 N (margin ~10 N), BEST FIT, ACCEPTED by rothbauerw 2026-10-03 (peak 53, trough 38.5 at 35 ms, second rise 48 at 45 ms, settles ~85 ms near 41.3 deg; negative velocity swing -2.8 vs real -3.5 deg/ms). Current file: FREE_PLAY_DAMPING_ENABLED True, CONTACT_DAMPING_RATIO 0.1, STIFF_DAMPING_RATIO 0.12, x0_power 0.3, x0_hold 0.0048, default run window 150 ms (GORGAR_T_END_MS). Items 8 (ringing) and the lift-off are RESOLVED for now; NEXT: rest-stop bounce (item 10; rest stop is a heavily damped Kelvin-Voigt zeta 0.8, plunger open-end stop fully inelastic; proposed 30% restitution, awaiting rothbauerw's call; also flipper should bounce off the rest stop when a ball strikes it). Remaining after that: the ~12 N free-play step (optional ramp), hold force 38 N vs 44.7 N measured breakaway, port to hitflipper.cpp (K 0.0619, x0_hold 0.0048, series option, damping changes, reflected-mass basis). Backup before this work: gorgar_model_pre_27N_2026-10-03.py. Free-play damping step is ~12 N at zeta 0.1 (was 27 N at 0.2 on plunger mass). Still open: step artifact itself, thin margin, hold force 38 N vs measured 44.7 N breakaway (different test conditions).
-
-**Open questions:** (1) first movement at 0.675 ms: from what clock? fits put 0.1 deg of motion at ~6-7 ms. (2) the 5.5-5.75 lbf impulse after breakaway is unexplained. (3) is preload measurable (spring-scale pull at the rest stop)?
-
-**Original to-do 1** (post-rebound ringing / ball not settling) is still open.
-
-**Why:** records decisions and discrepancies not derivable from the code.
-**How to apply:** before trusting model results, check gorgar_model.py and hitflipper.cpp against these values; see [[reference_hold_coil_breakaway_force]], [[reference_x0_range_by_coil_power]].
-
-[from memory note project_gorgar_rest_stop_bounce]
-Rest-stop bounce (item 10). Nothing changed in gorgar_model.py yet (backup gorgar_model_pre_reststop_2026-10-03.py exists). All experiments are in the return-only script.
-
-## Terminology / decisions
-- Say **elasticity** (not "restitution"/zeta). Work from elasticity.
-- Crank lever arm rests on the rubber stop from phi=0. Stop acts on flipper+crank inertia only (plunger is decoupled until a pin hits a hole wall).
-- Link damping unchanged for now: free-play zeta 0.1, stiff 0.12; rubber stop gets its own elasticity.
-- User does NOT want automatic fits right now; wants single comparisons shown as plots. "Decoupled" is wrong wording for the no-coupling case: pins are free by default; call it "no far-wall coupling".
-
-## Data
-- runs/2026-09-28-rampup0/gorgar_rest_bounce_data_2026-10-03.csv (25 pts). Raw: approach ~1.1 deg/ms, min -0.74, apex +6.69 at ~40 ms. User's numbers: min -1.4, apex 5.25 (from phi=0). Aligned column = 0.895*raw - 0.74 (user: "assume some measurement error"). Aligned: min -1.40 at ~11.5-12 ms, apex 5.25 at ~40 ms, back to ~0 at ~72-75 ms, slight second dip. Real data has NO hump at 15-20 ms (also checked the Gorgar rebound video); a slight faint second oscillation only. Other flipper has similar pattern, shorter timing.
-
-## Return-only model: gorgar_return_bounce.py
-- execs gorgar_model.py defs (up to `def load`), coil off, flipper falls from end stop under spring, cached state at 9.53 deg. Stop options: linear Kelvin-Voigt (elasticity->zeta), Hunt-Crossley (`hc_n=`), hysteretic Walton-Braun (`hyst=True`: load K*pen, unload K/e^2). Experiments tweak `_ns` globals (PRELOAD_FORCE_N, K_SPRING_N_PER_MM re-solved by brentq for 60 ms return, SLOP_MM, C_CONTACT_N_S_PER_MM) then call `fall_to` to reset `S_START`.
-- Plots in same folder: gorgar_return_bounce_fit/Kscan/gap2/preload/gap1_pre03(_e01)/HC/hyst/V .png.
-
-## Findings
-- Spring-only fall reaches 9.53 deg at -1.07 deg/ms vs data -1.02 (spring good).
-- Old stop K=100 N*m/rad was ~10x too stiff for a flipper-only picture; onset must be phi=0 (earlier +0.9 deg rest was a fitted onset artifact; spring torque at phi=0 is only ~0.005 N*m).
-- Return spring preload: 0.4 N (K_spring re-solved 0.0480 N/mm) fixes timing (apex 44 ms, back to 0 at 64 ms) but lowers the apex; 0.3 N gives K_spring 0.0549. User is leaning toward 0.3 N; not yet written into the model.
-- Gap: 6 deg = 2.49 mm (23.75 mm/rad lever). Plunger moves ~0.5 m/s at phi=0 (preload-insensitive). Plunger KE 7.8 mJ vs flipper 6.4 mJ at 8 ms (total 14.2 mJ). Video suggests gap is eaten at about max rubber compression (~2.5-3 deg at that speed).
-- THE PROBLEM: whenever the plunger reaches the far wall (any gap, any stop model), it kicks/drags the flipper -> hump, late trough (14-16 ms vs 11.5), apex 7-20 deg at ~65 ms. Smaller gaps (1-2 deg) are much worse (elastic far wall returns plunger momentum). Hunt-Crossley did not help; hysteretic stop helped (K~25, e 0.3: trough -1.5, apex ~7) but timing still late.
-- With NO far-wall coupling (gap huge, no damping) the V is sharp: trough -1.34 at 10.1 ms, apex 3.6 at 34 ms (close to data) - but that run hides the plunger's 7.8 mJ (it just runs away), so it is not physically complete.
-- User ruled out: larger gap (hump still occurs later), lossier far wall, plunger slowing/lagging (only delays hump). Plunger mass: 41.3 g (7/16 in x 2.25 in steel, 5 % groove trim; user, 2026-10-04). Open question: where does the plunger's energy go in the real machine without producing a hump on the flipper? Ideas not yet tried: how the real plunger decelerates/disengages (what it hits), link far wall acts on crank vs plunger geometry, coil/hold residual force, friction, plunger lag seen on one video.
-
-## 2026-10-04 resolution of the hump (session 2)
-- Plunger hump was because the link contact (20 N/mm, zeta 0.12) is too soft/slow: plunger energy reaches the flipper AFTER it leaves the rubber. Added to gorgar_return_bounce.py: `bounce_onebody()` (flipper+crank+plunger as ONE rigid body, I_eff = I_FLIPPER + m_p*lever^2, same as the 60 ms spring calibration) and hysteretic stop. One-body gives sharp V, trough matches, apex monotonic in elasticity: with preload 0.3 N, hysteretic stop K~40-45 N*m/rad (trough -1.4) and elasticity ~0.27 (interpolated, not run) gives apex ~5.25 (apex time ~54 ms vs data 40, still late). Two-body link converges to one-body as link K >= 300 N/mm (needs dt <= 0.01 ms); a much lossier link (K 100 N/mm, zeta 0.5-1.0) also removes the hump (apex 3.7-4.5 at ~48-50 ms).
-- USER DECISION: after watching more video, the RIGID BODY is the correct assumption at the rest end, and possibly everywhere: the free play may be in the shaft bushings (flipper base/coil shifting), not the link pins; the 6 deg gap in the model may just happen to account for that at end of stroke. Open: how to carry this into gorgar_model.py (options: rigid/stiff link only near the rest end, keeping the 6 deg gap + 20 N/mm contacts for end of stroke; or restructure so the end-of-stroke compliance is a bushing/stop compliance on a single body).
-
-## 2026-10-04 BUILT INTO gorgar_model.py (backup gorgar_model_pre_onebody_2026-10-04.py)
-- Start-of-stroke tuning (one-body, hysteretic stop, onset phi=0, grid over preload 0.2-0.8 N): best RMS 0.62 deg at preload 0.5 N, K_stop 44 N*m/rad, elasticity 0.30 (0.4 N: K72 e0.27 rms 0.73; 0.6 N: K34 e0.33 rms 0.65). Trough -1.50 at 10.0 ms, apex ~4.8-5.3 at ~43 ms.
-- Model changes: PRELOAD_FORCE_N 0.5 (K_SPRING re-solves to 0.0412 N/mm for the 60 ms return); hysteretic stop_torque_at_rest(phi, pen_max)->(T, pen_max) with K_STOP_REST_NM_PER_RAD=44, STOP_ELASTICITY_REST=0.30; env GORGAR_COIL_OFF_MS (none default; series: V=0 single-loop decay, flux rule if EOS closed; parallel: decay to 0); env GORGAR_PHI_RIGID_DEG (default 25): after coil-off and phi<25 deg on the return the plunger/flipper switch to ONE rigid body (I_eff = I_FLIPPER + m_p*lever^2, plunger slaved to slider_x(phi)). Summary printout added for coil-off runs.
-- First run (series, coil on 100 ms, T_END 300): returns to phi=0 at 61.4 ms after coil off, trough -1.50 deg, apex 5.34 deg at +36.1 ms, settles at -0.07 deg, no ringing. Upswing vs old: max 1.9 deg diff in 0-45 ms (preload change); peak link force / lift-off / ring-down NOT re-checked yet.
-
-## 2026-10-04 decisions + to-do list (after the build)
-- User: model "matches pretty close" - do NOT re-verify end-of-stroke metrics after the preload change; keep preload 0.5 N / 60 ms spring / stop K44 e0.30 as current values; skip release-delay check. IMPORTANT: every value set in the script must be easy to modify when moved to VPX (configurable, not buried).
-- To-do (in order): (4) design the two-body -> rigid hand-off [analysis done, see below]; (8) port to hitflipper.cpp (line 332 still old: K 0.095223, x0_hold 0.01, no series option); LATER: (5) all stop/spring/rigid values must be configurable PER FLIPPER (not per machine) - the other flipper shows a similar rebound with shorter timing; (6) small items: 12 N free-play damping step, 38 N model hold vs 44.7 N breakaway, keep parallel option intact; (7) ball strike on the resting flipper - user may just test it in VPX after the port, keep on the list; (9) housekeeping: stale comments, sync memory/backups.
-- Hand-off analysis (GORGAR_PHI_RIGID_DEG 15-40 deg, coil off at 100 ms): at the switch the link is loaded (mismatch ~-0.03 mm, link spring ~0.01 mJ, plunger speed change <0.001 m/s except 40 deg), so it is energy-seamless; results barely move (phi0 at +61.0..61.5 ms, trough -1.50..-1.51, apex 5.30..5.42). Added HANDOFF_INFO diagnostics in gorgar_model.py. Open design point for VPX: switch back to two-body when the coil re-energizes mid-return.
-
-- 2026-10-04 USER-CHOSEN HAND-OFF RULE (implemented, default `GORGAR_RIGID_TRIGGER=coil`): two-body link only while the coil is energized; when it de-energizes AND the link is taut (mismatch<0 and |rel speed| < GORGAR_RIGID_MAX_REL_SPEED_MM_S=50) switch to rigid one-body; when the coil energizes again go back to two-body starting from rigid kinematics with the link loaded (not simulated in Python yet - no re-fire case; must be built into the VPX port). Steel end stop (41.5 deg, inelastic) clamps in rigid mode too. `GORGAR_RIGID_TRIGGER=angle` keeps the old 25 deg rule. Result (series, coil off 100 ms): switched at 100.0 ms (phi 41.35), phi=0 at +63.2 ms after coil off (angle rule: 61.4), trough -1.52, apex 5.45 at +36 ms, end phi -0.10. 63.2 ms = 60 ms spring return + ~3.2 ms release delay, closer to the measured ~65 ms.
-
-## Next steps
-1. Resolve the plunger-hump physics before choosing stop K/elasticity (hysteretic stop, K~25, e~0.3, onset 0 is the current best guess).
-2. Then port stop + any link change into gorgar_model.py (series mode, 150 ms), back up first; keep hitflipper.cpp:332 untouched until asked.
-
-**Why:** capture so tomorrow's session can continue without re-deriving. See [[gorgar-series-only-and-ask-before-running]] and [[gorgar-return-spring-and-series-coils]].
+[from memory notes project_gorgar_return_spring_and_series_coils and project_gorgar_rest_stop_bounce; Gorgar, user 2026-10-03/04]
+- Return: 65 ms measured from coil off to rest, including a ~4.5 ms release delay; the spring alone gives 60 ms.
+- Coils wired in series: 1.0646 A at 28 V. In the model that gives ~38.1 N at the closed stop, nearly all from the hold winding (measured breakaway 44.7 N, different test conditions). Model de-energize: current tau 0.68 ms, force tau 0.34 ms.
+- User decisions for the coil model: windings uncoupled (M = 0), no induced current in the shorted hold winding; flux linkage conserved when EOS opens; the same coil on both Gorgar flippers; series or parallel wiring chosen per machine.
+- Fitted values the user accepted (fitted, not measured): x0_power 0.3, x0_hold 0.0048, return-spring preload 0.5 N (spring K then 0.0412 N/mm for the 60 ms return), rest stop K 44 N m/rad with elasticity 0.30, stop onset at phi = 0.
+- Rest-bounce data: runs/2026-09-28-rampup0/gorgar_rest_bounce_data_2026-10-03.csv (25 points). Aligned (0.895*raw - 0.74; user: measurement error): trough -1.40 deg at ~11.5-12 ms, apex 5.25 deg at ~40 ms, back to ~0 at ~72-75 ms, faint second dip. No hump at 15-20 ms (also checked on the rebound video). The other flipper: same pattern, shorter timing.
+- Rigid body (user, after more video): flipper, crank and plunger act as one rigid body at the rest end, possibly everywhere; the free play may be in the shaft bushings, not the link pins.
+- Hand-off rule (user): two bodies joined by the link only while the coil is energized; when it de-energizes and the link is taut, one rigid body; back to two bodies when the coil energizes again.
+- Terminology (user): say elasticity, not restitution or zeta.
 
 Coil data reference (user, 2026-11-07): https://mayapinball.com/papers/pinball-coil-data/ - the likely source of the coil figures here.
 
 Found in older notes and archives on 2026-11-07 (user data; format: ID | value | date | source):
-F1 | Gorgar coil windings in series: power winding 1.25 ohm and hold winding 25.05 ohm (series current ~28/(1.25+25.05) = 1.06 A). [Which winding is which is read from the formula; PartData has only "series, 1.0646 A at 28 V" and not the ohms.] UNSURE only in that the note does not say "user gave"; it is in the rothbauerw requirement paragraph. | 2026-10-02 | project_gorgar_two_body_state_2026-10-02.md, "28/(1.25+25.05)"
+F1 | Gorgar coil windings in series: power winding 1.25 ohm and hold winding 25.05 ohm (series current ~28/(1.25+25.05) = 1.06 A). [Which winding is which is read from the formula.] UNSURE only in that the note does not say "user gave"; it is in the rothbauerw requirement paragraph. | 2026-10-02 | project_gorgar_two_body_state_2026-10-02.md, "28/(1.25+25.05)"
 F2 | Gorgar EOS switch: normally closed, actuated by the crank/lever arm, shorts the hold winding so only the power winding carries current during the stroke; after it opens both windings share one loop. EOS opens at flipper angle 35.5 deg (~2.5 mm plunger travel from closure). Requirement: coil model must support both series and parallel winding, chosen per machine. | 2026-10-02 / 10-04 | project_gorgar_two_body_state_2026-10-02.md, "EOS switch is actuated by the crank"; project_gorgar_vpx_port_2026-10-04.md, "~2.5 mm plunger travel from closure"
-F3 | Real Gorgar flip data (rothbauerw, 1 ms samples): peak 53.0 deg at 24.3 ms; first trough 38.7 deg at 31.1 ms; settles ~41.3 deg. Later targets he accepted as "real": second rise 48 deg at 45 ms, peak speed 5.6 deg/ms, negative swing -3.5 deg/ms, trough at 35 ms. Plunger stroke 41.5 deg. Empty-stroke real peak speed ~97 rad/s (model ~88, stock ~71). | 2026-10-02/03 | project_gorgar_two_body_state_2026-10-02.md, "real data peaks 53.0 at 24.3 ms". PartData section 1 already has the 65 ms return, 60 ms spring, rest-bounce numbers, and the 5.6 / -3.5 deg/ms / 48 deg figures (duplicates). New to PartData: 53.0 deg at 24.3 ms, trough 38.7 at 31.1 ms, and the 97 rad/s: project_gorgar_trajectory_ab_2026-10-04.md, "empty real Gorgar peaks ~97"
-F4 | Linkage: nylon link does not stretch (seen in slow-mo video); free play is at the pins. Slop modelled 6 deg (tunable, new vs worn linkage). Later user conclusion (10-04): after more video the rigid body is the right assumption at the rest end and maybe everywhere; free play may be in the shaft bushings (flipper base/coil shifting), not the pins. [PartData line 120 already has the rigid-body decision; the "link does not stretch / play at pins" statement is not in PartData.] | 2026-10-02 | project_gorgar_two_body_state_2026-10-02.md, "Link does not stretch"
+F3 | Real Gorgar flip data (rothbauerw, 1 ms samples): peak 53.0 deg at 24.3 ms; first trough 38.7 deg at 31.1 ms; settles ~41.3 deg. Later targets he accepted as "real": second rise 48 deg at 45 ms, peak speed 5.6 deg/ms, negative swing -3.5 deg/ms, trough at 35 ms. Plunger stroke 41.5 deg. Empty-stroke real peak speed ~97 rad/s (model ~88, stock ~71). | 2026-10-02/03 | project_gorgar_two_body_state_2026-10-02.md, "real data peaks 53.0 at 24.3 ms". project_gorgar_trajectory_ab_2026-10-04.md, "empty real Gorgar peaks ~97"
+F4 | Linkage: nylon link does not stretch (seen in slow-mo video); free play is at the pins. Slop modelled 6 deg (tunable, new vs worn linkage). Later user conclusion (10-04): after more video the rigid body is the right assumption at the rest end and maybe everywhere; free play may be in the shaft bushings (flipper base/coil shifting), not the pins. | 2026-10-02 | project_gorgar_two_body_state_2026-10-02.md, "Link does not stretch"
 F6 | Gorgar link/crank dimension in the sling note: "link l_rod 19.05 (Gorgar)", crank 2 in = 50.8 mm for the sling. Source of l_rod 19.05 mm is not said to be the user. User: an updated measurement, newer than the value in use (2026-11-07). | 2026-10-07 | project_sling_model_2026-10-07.md, "l_rod 19.05"
 F7 | Real ball/flipper behaviour (user's own flipper-trajectory measurements and clips):
  - Fish Tales / JP: ball leaves at the stop, rides 21-31 ms, slides to 0.85-0.94 of bat, 2.8-3.35 m/s, spin R*omega/v 1.15-1.46.
@@ -158,11 +75,11 @@ F8 | User's flipper nudge physics: when a flipper hits its end of stroke a shock
 2. GATES AND SPINNERS
 ---------------------
 [from memory note project_gate_spinner_rebuild_data_2026-10-14]
-User, 2026-10-14, for to-do item 9 (gate/spinner complete rebuild, see [[todo-and-parking-lot]]). Gates and spinners are modelled SEPARATELY.
+User, 2026-10-14. Gates and spinners are modelled SEPARATELY.
 
-**Gate types (4):** long plate, plate, wire W, wire rectangle. One-way or two-way. User sent photos: wire W, a deep trapezoid/U wire, a wide flat wire rectangle (hooks at the ends), and a plate gate in its bracket (Marco).
-- Wire: 0.040-0.055 in (1.02-1.40 mm); any estimate in range is fine. Mass: I estimate from diameter x estimated length (steel). Wire width follows the gate width.
-- Plate + long plate: trapezoids, 0.5-0.8 mm thick (0.020-0.031 in), ~1-1/16 in (27 mm) wide at the top. Long plate: bottom = half the top, ~1-1/16 in long, LIP at the end for the ball to bounce off when one-way. Plate: bottom ~2/3 of a ball width. Plate length not given.
+**Gate types (4):** long plate, plate, wire W, wire rectangle. One-way or two-way. User sent photos: wire W, a deep trapezoid/U wire (a variant of the wire rectangle), a wide flat wire rectangle (hooks at the ends), and a plate gate in its bracket (Marco).
+- Wire: 0.040-0.055 in (1.02-1.40 mm); any estimate in range is fine. Mass: ESTIMATED (lead) from diameter x estimated length, steel. Wire width follows the gate width.
+- Plate + long plate: trapezoids, 0.5-0.8 mm thick (0.020-0.031 in), ~1-1/16 in (27 mm) wide at the top. Long plate: bottom = half the top, ~1-1/16 in long, LIP at the end, 2.5-3 mm, bent to a flat face for the ball to bounce off when one-way; the lip is vertical when the plate hangs 15 deg from vertical (bent 15 deg relative to the plate). Plate: bottom ~2/3 of a ball width. Plate: ~20 mm long (user's estimate).
 - Pivot height: a VARIABLE, typically 1 to 1-3/8 in. Wire gates hang low enough to strike a rolling ball near its centre.
 - Pivot: NO bushings; all pivot on wires through holes in the bracket. Resistance depends on whether a switch is attached.
 - Stops: metal stops or the bracket hitting the plate/wire. Gravity returns the gate to its start angle. Plate gates: a metal stop against the plate in both directions (allows one-way travel). Wire gates: a bend in the wire outside the pivot hits the bracket and blocks the opposite direction.
@@ -170,110 +87,38 @@ User, 2026-10-14, for to-do item 9 (gate/spinner complete rebuild, see [[todo-an
 - Switch: actuated by a bend in the wire outside the pivot; fires when the gate is open far enough to let the ball pass (maybe slightly before); little resistance (gate nearly fully open when it fires).
 - Solenoid hold: the coil moves an actuator that holds the gate open. Model as a simple script open/close with a specified open angle; NO coil modelling.
 
-**Answers 2026-10-14:** photo 2 (deep trapezoid wire) = a VARIANT of the wire rectangle. Plate gate length ~20 mm (good estimate). Long-plate lip 2.5-3 mm, bent to give a flat face for the ball to bounce off; the lip is VERTICAL when the plate hangs 15 deg from vertical (i.e. bent 15 deg relative to the plate).
-
-**Spinner data (user 2026-10-14, Marco photo of a blade with a Z-bent shaft wire):** OFFSET SHAFT: the wire is bent so the pivot axis is off the plate's centre, gravity pulls the blade back toward vertical after every spin; damping and the switch sometimes stop it short of perfect vertical. Thickness ~0.8 mm (0.032 in). Width varies (a variable); height typically 1.25 in (31.75 mm). Pivot height like gates (1 to 1-3/8 in), strikes a rolling ball from its mid point to the upper half. Shaft diameter like the gate wire. Damping = a VARIABLE (spin-down varies per machine). The bracket is NOT collidable (ball cannot touch it on the playfield; use a primitive if wanted, maybe later). Switch: LEAF or OPTO. Leaf: spring resistance as it closes, gives it back as it opens -> the spinner shows acceleration/deceleration cycles during the spin. My photo read (INFERRED): blade ~39 mm wide, Z-bend step ~6 mm; steel blade 39x31.75x0.8 = ~7.8 g.
+**Spinner data (user 2026-10-14, Marco photo of a blade with a Z-bent shaft wire):** OFFSET SHAFT: the wire is bent so the pivot axis is off the plate's centre, gravity pulls the blade back toward vertical after every spin; damping and the switch sometimes stop it short of perfect vertical. Thickness ~0.8 mm (0.032 in). Width varies (a variable); height typically 1.25 in (31.75 mm). Pivot height like gates (1 to 1-3/8 in), strikes a rolling ball from its mid point to the upper half. Shaft diameter like the gate wire. Damping = a VARIABLE (spin-down varies per machine). The bracket is NOT collidable (ball cannot touch it on the playfield; use a primitive if wanted, maybe later). Switch: LEAF or OPTO. Leaf: spring resistance as it closes, gives it back as it opens -> the spinner shows acceleration/deceleration cycles during the spin. ESTIMATED (lead, photo read, not measured): blade ~39 mm wide, Z-bend step ~6 mm; steel blade 39x31.75x0.8 = ~7.8 g.
 
 **Spinner answers (user 2026-10-14):** shaft offset ~6 mm CONFIRMED, IN THE PLANE of the blade (axis above the blade centre). Leaf switch: ~3/4 in (19 mm) lever arm of very thin conductive metal (probably copper); some spinners use a MICRO SWITCH instead. Switch force default: decide by FEEL in testing (user guesses my ~10 gf estimate is too high); expose it as a key.
 
-**How to apply:** use these as the defaults/keys of the new gate model; mark my own estimates (mass, plate length, stop restitution, pivot friction) UNVERIFIED in docs/unified-physics/archive/NewPhysicsReference.txt.
-
-Found 2026-11-07: G1 | Spinner leaf/micro switch geometry (user 2026-10-15): the crank presses the switch blade over the top half of the rotation (contact_half_deg 90); contacts closed within +-30 deg of 180 (closed_half_deg 30); hysteresis 1 deg. The second Spin when a spinner barely goes over the top and falls back through the closed window is the wanted behaviour (user confirmed). [PartData section 2 has leaf lever 3/4 in / micro switch / spring but not this geometry.] | 2026-10-15 | A1, "Spinner leaf/micro switch geometry (user 2026-10-15)"
+Found 2026-11-07: G1 | Spinner leaf/micro switch geometry (user 2026-10-15): the crank presses the switch blade over the top half of the rotation (contact_half_deg 90); contacts closed within +-30 deg of 180 (closed_half_deg 30); hysteresis 1 deg. The second Spin when a spinner barely goes over the top and falls back through the closed window is the wanted behaviour (user confirmed). | 2026-10-15 | A1, "Spinner leaf/micro switch geometry (user 2026-10-15)"
 
 3. JET BUMPERS
 --------------
-[from memory note project_jet_bumper_data_2026-10-26]
-Goal (user 2026-10-26): replace the generic stock bumper with a physical model: physical skirt + spoon switch, physical metal ring, coil behaviour. Initial coil: AE-23-800 (coil is specified per bumper).
-
-Data stated by the user:
-- Skirt diameter 60-63.5 mm. Top surface slopes down from inner stem (~45 mm dia) to the outer edge, 1.5-2.5 mm drop; ball hitting the edge forces the skirt down and sideways.
-- Skirt bottom has a molded centre stem through the playfield into a plastic spoon switch; cylindrical, rounded/pointed tip nested in the spoon dip. Ball on the outer edge rocks the wafer, stem slides up the spoon wall, closes the leaf switch.
-- Skirt outer edge floats 1/8-3/16 in above the playfield (no contact; drag would keep the coil on). Conical compression spring under the skirt centre pushes it up against the bottom rim of the fixed base. At rest the stem sits in the deepest dip of the spoon.
-- Metal ring: OD 2.5 in (63.5 mm), ID ~45 mm, 1/8 in steel, sloped 45-50 deg between OD and ID. Two #6-32 rods, 1.25 in centre to centre, through base, playfield, to the yoke below.
-- Ring up position: ring centre aligns with the TOP of the ball. When fired it stops with the ring top between 2/3 and 3/4 of the ball height. (Direction of travel to be confirmed with the user.)
-- Plastic base typically 38 mm dia, varies by model.
-
-**Why:** current model is generic. **How to apply:** design doc first (rule 7 list of what breaks), approve each step; no engine edits before the design is agreed. Related: [[todo-and-parking-lot]].
-
-Confirmed by the user 2026-10-26 after my cross-section sketch:
-- Ring is a DISH (outer edge high, inner edge low): underside faces outward-down, so a ring moving DOWN pushes the ball outward. Ring moves down on firing.
-- Centre body is part of the design (fixed, ~38 mm, sits on the skirt's inner lip).
-- Skirt is ALREADY pressed down when the ring fires (the press is what closes the switch and fires the coil); the ring does not push the skirt. So the ring/skirt clearance conflict (ring inner edge ~6 mm vs skirt top ~8 mm) is not a problem when the skirt is down.
-- Skirt thickness is NOT constant: thick at the inner diameter, very thin at the outer edge. Skirt BOTTOM IS FLAT.
-- My derived numbers (ring travel ~14 mm, body height 40 mm) are inferred, not measured.
-- Skirt thickness (user 2026-10-26): 3 mm at the inner diameter, 0.5 mm at the edge (top drop 2.5 mm, matches the 1.5-2.5 mm slope). Skirt travel to close the switch: still unanswered.
-- Sensitivity (user 2026-10-26): ini knob for the spoon displacement at which the leaf switch closes (fires the bumper). 1/16 in (1.59 mm) typical, 1/8 in (3.18 mm) = less sensitive. Open: whether displacement is the sideways spoon deflection at the stem contact (my reading) and the closing hysteresis.
-- CORRECTION (user 2026-10-26): switch displacement is the VERTICAL (downward) displacement of the spoon. A ball pressing one side of the skirt tilts it; the stem moves down, slides inside the spoon and pushes the spoon down. Leaf switch closes at 1/16-1/8 in of spoon downward travel. My sideways reading was wrong.
-
-- Spoon's mass (user 2026-10-31): 5 % or less of the skirt and stem. The 1 g guess is too high: at most 0.35 g on the 7 g skirt estimate.
-
-- Photo of a real bumper over a clear playfield, user confirmed 2026-10-31: the spoon is a long plastic arm from under the stem to the switch stack, pivoting at the switch end, so only part of its mass counts at the stem (about a third if uniform, calculated). The switch lever reaches almost to the cone, so 1/16 in of cone travel closes the switch: the 1.59 mm is at the stem, as modelled. The ring sits below the yellow dish at the top of the rods; two rods, either side of the white cylinder (the body). The conical spring is hidden under the skirt.
-
-- Second photo, side view of the spoon upside down (user 2026-10-31; lead's reading, not yet confirmed): a thin flat plastic blade clamped in the switch stack, so it flexes rather than turning on a hinge; a thicker section along its middle; the cone at the free end; the leaf switch's blades lie over it, reaching most of the way to the cone. Spoon is very light (supports dropping its mass); its spring is mostly the blade's own bending plus the leaf.
-
-- Cone tip's rounding (user 2026-10-31): can't be measured; use the lead's estimate from the photo, as a setting. Don't ask for it again.
-
-DESIGN WRITTEN 2026-10-26: rubber-contact-branch/docs/unified-physics/JetBumperDesign.txt (uncommitted, awaiting user review). Open questions Q1 coil drive held vs pulse, Q2 stem/spoon geometry, Q3 spring rates + masses, Q4 coil supply/stroke/x0, Q5 stock Radius, Q6 event names. Nothing built.
-
-User answers 2026-10-26 (design doc now in unified-physics-branch/docs/unified-physics/JetBumperDesign.txt):
-- Coil drive: THREE modes: (1) on only while the switch is closed, (2) timed pulse, (3) external signal (ROM-based games). This model starts with a 15 ms timed pulse. Supply 28 V, configurable.
-- Stem has enough clearance to tilt freely (no hole limit). Springs tuned by feel. Ignore stock Radius. Some dimensions configurable.
-- Ball rolling up the skirt should slow down by the time it reaches the body.
-- Script must READ skirt x/y rotation (to animate a primitive skirt) and ring z displacement.
-- Ring: top thickness 1 mm. About 1/4 in between ring and skirt when completely down. "Half way up" ring = half way point of the SLOPED FACE (at rest at the ball top; fired at 2/3-3/4 ball height).
-
-Design rev 2 2026-10-26: ring drop derived 8.4 mm (withdrawn the earlier 14 mm). Open: Q2 stem/spoon dims, Q3 masses, Q4 AE-23-800 x0/stroke, Q6 script names and read-out units.
-
-User review 2026-10-26 (design rev 3): Hit fires FIRST when the switch closes, no speed threshold (Threshold ignored). Bumpers are never placed so close that two balls interact with them at once (stated limit, not tested). A pinched ball must squirt out, never stay stuck between ring and playfield/skirt (wedge argument in 2.7, must be shown by test). Skirt must not close on nudge/tilt: springs tuned for it, 8-direction max-nudge test. Skirt tilt = 3-DOF rigid body (z, thx, thy) rocking about the far lip on the base rim, spring as 8 springs on a circle (2.2a).
-- Stem (user 2026-10-26): 45 mm below the skirt, 3/16 in dia, rounded tip (I took tip radius 2.38 mm). Next questions, one at a time: spoon dip radius/depth, masses, AE-23-800 x0/stroke, script names + read-out units.
-- Spoon dip (user 2026-10-26): a CONE, 1/2 in across, 1/4 in deep (45 deg wall), not a concave dish. Remaining questions: masses, AE-23-800 x0/stroke, script names + read-out units.
-- Masses (user 2026-10-26): no data, use my estimates: skirt 7 g, ring assembly 105 g (ring 18, rods 9, yoke 30, plunger 48), spoon 1 g; unverified, ring assembly mass is a kick tuning knob. Remaining: AE-23-800 x0/stroke, script names + read-out units.
-- AE-23-800 x0 0.3 accepted (user 2026-10-26). STROKE OPEN: user thinks 8.4 mm too short, expects about 1/2 in (12.7 mm). Working through: 12.7 mm fits "top of ring (outer upper edge) at 0.71 of ball height" and 1/4 in gap only if measured with the skirt pressed down (6.05 mm); with the skirt up the gap is 2.05 mm. Need the user to say which reading.
-
-2026-10-26 MESH-BASED GEOMETRY (user: meshes are "more accurate than my assumptions"; design rev 4): skirt = references/pinball-parts-main/Bumpers/skirt.obj scaled to OD 63.5 mm -> flat disc 2.27 mm thick to dia 44.9, linear taper to a knife edge (0.5 mm rim used), flat bottom, sloped top (file z is inverted like stock meshes: inferred). Ring = stock BumperRing mesh (xy scale = Radius 45, z = HeightScale 90, so z is 2x xy) scaled to OD 63.5 -> ID 45, rise 7.7 mm, 43 deg, sheet 1.9 mm. Earlier 3 mm / 1 mm / 47 deg / 9.9 mm / 8.4 mm numbers withdrawn. Ring stroke: user said 12-14 mm, expects ~1/2 in; recommended 12.7 mm (pressed-skirt gap 1/4 in at 12.6 mm; outer top edge at 0.67 of ball height), NOT yet confirmed. Skirt clearance 1/8 in (3.18 mm) being explored, not confirmed.
-- RING STROKE = 10 mm (user 2026-10-26). At 1/8 in skirt clearance: skirt-up gap 5.8 mm, mid-face 0.63 and outer top edge 0.77 of ball height. Supersedes the 12.7 mm recommendation. Remaining open: skirt clearance (1/8 in vs 4 mm), script names + read-out units.
-- Script API agreed (user 2026-10-26): Hit at switch closure (no threshold); Switch(state) event; read RotX/RotY (deg), CurrentRingOffset, SkirtZ, SpoonZ, SwitchClosed, CoilCurrent; external drive = Bumper1.Solenoid enabled[, volts[, duty]] (duty = mean voltage approx, off = False; ignored with a warning in pulse/held modes). Coil current is integrated (ramps, L/R 1.4-4.2 ms). Trigger() proposed, unconfirmed. Still open: skirt clearance (1/8 in vs 4 mm), freewheel diode assumption.
-- Skirt clearance = 1/8 in (3.18 mm) "for now" (user 2026-10-26), configurable 1/8-3/16 in. Design open items left: Trigger() method, freewheel diode assumption; then build order (design section 11) awaits the user go-ahead.
-- No Trigger() for the bumper: Solenoid is that method (user 2026-10-26). Open: what Solenoid True does in pulse mode. Freewheel diode still unanswered.
-- Solenoid True in pulse mode fires ONE pulse (user 2026-10-26). User asked what the freewheel diode does (answered in chat); diode assumption still to be confirmed.
-- Freewheel diode across the bumper coil: ASSUMED (user 2026-10-26). Design open items are now closed; design doc docs/unified-physics/JetBumperDesign.txt (rev 4+) awaits user review before any build.
-
-- SKIRT REQUIREMENT (user 2026-11-02): hair-trigger, almost no firm resistance. The slowest rolling ball (80 g) tilts the skirt and fires. A ball that grazes the edge and changes path without firing means too stiff (that's what the user sees in play). A ball placed right at the skirt on the high side deflects it and fires. Ball control states aren't real scenarios (user, same day).
-
-Found 2026-11-07: B1 | Jet bumper coil: "it's a 28 V coil"; voltage differs by table (50 V was "way too fast"), so voltage is per table. | 2026-11-02 | to-do archive 10-28..11-03
+[from memory note project_jet_bumper_data_2026-10-26 and the to-do archive; user 2026-10-26 unless dated. Drive modes, script names and the pinch and nudge requirements: JetBumperDesign.txt]
+- Skirt: geometry from references/pinball-parts-main/Bumpers/skirt.obj scaled to 63.5 mm OD (user: the meshes are more accurate than estimates): flat disc 2.27 mm thick to 44.9 mm diameter, linear taper to the edge (0.5 mm rim used), flat bottom, sloped top. User's own figures: 60-63.5 mm across, 3 mm thick at the inner diameter, 0.5 mm at the edge.
+- Skirt mounting: the outer edge floats 1/8 in (3.18 mm) above the playfield, configurable 1/8-3/16 in (no contact; drag would keep the coil on). A conical compression spring under the centre pushes it up against the bottom rim of the fixed base. Ball on the outer edge tilts it; the skirt is already pressed down when the ring fires.
+- Real skirt behaviour (user 2026-11-02): hair-trigger, almost no firm resistance. The slowest rolling ball tilts the skirt and fires; a ball placed at the skirt on the high side fires. A ball that grazes the edge and changes path without firing means the model is too stiff.
+- Stem: molded under the skirt centre, 45 mm long, 3/16 in diameter, rounded tip (tip radius ESTIMATED 2.38 mm from a photo; cannot be measured, user: don't ask again). Enough clearance to tilt freely.
+- Spoon: a thin flat plastic blade clamped in the switch stack (it flexes, no hinge), the cone at the free end under the stem: 1/2 in across, 1/4 in deep (45 deg wall). The leaf switch blades lie over it almost to the cone. The switch closes at 1/16 in (1.59 mm) of VERTICAL spoon travel at the stem, typical; 1/8 in (3.18 mm) = less sensitive (a setting). Mass at most 5 % of skirt and stem (<= 0.35 g); only about a third counts at the stem (lead's reading of a side photo, not confirmed).
+- Ring: a dish (outer edge high), moves DOWN on firing and pushes the ball outward. Geometry from the stock BumperRing mesh scaled to 63.5 mm OD: ID 45 mm, rise 7.7 mm, 43 deg, sheet 1.9 mm. Stroke 10 mm (user). At rest the ring centre aligns with the top of the ball; fired, it stops at 2/3-3/4 of the ball height. Two #6-32 rods 1.25 in apart through base and playfield to the yoke.
+- Body: fixed plastic base, typically 38 mm across (varies by model), sits on the skirt's inner lip.
+- Masses, ESTIMATED (no data; user accepted): skirt 7 g; ring assembly 105 g (ring 18, rods 9, yoke 30, plunger 48), a tuning knob for the kick.
+- Coil: AE-23-800 initially, set per bumper; x0 0.3 (user accepted). 28 V coil; supply voltage set per table (50 V was "way too fast"). Freewheel diode across the coil: ASSUMED.
 
 4. TURNTABLE (SPINNING DISC)
 ----------------------------
-[from memory note project_turntable_spec_2026-10-11]
-Spinning disc = TURNTABLE. User spec 2026-10-11:
-- Replaces a hole cut in the playfield; can be on main, lower or upper playfield. Default gap disc-to-playfield 1/16 in (1.5875 mm).
-- FULLER model: motor with torque and inertia, spins up/down; speed comes from the physics. Script only enables/disables the motor.
-- Clockwise / counterclockwise direction property. Report speed and angle (from a reference point) to the script.
-- Textured surface (friction). Ball must interact with the disc AND a spinner AND a magnet; disc does not affect the magnet. Video: magnet plug at disc centre pulls balls inward; when the magnet turns off the balls are flung off.
-- Rotating disc mesh, visibility optional (user will likely replace with an animated disc). Punch a hole in the playfield plane or mesh with the gap and draw disc + collision surface in its place.
-- Asked: how to make the spin visible on a plain disc (answer proposed: optional marker/spoke pattern).
-Related: [[todo-and-parking-lot]], [[unified-surface-contact]].
-**How to apply:** confirm the design with the user before building; ball-disc contact uses the existing Hertz+friction law with surface velocity omega x r; ball reaction torque feeds back on the disc.
-
-**Later 2026-10-11 additions (user):** game software varies disc speed by motor voltage (or PWM) -> script sets voltage/duty (Turntable "name", volts; TurntableDuty). Reference machine = Williams Whirlwind (14-7955 DC motor): full speed ~200-300 RPM -> default free_rpm 250 (NOT 40). Ball load is an OUTPUT of the physics, never an input. Defaults: spinup ~1 s, ini-defined for now, editor objects later. Uses playfield slope (gravity frame). Build plan: turntable.cpp/.h, disc = surface host (kind "turntable") with surface velocity w x r, hole carved in playfield host (rubbercontact.h CarvedHole).
-
-**STATE 2026-10-11 (built, UNCOMMITTED, user says the disc rotates visually):** src/physics/turntable.{h,cpp}; hooks in hitrubber (m_turntable, IsFloor, vs + AddImpulse in RingAdvance, TurntableSettings, playfield ProbeRing carves holes via RubberContact::CarvedHole), PhysicsEngine (Setup + Step), ScriptGlobalTable + vpinball.idl ids 832-835 (Turntable, TurntableDuty, TurntableSpeed, TurntableAngle), Renderer (Render/ReleaseRender), physicsini (turntables feature). Docs: NewPhysicsReference section 10 + changelog; commented example at the end of tables/basic/vpx_physics.ini. Tests in runs/2026-10-09-slow-contact: tt1 (spin-up 95% at 0.999 s, 250 rpm), tt2 (fall-through audit flush/raised, plane OK; mesh failures were balls leaving the open blank table), tt4/tt5 (magnet at the centre: pull works, weak default M1), batch_cost (+5 us mean/cycle). Findings: ball dropped on the rim dips speed ~3%, rides at no-slip speed rim/3.5; mu 0.6 keeps balls on the disc at 250 rpm (flung off only with lower mu / larger radius) - tune mu. Harness trap: blank-table BallRelease captures a ball teleported to z=25.5 / a ball left rolling; teleport right after the 2nd Kick at z=40. Screen capture of the VPX window returns a stale frame; do not rely on it (the user can watch). Open: user confirmation of feel before any commit; mu / mass defaults unverified; geometry keys not hot-reloaded; playfield texture not cut (gap drawn as a dark ring); standalone IDL stale (parked item).
-
-**OPEN ISSUES 2026-10-11 late (user testing "turn table test 3": the user LOCKS BALLS ON THE DISC WITH THE FLIPPERS; magnet plug RubberPost1 at the disc centre (450,1380), M1 at the same place):**
-1. Slowdown with 3 balls: user's timing.csv: ~465 us/cycle avg with 3 balls near the magnet, spikes 1-3 ms/cycle (frames of 600 ms) exactly when a flipper rubber model is engaged (timing 'engaged'=1) -> suspect flipper rubber model with several balls, NOT the turntable (one ball on the disc is +5 us). Reproduce with the launcher tables\VPX play - turn table timing.bat. With ball_interaction=0, two balls pinned at the plug still cost ~240 us/cycle.
-2. Two-ball launch (REPRODUCED, runs tt14_*): ball A resting on the plug + ball B rolled in with the magnet on at 28 V -> A reaches 22-30 m/s, B z=250. Reproduces WITHOUT the turntable (turntables=0) and disappears with [Magnet:M1] ball_interaction = 0 -> it is the magnet's induced ball-ball force plus contact: the pair force lifts B onto A (~3 N vertical vs 0.8 N weight, B's induced moment is tilted by the field spread), B overlaps A by ~4.7 mm in one cycle (ring-engaged balls do not see each other in their substeps; stock ball-ball resolves the overlap with a huge impulse). Fix idea: make other balls part of the ring contact set (or cap the pair load); NOT done.
-3. Pair force cut off at 100 mm between centres (PAIR_REACH) -> raised to 0.6 m (done, built; the old comment claiming 1e-4 was wrong: it is ~5e-3 of the touching force). Outer balls not aligning on opposite sides of the centre ball NOT explained yet; user expects strong lateral repulsion of side-by-side balls; the model's moments follow the field direction, so tilted moments give lift instead.
-Also done this session: twist friction uses the spin relative to the turning disc (rubbercontact.h ContactCore ws), friction_nm, ramp keys, auto disc height. TEMP /* TEMP */ log in magnet.cpp was removed. Harness trap: do NOT wipe prefs\rubber-contact\vpinball.log while the user is testing (it is the user's log too).
-
-**RERUN 2026-10-12 on unified engine (HEAD 852042a1c, tree clean, user table "turn table test 3", user ini):** runs u1_off, u3_off/on, u3c_* in runs/2026-10-09-slow-contact; script ball3t.vbs (A plug, B/C rolled in from right/left, flippers raised, M1 28 V), ini bb/user_on.ini (= user ini + `ball_contact = 1` in [Contact]; user ini has NO ball_contact key, default off). Result: issue 2 (launch) GONE (two-ball: A 0.78 m/s, B maxZ 26, pairs off; three-ball max speed <0.8 m/s both modes). Issue 3 still: B,C settle ~130 deg apart around A (not 180) in both modes; B does not ride on A in the 3-ball scene. Issue 1: the flippers are at y=1803, disc at y=1380, so my scene never engages a bat (bats=0) -> flipper-engaged spike NOT tested. Cost (step_us, bodies>=3): pairs off mean 115 us max 430; pairs on mean 135 max 1572, 175 cycles >1 ms all with 501 substeps (pair step 2 us forced by magnet-pressed touching balls) -> new cost issue in pair model.
-
-**PAIR-STEP FIX 2026-10-12 (uncommitted, contactsystem.cpp SetupIsland):** cause of the 501-substep cycles = a not-yet-touching pair inside the cluster reach (closing >0.02 m/s, gap ~2 mm) got the 2 us impact step for the whole approach. Fix: a pair that is not inContact and whose gap > closing*dt*1.5 + 100 um (kApproachMarginM) adds no step. Three-ball scene pairs on: >1 ms cycles 177 -> 41, mean 135 -> 117 us (pairs off 115). Remaining 41 are real impacts (arrival at 5.7 s, then bursts every ~640 ms at 10.1/10.7/11.4/12.0/12.6 s = B/C re-hitting A). Final positions unchanged in kind. Flipper-engaged spike (issue 1) still untested.
-
-Second machine (user, 2026-10-13, from the "Magna Disc Assembly 500-5993-00-41" manual and a motor photo): shaded-pole AC gear motor
-(laminated stator, capacitor + neon bulb for suppression), constant speed about 325 rpm per the manual (user's video count >= 250).
-The Williams Whirlwind disc above uses a DC motor; both kinds exist (to-do 7.1: AC option).
-
-Found 2026-11-07: T2 | Disc shaft: 1/4 in steel. | 2026-11-04 | to-do archive 11-03..11-06
+[from memory note project_turntable_spec_2026-10-11 and the to-do archive]
+User spec 2026-10-11:
+- Replaces a hole cut in the playfield; can be on the main, lower or upper playfield. Default gap disc-to-playfield 1/16 in (1.5875 mm).
+- Motor with torque and inertia, spins up and down; speed comes from the physics. The game varies speed by motor voltage or PWM, so the script sets voltage and duty. Ball load is an output of the physics, never an input.
+- Clockwise or counterclockwise. Speed and angle (from a reference point) reported to the script.
+- Textured surface (friction). The ball interacts with the disc, a spinner and a magnet; the disc does not affect the magnet. Video: a magnet plug at the disc centre pulls balls inward; when the magnet turns off the balls are flung off.
+- Rotating disc mesh, visibility optional (the user will likely replace it with an animated disc).
+Machines:
+- Williams Whirlwind: 14-7955 DC motor, full speed ~200-300 rpm (default 250 rpm), spin-up ~1 s.
+- Second machine (user, 2026-10-13, "Magna Disc Assembly 500-5993-00-41" manual and a motor photo): shaded-pole AC gear motor (laminated stator, capacitor + neon bulb for suppression), constant speed ~325 rpm per the manual (user's video count >= 250).
+- Disc shaft: 1/4 in steel (user, 2026-11-04).
 
 5. MAGNETS AND COILS
 --------------------
@@ -282,43 +127,20 @@ Coil data reference: https://mayapinball.com/papers/pinball-coil-data/ (see sect
 User, 2026-10-14. Coil scenarios in pinball that the ball-magnet law must serve:
 1. Iron-core coil BELOW the playfield; the core never touches a ball. COMMON. The playfield is usually routed out to bring the core closer; the core face sits AT LEAST 6 mm below the surface (user 2026-10-14; corrected from a first guess of 1/3 of the thickness).
 2. Iron-core coil with the plug AT playfield level, locking balls to the core. Single ball COMMON; multiple balls (the disc/turntable case) LESS COMMON.
-3. Air-core coil pulling a single ball into the core, then releasing it. COMMON. Dropped from the current multipole work (works now; strength may be off, parked).
+3. Air-core coil pulling a single ball into the core, then releasing it. COMMON.
 
-Typical iron-core geometry (user 2026-10-14, "usually, but not always"): the winding's top end sits ~6 mm below the core face (about 1/3 of the playfield thickness); core length = winding length + ~6 mm; CORRECTION: cores sometimes also extend BELOW the winding (threaded fitting for height adjustment) -> model it only if it changes results significantly. The FEM so far used 2 mm and a 38 mm core: redo with this.
+Typical iron-core geometry (user 2026-10-14, "usually, but not always"): the winding's top end sits ~6 mm below the core face (about 1/3 of the playfield thickness); core length = winding length + ~6 mm; CORRECTION: cores sometimes also extend BELOW the winding (threaded fitting for height adjustment) -> model it only if it changes results significantly.
 Typical sizes (user 2026-10-14): iron plug winding 38 mm long on a 19 mm core (some modern ones 1/2 in = 12.7 mm core); air-core winding ~20 mm long, 32 mm bore.
 
 User knows of NO case where the iron core face is as large as the ball or larger (typical core 19 mm vs ball 27 mm), so an infinite-iron-plane (mirror image) model is never exact; its error must be measured vs FEM.
 
-**Why:** sets priorities for the efficient multipole design: the common cases come first; multi-ball on the plug is the hard but rarer case.
+Gorgar magnet (user, 2026-10-10): 28 VDC, 3/4 in core, 650 turns 22 AWG (R 3.2 ohm computed), 3/4 in playfield, on ~750 ms, bracket ~2.25 in square angled to the playfield underside (newer tables: one side only); some machines have the core reach the playfield surface.
 
-**How to apply:** judge every design option (A full multipole, etc.) per scenario. Related: [[unified-contact-design-2026-10-11]], [[magnet-model-2026-10-10]].
-
-[from memory note project_magnet_model_2026-10-10]
-Built 2026-10-10, UNCOMMITTED in rubber-contact-branch: `src/physics/magnet.{h,cpp}`, hooks in `HitBall::ExternalVelocityIncrement` (force added when `Magnets::Active()`), `Magnets::Step()` once per 1 ms cycle in PhysicsEngine.cpp, `[Magnet:<name>]` ini sections + `[Features] magnets`, script `Magnet "name", volts` and `MagnetCurrent("name")` (ScriptGlobalTable + vpinball.idl ids 830/831; standalone/vpinball_standalone_i.h NOT regenerated). Added to make/CMakeLists_sources.txt.
-
-User decisions (2026-10-10): coil electromagnet; current-driven coil model (not just on/off); physical falloff, strength and range ESTIMATED from inductance, resistance, dimensions (user: "shouldn't range and strength be estimated by inductance, resistance, dimensions?"). No softening needed: finite pole disc gives finite field.
-
-Model: N turns, wire dia -> R; L = mu0 A N^2 / l_air; I exponential rise/decay per 1 ms (tau = L/R, freewheel); Bc = min(Bsat, mu0 N I / l_air), l_air = return_path_diameters * core dia; near face = 24 point charges, far face 1 charge; ball M = min(3B/mu0, Ms), F = V M grad|B|; a = F / (7800 kg/m3 V mass).
-
-Test: runs/2026-10-09-slow-contact/magnet.vbs, magnet_near.vbs, magnet_test.ini (run names magnet1, magnet2; focused). Result: coil current 0.948 A at 24 V (R 25.3 ohm, L 18.8 mH, tau 0.74 ms) correct; ball at 32 mm pulled toward the pole but only ~0.004 m/s2 (B ~0.7 mT there): an open rod with 2000 A-turns is physically weak. Real pinball magnets hold a ball: they have a yoke/return path and the ball closes the circuit.
-
-**Next:** get the user's real coil data (turns, wire, resistance, supply, core/yoke) and add a closed-circuit term: flux = NI / (R_return + R_gap(ball distance)), so strength rises as the ball nears the pole; then recheck the pull vs a 6 deg slope; measure per-step cost (24 charges per ball in reach only when current != 0); document in vpx_physics.ini.
-
-**Update (later 2026-10-10):** flux reluctance fixed (pole spreading 1/(8 mu0 a) + gap term; the old tube model was ~100x too weak in force). `return_fraction` replaces return_path_diameters. Optional bracket yoke: return_pole_* keys (flanges in a plane parallel to the face; depth for a core flush with the playfield). Load-order bug fixed (a top-level `Magnet` call in the script ran before the table existed and cached "no magnets"; now pending voltages applied at load). Gorgar data from the user: 28 VDC, 3/4 in core, 650 turns 22 AWG (R 3.2 computed; 4.5 was a high estimate), 3/4 in playfield, on ~750 ms, bracket ~2.25 in square angled to the playfield underside (newer tables: one side only), some machines have the core reach the playfield surface. Documented in vpx_physics.ini and docs/unified-physics/archive/NewPhysicsReference.txt. Still uncommitted; per-step cost not measured; not calibrated against a real machine.
-
-**Update (end of 2026-10-10 session):** user reported fast undamped vibration about the core (real video: ball locks on to a flush core with little oscillation). Found: (1) playfield_contact=1 had almost no rolling resistance ([Contact] rolling_resistance ignored, only Persson tan_delta law, ~8x too low): FIXED by RubberParams::rollingMu floor for the playfield host (hitrubber.cpp LoadPlayfieldSettings, rubbercontact.h EvaluateTube); roll-decel test 0.02 m/s2 = stock; (2) the ring substeps applied the magnet force once per cycle at the start position (pumped energy): now re-evaluated per substep (HitBall::ExternalVelocityIncrement(withMagnets), RingAdvance). Result: flush core B swing 7.4 mm constant -> 3.9 mm after 1.1 s; stock path decays faster (4.3 -> 2.7 mm), real ball locks faster still. Regressions OK (rest z 24.99874, pinch 1196.395). Eddy-current loss estimated negligible; ball hysteresis not modelled. `reach` now fixed 5 in cutoff (key removed). UNCOMMITTED. Open: why loaded damping is still below the rolling-resistance estimate (~5%/cycle); user feel-test of the swing and playfield rolling (affects every rolling ball).
-
-**Solenoid type added (2026-10-10, uncommitted):** `type = solenoid` ([Magnet:<name>]): air-core coil the ball rolls through (ball lock). On-axis finite-solenoid field (3 layers) + paraxial radial term, same circuit/script. Test runs/2026-10-09-slow-contact sol_trig2.vbs + sol_test2.ini (coil at 506,1110; avoid Kicker1 at 448.7,959 — it captured the ball). Result: ball rolling in at 0.3 m/s, coil switched on at center -> held, swings +-4.5 mm and decays slowly (same loaded-damping gap). Documented in vpx_physics.ini (commented example) and NewPhysicsReference.txt.
-
-**2026-10-10 late:** (1) FIXED a stale-config bug: magnet state kept across Plays in the editor (Player pointer reused; user edited the ini and replayed, nothing reloaded). Now CheckSession(): reset when the game clock goes backwards. (2) Aircore field replaced: paraxial approx threw a ball out of a vertical coil (unbounded radial force); now full loop field (3 layers x 8 rings, elliptic integrals) tabulated at load (|B|^2 and gradient per A^2, 128x128 at 1 mm), lookup per step. Horizontal pull-in peak 1.43 -> 1.77 m/s. User test table: tables/basic/Magnet Test.vpx (coil C1 at ball height z=25 gives no lift; coil must be above, z~60, and needs a guide tube radially). Test: runs/2026-10-09-slow-contact/mt_lift.vbs, mt_user.ini, mt_above.ini. Uncommitted. Table load cost of the 16k-node table not measured.
-
-**COMMITTED 2026-10-10: f2a38f943 on rubber-contact (not pushed). User confirmed the magnets work (iron-core flush plug locks; air-core horizontal ball-lock works once the axis was right). Also in the commit: playfield rolling resistance, per-substep magnet force, session reload + ini hot reload, docs/unified-physics/archive/NewPhysicsReference.txt. Not done: per-step cost measurement, calibration vs a real machine, hysteresis/loaded damping. Air-core convention: x,y,z = coil CENTRE (iron-core: pole face); a vertical lift coil needs its lower end above the ball top (centre z>=~92 for 40 mm) and a guide tube/stop.
-
-Mirror image result (moved here 2026-11-07 from a feedback note): the plain mirror (ball imaged in an infinite plane at the pole face) as the core's reaction gave 1.56 / 1.34 / 1.23 times the FEM value at 0.25 / 1 / 2 mm on the small face (linear, c19, on axis; within 1 % on a wide face); runs/2026-10-14-mirror/REPORT.md. A session set it aside on that data; the user did not reject image methods, and other uses of images stay open.
+User decisions (2026-10-10/11): the coil is current-driven (not just on/off); strength, falloff and range come from inductance, resistance and dimensions, not tuning. Real behaviour (user video): a ball locks onto a flush core with little oscillation.
 
 Found in older notes and archives on 2026-11-07 (user data; format: ID | value | date | source):
 M1 | Magnet coil data (user 2026-10-14): most pinball magnet coils are 22 AWG, 600-650 turns. PartData has only the Gorgar 650-turn case. | 2026-10-14 | A1, "2026-10-14 COIL DATA (user)"
-M2 | Supply (user 2026-10-14): older machines 28 V DC, newer machines 50 V DC, most likely PULSED (PWM). At the known plug sizes only ONE ball can touch the plug directly; several balls on the plug is rare in general but COMMON on certain machines (others sit on the touching ball). [Partly overlaps PartData section 5 scenario 2.] | 2026-10-14 | A1, "SUPPLY + PLUG (user)"
+M2 | Supply (user 2026-10-14): older machines 28 V DC, newer machines 50 V DC, most likely PULSED (PWM). At the known plug sizes only ONE ball can touch the plug directly; several balls on the plug is rare in general but COMMON on certain machines (others sit on the touching ball). | 2026-10-14 | A1, "SUPPLY + PLUG (user)"
 M3 | Real magnet-disc assembly (user's manual drawing "Magna Disc Assembly 500-5993-00-41" + motor photo): coil = "Magnet 22-600" (600 turns 22 AWG); disc & bushing assembly on the motor's 1/4 in steel shaft; shaft+bushing pass through a sleeve (2B) in the coil centre (set screw below the coil); magnet bracket (2A) + sleeve (2B) are a sheet-metal assembly around the coil, screwed to two large support brackets (1B) bolting to the playfield underside; material not confirmed (yellow plating, probably zinc-plated steel; user thought brass); 6 fanning blades WELDED to the underside of the disc (manual), so disc probably steel sheet (user assumed aluminium); disc is NOT spinning when ball 3 is dropped on the centre ball. | 2026-10-13 | A1, "DISC MAGNET, REAL HARDWARE"
 M4 | Video observations of the real disc magnet (user): plug is flush, 15-20 mm; disc spins everywhere; the post is visual only; the centre ball turns fine; no outer-ball lift and no stack in the video; user's videos of the real scene do not show 180 deg alignment of the outer balls (104 deg was accepted as appropriate; video balls were on a spinning, flat disc). Video 2: 3 balls dropped from a ramp near the disc centre; ball 1 latches, ball 2 lands near the top of the disc and does not move, ball 3 dropped on ball 1 is NOT held and falls to the far side; when the disc turns the balls track it from the start with no slipping; user's guesses: magnet too strong, motor on a duty cycle. | 2026-10-11..10-13 | A1, "user conclusion = dipole model incomplete"; project_ball_pair_rolling_resistance_2026-10-12.md, "VIDEO 2 CALIBRATION"; project_magnet_ball_interaction_2026-10-11.md, "User verdict 2026-10-11"; A1, "do not show 180 either"
 M5 | Ball-ball magnetic behaviour (user, 10-11): induced only, remanence dropped ("no significant influence seen in videos"); side-by-side across a vertical field repels, in line along the field attracts, flip at ~55 deg from the field axis. | 2026-10-11 | project_magnet_ball_interaction_2026-10-11.md, "Acceptance test", "Remanence is dropped"
@@ -327,26 +149,26 @@ M5 | Ball-ball magnetic behaviour (user, 10-11): induced only, remanence dropped
 ----------
 [from memory note reference_rubber_friction_values]
 User's research (2026-10-30, not measured here), friction of rubber on the steel ball:
-- White / black rubbers: 0.8 - 0.85 (model uses 0.8, user's setting; was 0.9 with no source)
+- White / black rubbers: 0.8 - 0.85 (model uses 0.8, user's setting)
 - Silicone rings (Titan, Perfect Play): 0.65 - 0.76
 - Polyurethane (Super-Bands): 0.6 - 0.7
 
 User's tilt test on a flipper rubber was too variable to settle it (12 - 25 deg unweighted, 50 - 60 deg weighted; friction = tan of the angle).
 Band and ring tension (user measurement, 2026-10-29, also GroupStepDesign 11.8; "never ask again"): sling ring 2.5 in, 1/4 in section, 22.56 N
-(about 5 lbf); 37.41 N (about 8.4 lbf) on the Sling table's posts. Black rubber Young's modulus 4 MPa. Replaces the 2026-10-08 assumption of 20 - 40 lbf.
+(about 5 lbf); 37.41 N (about 8.4 lbf) on the Sling table's posts. Black rubber Young's modulus 4 MPa.
 
 Rubber ring height (user's survey across manufacturers and eras, all EM, 2026-11-07): the centre of the rubber is at least 5/8 in and at most 11/16 in above the
 playfield. Williams highest, Gottlieb middle, Bally lowest.
 
 Found in older notes and archives on 2026-11-07 (user data; format: ID | value | date | source):
-R1 | Flipper rubber (user's measurement): 0.44 in tall, bottom edge 0.36 in above the playfield, ~1/8 in thick, solid, hard plastic bat under it; he does not use Shore, parameters are in E (MPa). [PartData has rubber CENTRE height 5/8-11/16 in for rings from the survey; this is the flipper rubber, not a conflict: 0.36 + 0.22 = 0.58 in centre.] | 2026-10-04 | project_gorgar_rubber_contact_direction.md, "0.44 in tall"
+R1 | Flipper rubber (user's measurement): 0.44 in tall, bottom edge 0.36 in above the playfield, ~1/8 in thick, solid, hard plastic bat under it; he does not use Shore, parameters are in E (MPa). Centre 0.36 + 0.22 = 0.58 in above the playfield. | 2026-10-04 | project_gorgar_rubber_contact_direction.md, "0.44 in tall"
 R3 | User's eyeball check: a real sling stretches the rubber 2 - 2.5 x its diameter (8.6 - 10.8 mm). | 2026-10-07 | project_sling_model_2026-10-07.md
 R4 | Real sling video observations (user videos, 10-29/10-30): band never lets a ball pass; cord pulled to the ball's mid point; ~12-13 mm penetration at 2.5-3 m/s; sling hop 13 mm at 1.4 m/s with coil off; rolling exit ~0.84 m/s at 1.4 m/s (user "thinks it may be real"); the rubber visibly twists; plate stops the ball; user says no good free-span video exists. | 2026-10-29..11-01 | A2, "User video 10-29", "hop 13 mm at 1.4 m/s", "rolling again 0.81 against 1.4 m/s video about 0.84"
 R5 | Sling plate (user 2026-11-01): real plate gives under 1 mm, very stiff stop, metal or wood; a plate hit should behave like a rubber on a post. | 2026-11-01 | A2, "real plate gives under 1 mm"
    Also in the same line: "plate about 10 - 12 mm wide against a 27 mm ball, sharp sheet edges, hood not modelled" - source NOT stated (UNSURE if user or mesh reading).
 R6 | Sling mechanism spec as decided with the user: plate = two 2 in x 1/2 in x 1/8 in steel arms (16.1 g each), crank 2 in (50.8 mm); face-to-band gap spec 1/4 in (6.35 mm), user trials 1/8 in and 3/16 in (3/16 became default); plate travel 20 deg ("pretty close"; stroke ~17.6 mm); two switches per sling wired in parallel; sling coil does not stay on while the switch is closed: the driver makes a fixed-length pulse once triggered; Gorgar sling coil is SG-23-850 (AE-23-800 used as a stand-in, "pretty similar"), 28 V (everything is modelled on Gorgar, user 10-07); user saw "longer pulse OK, more real" (100 ms). Real sling exit speed: user has no figure (3 m/s was the session's own number). Switch gap: 1/16 in, user changed default to 1/32 in (0.79375 mm) on 2026-11-02. | 2026-10-07 .. 11-02 | project_sling_model_2026-10-07.md, "Plate = two 2 in x 1/2", "spec was 1/4 in", "SG-23-850", "28 V stays", "3 m/s was MY number"; A2, "SWITCH GAP DEFAULT 1/32 in". UNSURE: the 2 x 1/2 x 1/8 in arm dims and crank 2 in are listed under "Decisions so far (2026-10-07, user)".
 R7 | Span posts: user 10-30: a post in the middle of a long span typically has a notch holding the rubber vertically, like the end posts. | 2026-10-30 | A2, "a span post typically has a notch"
-R8 | Friction tilt test: user's best estimate 20-30 deg = mu 0.36-0.58 (~0.47 at 25 deg); user then set 0.8. [PartData has the 12-25 / 50-60 deg ranges and the 0.8; the best-estimate line is new.] | 2026-10-30 | A2, "user's best estimate 20-30 deg"
+R8 | Friction tilt test: user's best estimate 20-30 deg = mu 0.36-0.58 (~0.47 at 25 deg); user then set 0.8. | 2026-10-30 | A2, "user's best estimate 20-30 deg"
 
 7. PLAYFIELD FEATURES (user, 2026-11-07, as given)
 --------------------------------------------------

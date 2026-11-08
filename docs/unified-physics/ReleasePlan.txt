@@ -2,6 +2,8 @@ RELEASE PLAN - getting the unified physics into official VPX
 =============================================================
 Moved word for word from memory on 2026-11-07. To-do section 10 (items 3, 5, 10) points here.
 
+Before release: review every design doc in docs/unified-physics with the user, one at a time (user, 2026-11-07).
+
 Niwak (VPX maintainer) advised 2026-10-12: work in a shared branch on the main repo or a fork, based on Toxie's commit 8c4cf05d (vbousquet/vpinball; NOT in our repo, our origin is the review fork dcbenji/vpinball-physics-review, merge base b003609ae 2026-09-18). User is not a developer: I handle git protocol and tell each step.
 
 New base (fetched 2026-10-21): remote vpx = vpinball/vpinball, vpx/master da8b594ae (2026-10-21) contains Toxie 8c4cf05d3; 35 of our 36 stock files changed upstream; upstream has its own versions of the hitball stock fixes (take theirs). Remote vb = vbousquet.
