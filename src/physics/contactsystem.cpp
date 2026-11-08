@@ -4638,6 +4638,7 @@ namespace
       std::vector<PartSnap> parts;
       std::vector<ContactSystemImpl::SleepGroup> sleep;   // pile sleep
       double sleepCycleDt = 0.0;
+      double frameUsedS = 0.0;   // g_frameUsedS: how much of the physics step the sub-intervals before this one took (Body::Begin's share of gravity and nudge owed to the later ones reads it, and Step advances it)
       size_t deferred = 0;
       bool valid = false;
       unsigned us = 0;
@@ -4668,6 +4669,7 @@ void ContactSystem::SaveStart()
    }
    s.sleep = ContactSystemImpl::g_sleep;
    s.sleepCycleDt = ContactSystemImpl::g_sleepCycleDt;
+   s.frameUsedS = g_frameUsedS;
    s.contacts.resize(g_engaged.size());
    size_t k = 0;
    for (const BallContact &e : g_engaged)
@@ -4702,6 +4704,7 @@ static void RestoreSnap(const std::vector<HitBall *> *only)
       return;
    ContactSystemImpl::g_sleep = s.sleep;   // pile sleep: every ball's, whatever the replay restores of the rest
    ContactSystemImpl::g_sleepCycleDt = s.sleepCycleDt;
+   g_frameUsedS = s.frameUsedS;   // (the step being taken again starts where this sub-interval started in the physics step)
    for (const BallSnap &b : s.balls)
    {
       b.pb->m_sleepGroup = b.sleepGroup;
