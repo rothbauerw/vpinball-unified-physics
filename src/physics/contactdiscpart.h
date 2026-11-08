@@ -20,9 +20,18 @@
 
 namespace DiscModel
 {
-   class Engine : public ContactMovingPart
+   // what the engine side keeps (PartRecords: part of its state)
+   struct EngineState
+   {
+      bool idle = false, marked = false;
+      double markQ = 0.0;          // the angle at the start of its last cycle in a group (AtRest)
+      GroupStep::RestWatch rest;   // the rest rule's watch alone
+   };
+
+   class Engine : public ContactMovingPart, public EngineState
    {
    public:
+      Engine() { KeepState<EngineState>(this); }
       DiscGroup::Part gp;
       RubberContact::RubberParams rp;  // the textured surface against the steel ball
       double layerM = 0.0;
@@ -110,54 +119,11 @@ namespace DiscModel
          return steps;
       }
 
-      // The dynamic state, plain bytes (the settings and the shape are not state; the script's volts are, so a replay keeps the drive it ran on)
-      struct Dyn
-      {
-         GroupStep::BodyPart::Dyn b;
-         double volts, steppedS, markQ;
-         bool idle, steppedThisCycle, marked;
-         GroupStep::RestWatch rest;
-      };
-      void SaveState(State &out) const override
-      {
-         Dyn d;
-         std::memset(&d, 0, sizeof d);   // (the padding too: saved bytes must be the same for the same state)
-         gp.Fill(d.b);
-         d.volts = gp.volts;
-         d.steppedS = steppedS;
-         d.markQ = markQ;
-         d.idle = idle;
-         d.rest = rest;
-         d.steppedThisCycle = steppedThisCycle;
-         d.marked = marked;
-         out.used = 0;
-         Put(out, d);
-      }
-      void RestoreState(const State &in) override
-      {
-         StateReader r(in);
-         Dyn d;
-         r.Get(d);
-         gp.Load(d.b);
-         gp.volts = d.volts;
-         steppedS = d.steppedS;
-         markQ = d.markQ;
-         idle = d.idle;
-         rest = d.rest;
-         steppedThisCycle = d.steppedThisCycle;
-         marked = d.marked;
-         events.clear();
-      }
       std::string StateNote() const override
       {
          char buf[160];
          std::snprintf(buf, sizeof buf, "%.2f rad/s, volts %.2f, stuck %d, asleep %d", gp.rate, gp.volts, (int)gp.Stuck(), (int)idle);
          return buf;
       }
-
-   private:
-      bool idle = false, marked = false;
-      double markQ = 0.0;   // the angle at the start of its last cycle in a group (AtRest)
-      GroupStep::RestWatch rest;   // the rest rule's watch alone
    };
 }

@@ -95,9 +95,23 @@ struct Touch
    double xiT = 0.0, xiB = 0.0, kT = 0.0, kB = 0.0;   // the grip: along the cord, and round it (the twist's spring)
 };
 
-class Part final : public GroupStep::Part
+// The plate's state (PartRecords; the touches are a kept list beside it). The cord is not in the engine's snapshot yet: the net's retake is its one user
+struct CordState
+{
+   double phi = 0.0, omega = 0.0, iCoil = 0.0;   // iCoil: A
+   bool pinned = false, atRest = false;   // no unknown: on a stop; atRest: the rest stop, otherwise the coil stop
+   GroupStep::RestWatch plateRest;        // the rest rule's watch of the plate alone
+   bool plateIdle = false;
+};
+
+class Part final : public GroupStep::Part, public CordState
 {
 public:
+   Part()
+   {
+      KeepState<CordState>(this);
+      KeepVector(&tch);
+   }
    static constexpr int kMaxEdges = 4;
    double EA = 126.7, rc = 0.5 * 6.35e-3, mu = 0.8, tanD = 0.15, refHz = 20.0;
    double w = 0.0, T0 = 37.4;   // bending length sqrt(EI / T0): rounds the line's axis
@@ -118,8 +132,6 @@ public:
    CoilSettings coilS;   // the plate's winding (sl.mech's power values), for the coil's one energy law
    CoilDerived coilD;
    SlingDriver driver;
-   double phi = 0.0, omega = 0.0, iCoil = 0.0;   // iCoil: A
-   bool pinned = false, atRest = false;   // no unknown: on a stop; atRest: the rest stop, otherwise the coil stop
    double minPhi = 0.0;                   // how far it ever went behind its seat (a rigid seat: never)
    mutable double phiQ = 0.0;   // the angle V is asked at
    mutable double dVdP = 0.0;   // d V / d phi from the last Solve with forces
@@ -141,8 +153,6 @@ public:
    long nFar = 0;
 
    int nb = 0, ns = 0;
-   GroupStep::RestWatch plateRest, savePlateRest;   // the rest rule's watch of the plate alone, and its copy for the net
-   bool plateIdle = false, savePlateIdle = false;
    std::vector<Touch> tch;
 
    void SetupPlate()
@@ -176,7 +186,6 @@ public:
       TmS.assign(ns, 0.0);
       gv.assign(nb, V3());
       farS.assign(ns, 0);
-      save = tch;
    }
    // With the ball off the cord (or joining): which way it comes, and where it counts from so that nothing is stored. V is zero before and after: the label can't alter it
    void Label(const Span &sp, Touch &u, const Ball &b) const
@@ -823,8 +832,7 @@ public:
                Label(span[j], u, g.ball[i]);
          }
    }
-   void SaveState() override { save = tch; savePl[0] = phi; savePl[1] = omega; savePl[2] = iCoil; savePin = pinned; saveRest = atRest; savePlateRest = plateRest; savePlateIdle = plateIdle; }
-   void RestoreState() override { tch = save; phi = phiQ = savePl[0]; omega = savePl[1]; iCoil = savePl[2]; pinned = savePin; atRest = saveRest; plateRest = savePlateRest; plateIdle = savePlateIdle; }
+   void AfterRestore() override { phiQ = phi; }
    // ---- what the engine's cord path asks of a band (cordband.h, contactsystem.cpp, hitrubber.cpp) ----
    struct Circle { double x = 0.0, y = 0.0, r = 0.0; bool twin = false; };   // r: the cord centre's radius round it
    struct SwitchSpec { double x = 0.0, y = 0.0, bx = 0.0, by = 0.0; bool coil = false; };
@@ -1844,9 +1852,7 @@ private:
    std::vector<Scr> st;
    std::vector<double> V0S, dLS, TdS, TmS;
    std::vector<V3> gv;
-   std::vector<Touch> save;
-   double savePl[3] = { 0, 0, 0 };
-   bool savePin = false, saveRest = false, gFreed = false;
+   bool gFreed = false;
    double gTauPinned = 0.0;
    static constexpr double kArm = 0.05;   // the distance that makes the plate's angle a length, in the solver's rows and in sharing the closure
    double gLoad = 0.0, gRestL = 0.0, gPivotL = 0.0, gCordTau = 0.0;

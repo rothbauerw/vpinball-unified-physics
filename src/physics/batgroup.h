@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 #include "physics/coilmodel.h"
 #include "physics/groupstep.h"
@@ -38,22 +39,43 @@ namespace BatGroup
       long plungerStops = 0, phiStops = 0, captures = 0;
    };
 
-   class Part : public GroupStep::Part
+   // The part's values by lifetime (PartRecords): its state and what one attempt keeps (the books are state: a retake books the same)
+   struct BatState
    {
-   public:
-      FlipperSettings s;
-      FlipperDerived p;
-      BatGeom geo;
-      RubberContact::RubberParams rp;         // the bat's rubber
-      double layerM = 0.0;
       PartBooks bk;
-      // state (SI)
-      bool solenoid = false, rigid = true, wasPreEos = true, coilOffPrev = true, plungerPinned = false, phiPinned = false, hitStop = false;
+      bool rigid = true, wasPreEos = true, coilOffPrev = true, plungerPinned = false, phiPinned = false, hitStop = false;
       double phi = 0.0, omega = 0.0, xp = 0.0, vp = 0.0, iHigh = 0.0, iLow = 0.0;
       bool hitStopLatch = false;   // the plunger reached the coil stop since the table last read it (EOS, the nudge of the other bat)
       double hitL = 0.0;           // the angular momentum at the last such hit, kg m^2/s
       double aPhi = 0.0, pendingStopJ = 0.0;
       FM::PivotPulse pulse;   // the other bat's strike moves the pivot
+   };
+   struct BatAttemptWork
+   {
+      int nDof = 0;
+      FM::Kin k0{};
+      double gI0 = 1.0, gP0 = 0.0, gV0 = 0.0, gRest0 = 0.0, gCr = 0.0, gGivenX = 0.0, gLoad = 0.0;
+      FM::CoilStep gCoil;
+      bool gLoop = false, gDeadP = false, gDeadH = false, gCoilLive = false;
+      double gX0 = 0.0, gFrac0 = 0.0, gVolts = 0.0, gIP0 = 0.0, gIH0 = 0.0;
+      double gDrive = 0.0, gLossRest = 0.0, gLossLink = 0.0, gLossB = 0.0;
+      bool gPreEos = true;
+   };
+
+   class Part : public GroupStep::Part, public BatState, protected BatAttemptWork
+   {
+   public:
+      Part()
+      {
+         KeepState<BatState>(this);
+         WipeEachAttempt<BatAttemptWork>(this);
+      }
+      FlipperSettings s;
+      FlipperDerived p;
+      BatGeom geo;            // (its pivot: made from the pulse, MovePivot)
+      RubberContact::RubberParams rp;         // the bat's rubber
+      double layerM = 0.0;
+      bool solenoid = false;  // the table's coil command (between cycles)
       double reach = 0.1;     // m, the lever that turns the bat's rate into a speed
       static constexpr int kPhi = 0, kX = 1, kPivot = 2;   // the coordinates
 
@@ -526,18 +548,11 @@ namespace BatGroup
             MovePivot();
          }
       }
-      // ---- the net (Group::EnergyStep): counted and reported, not expected to fire ----
-      struct Saved { bool rigid, wasPreEos, coilOffPrev, plungerPinned, phiPinned; double phi, omega, xp, vp, iHigh, iLow; FM::PivotPulse pulse; };
-      Saved sv;
-      void SaveState() override { sv = Saved{ rigid, wasPreEos, coilOffPrev, plungerPinned, phiPinned, phi, omega, xp, vp, iHigh, iLow, pulse }; }
-      void RestoreState() override
-      {
-         rigid = sv.rigid; wasPreEos = sv.wasPreEos; coilOffPrev = sv.coilOffPrev; plungerPinned = sv.plungerPinned; phiPinned = sv.phiPinned;
-         phi = sv.phi; omega = sv.omega; xp = sv.xp; vp = sv.vp; iHigh = sv.iHigh; iLow = sv.iLow; pulse = sv.pulse;
-         MovePivot();
-      }
+      void AfterRestore() override { MovePivot(); }
       std::string StartNote() const override
       {
+         BatState sv;
+         std::memcpy(&sv, SavedState(), sizeof sv);   // (its state record)
          char s[400];
          snprintf(s, sizeof s, "rigid %d preEos %d coilOffPrev %d plungerPinned %d phiPinned %d solenoid %d phi %.17g omega %.17g xp %.17g vp %.17g iHigh %.17g iLow %.17g pulse %d t %.17g amp %.17g",
             sv.rigid, sv.wasPreEos, sv.coilOffPrev, sv.plungerPinned, sv.phiPinned, solenoid, sv.phi, sv.omega, sv.xp, sv.vp, sv.iHigh, sv.iLow, sv.pulse.active, sv.pulse.t, sv.pulse.amp);
@@ -792,21 +807,13 @@ namespace BatGroup
       }
 
       double kLink = 0.0, cStiff = 0.0, cFree = 0.0, slop = 0.0, kSpring = 0.0, xRest = 0.0, xMin = 0.0, xMax = 0.0, bobbin = 0.0, phiStop = 0.0, mp = 0.0, If = 0.0;
-      int nDof = 0;
-      FM::Kin k0{};
-      double gI0 = 1.0, gP0 = 0.0, gV0 = 0.0, gRest0 = 0.0, gCr = 0.0, gGivenX = 0.0, gLoad = 0.0;
-      FM::CoilStep gCoil;
       CoilSettings coilP, coilH;   // the windings as the coil's one energy law takes them
       CoilDerived derP, derH;
-      bool gLoop = false, gDeadP = false, gDeadH = false, gCoilLive = false;
-      double gX0 = 0.0, gFrac0 = 0.0, gVolts = 0.0, gIP0 = 0.0, gIH0 = 0.0;
-      double gDrive = 0.0, gLossRest = 0.0, gLossLink = 0.0, gLossB = 0.0;
       // the last evaluation, for the failure notes: the link's mismatch at the move's end (m), its state (r rigid, h plunger pinned, s slack, p pushing,
       // f pressed at the slop's far end, c clamped: its damper would pull, so its force is 0) and the coil's place at the move's end (frac of the bobbin)
       double nM1 = 0.0, nFrac1 = 0.0;
       char nLink = '?';
       struct FailNoteData { int nDof = 0; double resPhi = 0.0, resX = 0.0, m1 = 0.0, iP = 0.0, iH = 0.0, frac = 0.0; char link = '?'; };
       FailNoteData failNote[GroupStep::Group::kHalveDiag];
-      bool gPreEos = true;
    };
 }

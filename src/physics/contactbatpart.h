@@ -26,9 +26,18 @@ namespace BatPart
 {
    using V3 = RubberContact::V3;
 
-   class Part : public ContactMovingPart
+   // what the engine side keeps (PartRecords: part of its state)
+   struct EngineState
+   {
+      bool idle = false, marked = false;
+      double markPhi = 0.0, markXp = 0.0;   // the angle and plunger at the start of its last cycle in a group (AtRest)
+      GroupStep::RestWatch rest;            // the rest rule's watch alone
+   };
+
+   class Part : public ContactMovingPart, public EngineState
    {
    public:
+      Part() { KeepState<EngineState>(this); }
       ContactBat bat;                    // the bat's settings file (contactbat.h)
       BatGroup::Part gp;                 // the bat, its coil and its stops, as a part of the group
       V3 pivot;                          // pivot at rest, m (z = 0)
@@ -148,42 +157,6 @@ namespace BatPart
          return steps;
       }
 
-      // The dynamic state, plain bytes (the settings, the outline and the coil input are not state)
-      struct Dyn
-      {
-         double xp, vp, phi, omega, iHigh, iLow, aPhi, hitL, pendingStopJ;
-         FlipperModel::PivotPulse pulse;
-         double steppedS;
-         bool rigid, wasPreEos, coilOffPrev, plungerPinned, phiPinned, hitStop, hitStopLatch, idle, steppedThisCycle, marked;
-         double markPhi, markXp;
-         GroupStep::RestWatch rest;
-      };
-      void SaveState(State &out) const override
-      {
-         Dyn d;
-         std::memset(&d, 0, sizeof d);   // (the padding too: saved bytes must be the same for the same state)
-         const BatGroup::Part &b = gp;
-         d.xp = b.xp; d.vp = b.vp; d.phi = b.phi; d.omega = b.omega; d.iHigh = b.iHigh; d.iLow = b.iLow; d.aPhi = b.aPhi; d.hitL = b.hitL; d.pendingStopJ = b.pendingStopJ;
-         d.pulse = b.pulse; d.steppedS = steppedS;
-         d.rigid = b.rigid; d.wasPreEos = b.wasPreEos; d.coilOffPrev = b.coilOffPrev; d.plungerPinned = b.plungerPinned; d.phiPinned = b.phiPinned; d.hitStop = b.hitStop; d.hitStopLatch = b.hitStopLatch;
-         d.idle = idle; d.steppedThisCycle = steppedThisCycle; d.marked = marked; d.markPhi = markPhi; d.markXp = markXp; d.rest = rest;
-         out.used = 0;
-         Put(out, d);
-      }
-      void RestoreState(const State &in) override
-      {
-         StateReader r(in);
-         Dyn d;
-         r.Get(d);
-         BatGroup::Part &b = gp;
-         b.xp = d.xp; b.vp = d.vp; b.phi = d.phi; b.omega = d.omega; b.iHigh = d.iHigh; b.iLow = d.iLow; b.aPhi = d.aPhi; b.hitL = d.hitL; b.pendingStopJ = d.pendingStopJ;
-         b.pulse = d.pulse; steppedS = d.steppedS;
-         b.rigid = d.rigid; b.wasPreEos = d.wasPreEos; b.coilOffPrev = d.coilOffPrev; b.plungerPinned = d.plungerPinned; b.phiPinned = d.phiPinned; b.hitStop = d.hitStop; b.hitStopLatch = d.hitStopLatch;
-         idle = d.idle; steppedThisCycle = d.steppedThisCycle; marked = d.marked; markPhi = d.markPhi; markXp = d.markXp; rest = d.rest;
-         b.MovePivot();
-         events.clear();
-      }
-
       // The largest angular acceleration the bat can have in the coming cycle, from its present state (UnifiedContactDesign 12.2; measured 2026-10-28: the full-coil bound of
       // about 209,000 rad/s^2 made a held bat count as able to reach 14 m/s at its tip within a cycle):
       //  - coil on with the plunger at its stop: the stop takes the coil's push; the bat can only move within the link's play, against the return spring
@@ -217,9 +190,6 @@ namespace BatPart
       std::string StateNote() const override { return "phi " + std::to_string(gp.phi) + " rad, omega " + std::to_string(gp.omega) + " rad/s, coil " + (gp.solenoid ? "on" : "off"); }
 
    private:
-      bool idle = false, marked = false;
-      double markPhi = 0.0, markXp = 0.0;   // the angle and plunger at the start of its last cycle in a group (AtRest)
-      GroupStep::RestWatch rest;            // the rest rule's watch alone
       double RestSpeed() const { return std::fabs(gp.omega) * TipReach() + std::fabs(gp.vp) + std::fabs(gp.geo.vPivotX); }   // the bat's and plunger's surface speed bound, m/s
    };
 }

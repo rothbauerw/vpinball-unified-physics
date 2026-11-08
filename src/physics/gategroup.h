@@ -119,7 +119,7 @@ namespace GateGroup
          // stops: the wire crank (radius wire/2) or the plate edge (t/2) on the bracket edge
          const double rPart = s.type == Type::Plate || s.type == Type::LongPlate ? halfT : rho, deg = GroupStep::kPi / 180.0;
          const auto stop = [&](const double angDeg, const int side) {
-            GroupStep::BodyStop st;
+            GroupStep::BodyStopPlace st;
             st.at = angDeg * deg;
             st.side = side;
             st.lever = arm;
@@ -139,7 +139,7 @@ namespace GateGroup
             stopBack = PlaceStop(stop(-s.openStopDeg, -1));
          }
          // the hold actuator: a driven stop on the closing side, parked at the rest angle (one-way) or behind the open stop's mirror (two-way)
-         GroupStep::BodyStop hold = stop(s.oneWay ? s.restAngleDeg : -s.openStopDeg, -1);
+         GroupStep::BodyStopPlace hold = stop(s.oneWay ? s.restAngleDeg : -s.openStopDeg, -1);
          hold.target = hold.at;
          holdPark = hold.at;
          stopHold = PlaceStop(hold);

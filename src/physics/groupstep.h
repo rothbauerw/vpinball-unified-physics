@@ -36,6 +36,7 @@
 
 #include "physics/rubbercontact.h"
 #include "physics/pairform.h"
+#include "physics/partrecords.h"
 
 namespace GroupStep
 {
@@ -49,8 +50,15 @@ namespace GroupStep
    public:
       void Grow(const size_t n)
       {
+         if (n > used)
+            used = n;
          if (v.size() < n)
             v.resize(n);
+      }
+      void Wipe()   // the part this use grew back to its default (WipeRecord): the size stays, so no allocation
+      {
+         std::fill(v.begin(), v.begin() + (std::ptrdiff_t)std::min(used, v.size()), T());
+         used = 0;
       }
       operator T *() { return v.data(); }
       operator const T *() const { return v.data(); }
@@ -59,7 +67,9 @@ namespace GroupStep
 
    private:
       std::vector<T> v;
+      size_t used = 0;   // the most this use has grown it to
    };
+   template <class T> void WipeRecord(Buf<T> &b) { b.Wipe(); }
    // A list only the group adds to (AddShape, AddPart: they size it); to anyone else it reads
    class Group;
    template <class T> class AddedList
@@ -514,7 +524,8 @@ namespace GroupStep
    // the balls in one solve. The unknowns x: per ball the move (3) and the spin change (3), then each part's own (NumDof of them, from off). The balls' residual
    // rows are 2 m dc / h - 2 m v - h F and I dw - h M; a part adds its forces on the balls (averaged over the step) to F and M and writes its own rows.
    // Every call of a step reads the balls' state at the step's start (BeginStep's b) and the move x.
-   class Part
+   // Its values by lifetime (PartRecords): a part declares its state records, step work and attempt work; the group alone saves, restores and wipes them.
+   class Part : public PartRecords
    {
    public:
       virtual ~Part() = default;
@@ -551,9 +562,19 @@ namespace GroupStep
       // step, and whether a ball went through it
       virtual void Accept(const double *x, int off, double h, bool onStop, double &driveJ, double &lossJ, bool &through) = 0;
       virtual void AfterStep(const Group &) {}   // the step taken and the balls moved: what the part keeps of its own shapes' contacts
-      // an energy step (Group::EnergyStep): the state kept and put back; its bodies' kinetic energy and all their speeds times s; what a step's forces left for the next one is put back
-      virtual void SaveState() {}
-      virtual void RestoreState() {}
+      // an energy step (Group::EnergyStep): the state kept and put back (its state records, the same the engine's snapshot copies); its bodies' kinetic energy and all their speeds times s; what a step's forces left for the next one is put back
+      void SaveState()
+      {
+         sv.resize(StateBytes());
+         SaveRecords(sv.data());
+      }
+      void RestoreState()
+      {
+         RestoreRecords(sv.data());
+         AfterRestore();
+      }
+      virtual void AfterRestore() {}   // its state put back: what is derived from it is made again (the bat's pivot)
+      const unsigned char *SavedState() const { return sv.data(); }   // the net's saved records, in the order the part declared them (its notes)
       virtual double KineticJ() const { return 0.0; }
       virtual void ScaleSpeeds(double) {}
       virtual void AfterEnergyStep() {}
@@ -572,6 +593,9 @@ namespace GroupStep
       virtual void BallsMoved(const Ball *, int) {}              // the balls were moved with no step of its own
       virtual void ExplicitMove(const double *, int, double, double *) const {}   // its own unknowns in an energy step's explicit round
       virtual double EndResidual() const { return 0.0; }         // > 0: a step of a group holding this part counts as solved only with its residual within this (m/s; Settings::tolEndRes)
+
+   private:
+      std::vector<unsigned char> sv;   // the net's copy of its state (SaveState)
    };
 
    // One contact: ball a on shape s, or ball a on ball b. Its law is taken when a touch starts and held while it lasts.
@@ -749,9 +773,63 @@ namespace GroupStep
       }
    };
 
-   class Group
+   // The group step's own values of one use (PartRecords: use work, with its buffers): set while it steps an island, never read by the next use
+   struct GroupUseWork
+   {
+      int lastRounds = 0;
+      int nHalveDiag = 0;
+      char failWhy = '?';
+      bool trialCached = false;
+      bool warmOn = false;
+      double driveW = 0.0;
+      int nCoord = 0;
+      bool carried = false;      // a shape of this group is carried by a part
+      int nUnk = 0;              // unknowns of the step being solved
+      bool partEvalFailed = false;
+      bool nearOn = false;
+      double nearGrow = 1.0;     // the reach's factor: x4 each time a solve's end left its list (the lists then grow to all the pieces)
+      bool farOff = false;
+   };
+
+   class Group : public PartRecords, public GroupUseWork
    {
    public:
+      // Its work by lifetime (PartRecords): every buffer and value a use writes is wiped at the start of the next (BeginUse). Kept: the settings; the stamps (a counter:
+      // Configure moves it on, so no kept probe is taken as now); the books and diagnostics (the owner reads them after the use; reset where they start); the step history
+      // (a log); the Jacobian's store (zeroed before each forming, Eval); the balls, shapes, parts and pair forms (the use's input, added after BeginUse)
+      Group()
+      {
+         WipeEachUse<GroupUseWork>(this);
+         WipeEachUse(&item);
+         for (Buf<Item> *b : { &law, &esI0 })
+            WipeEachUse(b);
+         for (Buf<Hit> *b : { &hNow, &h1c, &hmc, &h0s })
+            WipeEachUse(b);
+         for (Buf<double> *b : { &d0s, &x, &resS, &stpS, &xPrevS, &stpPrevS, &trialS, &zeroS, &esRes, &xpS, &rpS, &rmS, &qEnd, &qMid, &qF, &fieldE0 })
+            WipeEachUse(b);
+         for (Buf<Ball> *b : { &b1r, &bmr, &evB1, &evBm, &farB1, &farBm, &esB0 })
+            WipeEachUse(b);
+         for (Buf<V3> *b : { &aLast, &alphaLast, &fNetS, &evF, &evM, &evDc, &evDw, &evWm, &esA0, &esAl0, &warmA, &warmAl, &loadF })
+            WipeEachUse(b);
+         for (Buf<char> *b : { &prevSlipS, &prevOnS, &farNow })
+            WipeEachUse(b);
+         for (Buf<int> *b : { &idxS, &partOff, &coordOff, &cUnk })
+            WipeEachUse(b);
+         WipeEachUse(&ie);
+         WipeEachUse(&ci);
+         WipeEachUse(&nearL);
+         WipeEachUse(&tgS);
+         WipeEachUse(&tkS);
+         WipeEachUse(&tOnS);
+         WipeEachUse(&crossS);
+         Size(8);
+      }
+      // The start of a use (an island's steps, a part's steps alone): no ball, shape or part yet, and nothing an earlier use wrote can be read
+      void BeginUse()
+      {
+         nb = ns = ni = np = nf = nform = 0;
+         WipeUseWork();
+      }
       // VPX_GROUP_PHASE_TIMING=<file> (a diagnostic, read once; unset = off: no clock is read, nothing changes): one row per step, the wall time in each phase,
       // each phase's own (a phase entered inside another pauses it: a probe inside Eval counts as a probe, not as Eval). steady_clock (QueryPerformanceCounter on MSVC).
       enum Phase { phChoose, phBegin, phProbeEval, phProbeOther, phEvalRest, phLinear, phPartAfter, phAfter, phDiag, phN };
@@ -818,7 +896,6 @@ namespace GroupStep
       Buf<Item> item;
       AddedList<Part *> part;   // moving parts (the band); they read the balls through the step calls
 
-      Group() { Size(8); }
       // Room for this many balls (before the balls are written, between cycles)
       void Size(const int balls)
       {
@@ -1135,12 +1212,6 @@ namespace GroupStep
             vs = vs + hp.c[j].V() * part[sh.part]->Coord(hp.c[j].coord).rate;
          return vs;
       }
-      // The first guess starts afresh: a step taken again from a snapshot then gives the same result to the last digit
-      void ClearGuess()
-      {
-         for (int i = 0; i < nb; i++)
-            aLast[i] = alphaLast[i] = V3();
-      }
       // After Configure: a part's own contact goes on as it was kept (touching, stretch, zero); one not touching that is already inside has stored nothing, its depth is its zero
       void SetShapeItem(const int k, const bool wasTouching, const double zero, const V3 &xi, const RubberContact::RollAngle &ra = RubberContact::RollAngle())
       {
@@ -1439,6 +1510,8 @@ namespace GroupStep
       double Step(double hTry)
       {
          const NearOff nearOff(nearOn);
+         for (int p = 0; p < np; p++)   // what a part keeps over one step's attempts starts afresh (PartRecords)
+            part[p]->WipeStepWork();
          double h = hTry;
          nHalveDiag = 0;
          failContactBuf.clear();
@@ -1591,7 +1664,6 @@ namespace GroupStep
       // diagnostics of the last solve: its rounds, and per round (the first kRounds) the largest Newton change of a ball's speed (moveC, m/s) and rim speed
       // (moveW = R |dw|, m/s), the share of the Newton move taken (scale), the contacts in play, those sliding, and how many changed between sticking and sliding
       // or between touching and not since the round before
-      int lastRounds = 0;
       // why the last Step's attempts failed and were halved: P a part could not begin the step, B a part's forces could not be formed (the band's path would not
       // settle), G a first guess the layer check refused 60 times, N a residual not finite, L the linear solve
       // singular, R a Newton move the layer check refused 60 times, C not solved within maxRounds, E the end evaluation not finite
@@ -1773,8 +1845,6 @@ namespace GroupStep
          history[historyN % kHistory] = line;
          historyN++;
       }
-      int nHalveDiag = 0;
-      char failWhy = '?';
       char overWhy = '?';                   // why StepsOver lost its cycle (F, Z, G)
       std::string stopBuf;                  // VPX_GROUP_STOP_TRACE=1: this cycle's stop checks (the first 12)
       int stopLines = 0;
@@ -1830,7 +1900,6 @@ namespace GroupStep
       mutable long nowStamp = -1;
       long stamp = 0;            // counts changes of the positions (Configure, Accept)
       Buf<Hit> h1c, hmc;
-      bool trialCached = false;
       Buf<double> d0s;
       Buf<Hit> h0s;   // the start's terms (hinge_piece_sum; nt 0 otherwise)
       Buf<Ball> b1r, bmr;        // InRange's moved balls
@@ -1842,7 +1911,6 @@ namespace GroupStep
       Buf<V3> evF, evM, evDc, evDw, evWm, esA0, esAl0;
       // the stop search's first guess: the accelerations of this step's last solve (same start state), so a re-solve at a nearby length starts near its answer
       Buf<V3> warmA, warmAl;
-      bool warmOn = false;
       void WarmFromSolve(double)
       {
          for (int i = 0; i < nb; i++)
@@ -1860,18 +1928,13 @@ namespace GroupStep
       Buf<char> prevSlipS, prevOnS;
       Buf<int> idxS;
       int jStride = 0;
-      double driveW = 0.0;
       Buf<int> partOff;
       // the parts' coordinates, one list (coordOff: each part's first): as they are this attempt, the unknown of each (-1 = none), the moves a probe is at, the balls' reaction on each and on each part in this evaluation
       Buf<int> coordOff, cUnk;
-      int nCoord = 0;
       Buf<CoordInfo> ci;
       Buf<double> qEnd, qMid, qF;
       Buf<V3> loadF;
-      bool carried = false;      // a shape of this group is carried by a part
       static constexpr int kGradMax = 3 + 7;   // a discrete gradient's entries: a ball's centre and a hit's columns (two balls: 6)
-      int nUnk = 0;              // unknowns of the step being solved
-      bool partEvalFailed = false;
       Buf<char> farNow;          // not touching and out of reach in this attempt
       // [Contact] hinge_piece_sum: per contact, the pieces of its surface the ball can reach in this attempt (Shape::NearPieces), built at its start; every probe
       // of the attempt (start, middle, end, every Newton try) takes the same list. A piece off it has depth <= 0 at every place of the step (checked after the
@@ -1880,9 +1943,7 @@ namespace GroupStep
       std::vector<std::array<double, 4>> tgS;   // (Eval, hinge_piece_sum: each term's gradient, its chord slope and whether it presses; kept to save the allocation)
       std::vector<double> tkS;
       std::vector<char> tOnS;
-      bool nearOn = false;
       struct NearOff { bool &f; explicit NearOff(bool &b) : f(b) { f = false; } ~NearOff() { f = false; } };   // a step's lists end with it (Step, EnergyStep)
-      double nearGrow = 1.0;     // the reach's factor: x4 each time a solve's end left its list (the lists then grow to all the pieces)
       static bool NearAllOn() { static const bool on = []() { const char *const e = getenv("VPX_HINGE_NEAR_ALL"); return e != nullptr && atoi(e) != 0; }(); return on; }   // diagnostics: every list = all pieces (A/B)
       // the lists of this attempt (after the parts' BeginStep: their rates now). The reach: the ball's travel 2 |v| h and the part's turn 2 |rate| h (times nearGrow),
       // and never less than the far test's bound (OutOfReach), so a contact that is not far has its deepest piece listed and its gap, normal and law are those of all
@@ -3252,6 +3313,7 @@ namespace GroupStep
          for (int p = 0; p < np; p++)
          {
             part[p]->guessAccel = set.partGuessAccel;
+            part[p]->WipeAttemptWork();   // (an attempt's own values start afresh: PartRecords)
             if (!part[p]->BeginStep(ball, nb, h, x, partOff[p]))
             {
                failWhy = 'P';
@@ -3293,7 +3355,6 @@ namespace GroupStep
             nearGrow *= 4.0;   // a piece off a list was reached: the lists anew from a longer reach, the attempt again
          }
       }
-      bool farOff = false;
       // diagnostics, off by default (VPX_GROUP_ROUND_TRACE=1): each round of an attempt, the residual by row in speed units and the parts' row terms; the first failed attempt of a step kept in failRoundBuf
       static bool RoundTraceOn() { static const bool on = []() { const char *const e = getenv("VPX_GROUP_ROUND_TRACE"); return e != nullptr && atoi(e) != 0; }(); return on; }
       bool searchTrace = false;
@@ -3875,7 +3936,7 @@ namespace GroupStep
    inline bool AdvanceAlone(Part &p, const double dt, const int tMs, Books *const out = nullptr)
    {
       static Group g;
-      g.nb = g.ns = g.np = 0;
+      g.BeginUse();
       g.set = EngineSettings();
       g.AddPart(&p);
       g.Configure();

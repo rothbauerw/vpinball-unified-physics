@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -26,20 +27,30 @@ namespace HingeGroup
    using RubberContact::RubberParams;
    using RubberContact::TubeProbe;
 
-   class Part : public GroupStep::BodyPart
+   // its own state beside the body's (PartRecords)
+   struct HingeState
+   {
+      V3 g = V3(0.0, 0.0, -9.81); // the gravity the part feels: gravity minus the cabinet acceleration (the owner's, between cycles; kept so a replay runs on the same)
+      bool switchClosed = false;
+      double prevWrapped = 0.0;   // (a spinner with no switch: where it was against its switch angle)
+   };
+
+   class Part : public GroupStep::BodyPart, public HingeState
    {
    public:
+      Part()
+      {
+         KeepState<HingeState>(this);
+         KeepQueue(&swLog);
+      }
       RubberParams rp;            // ball contact law
       V3 A, E, N, Z;              // axis point and frame
-      V3 g = V3(0.0, 0.0, -9.81); // the gravity the part feels: gravity minus the cabinet acceleration
       HingeBody::MassProps mp;
       double rPin = 0.6e-3, muPivot = 0.3, cViscous = 0.0;
       bool pieceSum = false;      // [Contact] hinge_piece_sum (SetPieceSum): the contact as its union's terms, each stepped by its own exact difference (ProbeTerms)
       std::vector<HingeBody::Cam> cams;
       double kBlade = 0.0, aBlade = 0.0;   // a one-sided torsion spring: a blade pressed once theta is past aBlade
       std::vector<char> swLog;    // what happened, in order, until the owner reads it: 1 switch closed, 0 opened, 2 a spin
-      bool switchClosed = false;
-      double prevWrapped = 0.0;   // (a spinner with no switch: where it was against its switch angle)
 
       // ---- what the derived part supplies ----
       virtual double BendKb(double y) const = 0;           // the bend stiffness out of the part's plane at the distance y from the axis
@@ -422,24 +433,12 @@ namespace HingeGroup
          return pin.Length();
       }
       void AfterMove() override { UpdateSwitches(); }
-      void SaveState() override
-      {
-         BodyPart::SaveState();
-         svSwitch = switchClosed;
-         svWrapped = prevWrapped;
-         svSwLog = swLog.size();
-      }
-      void RestoreState() override
-      {
-         BodyPart::RestoreState();
-         switchClosed = svSwitch;
-         prevWrapped = svWrapped;
-         swLog.resize(svSwLog);
-      }
       std::string StartNote() const override
       {
+         HingeState sv;
+         std::memcpy(&sv, SavedState() + sizeof(GroupStep::BodyState), sizeof sv);   // (its second state record)
          char s[200];
-         snprintf(s, sizeof s, " switch %d wrapped %.17g g %.17g %.17g %.17g", (int)svSwitch, svWrapped, g.x, g.y, g.z);
+         snprintf(s, sizeof s, " switch %d wrapped %.17g g %.17g %.17g %.17g", (int)sv.switchClosed, sv.prevWrapped, sv.g.x, sv.g.y, sv.g.z);
          return BodyPart::StartNote() + s;
       }
       // diagnostics (VPX_GROUP_HISTORY_TRACE): the body's note and the blade's share of the stored energy (uJ)
@@ -665,9 +664,6 @@ namespace HingeGroup
       double GravV(const double th) const { return -mp.m * (GravA() * std::cos(th) + GravB() * std::sin(th)); }
       double GravVp(const double th) const { return -mp.m * (-GravA() * std::sin(th) + GravB() * std::cos(th)); }
       double GravVpp(const double th) const { return mp.m * (GravA() * std::cos(th) + GravB() * std::sin(th)); }
-      bool svSwitch = false;
-      double svWrapped = 0.0;
-      size_t svSwLog = 0;
    };
 
    // One side of a part, a surface it carries (the offline bench's; the engine has its own, on the same probe)

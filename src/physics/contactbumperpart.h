@@ -22,15 +22,24 @@
 
 namespace JetBumper
 {
-   class EnginePart : public ContactMovingPart
+   // what the engine side keeps (PartRecords: part of its state)
+   struct EngineState
+   {
+      bool collidable = true;          // false: the bumper is not there at all (no contact, no switch, no coil, no events, parts at rest)
+      bool idle = false, marked = false;
+      GroupStep::RestWatch rest;       // the rest rule's watch alone
+      double markZ = 0.0, markThx = 0.0, markThy = 0.0, markDr = 0.0;   // the state at the start of its last cycle in a group (AtRest)
+   };
+
+   class EnginePart : public ContactMovingPart, public EngineState
    {
    public:
+      EnginePart() { KeepState<EngineState>(this); }
       BumperGroup::Part gp;            // the skirt, the ring and the coil, as a part of the group
       GroupStep::Settings partSet;     // the gravity the part feels (SetGravity)
       BumperGroup::RevolveShape ringShape, bodyShape;
       V3 origin;                       // the foot of the bumper's axis on the playfield, world (m)
       RubberContact::BallSI ball;
-      bool collidable = true;          // false: the bumper is not there at all (no contact, no switch, no coil, no events, parts at rest)
       long failedSteps = 0, aloneSteps = 0, energySteps = 0;   // a step of the part alone could not be solved (the detector: rule 8); steps taken alone (cost); of them taken on energy alone (rule 8)
       int bookMs = 0;                  // the table's time, for the book of a cycle alone
 
@@ -245,52 +254,6 @@ namespace JetBumper
          return steps;
       }
 
-      // The dynamic state, plain bytes (the settings and the shapes are not state). Restoring drops the switch changes since: the replay makes them again
-      struct Dyn
-      {
-         BumperGroup::Part::Saved s;
-         double steppedS, markZ, markThx, markThy, markDr;
-         bool idle, steppedThisCycle, collidable, marked;
-         GroupStep::RestWatch rest;
-      };
-      void SaveState(State &out) const override
-      {
-         Dyn d;
-         std::memset(&d, 0, sizeof d);   // (the padding too: saved bytes must be the same for the same state)
-         gp.Fill(d.s);
-         d.steppedS = steppedS;
-         d.idle = idle;
-         d.rest = rest;
-         d.steppedThisCycle = steppedThisCycle;
-         d.collidable = collidable;
-         d.markZ = markZ;
-         d.markThx = markThx;
-         d.markThy = markThy;
-         d.markDr = markDr;
-         d.marked = marked;
-         out.used = 0;
-         Put(out, d);
-      }
-      void RestoreState(const State &in) override
-      {
-         StateReader r(in);
-         Dyn d;
-         r.Get(d);
-         gp.Load(d.s);
-         gp.swLog.clear();
-         steppedS = d.steppedS;
-         idle = d.idle;
-         rest = d.rest;
-         steppedThisCycle = d.steppedThisCycle;
-         collidable = d.collidable;
-         markZ = d.markZ;
-         markThx = d.markThx;
-         markThy = d.markThy;
-         markDr = d.markDr;
-         marked = d.marked;
-         events.clear();
-      }
-
       std::string StateNote() const override
       {
          char buf[300];
@@ -302,10 +265,7 @@ namespace JetBumper
    private:
       static constexpr int kSurfaces = 3;
       double m_reach = 0.0;
-      bool idle = false, gravityKnown = false;
-      GroupStep::RestWatch rest;   // the rest rule's watch alone
+      bool gravityKnown = false;
       double RestSpeed() const { return std::fabs(gp.vz) + (std::fabs(gp.wx) + std::fabs(gp.wy)) * gp.reach + std::fabs(gp.vr); }   // the skirt's and ring's surface speed bound, m/s
-      double markZ = 0.0, markThx = 0.0, markThy = 0.0, markDr = 0.0;   // the state at the start of its last cycle in a group (AtRest)
-      bool marked = false;
    };
 }

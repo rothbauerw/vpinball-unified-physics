@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "physics/groupstep.h"
+#include "physics/partrecords.h"
 #include "physics/rubbercontact.h"
 
 namespace GroupStep
@@ -29,7 +30,8 @@ namespace GroupStep
    // Steel on steel (E 200 GPa, nu 0.3, both bodies): E* = E / (2 (1 - nu^2))
    constexpr double kSteelEstar = 200e9 / (2.0 * (1.0 - 0.3 * 0.3));
 
-   // A stop: side +1 blocks q above at, side -1 blocks q below it; touched at a lever from the axis (1 for a body that slides). A driven stop moves at toward target at rate.
+   // A stop: side +1 blocks q above at, side -1 blocks q below it; touched at a lever from the axis (1 for a body that slides). A driven stop moves at toward target at rate. Part of the body's state (plain bytes);
+   // its restitution table is a setting the body keeps beside it (BodyStopLaw)
    struct BodyStop
    {
       double at = 0.0;
@@ -41,17 +43,6 @@ namespace GroupStep
       bool touching = false;
       double target = 0.0, rate = 0.0;   // rate 0 = fixed
       double speed = 0.0;                // its own rate over the step being solved
-      // the restitution of the stop's contact by the closing speed at the lever (the viscoelastic law: it falls slowly with speed); log-spaced from kEV0, a factor kEFac apart
-      static constexpr int kE = 12;
-      static constexpr double kEV0 = 1e-4, kEFac = 3.0;
-      double eTab[kE] = {};
-      double Restitution(const double v) const
-      {
-         const double u = v > kEV0 ? std::log(v / kEV0) / std::log(kEFac) : 0.0;
-         const int i = std::min((int)u, kE - 2);
-         const double f = std::min(u - i, 1.0);
-         return eTab[i] + (eTab[i + 1] - eTab[i]) * f;
-      }
       double EffMass(const double m) const { return m / (lever * lever); }
       double HeldEnergy(const double F) const { return F > 0.0 && k > 0.0 ? 0.4 * F * std::pow(F / k, 2.0 / 3.0) : 0.0; }   // the squash a pressing force holds: 2/5 F d, with k d^1.5 = F
       double SpeedNow() const { return rate > 0.0 && at != target ? (target > at ? rate : -rate) : 0.0; }
@@ -62,6 +53,25 @@ namespace GroupStep
          const double a = at + speed * h;
          return speed > 0.0 ? std::min(a, target) : std::max(a, target);
       }
+   };
+   // the restitution of the stop's contact by the closing speed at the lever (the viscoelastic law: it falls slowly with speed); log-spaced from kEV0, a factor kEFac apart
+   struct BodyStopLaw
+   {
+      static constexpr int kE = 12;
+      static constexpr double kEV0 = 1e-4, kEFac = 3.0;
+      double eTab[kE] = {};
+      double Restitution(const double v) const
+      {
+         const double u = v > kEV0 ? std::log(v / kEV0) / std::log(kEFac) : 0.0;
+         const int i = std::min((int)u, kE - 2);
+         const double f = std::min(u - i, 1.0);
+         return eTab[i] + (eTab[i + 1] - eTab[i]) * f;
+      }
+   };
+   // a stop as its owner places it: the stop and its law
+   struct BodyStopPlace : BodyStop
+   {
+      BodyStopLaw law;
       // k and the restitution table: steel on steel at the effective radius reff, restitution e at the reference speed vRef (m/s at the lever), for the body's mass at the lever
       void Setup(const double mass, const double reff, const double e, const double vRef)
       {
@@ -71,9 +81,9 @@ namespace GroupStep
          rp.eMpa = kSteelEstar * 1e-6;
          rp.normalLoss = false;
          const double mEff = mass / (lever * lever), gamma = RubberContact::CalibrateKK(rp, reff, mEff, vRef, e);
-         double v = kEV0;
-         for (int i = 0; i < kE; i++, v *= kEFac)
-            eTab[i] = RubberContact::ImpactRestitutionKK(rp, reff, mEff, gamma, v);
+         double v = BodyStopLaw::kEV0;
+         for (int i = 0; i < BodyStopLaw::kE; i++, v *= BodyStopLaw::kEFac)
+            law.eTab[i] = RubberContact::ImpactRestitutionKK(rp, reff, mEff, gamma, v);
       }
    };
 
@@ -89,16 +99,46 @@ namespace GroupStep
       long stopHits = 0, rests = 0, leaves = 0;
    };
 
-   class BodyPart : public Part
+   // The body's values by lifetime (PartRecords): its state, what one step keeps over its attempts, what one attempt keeps
+   struct BodyState
+   {
+      static constexpr int kMaxStops = 4;
+      double q = 0.0, rate = 0.0;
+      double qAtStepStart = 0.0;
+      FixedList<BodyStop, kMaxStops> stops;
+      BodyBooks bk;
+      int pinStop = -1;
+      bool pinHolds = false;
+      double pinS = 0.0, pinK = 0.0;   // the pin's spring: its twist (rad) and stiffness at the end of the last step (pivot_model 1)
+      double gGiven = 0.0, pendDrive = 0.0, pendLoss = 0.0;
+      double gBallQ = 0.0;   // the balls' load at the last evaluation: the next cycle's CycleBegin reads it before any Loads
+      bool gPinnedInStep = false;   // PinOnStop put it on its stop in this step: not freed again in the same step (an energy step that turns back leaves it for the next step, which reads it)
+      double aLast = 0.0;    // the coordinate's acceleration over the last step taken (the next step's first guess, part_guess_accel; kept across cycles)
+      V3 gBallF;
+   };
+   struct BodyAttemptWork
+   {
+      double gH = 1e-3, gDrive = 0.0, gViscous = 0.0, gFriction = 0.0;
+      double gQ = 0.0;   // the force of the last Eval
+      double rowT[10] = {};   // the wire row's terms at the last evaluation (pivot_model 1), each as it enters Res (N m s): inertia, stored (spring + gravity), viscous, pin, balls; the pin's K, static limit, holds, s1; dq
+      mutable int gExcessStop = -1;   // what the last StopExcess found, for ArrivingAtStop and PinOnStop
+      mutable double gDqLast = 0.0;
+   };
+
+   class BodyPart : public Part, public BodyState, protected BodyAttemptWork
    {
    public:
-      double q = 0.0, rate = 0.0, mass = 1.0;
+      BodyPart()
+      {
+         KeepState<BodyState>(this);
+         WipeEachAttempt<BodyAttemptWork>(this);
+         KeepQueue(&stopEvents);
+      }
+      double mass = 1.0;
       double reach = 0.05;      // m: the lever that turns the rate into a speed, for the solver's units
       double maxMove = 0.05;    // a Newton round moves it at most this
-      double qAtStepStart = 0.0;
-      std::vector<BodyStop> stops;
+      BodyStopLaw stopLaw[kMaxStops];   // each stop's restitution (a setting)
       std::vector<BodyStopEvent> stopEvents;   // until the owner reads them
-      BodyBooks bk;
       // the pin's law: a stick spring in its hole (it holds to the static limit, slides at dynRatio times it)
       double dynRatio = 0.85;   // [Contact] mu_dynamic_ratio
 
@@ -122,10 +162,12 @@ namespace GroupStep
          DrivenTouch(pendDrive, pendLoss);
          gGiven = 0.0;
       }
-      int PlaceStop(BodyStop s)
+      int PlaceStop(const BodyStopPlace &p)
       {
+         BodyStop s = p;
          s.touching = false;
          s.armed = s.side * (q - s.at) <= 0.0;
+         stopLaw[stops.size()] = p.law;
          stops.push_back(s);
          return (int)stops.size() - 1;
       }
@@ -364,60 +406,20 @@ namespace GroupStep
          DrivenTouch(driveJ, lossJ);
          AfterMove();
       }
-      // The dynamic state as plain bytes: for the engine's snapshot and the net's retake (the settings are not state)
-      static constexpr int kMaxStops = 4;
-      struct Dyn
-      {
-         double q, rate, pendDrive, pendLoss, qAtStepStart, gBallQ, gGiven, pinS, pinK, aLast;
-         V3 gBallF;
-         BodyBooks bk;
-         struct { double at, target, rate, speed; bool enabled, armed, touching; } stop[kMaxStops];
-         int pin;
-         bool pinnedInStep, pinHolds;
-      };
-      void Fill(Dyn &d) const
-      {
-         assert(stops.size() <= kMaxStops);
-         d.q = q; d.rate = rate; d.pendDrive = pendDrive; d.pendLoss = pendLoss; d.qAtStepStart = qAtStepStart; d.gBallQ = gBallQ; d.gGiven = gGiven; d.gBallF = gBallF; d.bk = bk; d.pin = pinStop; d.pinnedInStep = gPinnedInStep; d.pinS = pinS; d.pinK = pinK; d.pinHolds = pinHolds; d.aLast = aLast;
-         for (size_t i = 0; i < stops.size(); i++)
-         {
-            const BodyStop &s = stops[i];
-            d.stop[i].at = s.at; d.stop[i].target = s.target; d.stop[i].rate = s.rate; d.stop[i].speed = s.speed; d.stop[i].enabled = s.enabled; d.stop[i].armed = s.armed; d.stop[i].touching = s.touching;
-         }
-      }
-      void Load(const Dyn &d)
-      {
-         q = d.q; rate = d.rate; pendDrive = d.pendDrive; pendLoss = d.pendLoss; qAtStepStart = d.qAtStepStart; gBallQ = d.gBallQ; gGiven = d.gGiven; gBallF = d.gBallF; bk = d.bk; pinStop = d.pin; gPinnedInStep = d.pinnedInStep; pinS = d.pinS; pinK = d.pinK; pinHolds = d.pinHolds; aLast = d.aLast;
-         for (size_t i = 0; i < stops.size(); i++)
-         {
-            BodyStop &s = stops[i];
-            s.at = d.stop[i].at; s.target = d.stop[i].target; s.rate = d.stop[i].rate; s.speed = d.stop[i].speed; s.enabled = d.stop[i].enabled; s.armed = d.stop[i].armed; s.touching = d.stop[i].touching;
-         }
-      }
-      // ---- the net (Group::EnergyStep): counted and reported, not expected to fire ----
-      void SaveState() override
-      {
-         std::memset(&sv, 0, sizeof sv);
-         Fill(sv);
-         svEvents = stopEvents.size();
-      }
-      void RestoreState() override
-      {
-         Load(sv);
-         stopEvents.resize(svEvents);
-      }
-      // after an energy step: the state it saved at the step's start, full precision (for an exact replay; rad, rad/s, the ball load in N m and N). The books are left out (counted, never read by a step)
+      // after an energy step: the state it saved at the step's start, full precision (for an exact replay; rad, rad/s, the ball load in N m and N). The books are left out (counted, never read by a step).
       std::string StartNote() const override
       {
+         BodyState sv;
+         std::memcpy(&sv, SavedState(), sizeof sv);   // (its first state record)
          char s[700];
          snprintf(s, sizeof s, "q %.17g rate %.17g qStart %.17g pendDrive %.17g pendLoss %.17g ballQ %.17g ballF %.17g %.17g %.17g given %.17g pin %d pinnedInStep %d pinHolds %d pinS %.17g pinK %.17g stops %d",
-            sv.q, sv.rate, sv.qAtStepStart, sv.pendDrive, sv.pendLoss, sv.gBallQ, sv.gBallF.x, sv.gBallF.y, sv.gBallF.z, sv.gGiven, sv.pin, (int)sv.pinnedInStep, (int)sv.pinHolds,
-            sv.pinS, sv.pinK, (int)stops.size());
+            sv.q, sv.rate, sv.qAtStepStart, sv.pendDrive, sv.pendLoss, sv.gBallQ, sv.gBallF.x, sv.gBallF.y, sv.gBallF.z, sv.gGiven, sv.pinStop, (int)sv.gPinnedInStep, (int)sv.pinHolds,
+            sv.pinS, sv.pinK, (int)sv.stops.size());
          std::string msg = s;
-         for (size_t i = 0; i < stops.size() && i < kMaxStops; i++)
+         for (int i = 0; i < sv.stops.size(); i++)
          {
-            snprintf(s, sizeof s, " {stop %d side %d at %.17g target %.17g rate %.17g speed %.17g enabled %d armed %d touching %d}", (int)i, stops[i].side,
-               sv.stop[i].at, sv.stop[i].target, sv.stop[i].rate, sv.stop[i].speed, (int)sv.stop[i].enabled, (int)sv.stop[i].armed, (int)sv.stop[i].touching);
+            const BodyStop &t = sv.stops[i];
+            snprintf(s, sizeof s, " {stop %d side %d at %.17g target %.17g rate %.17g speed %.17g enabled %d armed %d touching %d}", i, t.side, t.at, t.target, t.rate, t.speed, (int)t.enabled, (int)t.armed, (int)t.touching);
             msg += s;
          }
          return msg;
@@ -440,8 +442,6 @@ namespace GroupStep
       // s scaled by K0 / K1) the stored energy it can no longer hold.
       static constexpr double kPinShearTan = 0.4;
       struct PinMove { double M = 0.0, s1 = 0.0, K = 0.0, c = 0.0, loss = 0.0; bool holds = false; };
-      // the wire row's terms at the last evaluation (pivot_model 1), each as it enters Res (N m s): inertia, stored (spring + gravity), viscous, pin, balls; the pin's K, static limit, holds, s1; dq
-      double rowT[10] = {};
       std::string RowNote() const override
       {
          char line[300];
@@ -475,7 +475,7 @@ namespace GroupStep
             n += snprintf(line + n, sizeof line - n, " | res %.5g N m s (%.4g m/s)", Res[off], Res[off] / mass * reach);
          }
          std::string note = line;
-         for (size_t i = 0; i < stops.size(); i++)
+         for (int i = 0; i < stops.size(); i++)
          {
             const BodyStop &s = stops[i];
             snprintf(line, sizeof line, " {stop %d side %d at %.5f deg excess %.4g deg en %d armed %d touching %d}", (int)i, s.side, s.at * 57.29577951308232, s.side * (q + dq - s.at) * 57.29577951308232,
@@ -579,7 +579,7 @@ namespace GroupStep
          if (!s.touching)
             stopEvents.push_back({ i, std::fabs(rate) });
          s.touching = true;
-         const double e = s.Restitution(vClose), vOut = e * vClose;
+         const double e = stopLaw[i].Restitution(vClose), vOut = e * vClose;
          double rNew = s.speed - e * vr;
          if (0.5 * s.EffMass(mass) * vOut * vOut <= s.HeldEnergy(F))
          {
@@ -625,17 +625,5 @@ namespace GroupStep
             }
          }
       }
-
-      int pinStop = -1;
-      bool gPinnedInStep = false, pinHolds = false;
-      double pinS = 0.0, pinK = 0.0;   // the pin's spring: its twist (rad) and stiffness at the end of the last step (pivot_model 1)
-      double gH = 1e-3, gGiven = 0.0, gDrive = 0.0, gViscous = 0.0, gFriction = 0.0, pendDrive = 0.0, pendLoss = 0.0;
-      double gBallQ = 0.0;
-      double aLast = 0.0, gQ = 0.0;   // the coordinate's acceleration over the last step taken (the next step's first guess, part_guess_accel; kept across cycles: it is in Dyn, so a retake is exact); the force of the last Eval
-      V3 gBallF;
-      mutable int gExcessStop = -1;
-      mutable double gDqLast = 0.0;
-      Dyn sv{};
-      size_t svEvents = 0;
    };
 }

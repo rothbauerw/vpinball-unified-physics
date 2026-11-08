@@ -21,13 +21,21 @@
 
 namespace HingeModel
 {
-   class Engine : public ContactMovingPart
+   // what the engine side keeps (PartRecords: part of its state)
+   struct EngineState
+   {
+      bool collidable = true;          // false: the balls pass; it keeps moving under gravity and its drive
+      bool idle = false, marked = false;
+      double markQ = 0.0;              // the angle at the start of its last cycle in a group (AtRest)
+      GroupStep::RestWatch rest;       // the rest rule's watch alone
+   };
+
+   class Engine : public ContactMovingPart, public EngineState
    {
    public:
-      explicit Engine(HingeGroup::Part &part) : gp(part) {}
+      explicit Engine(HingeGroup::Part &part) : gp(part) { KeepState<EngineState>(this); }
       HingeGroup::Part &gp;
       RubberContact::BallSI ball;
-      bool collidable = true;          // false: the balls pass; it keeps moving under gravity and its drive
       long failedSteps = 0, aloneSteps = 0, energySteps = 0;   // the part alone: a step not solved (the detector: rule 8), steps taken (cost), of them taken on energy alone (rule 8)
       int bookMs = 0;                  // the table's time, for the book of a cycle alone
 
@@ -186,67 +194,11 @@ namespace HingeModel
          return steps;
       }
 
-      // The dynamic state, plain bytes (the settings and the shape are not state). Restoring drops the events since the save (the replay makes them again) and keeps those before it
-      struct Dyn
-      {
-         GroupStep::BodyPart::Dyn b;
-         V3 g;
-         double steppedS, markQ, prevWrapped;
-         bool idle, steppedThisCycle, collidable, marked, switchClosed;
-         GroupStep::RestWatch rest;
-         uint32_t nSwLog, nStopEvents, nEvents;   // the events made before the save: a restore keeps them (only those since are made again by the replay)
-      };
-      void SaveState(State &out) const override
-      {
-         Dyn d;
-         std::memset(&d, 0, sizeof d);   // (the padding too: saved bytes must be the same for the same state)
-         gp.Fill(d.b);
-         d.g = gp.g;
-         d.steppedS = steppedS;
-         d.markQ = markQ;
-         d.prevWrapped = gp.prevWrapped;
-         d.idle = idle;
-         d.rest = rest;
-         d.steppedThisCycle = steppedThisCycle;
-         d.collidable = collidable;
-         d.marked = marked;
-         d.switchClosed = gp.switchClosed;
-         d.nSwLog = (uint32_t)gp.swLog.size();
-         d.nStopEvents = (uint32_t)gp.stopEvents.size();
-         d.nEvents = (uint32_t)events.size();
-         out.used = 0;
-         Put(out, d);
-      }
-      void RestoreState(const State &in) override
-      {
-         StateReader r(in);
-         Dyn d;
-         r.Get(d);
-         gp.Load(d.b);
-         gp.g = d.g;
-         gp.switchClosed = d.switchClosed;
-         gp.prevWrapped = d.prevWrapped;
-         gp.swLog.resize(std::min<size_t>(gp.swLog.size(), d.nSwLog));
-         gp.stopEvents.resize(std::min<size_t>(gp.stopEvents.size(), d.nStopEvents));
-         steppedS = d.steppedS;
-         markQ = d.markQ;
-         idle = d.idle;
-         rest = d.rest;
-         steppedThisCycle = d.steppedThisCycle;
-         collidable = d.collidable;
-         marked = d.marked;
-         events.resize(std::min<size_t>(events.size(), d.nEvents));
-      }
       std::string StateNote() const override
       {
          char buf[200];
          std::snprintf(buf, sizeof buf, "angle %.2f deg at %.2f rad/s, on stop %d, stuck %d, switch %d, asleep %d", gp.q * 180.0 / GroupStep::kPi, gp.rate, gp.PinStop(), (int)gp.Stuck(), (int)gp.switchClosed, (int)idle);
          return buf;
       }
-
-   private:
-      bool idle = false, marked = false;
-      double markQ = 0.0;   // the angle at the start of its last cycle in a group (AtRest)
-      GroupStep::RestWatch rest;   // the rest rule's watch alone
    };
 }

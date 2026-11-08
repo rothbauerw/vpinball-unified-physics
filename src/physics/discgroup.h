@@ -104,15 +104,21 @@ namespace DiscGroup
       }
    };
 
-   class Part : public GroupStep::BodyPart
+   // its own state beside the body's (PartRecords)
+   struct DiscState
+   {
+      double volts = 0.0;       // the drive the script set; an input, not changed by the step (kept so a replay runs on the drive it ran on)
+   };
+
+   class Part : public GroupStep::BodyPart, public DiscState
    {
    public:
+      Part() { KeepState<DiscState>(this); }
       Motor motor;
       V3 centre;                // centre of the top face, m
       double R = 0.0762;        // disc radius, m
       double zBottom = 0.0;     // bottom of the side when the disc stands proud of the playfield (= centre.z when it is flush: a disc with no side), m
       double edgeRhoM = 1e-3;   // the rim edge counts as rounded to this radius (Hertz effective radius, as ProbeTriangles' edgeRho)
-      double volts = 0.0;       // the drive the script set; an input, not changed by the step
 
       void Build(const Motor &m, const V3 &faceCentre, const double radius, const double bottom, const double edgeRho)
       {

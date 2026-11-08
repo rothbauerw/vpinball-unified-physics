@@ -207,7 +207,7 @@ namespace WireSwitchGroup
          switchMake = AngleAtDrop(s.closeMm * mm);
          switchBreak = AngleAtDrop(std::max(s.closeMm - s.releaseMm, 0.0) * mm);
          const auto stop = [&](const double at, const int side) {
-            GroupStep::BodyStop st;
+            GroupStep::BodyStopPlace st;
             st.at = at;
             st.side = side;
             st.lever = s.stopArmMm * mm;

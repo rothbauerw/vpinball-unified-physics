@@ -45,27 +45,56 @@ namespace BumperGroup
       long pulses = 0;
    };
 
-   class Part : public GroupStep::Part
+   struct StepLosses { double lip = 0.0, rim = 0.0, spoon = 0.0, spring = 0.0, viscous = 0.0; };
+
+   // The part's values by lifetime (PartRecords): its state, what one step keeps over its attempts, what one attempt keeps
+   struct BumperState
    {
-   public:
-      static constexpr int kZ = 0, kThx = 1, kThy = 2, kR = 3;   // the coordinates
-      JB::Bumper cfg;           // its geometry, masses and materials
       PartBooks bk;
-      // state (SI)
       double z = 0.0, thx = 0.0, thy = 0.0, vz = 0.0, wx = 0.0, wy = 0.0;
       double t = 0.0;           // s, the time the part has been stepped
       bool closed = false;      // the switch
       int closures = 0;
       double tClose = -1.0;     // the first closure
-      double reach = 0.05;      // m, the lever that turns a tilt rate into a speed
       double dr = 0.0, vr = 0.0;   // the ring's drop and rate, down positive
       int ringStop = -1;        // -1 on the rest stop (no unknown), +1 on the coil stop (no unknown), 0 free
       double iCoil = 0.0;       // A
-      bool coilEnabled = true, pulseActive = false, pulseArmed = true;
+      bool pulseActive = false, pulseArmed = true;
       double pulseLeft = 0.0;
       bool extOn = false;       // external drive: the script's command
       double extVolts = -1.0, extDuty = 1.0;
       double coilOnS = 0.0, coilOnMaxS = 0.0;   // how long the coil has been commanded on, this episode and the longest (a detector's)
+      double gPendingStopJ = 0.0;   // the ring's energy a stop took in PinOnStop, booked by the next Accept (a retake's Accept books it too)
+   };
+   struct BumperStepWork
+   {
+      bool gTriedFree = false;   // FreedByStep freed the ring in this step: once a step
+   };
+   struct BumperAttemptWork
+   {
+      CoilModel::OverMove gCoil;
+      bool gCoilOn = false;
+      mutable bool gArriving = true;
+      double gLoad = 0.0;   // the balls' load on the ring at this attempt's evaluation (Loads); a step alone has no ball, so none (as a hinge's ClearLoads)
+      double gH = 1e-6, gVolts = 0.0, gFCoil = 0.0, gDrive = 0.0, gRingLoss = 0.0;
+      double gD0 = 0.0, gVs0 = 0.0, gLip0 = 0.0, gRim0 = 0.0, gALip0 = 0.0, gCz0 = 1.0, gA20 = 0.0;
+      StepLosses gLoss;
+   };
+
+   class Part : public GroupStep::Part, public BumperState, protected BumperStepWork, protected BumperAttemptWork
+   {
+   public:
+      Part()
+      {
+         KeepState<BumperState>(this);
+         WipeEachStep<BumperStepWork>(this);
+         WipeEachAttempt<BumperAttemptWork>(this);
+         KeepQueue(&swLog);
+      }
+      static constexpr int kZ = 0, kThx = 1, kThy = 2, kR = 3;   // the coordinates
+      JB::Bumper cfg;           // its geometry, masses and materials
+      double reach = 0.05;      // m, the lever that turns a tilt rate into a speed
+      bool coilEnabled = true;  // the table's (between cycles)
       std::vector<char> swLog;  // the switch's changes in order, until the owner reads them: 1 closed, 0 opened
       struct CoilStepBook { bool free = false; double dx = 0.0, v0 = 0.0, v1 = 0.0, i0 = 0.0, i1 = 0.0, h = 0.0, load = 0.0, elec = 0.0, res = 0.0, dField = 0.0, work = 0.0; };
       CoilStepBook cb;          // the last step's coil balance (a diagnostic)
@@ -152,6 +181,7 @@ namespace BumperGroup
          coilOnS = coilOnMaxS = 0.0;
          swLog.clear();
          gTriedFree = false;
+         gPendingStopJ = 0.0;
       }
       // One pulse now, as the table's or a test's solenoid command
       void FirePulse()
@@ -490,27 +520,6 @@ namespace BumperGroup
          if (!pulseActive && !closed)
             pulseArmed = true;
       }
-      // ---- the net (Group::EnergyStep): counted and reported, not expected to fire ----
-      struct Saved { double z, thx, thy, vz, wx, wy, t, tClose, dr, vr, iCoil, pulseLeft, extVolts, extDuty, coilOnS, coilOnMaxS; int closures, ringStop; bool closed, pulseActive, pulseArmed, extOn; size_t nLog; PartBooks bk; };
-      Saved sv{};
-      void Fill(Saved &o) const
-      {
-         o.z = z; o.thx = thx; o.thy = thy; o.vz = vz; o.wx = wx; o.wy = wy; o.t = t; o.tClose = tClose; o.dr = dr; o.vr = vr; o.iCoil = iCoil; o.pulseLeft = pulseLeft; o.extVolts = extVolts; o.extDuty = extDuty; o.coilOnS = coilOnS; o.coilOnMaxS = coilOnMaxS;
-         o.closures = closures; o.ringStop = ringStop; o.closed = closed; o.pulseActive = pulseActive; o.pulseArmed = pulseArmed; o.extOn = extOn; o.nLog = swLog.size(); o.bk = bk;
-      }
-      void Load(const Saved &o)
-      {
-         z = o.z; thx = o.thx; thy = o.thy; vz = o.vz; wx = o.wx; wy = o.wy; t = o.t; tClose = o.tClose; dr = o.dr; vr = o.vr; iCoil = o.iCoil; pulseLeft = o.pulseLeft; extVolts = o.extVolts; extDuty = o.extDuty; coilOnS = o.coilOnS; coilOnMaxS = o.coilOnMaxS;
-         closures = o.closures; ringStop = o.ringStop; closed = o.closed; pulseActive = o.pulseActive; pulseArmed = o.pulseArmed; extOn = o.extOn; bk = o.bk;
-         gTriedFree = false;
-         gPendingStopJ = 0.0;
-      }
-      void SaveState() override { Fill(sv); }
-      void RestoreState() override
-      {
-         Load(sv);
-         swLog.resize(sv.nLog);
-      }
       void ScaleSpeeds(const double f) override { vz *= f; wx *= f; wy *= f; vr *= f; }
       void ExplicitMove(const double *Res, const int off, const double h, double *x) const override
       {
@@ -596,7 +605,6 @@ namespace BumperGroup
             o[a] = g[a] + cf * invM[a] * dq[a];
       }
       static constexpr double kEps16 = 16.0 * 2.220446049250313e-16;
-      struct StepLosses { double lip = 0.0, rim = 0.0, spoon = 0.0, spring = 0.0, viscous = 0.0; };
       // The chord of a function of the tilts over their move: g + (df - g . dq) dq / (dq . dq), so that the result . dq = df exactly. The two tilts have one weight, so nothing comes in from another coordinate; a mismatch within the rounding of f is left out
       static void TiltChord(const double g[2], const double df, const double noise, const double *dq, double o[2])
       {
@@ -682,13 +690,7 @@ namespace BumperGroup
       const GroupStep::Settings *set = nullptr;
       double invM[4] = { 0.0, 0.0, 0.0, 0.0 };
       double mR = 0.0, stroke = 0.0, bobbin = 0.0, fReturn = 0.0, kReturn = 0.0, cRing = 0.0;
-      CoilModel::OverMove gCoil;
-      bool gCoilOn = false, gTriedFree = false;
-      mutable bool gArriving = true;
-      double gH = 1e-6, gVolts = 0.0, gFCoil = 0.0, gLoad = 0.0, gDrive = 0.0, gRingLoss = 0.0, gPendingStopJ = 0.0;
       double m = 0.0, I = 0.0, cmZ = 0.0, tIn = 0.0, zRest = 0.0, zBase = 0.0, rLip = 0.0, rRim = 0.0, Lt = 0.0, kSpring = 0.0, fSpring = 0.0, aSpring = 0.0, kSeat = 0.0, cSeat = 0.0, kSpoon = 0.0, fSpoon = 0.0, cSpoon = 0.0, cZ = 0.0, cTilt = 0.0, taWall = 1.0, w = 0.0, dClose = 0.0, dOpen = 0.0, omLip = 0.0, omRim = 0.0;
-      double gD0 = 0.0, gVs0 = 0.0, gLip0 = 0.0, gRim0 = 0.0, gALip0 = 0.0, gCz0 = 1.0, gA20 = 0.0;
-      StepLosses gLoss;
    };
 
    // The skirt's top: a surface the part carries

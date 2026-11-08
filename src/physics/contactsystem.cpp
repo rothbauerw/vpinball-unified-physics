@@ -2419,8 +2419,7 @@ struct ContactSystemImpl
       static GroupStep::Group g;
       static std::deque<SurfaceShape> shapes;
       shapes.clear();
-      g.nb = g.ns = g.np = g.nf = 0;
-      g.nform = 0;
+      g.BeginUse();
       static std::deque<PullField> pulls;
       pulls.clear();
       for (const Magnets::CellPull &cp : Magnets::CellPulls())
@@ -2692,7 +2691,6 @@ struct ContactSystemImpl
       ringPairs.clear();
       if (ring || hasPart)
       {
-         g.ClearGuess();
          vStep = v0;
          for (int k = 0; k < g.ni; k++)
          {
@@ -4637,6 +4635,8 @@ namespace
       std::vector<BallPairState> pairs;
       std::vector<PartSnap> parts;
       std::vector<ContactSystemImpl::SleepGroup> sleep;   // pile sleep
+      int sleepNextId = 1;                                 // (the next pile's number: a pile formed in the step taken again gets the same one)
+      std::vector<const HitBall *> placed;                 // g_placed: the balls a script or the driver put since the last cycle (the step reads it; Step clears it after)
       double sleepCycleDt = 0.0;
       double frameUsedS = 0.0;   // g_frameUsedS: how much of the physics step the sub-intervals before this one took (Body::Begin's share of gravity and nudge owed to the later ones reads it, and Step advances it)
       size_t deferred = 0;
@@ -4668,6 +4668,8 @@ void ContactSystem::SaveStart()
       s.balls[i].sleepPos = hb.m_sleepPos;
    }
    s.sleep = ContactSystemImpl::g_sleep;
+   s.sleepNextId = ContactSystemImpl::g_sleepNextId;
+   s.placed = g_placed;
    s.sleepCycleDt = ContactSystemImpl::g_sleepCycleDt;
    s.frameUsedS = g_frameUsedS;
    s.contacts.resize(g_engaged.size());
@@ -4703,6 +4705,8 @@ static void RestoreSnap(const std::vector<HitBall *> *only)
    if (!s.valid)
       return;
    ContactSystemImpl::g_sleep = s.sleep;   // pile sleep: every ball's, whatever the replay restores of the rest
+   ContactSystemImpl::g_sleepNextId = s.sleepNextId;
+   g_placed = s.placed;
    ContactSystemImpl::g_sleepCycleDt = s.sleepCycleDt;
    g_frameUsedS = s.frameUsedS;   // (the step being taken again starts where this sub-interval started in the physics step)
    for (const BallSnap &b : s.balls)

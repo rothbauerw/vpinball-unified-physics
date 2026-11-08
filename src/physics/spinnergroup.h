@@ -79,7 +79,7 @@ namespace SpinnerGroup
          if (s.angleMaxDeg > s.angleMinDeg)
          {
             const auto stop = [&](const double angDeg, const int side) {
-               GroupStep::BodyStop st;
+               GroupStep::BodyStopPlace st;
                st.at = angDeg * deg;
                st.side = side;
                st.lever = s.stopArmMm * mm;

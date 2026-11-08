@@ -25,6 +25,8 @@
 
 #include "physics/rubbercontact.h"
 #include "physics/contactsurface.h"
+#include "physics/groupstep.h"
+#include "physics/partrecords.h"
 
 // Scale on the impact rule of the contact step (omega * h <= 0.2 in the contact system, 0.1 in a part's BallStep): VPX_OMEGAH_SCALE, default 1. A diagnostic knob for the step-size study of 2026-10-27.
 inline double ContactOmegaHScale()
@@ -33,9 +35,15 @@ inline double ContactOmegaHScale()
    return s;
 }
 
-namespace GroupStep { class Part; struct Hit; }
+// What the engine keeps of every moving part between its calls (PartRecords: part of its state)
+struct MovingPartState
+{
+   double steppedS = 0.0;           // how long the contact system stepped the part with its balls in this sub-interval (s); the host advances it alone for the rest
+   bool steppedThisCycle = false;   // the contact system stepped the part with the balls of an island this cycle (the host's own advance skips it once)
+   bool restTouched = false;        // a ball asleep in a pile touches it (the engine's pile sleep): the part does not sleep while one does (GroupStep::RestWatch)
+};
 
-class ContactMovingPart
+class ContactMovingPart : public PartRecords, public MovingPartState
 {
 public:
    using V3 = RubberContact::V3;
@@ -47,37 +55,21 @@ public:
       double value = 0.0;   // Hit: normal approach speed (m/s); Limit: angular speed (deg/s); BandHit: the cord's largest deflection under the ball (m); SlingFire: 1 = the script's trigger
    };
 
-   // A saved copy of a part's dynamic state, for rewinding an island (docs/unified-physics/archive/UnifiedContactDesign.txt section 11, point 2): plain bytes, no allocation. A part packs the values that change while it
-   // runs (position, speed, switch and drive state, stop contacts, held forces), not its settings or shape.
+   // A saved copy of a part's dynamic state, for rewinding an island (docs/unified-physics/archive/UnifiedContactDesign.txt section 11, point 2): plain bytes, no allocation. Its state records (PartRecords)
+   // and its group part's, whole: the values that change while it runs, not its settings or shape.
    struct State
    {
       alignas(8) unsigned char bytes[2048];
       size_t used = 0;
    };
-   template <class T> static void Put(State &s, const T &v)
-   {
-      assert(s.used + sizeof(T) <= sizeof(s.bytes));
-      std::memcpy(s.bytes + s.used, &v, sizeof(T));
-      s.used += sizeof(T);
-   }
-   struct StateReader
-   {
-      const State &s;
-      size_t pos = 0;
-      explicit StateReader(const State &st) : s(st) {}
-      template <class T> void Get(T &v)
-      {
-         assert(pos + sizeof(T) <= s.used);
-         std::memcpy(&v, s.bytes + pos, sizeof(T));
-         pos += sizeof(T);
-      }
-   };
 
    std::vector<Event> events;
-   double steppedS = 0.0;           // how long the contact system stepped the part with its balls in this sub-interval (s); the host advances it alone for the rest
-   bool steppedThisCycle = false;   // the contact system stepped the part with the balls of an island this cycle (the host's own advance skips it once)
-   bool restTouched = false;        // a ball asleep in a pile touches it (the engine's pile sleep): the part does not sleep while one does (GroupStep::RestWatch)
 
+   ContactMovingPart()
+   {
+      KeepState<MovingPartState>(this);
+      KeepQueue(&events);
+   }
    virtual ~ContactMovingPart() = default;
 
    virtual void SetBall(const RubberContact::BallSI &b) = 0;   // the ball of the present call (balls may differ in size and mass)
@@ -91,9 +83,28 @@ public:
    virtual double BallStep(const V3 &c, const V3 &v, double hMax) const = 0;
    virtual void StepInIsland(double h) = 0;
    virtual int AdvanceAlone(double dt) = 0;
-   // Save the dynamic state / put it back exactly. Restoring discards the events the part queued since (the replay makes them again) and rebuilds what is derived from the state.
-   virtual void SaveState(State &out) const = 0;
-   virtual void RestoreState(const State &in) = 0;
+   // Save the dynamic state / put it back exactly: its records and its group part's, copied whole (one shared code for every part). Restoring cuts each event queue back to what it held at the save
+   // (the replay makes the later ones again) and rebuilds what is derived from the state.
+   void SaveState(State &out)
+   {
+      GroupStep::Part *const g = GroupPart();
+      const size_t a = StateBytes(), b = g != nullptr ? g->StateBytes() : 0;
+      assert(a + b <= sizeof out.bytes);
+      SaveRecords(out.bytes);
+      if (g != nullptr)
+         g->SaveRecords(out.bytes + a);
+      out.used = a + b;
+   }
+   void RestoreState(const State &in)
+   {
+      GroupStep::Part *const g = GroupPart();
+      RestoreRecords(in.bytes);
+      if (g != nullptr)
+      {
+         g->RestoreRecords(in.bytes + StateBytes());
+         g->AfterRestore();
+      }
+   }
    // The fastest any point of the part's surfaces can move ALONG ITS OWN NORMAL (toward a ball) within the next cycle of cycleS seconds (m/s): its present speed plus what its own drive and springs
    // can add in a cycle. Balls are not counted (their contact is the contact). The engine adds it to the ball's closing speed when it decides to engage a ball and when it decides to let one go
    // (UnifiedContactDesign.txt 11 point 1, 12.1 d). A part may answer its whole point speed (an upper bound); a disc turning about its own axis answers 0 (its surfaces slide along themselves).
