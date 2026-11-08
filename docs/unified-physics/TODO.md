@@ -13,7 +13,7 @@ G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
 In flight: nothing running. Uncommitted: part_guess_accel + clamp trace (engine, 7 files). CLAUDE.md, hooks and memory are outside git.
-Review left, one doc at a time with the user: ReleasePlan (next). To write: disc and wire-switch sections (GroupStepDesign 22). Engine work uncommitted, not compiled.
+To write: wire-switch section (GroupStepDesign 23). Engine work uncommitted, not compiled.
 Next decision after that: the solution path for the wire switch not converging (N1); it decides N6. All items confirmed with the user 11-07.
 N1. Wire switch at 6 mm: Newton does not converge near touch (ringing); 252 us/ms vs 30 us limit. Shared-engine item: closes only when solved there. Riding wire pulled (poor design and code), may reopen.
 N2. Wires B, C, D as the real switches (B V wire, C angled straight wire, D arch through playfield); lever ends wrong. Derive sizes from photos (ball 1-1/16 in as scale) and parts drawings; user checks before build.
@@ -87,5 +87,5 @@ N11. After N1's solution: review shear_step_motion, term_arrival, damp_dir_slope
 5. Stock-file hooks to separate.
 6. Editor changes to replace the ini files (panels, settings saved in the .vpx); unified off per table for release.
 7. Old keys in 14 inis, then the unknown-key notice.
-10. PR to the official repo after 3-5.
+10. Review ReleasePlan with the user, then PR to the official repo after 3-5.
 13. Old-law switches to delete once accepted (CLAUDE.md): static/roll/pivot/step_model 0, island_reach 0, ball_pair_reach 0, ball_rest_substep_us.

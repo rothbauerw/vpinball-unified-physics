@@ -183,7 +183,17 @@ User: reusing the code was a main reason for the rewrite: a ring, a rubber wall 
 
 21.6 tolEndRes. A step counts as solved only with its residual within this, and a noise stop keeps the point it read: a noise stop could land past a light body's steep onset, 0.45 uJ (10-31). A part asks through Part::EndResidual, Group::Configure takes the largest, 0 with no such part: a table with no gate or spinner keeps its bytes (six_0 md5). A cord, bat or bumper in one group with a gate or spinner takes it for those cycles.
 
-22. To be written: the turntable disc and the wire switches (WireA-D, Inder blade) on the group step. Both run on it; neither has a section yet.
+22. The turntable disc on the group step (reviewed with the user 2026-11-07)
+
+22.1 One unknown, nothing stored. The disc is a BodyPart (21.1): one body turning about its vertical axis, the unknown its turn over the step. A disc turning about its own axis maps its surfaces onto themselves: no depth changes with the turn, so it never closes on a ball by its own motion, has no stored energy and no stops.
+
+22.2 Motor. Powered: I dw/dt = Ts V / Vrated - kTot w - Tf sign(w). The motor's torque-speed line is split into a held torque whose work is counted (the drive, the only one) and its slope as a viscous loss. Ts and kTot come from free_rpm at rated volts and either the stall torque or the spin-up time (95 % in three time constants). The script sets the voltage; the speed is an output. The winding's inductance is left out (milliseconds against a 1 s spin-up).
+
+22.3 Bearing. Unpowered: I dw/dt = -b w - Tf sign(w). Tf is the bearing and gear train's Coulomb torque with BodyPart's stick rule: a still disc stays still until the other torques pass it, then slides at mu_dynamic_ratio times it. The stick spring is the 1/4 in steel shaft's torsion, G J / L over 30 mm (user 2026-11-04). The inertia is not a key: the friction alone takes the free disc from free_rpm to 5 % in ramp_down_s, I = Tslide ramp_down_s / (0.95 w), at least that of a 1/8 in steel plate of the disc's radius; only if the floor applies does a viscous drag b make up the rest.
+
+22.4 Balls. A ball meets the disc through the shared surface law with the surface moving at w x r: the disc is a carried surface of the group, and the ball's reaction turns the disc in the same solve. Shape: a solid cylinder from its bottom up to the top face (a flush disc is the top face alone); past the rim the edge counts as rounded to edge_rho, as any face edge. The playfield gets a hole of the disc's radius plus its gap (default 1/16 in), carved in the playfield's contact.
+
+23. To be written: the wire switches (WireA-D, Inder blade) on the group step. They run on it; the agreed requirements and paper design are in runs/2026-11-03-switch-requirements.
 
 
 == G. Bands ==
