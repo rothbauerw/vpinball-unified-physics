@@ -367,6 +367,76 @@ namespace GroupStep
       return s;
    }
 
+   // One rest rule for every moving part (ModelStandards 3c: a part with nothing driving it and nothing touching it sleeps), alone and in a group alike:
+   // nothing drives it (each part names its drives: a coil's supply, a pulse, a moving stop, a pending trigger, a motor), no ball touches it, and over one whole cycle no point of its surface
+   // moved more than kMoveM, nor could its surface speed move it more in the next cycle. Alone, the time watched adds up over the part's steps (a cycle can come in shares); a move past the
+   // limit, a drive or a touch starts the watch again from where the part is. In a group the window is the group's cycle (from the part's mark at CycleBegin), with the same limit.
+   struct RestWatch
+   {
+      static constexpr double kMoveM = 1e-9;    // m, at the part's reach: the one limit
+      static constexpr double kCycleS = 1e-3;   // s: one physics cycle
+      static constexpr int kMax = 4;
+      struct Pose   // the part's coordinates and the lever that turns each into a surface move (m per unit)
+      {
+         int n = 0;
+         double q[kMax] = {}, reach[kMax] = {};
+         Pose &Add(const double v, const double r)
+         {
+            q[n] = v;
+            reach[n] = r;
+            n++;
+            return *this;
+         }
+      };
+      Pose mark;
+      double t = 0.0;
+      bool on = false;
+      void Reset()
+      {
+         on = false;
+         t = 0.0;
+      }
+      double Moved(const Pose &p) const
+      {
+         double m = 0.0;
+         for (int i = 0; i < p.n; i++)
+            m += std::fabs(p.q[i] - mark.q[i]) * p.reach[i];
+         return m;
+      }
+      static bool Still(const double movedM, const double speedMS) { return movedM <= kMoveM && speedMS * kCycleS <= kMoveM; }
+      // a share dt of the part alone ended at pose p, surface speed speedMS (m/s): true = it rests
+      bool Step(const Pose &p, const double speedMS, const bool driven, const bool touched, const double dt)
+      {
+         if (driven || touched)
+         {
+            Reset();
+            return false;
+         }
+         if (!on || Moved(p) > kMoveM)
+         {
+            mark = p;
+            t = 0.0;
+            on = true;
+            return false;
+         }
+         t += dt;
+         return t >= kCycleS * (1.0 - 1e-9) && Still(0.0, speedMS);
+      }
+      // diagnostics (VPX_GROUP_STATS): per part kind (0 jet bumper, 1 gate / spinner / wire switch / Inder blade, 2 disc, 3 flipper, 4 sling plate) the steps alone taken, and how often one ended asleep after being awake
+      static long *Counts()
+      {
+         static long c[10] = {};
+         return c;
+      }
+      static void Book(const int kind, const bool was, const bool now)
+      {
+         Counts()[kind]++;
+         if (!was && now)
+            Counts()[5 + kind]++;
+      }
+   };
+
+
    class Group;
 
    // What a coordinate of a part is, for the group. A coordinate may have an unknown or not (a body on a stop, stuck or held has none); a surface's column names it either way.

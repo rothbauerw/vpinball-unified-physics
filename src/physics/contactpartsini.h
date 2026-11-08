@@ -161,7 +161,6 @@ namespace PartsIni
          else if (k == "wire_d_mm") s.wireDMm = v;
          else if (k == "density_kg_m3") s.density = v;
          else if (k == "mu_pivot") { s.muPivot = v; s.muPivotSpring = v; }
-         else if (k == "damping") s.damping = v;
          else if (k == "switch") s.sw = lv == "none" ? SpinnerModel::Switch::None : lv == "opto" ? SpinnerModel::Switch::Opto : lv == "micro" ? SpinnerModel::Switch::Micro : SpinnerModel::Switch::Leaf;
          else if (k == "switch_angle_deg") s.switchAngleDeg = v;
          else if (k == "opto_half_width_deg") s.optoHalfWidthDeg = v;

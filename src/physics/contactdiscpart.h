@@ -92,16 +92,21 @@ namespace DiscModel
          speedMS = std::fabs(gp.rate) * gp.reach;
          return true;
       }
-      bool AtRest() const override { return idle || (marked && std::fabs(gp.q - markQ) * gp.reach < 1e-9 && std::fabs(gp.rate) * gp.reach < 1e-6); }
+      bool AtRest() const override
+      {
+         return gp.volts == 0.0 && (idle || (marked && GroupStep::RestWatch::Still(std::fabs(gp.q - markQ) * gp.reach, std::fabs(gp.rate) * gp.reach)));   // the one rest rule: the motor drives it; its move over its last cycle in a group, and its speed now
+      }
       // No ball near: the same group with no balls, asleep while the friction holds it still; the script's drive wakes it
       int AdvanceAlone(const double dt) override
       {
          if (dt <= 0.0 || idle)
             return 0;
+         const bool was = idle;
          gp.ClearLoads();
          gp.CycleBegin();
          const int steps = GroupStep::AloneCycle(gp, dt, bookMs, failedSteps, aloneSteps, energySteps);
-         idle = gp.NumDof() == 0 && gp.rate == 0.0;
+         idle = rest.Step(GroupStep::RestWatch::Pose().Add(gp.q, gp.reach), std::fabs(gp.rate) * gp.reach, gp.volts != 0.0, restTouched, dt);   // the one rest rule: driven while the motor has volts
+         GroupStep::RestWatch::Book(2, was, idle);
          return steps;
       }
 
@@ -111,6 +116,7 @@ namespace DiscModel
          GroupStep::BodyPart::Dyn b;
          double volts, steppedS, markQ;
          bool idle, steppedThisCycle, marked;
+         GroupStep::RestWatch rest;
       };
       void SaveState(State &out) const override
       {
@@ -121,6 +127,7 @@ namespace DiscModel
          d.steppedS = steppedS;
          d.markQ = markQ;
          d.idle = idle;
+         d.rest = rest;
          d.steppedThisCycle = steppedThisCycle;
          d.marked = marked;
          out.used = 0;
@@ -136,6 +143,7 @@ namespace DiscModel
          steppedS = d.steppedS;
          markQ = d.markQ;
          idle = d.idle;
+         rest = d.rest;
          steppedThisCycle = d.steppedThisCycle;
          marked = d.marked;
          events.clear();
@@ -150,5 +158,6 @@ namespace DiscModel
    private:
       bool idle = false, marked = false;
       double markQ = 0.0;   // the angle at the start of its last cycle in a group (AtRest)
+      GroupStep::RestWatch rest;   // the rest rule's watch alone
    };
 }

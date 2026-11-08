@@ -117,7 +117,21 @@ namespace BatPart
          layerM = gp.layerM;
          return &gp.rp;
       }
-      void CycleBegin() override { idle = false; }
+      void CycleBegin() override
+      {
+         idle = false;
+         markPhi = gp.phi;
+         markXp = gp.xp;
+         marked = true;
+      }
+      // the one rest rule (GroupStep::RestWatch), as every part: driven while its coil or the pivot's pulse is on; the bat (at its tip) and the plunger still
+      bool Sleeping() const override { return idle; }
+      bool AtRest() const override
+      {
+         if (gp.solenoid || gp.pulse.active)
+            return false;
+         return idle || (marked && GroupStep::RestWatch::Still(std::fabs(gp.phi - markPhi) * TipReach() + std::fabs(gp.xp - markXp), RestSpeed()));
+      }
       void TouchBegan(int, const int ballIndex, const double vn) override { events.push_back({ Event::Hit, ballIndex, std::max(0.0, vn) }); }   // (the engine's touch: the release gap is its hysteresis)
 
       // A bat no ball is near: the same group with no balls, asleep while nothing changes (a part at rest sleeps, ModelStandards 3c: the coil unchanged, the state the same over a whole cycle)
@@ -125,15 +139,12 @@ namespace BatPart
       {
          if (dt <= 0.0)
             return 0;
-         if (idle && gp.solenoid == idleSol && !gp.pulse.active)
+         if (idle && !gp.solenoid && !gp.pulse.active)   // (asleep only with the coil off: its coil or a pulse wakes it)
             return 0;
-         const double phi0 = gp.phi, xp0 = gp.xp, iHigh0 = gp.iHigh, iLow0 = gp.iLow;
+         const bool was = idle;
          const int steps = GroupStep::AloneCycle(gp, dt, bookMs, failedSteps, aloneSteps, energySteps);
-         // a whole cycle in which nothing moved that any ball or the table could see (angle, speed, plunger, both coil currents): the bat is at rest
-         const double r = TipReach();
-         idle = dt >= 0.9e-3 && !gp.hitStopLatch && !gp.pulse.active && std::fabs(gp.phi - phi0) * r < 1e-9 && std::fabs(gp.omega) * r < 1e-6 && std::fabs(gp.xp - xp0) < 1e-9 && std::fabs(gp.vp) < 1e-6
-                && std::fabs(gp.iHigh - iHigh0) < 1e-9 && std::fabs(gp.iLow - iLow0) < 1e-9;
-         idleSol = gp.solenoid;
+         idle = rest.Step(GroupStep::RestWatch::Pose().Add(gp.phi, TipReach()).Add(gp.xp, 1.0), RestSpeed(), gp.solenoid || gp.pulse.active, restTouched, dt);
+         GroupStep::RestWatch::Book(3, was, idle);
          return steps;
       }
 
@@ -143,7 +154,9 @@ namespace BatPart
          double xp, vp, phi, omega, iHigh, iLow, aPhi, hitL, pendingStopJ;
          FlipperModel::PivotPulse pulse;
          double steppedS;
-         bool rigid, wasPreEos, coilOffPrev, plungerPinned, phiPinned, hitStop, hitStopLatch, idle, idleSol, steppedThisCycle;
+         bool rigid, wasPreEos, coilOffPrev, plungerPinned, phiPinned, hitStop, hitStopLatch, idle, steppedThisCycle, marked;
+         double markPhi, markXp;
+         GroupStep::RestWatch rest;
       };
       void SaveState(State &out) const override
       {
@@ -153,7 +166,7 @@ namespace BatPart
          d.xp = b.xp; d.vp = b.vp; d.phi = b.phi; d.omega = b.omega; d.iHigh = b.iHigh; d.iLow = b.iLow; d.aPhi = b.aPhi; d.hitL = b.hitL; d.pendingStopJ = b.pendingStopJ;
          d.pulse = b.pulse; d.steppedS = steppedS;
          d.rigid = b.rigid; d.wasPreEos = b.wasPreEos; d.coilOffPrev = b.coilOffPrev; d.plungerPinned = b.plungerPinned; d.phiPinned = b.phiPinned; d.hitStop = b.hitStop; d.hitStopLatch = b.hitStopLatch;
-         d.idle = idle; d.idleSol = idleSol; d.steppedThisCycle = steppedThisCycle;
+         d.idle = idle; d.steppedThisCycle = steppedThisCycle; d.marked = marked; d.markPhi = markPhi; d.markXp = markXp; d.rest = rest;
          out.used = 0;
          Put(out, d);
       }
@@ -166,7 +179,7 @@ namespace BatPart
          b.xp = d.xp; b.vp = d.vp; b.phi = d.phi; b.omega = d.omega; b.iHigh = d.iHigh; b.iLow = d.iLow; b.aPhi = d.aPhi; b.hitL = d.hitL; b.pendingStopJ = d.pendingStopJ;
          b.pulse = d.pulse; steppedS = d.steppedS;
          b.rigid = d.rigid; b.wasPreEos = d.wasPreEos; b.coilOffPrev = d.coilOffPrev; b.plungerPinned = d.plungerPinned; b.phiPinned = d.phiPinned; b.hitStop = d.hitStop; b.hitStopLatch = d.hitStopLatch;
-         idle = d.idle; idleSol = d.idleSol; steppedThisCycle = d.steppedThisCycle;
+         idle = d.idle; steppedThisCycle = d.steppedThisCycle; marked = d.marked; markPhi = d.markPhi; markXp = d.markXp; rest = d.rest;
          b.MovePivot();
          events.clear();
       }
@@ -204,6 +217,9 @@ namespace BatPart
       std::string StateNote() const override { return "phi " + std::to_string(gp.phi) + " rad, omega " + std::to_string(gp.omega) + " rad/s, coil " + (gp.solenoid ? "on" : "off"); }
 
    private:
-      bool idle = false, idleSol = false;
+      bool idle = false, marked = false;
+      double markPhi = 0.0, markXp = 0.0;   // the angle and plunger at the start of its last cycle in a group (AtRest)
+      GroupStep::RestWatch rest;            // the rest rule's watch alone
+      double RestSpeed() const { return std::fabs(gp.omega) * TipReach() + std::fabs(gp.vp) + std::fabs(gp.geo.vPivotX); }   // the bat's and plunger's surface speed bound, m/s
    };
 }

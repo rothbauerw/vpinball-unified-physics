@@ -160,7 +160,6 @@ namespace
       {
          const ContactSettings &cs = ContactSettings::Get();
          m_model->gp.dynRatio = cs.muDynamicRatio;
-         m_model->gp.SetPivotModel(cs.pivotModel);
          m_model->gp.SetPieceSum(cs.hingePieceSum);
       }
       void Publish() override

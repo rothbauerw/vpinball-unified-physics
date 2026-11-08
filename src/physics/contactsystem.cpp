@@ -2983,6 +2983,8 @@ struct ContactSystemImpl
             if (FILE *const f = fopen(statsPath, "w"))
             {
                fprintf(f, "cycles %ld us/cycle %.2f max %.0f steps %ld rounds %ld halvings %ld energysteps %ld failed %ld balls %d\n", n, us / n, usMax, steps, rounds, halv, eSteps, fails, g.nb);
+               const long *const rc = GroupStep::RestWatch::Counts();   // (parts alone: bumper, hinge part, disc, flipper, sling plate)
+               fprintf(f, "alone calls %ld %ld %ld %ld %ld asleep after %ld %ld %ld %ld %ld\n", rc[0], rc[1], rc[2], rc[3], rc[4], rc[5], rc[6], rc[7], rc[8], rc[9]);
                fclose(f);
             }
          }
@@ -3247,8 +3249,11 @@ struct ContactSystemImpl
       CordFollow(cb, nullptr, nullptr, 0);
       if (!(cb.attached && cb.slots.empty() && !cb.PlateQuiet()))
          band->CordBegin();
+      const bool was = cb.PlateQuiet();
       if (!GroupStep::AdvanceAlone(*cb.fixed, dt, (int)g_pplayer->m_time_msec))
          band->CordSolveFailed("the plate's step could not be solved");
+      cb.fixed->PlateRestStep(dt);
+      GroupStep::RestWatch::Book(4, was, cb.PlateQuiet());
    }
 
    static void IslandMembers(const Cycle &cy, const ContactSystem::Islands::Island &isl, std::string &out)
@@ -3404,6 +3409,8 @@ struct ContactSystemImpl
    static void SleepWakeGroup(const size_t gi, const char *cause, const bool owe)
    {
       SleepGroup &g = g_sleep[gi];
+      for (ContactMovingPart *const mp : g.parts)
+         mp->restTouched = false;
       if (SleepLogOk())
          PLOGI << "Pile sleep: wake group " << g.id << " (" << g.balls.size() << " balls) at t=" << g_pplayer->m_time_msec << " ms: " << cause;
       for (HitBall *const pb : g.balls)
@@ -3448,6 +3455,7 @@ struct ContactSystemImpl
       for (size_t k = 0; k < g.parts.size(); k++)
       {
          ContactMovingPart *const mp = g.parts[k];
+         mp->restTouched = true;   // (a ball asleep on it: the part does not sleep, and the pile stays asleep while the part does not move)
          if (mp->Sleeping())
             g.partIdle[k] = 1;
          else if (g.partIdle[k])

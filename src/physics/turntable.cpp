@@ -120,22 +120,13 @@ namespace Turntables
          m.stallTorque = t.stallTorque;
          m.frictionNm = t.frictionNm;
          m.dir = t.clockwise ? 1.0 : -1.0;
-         m.pivotModel = ContactSettings::Get().pivotModel;
          m.dynRatio = ContactSettings::Get().muDynamicRatio;
          m.radiusM = r;
          m.Derive();
-         if (m.pivotModel == 1)
-         {
-            if (t.massSet || t.inertiaSet)
-               PLOGW << "Turntable " << t.name << ": " << (t.massSet && t.inertiaSet ? "mass_g and inertia_kgm2 no longer act" : t.massSet ? "mass_g no longer acts" : "inertia_kgm2 no longer acts") << " (inertia comes from ramp_down_s and friction_nm)";
-            PLOGI << "Turntable " << t.name << ": inertia " << m.I << " kg m^2 from ramp_down_s " << t.rampDownS << " s and the sliding torque " << m.tSlide << " N m (" << m.dynRatio << " x friction_nm " << t.frictionNm << "), drag " << m.b << " N m s"
-                  << (m.floorApplied ? "; floor applied: the friction alone would stop the disc's own inertia (1/8 in steel plate) too soon, the drag makes up the rest" : "; no floor");
-            return;
-         }
-         if (m.frictionFaster)
-            PLOGI << "Turntable " << t.name << ": friction_nm alone stops the disc from max_rpm in " << m.coastFrictionS << " s, sooner than ramp_down_s " << t.rampDownS << " s: the coast-down is " << m.coastFrictionS << " s (lower friction_nm or raise the inertia for a longer one)";
-         if (m.dragClamped)
-            PLOGW << "Turntable " << t.name << ": ramp_down_s is shorter than the bearing drag allows next to ramp_up_s (a motor off cannot stop the disc faster than the motor spins it up); using " << 3.0 * m.I / m.kTot << " s";
+         if (t.massSet || t.inertiaSet)
+            PLOGW << "Turntable " << t.name << ": " << (t.massSet && t.inertiaSet ? "mass_g and inertia_kgm2 no longer act" : t.massSet ? "mass_g no longer acts" : "inertia_kgm2 no longer acts") << " (inertia comes from ramp_down_s and friction_nm)";
+         PLOGI << "Turntable " << t.name << ": inertia " << m.I << " kg m^2 from ramp_down_s " << t.rampDownS << " s and the sliding torque " << m.tSlide << " N m (" << m.dynRatio << " x friction_nm " << t.frictionNm << "), drag " << m.b << " N m s"
+               << (m.floorApplied ? "; floor applied: the friction alone would stop the disc's own inertia (1/8 in steel plate) too soon, the drag makes up the rest" : "; no floor");
       }
 
       // The playfield's surface around a disc: the height the disc is flush with. In each of 24 directions, the nearest playfield face outward from the disc's edge, taking the highest face at a point; a direction that finds none has no say (past the table's edge).
@@ -357,7 +348,6 @@ namespace Turntables
          ContactPartHost *const host = new ContactPartHost(table, t.part, std::make_unique<DiscAdapter>(t.part, t.name, note), ps, file, t.name, "turntable", lo, hi);
          t.part->gp.Build(t.part->gp.motor, GroupStep::V3(t.x * UM, t.y * UM, t.z * UM), t.radiusMm * 1e-3, (double)zBottom * UM, ps.edgeRadiusMm * 1e-3);
          t.part->gp.dynRatio = ContactSettings::Get().muDynamicRatio;
-         t.part->gp.SetPivotModel(ContactSettings::Get().pivotModel);   // the bearing's law for this play
          t.part->rp = ps.ToParams();
          t.part->layerM = host->LayerM();
          hosts.push_back(host);   // the physics engine owns it and deletes it with itself (the host is in the process-wide registry: a leaked one is tested against every ball in every later session)

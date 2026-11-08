@@ -170,17 +170,19 @@ namespace HingeModel
       {
          if (gp.AnyStopMoving())
             return false;
-         return idle || (marked && std::fabs(gp.q - markQ) * gp.reach < 1e-9 && std::fabs(gp.rate) * gp.reach < 1e-6);
+         return idle || (marked && GroupStep::RestWatch::Still(std::fabs(gp.q - markQ) * gp.reach, std::fabs(gp.rate) * gp.reach));   // the one rest rule: its move over its last cycle in a group, and its speed now
       }
       // No ball near: the same group with no balls, asleep while nothing is driven or moving, its state kept as it is
       int AdvanceAlone(const double dt) override
       {
          if (dt <= 0.0 || (idle && !gp.AnyStopMoving()))
             return 0;
+         const bool was = idle;
          gp.ClearLoads();
          gp.CycleBegin();
          const int steps = GroupStep::AloneCycle(gp, dt, bookMs, failedSteps, aloneSteps, energySteps);
-         idle = gp.NumDof() == 0 && gp.rate == 0.0 && !gp.AnyStopMoving();
+         idle = rest.Step(GroupStep::RestWatch::Pose().Add(gp.q, gp.reach), std::fabs(gp.rate) * gp.reach, gp.AnyStopMoving(), restTouched, dt);   // the one rest rule: driven while a stop moves
+         GroupStep::RestWatch::Book(1, was, idle);
          return steps;
       }
 
@@ -191,6 +193,7 @@ namespace HingeModel
          V3 g;
          double steppedS, markQ, prevWrapped;
          bool idle, steppedThisCycle, collidable, marked, switchClosed;
+         GroupStep::RestWatch rest;
          uint32_t nSwLog, nStopEvents, nEvents;   // the events made before the save: a restore keeps them (only those since are made again by the replay)
       };
       void SaveState(State &out) const override
@@ -203,6 +206,7 @@ namespace HingeModel
          d.markQ = markQ;
          d.prevWrapped = gp.prevWrapped;
          d.idle = idle;
+         d.rest = rest;
          d.steppedThisCycle = steppedThisCycle;
          d.collidable = collidable;
          d.marked = marked;
@@ -227,6 +231,7 @@ namespace HingeModel
          steppedS = d.steppedS;
          markQ = d.markQ;
          idle = d.idle;
+         rest = d.rest;
          steppedThisCycle = d.steppedThisCycle;
          collidable = d.collidable;
          marked = d.marked;
@@ -242,5 +247,6 @@ namespace HingeModel
    private:
       bool idle = false, marked = false;
       double markQ = 0.0;   // the angle at the start of its last cycle in a group (AtRest)
+      GroupStep::RestWatch rest;   // the rest rule's watch alone
    };
 }

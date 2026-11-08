@@ -141,6 +141,8 @@ public:
    long nFar = 0;
 
    int nb = 0, ns = 0;
+   GroupStep::RestWatch plateRest, savePlateRest;   // the rest rule's watch of the plate alone, and its copy for the net
+   bool plateIdle = false, savePlateIdle = false;
    std::vector<Touch> tch;
 
    void SetupPlate()
@@ -658,6 +660,11 @@ public:
    }
    void Accept(const double *x, int off, double h, bool onStop, double &driveJ, double &lossJ, bool &) override
    {
+      if (nb > 0)   // (a ball with it: the plate's rest watch starts again when it is alone)
+      {
+         plateRest.Reset();
+         plateIdle = false;
+      }
       if (pl.on)
       {
          lossJ += gPinJ;
@@ -816,8 +823,8 @@ public:
                Label(span[j], u, g.ball[i]);
          }
    }
-   void SaveState() override { save = tch; savePl[0] = phi; savePl[1] = omega; savePl[2] = iCoil; savePin = pinned; saveRest = atRest; }
-   void RestoreState() override { tch = save; phi = phiQ = savePl[0]; omega = savePl[1]; iCoil = savePl[2]; pinned = savePin; atRest = saveRest; }
+   void SaveState() override { save = tch; savePl[0] = phi; savePl[1] = omega; savePl[2] = iCoil; savePin = pinned; saveRest = atRest; savePlateRest = plateRest; savePlateIdle = plateIdle; }
+   void RestoreState() override { tch = save; phi = phiQ = savePl[0]; omega = savePl[1]; iCoil = savePl[2]; pinned = savePin; atRest = saveRest; plateRest = savePlateRest; plateIdle = savePlateIdle; }
    // ---- what the engine's cord path asks of a band (cordband.h, contactsystem.cpp, hitrubber.cpp) ----
    struct Circle { double x = 0.0, y = 0.0, r = 0.0; bool twin = false; };   // r: the cord centre's radius round it
    struct SwitchSpec { double x = 0.0, y = 0.0, bx = 0.0, by = 0.0; bool coil = false; };
@@ -1000,7 +1007,16 @@ public:
       }
       return gap;
    }
-   bool PlateQuiet() const { return !geo.hasPlate || (std::fabs(phi) < 1e-5 && std::fabs(omega) < 1e-3 && !driver.Coil() && driver.pending <= 0.0); }
+   bool PlateQuiet() const { return !geo.hasPlate || (plateIdle && !driver.Coil() && driver.pending <= 0.0); }   // the one rest rule (PlateRestStep), and no drive since
+   // the plate's watch after a share dt alone (GroupStep::RestWatch). It moves the cord by dy per radian (Limit); driven while its coil or a trigger is on
+   void PlateRestStep(const double dt)
+   {
+      if (!geo.hasPlate)
+         return;
+      double y = 0.0, dy = 0.0;
+      Limit(phi, y, dy);
+      plateIdle = plateRest.Step(GroupStep::RestWatch::Pose().Add(phi, std::fabs(dy)), std::fabs(omega) * std::fabs(dy), driver.Coil() || driver.pending > 0.0, false, dt);
+   }
    // the cord's displacement at a switch blade, from the deepest ball's own runs (a blade reads where the cord is: nothing here acts on the ball)
    double SwitchPush(const int s) const
    {

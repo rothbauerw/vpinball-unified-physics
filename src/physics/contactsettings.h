@@ -38,7 +38,6 @@ struct ContactSettings
    bool arrivalStep = true;          // arrival_step
    bool staticModel = true;          // static_model (default 1 since 2026-11-03): 1 = every static surface (walls, primitives, ramps, playfield) takes a ball to the group step as a rubber does (ring_model, GroupStepDesign 14); 0 = only rubbers
    int rollModel = 1;                // roll_model (default 1): 0 = the rolling and twist torques smoothed through zero spin (roll_smooth_rad_s); 1 = rolling and twist stick springs at the contact (group step)
-   int pivotModel = 1;               // pivot_model (default 1): 1 = a 1-dof part's pin (gate, spinner, wire switch) holds on a stick spring and slides at mu_dynamic_ratio times its static limit; 0 = the slip direction, stuck state and turn event
    double epsRestUm = 0.1;           // eps_rest_um (default 0.1 since 2026-11-05): the position error a steady contact's step may carry (step_model 1, step_swing_cap), um
    bool stepSwingCap = true;         // step_swing_cap (default 1 since 2026-11-05; with step_model 1): 1 = a steady contact whose whole swing (2 x its mode's amplitude) is within the step's error allowance sets no step limit
    bool termArrival = true;          // term_arrival (default 1 since 2026-11-05): 1 = each term of a contact made of terms (hinge_piece_sum) not yet pressing gets the arrival rule (rule 3) by its own depth and closing rate

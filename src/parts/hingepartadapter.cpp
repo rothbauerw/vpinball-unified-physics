@@ -17,7 +17,6 @@ HingePartAdapter::HingePartAdapter(std::shared_ptr<HingeModel::Engine> model, Ga
 {
    const ContactSettings &cs = ContactSettings::Get();
    m_model->gp.dynRatio = cs.muDynamicRatio;
-   m_model->gp.SetPivotModel(cs.pivotModel);   // the pin's law for this play
    m_model->gp.SetPieceSum(cs.hingePieceSum);
    if (cs.hingePieceSum && !m_model->gp.OverlapWarn().empty())
       PLOGW << "hinge_piece_sum: part " << m_name << ": " << m_model->gp.OverlapWarn();

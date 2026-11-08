@@ -98,12 +98,6 @@ namespace
             ClampKey("roll_model", m, 0.0, 1.0);
             s.rollModel = (int)std::lround(m);
          }
-         else if (key == "pivot_model" && num)
-         {
-            double m = d;
-            ClampKey("pivot_model", m, 0.0, 1.0);
-            s.pivotModel = (int)std::lround(m);
-         }
          else if (key == "eps_rest_um" && num)
          {
             double m = d;
@@ -186,7 +180,7 @@ namespace
       cur = s;
       Publish();
       PLOGI << "Contact settings loaded from " << path.string() << ": " << (s.enable ? "on" : "off") << ", dynamic ratio " << s.muDynamicRatio
-            << ", rolling resistance " << s.rollingResistance << ", twist " << (s.twist ? "on" : "off") << " patch " << s.twistPatchMm << " mm, ball contact " << (s.ballContact ? "on" : "off") << ", roll_model " << s.rollModel << ", pivot_model " << s.pivotModel << ", step_model " << s.stepModel << ", step_swing_cap " << (s.stepSwingCap ? 1 : 0) << ", term_arrival " << (s.termArrival ? 1 : 0) << ", eps_rest_um " << s.epsRestUm << ", hinge_piece_sum " << (s.hingePieceSum ? 1 : 0) << ", damp_dir_slope " << (s.dampDirSlope ? 1 : 0) << ", part_guess_accel " << (s.partGuessAccel ? 1 : 0);
+            << ", rolling resistance " << s.rollingResistance << ", twist " << (s.twist ? "on" : "off") << " patch " << s.twistPatchMm << " mm, ball contact " << (s.ballContact ? "on" : "off") << ", roll_model " << s.rollModel << ", step_model " << s.stepModel << ", step_swing_cap " << (s.stepSwingCap ? 1 : 0) << ", term_arrival " << (s.termArrival ? 1 : 0) << ", eps_rest_um " << s.epsRestUm << ", hinge_piece_sum " << (s.hingePieceSum ? 1 : 0) << ", damp_dir_slope " << (s.dampDirSlope ? 1 : 0) << ", part_guess_accel " << (s.partGuessAccel ? 1 : 0);
    }
 }
 

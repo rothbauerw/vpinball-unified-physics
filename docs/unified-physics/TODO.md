@@ -12,7 +12,7 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-In flight: nothing running. Uncommitted: part_guess_accel + clamp trace (engine, 6 files). CLAUDE.md, hooks and memory are outside git.
+In flight: nothing running. Goal 1 merge in pieces (1-2 committed; next: one sleep rule + pivot_model 0 deleted; then the energy-decaying step, runs/2026-11-08-energy-decaying/order2). Uncommitted: nothing. CLAUDE.md, hooks and memory are outside git.
 Next decision: the solution path for the wire switch not converging (N1); it decides N6. All items confirmed with the user 11-07.
 N1. Wire switch at 6 mm: Newton does not converge near touch (ringing); 252 us/ms vs 30 us limit. Shared-engine item: closes only when solved there. Riding wire pulled (poor design and code), may reopen.
 N2. Wires B, C, D as the real switches (B V wire, C angled straight wire, D arch through playfield); lever ends wrong. Derive sizes from photos (ball 1-1/16 in as scale) and parts drawings; user checks before build.
@@ -24,6 +24,7 @@ N7. Stress v2 bench: ball travel energy +2 % at 57 ms; spin not counted. Check t
 N8. Test driver must refuse a ball placed inside any object, unless the file declares the overlap (rule 10b: then judged on recovery, no energy gained).
 N9. Branch pushed: every commit is on the fork. Engine work (part_guess_accel, clamp trace) uncommitted.
 N10. Performance tests: not built; review TestMatrixDesign with the user when building them. Includes the stress table driver clock after start-up and the 144 Hz frame budget. Any safety-net trip (e.g. the cord's hold and let-go) fails the run.
+N12. Snapshot self-test: 1 step in 300-700 not restored exactly on Gorgar play (ball contacts, ball pairs; present before the goal-1 merge). Fix before the energy-decaying step, which adds stored state per contact.
 
 ## 1. Contact system (tasks)
 10. Sleep (default off): a ball on a flipper never sleeps (bats have no rest check). Whether sleep becomes default: user.

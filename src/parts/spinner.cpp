@@ -185,11 +185,10 @@ void Spinner::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       const std::filesystem::path hingeIni = ContactHost::IniPathFor(m_ptable->m_filename);
       if (!isUI && ContactSystem::Unified() && ContactHost::HingeWanted(hingeIni, "spinner", GetName()))   // unified engine: the spinner is a physical model of the contact system (docs/unified-physics/GateSpinnerDesign.txt)
       {
-         // the real spinner: steel blade on an offset shaft, pin friction, the Damping as a viscous loss, opto / leaf / micro switch; no stock collider, mover or bracket circles
+         // the real spinner: steel blade on an offset shaft, the pin's stick spring, the blade's air drag, opto / leaf / micro switch; no stock collider, mover or bracket circles
          constexpr double U = ContactSystem::kMetresPerUnit;
          SpinnerModel::Settings s;
          s.widthMm = (double)m_d.m_length * U * 1e3;
-         s.damping = m_d.m_damping;
          if (m_d.m_angleMin != m_d.m_angleMax)
          {
             s.angleMinDeg = m_d.m_angleMin;

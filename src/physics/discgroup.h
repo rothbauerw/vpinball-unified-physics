@@ -36,8 +36,7 @@ namespace DiscGroup
       double coastFrictionS = 0.0;   // how long the friction alone takes from freeRpm to 5 %, s (for the log)
       bool frictionFaster = false;   // the friction alone stops the disc sooner than rampDownS
       bool dragClamped = false;      // rampDownS asked for more drag than the motor's own slope: b = kTot
-      // pivot_model 1 (user 2026-11-04): the inertia is not a key: the friction alone gives the spin-down, I = Tslide rampDownS / (0.95 freeRpm), at least the disc's own (a steel plate of radius radiusM)
-      int pivotModel = 0;
+      // the inertia is not a key (user 2026-11-04): the friction alone gives the spin-down, I = Tslide rampDownS / (0.95 freeRpm), at least the disc's own (a steel plate of radius radiusM)
       double dynRatio = 0.85;        // [Contact] mu_dynamic_ratio: the disc slides at dynRatio frictionNm (bodypart.h PinStep)
       double radiusM = 0.0762;
       static constexpr double kPlateThickM = 3.175e-3, kSteelRho = 7850.0;   // the disc's own inertia, the floor: 1/8 in steel
@@ -76,48 +75,32 @@ namespace DiscGroup
 
       void Derive()
       {
-         if (pivotModel == 1)
-         {
-            // the motor's line holds the disc at freeRpm against the sliding torque, the speed it runs at; the friction alone coasts it to 5 % in rampDownS
-            wRun = freeRpm * 2.0 * GroupStep::kPi / 60.0;
-            tSlide = dynRatio * frictionNm;
-            const double plate = 0.5 * kSteelRho * GroupStep::kPi * radiusM * radiusM * kPlateThickM * radiusM * radiusM;
-            I = tSlide * rampDownS / (0.95 * wRun);
-            floorApplied = I < plate;
-            if (floorApplied)
-               I = plate;
-            if (stallTorque > 0)
-            {
-               Ts = stallTorque;
-               kTot = std::max(1e-9, (Ts - tSlide) / wRun);
-            }
-            else
-            {
-               kTot = I / (spinupS / 3.0);   // 95 % = 3 time constants
-               Ts = kTot * wRun + tSlide;
-            }
-            if (floorApplied)
-               SolveDrag(tSlide);
-            else
-            {
-               b = 0.0;   // exact: the friction alone takes rampDownS
-               coastFrictionS = rampDownS;
-               frictionFaster = dragClamped = false;
-            }
-            return;
-         }
+         // the motor's line holds the disc at freeRpm against the sliding torque, the speed it runs at; the friction alone coasts it to 5 % in rampDownS
          wRun = freeRpm * 2.0 * GroupStep::kPi / 60.0;
+         tSlide = dynRatio * frictionNm;
+         const double plate = 0.5 * kSteelRho * GroupStep::kPi * radiusM * radiusM * kPlateThickM * radiusM * radiusM;
+         I = tSlide * rampDownS / (0.95 * wRun);
+         floorApplied = I < plate;
+         if (floorApplied)
+            I = plate;
          if (stallTorque > 0)
          {
             Ts = stallTorque;
-            kTot = std::max(1e-9, (Ts - frictionNm) / wRun);
+            kTot = std::max(1e-9, (Ts - tSlide) / wRun);
          }
          else
          {
             kTot = I / (spinupS / 3.0);   // 95 % = 3 time constants
-            Ts = kTot * wRun + frictionNm;   // the running speed at ratedVolts is freeRpm with the friction included
+            Ts = kTot * wRun + tSlide;
          }
-         SolveDrag(frictionNm);
+         if (floorApplied)
+            SolveDrag(tSlide);
+         else
+         {
+            b = 0.0;   // exact: the friction alone takes rampDownS
+            coastFrictionS = rampDownS;
+            frictionFaster = dragClamped = false;
+         }
       }
    };
 
@@ -158,7 +141,7 @@ namespace DiscGroup
       double Viscous() const override { return volts != 0.0 ? motor.kTot : motor.b; }
       double DriveForce() const override { return motor.Ts * volts * motor.dir / motor.ratedVolts; }
       double FrictionLimit(double, double, const V3 &) const override { return motor.frictionNm; }
-      // pivot_model 1: the stick spring that carries the bearing and gear train's friction is the shaft's torsion, G J / L (user 2026-11-04: a 1/4 in steel shaft, 30 mm; no key)
+      // the stick spring that carries the bearing and gear train's friction is the shaft's torsion, G J / L (user 2026-11-04: a 1/4 in steel shaft, 30 mm; no key)
       static constexpr double kShaftG = 79e9, kShaftR = 3.175e-3, kShaftL = 0.030;
       double PinStiffness(double, double, const V3 &) const override { return kShaftG * 0.5 * GroupStep::kPi * kShaftR * kShaftR * kShaftR * kShaftR / kShaftL; }
 
