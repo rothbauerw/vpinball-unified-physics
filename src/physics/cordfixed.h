@@ -519,14 +519,14 @@ public:
       if (plDof)
       {
          // the plate's own row: its momentum, its spring and rest stop as exact differences, its losses on the mid-step rate, the coil's torque a drive (as bandcord.h)
-         const double I1 = Inertia(phi1), Jb = 0.5 * (1.0 / gI0 + 1.0 / I1), pEnd = 2.0 * dphi / (h * Jb) - gp0;
+         const GroupStep::MeanInertia mi(gI0, Inertia(phi1), gp0, dphi, h);   // (the shared inertia row: the plate's inertia varies with its angle)
          double dTdphi;
          if (std::fabs(dphi) > 1e-7)
-            dTdphi = (1.0 / I1 - 1.0 / gI0) / dphi * 0.25 * (gp0 * gp0 + pEnd * pEnd);
+            dTdphi = mi.KineticSlope((1.0 / mi.I1 - 1.0 / gI0) / dphi);
          else
          {
             const double e = 1e-6;
-            dTdphi = (1.0 / Inertia(phm + e) - 1.0 / Inertia(phm - e)) / (2.0 * e) * 0.25 * (gp0 * gp0 + pEnd * pEnd);
+            dTdphi = mi.KineticSlope((1.0 / Inertia(phm + e) - 1.0 / Inertia(phm - e)) / (2.0 * e));
          }
          const double Vp = std::fabs(dphi) > 1e-7 ? (PlateV(phi1) - PlateV(phi)) / dphi : PlateVp(phm);
          double tauS, cR;
@@ -539,13 +539,13 @@ public:
          gPivotL = bd * om * dphi;
          gCordTau = tauCord;
          gCoilW = tauC * dphi;
-         Res[off] = pEnd - gp0 - h * Fl;
+         Res[off] = mi.Row() - h * Fl;
          if (J)
          {
             // (the coil's term by differences of the same closed form: the magnet's pull, a negative stiffness, and the closing speed's back EMF)
             const double e = 1e-9 + 1e-6 * std::fabs(dphi);
             const double dTau = gCoilLive ? (CoilTorque(CoilOver(dphi + e, h), dphi + e) - CoilTorque(CoilOver(dphi - e, h), dphi - e)) / (2.0 * e) : 0.0;
-            J[off][off] += 2.0 / (h * Jb) + 0.5 * h * std::max(PlateVpp(phm), 0.0) + bd + cR - h * dTau;
+            J[off][off] += mi.Slope(h) + 0.5 * h * std::max(PlateVpp(phm), 0.0) + bd + cR - h * dTau;
          }
       }
       return true;
@@ -665,8 +665,10 @@ public:
          gPinJ = 0.0;
          if (!pinned)
          {
-            const double dq = x[off], phi1 = phi + dq, I1 = Inertia(phi1), Jb = 0.5 * (1.0 / gI0 + 1.0 / I1);
-            double om1 = (2.0 * dq / (h * Jb) - gp0) / I1;
+            const double dq = x[off], phi1 = phi + dq;
+            const GroupStep::MeanInertia mi(gI0, Inertia(phi1), gp0, dq, h);
+            const double I1 = mi.I1;
+            double om1 = mi.EndRate();
             gAlpha = (om1 - omega) / h;
             if (onStop)
             {

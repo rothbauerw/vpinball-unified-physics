@@ -359,6 +359,14 @@ namespace GroupStep
       return s;
    }
 
+   // The engine's step settings ([Contact] keys and the step floor, ContactSettings::ToStep, set when the ini is read): one copy, taken whole by every group the engine steps,
+   // an island's (with its own pair and gravity on top) and a part's alone (AdvanceAlone). Its defaults are Settings' own (an offline program that never sets it steps on those)
+   inline Settings &EngineSettings()
+   {
+      static Settings s;
+      return s;
+   }
+
    class Group;
 
    // What a coordinate of a part is, for the group. A coordinate may have an unknown or not (a body on a stop, stuck or held has none); a surface's column names it either way.
@@ -412,6 +420,24 @@ namespace GroupStep
       const Settings &set;
       double h;
       int rule = 0;
+   };
+
+   // The step's inertia, one law for every body (balls and parts): over the move dq the momentum goes from p0 to p1 with dq = h Mb^-1 (p0 + p1) / 2,
+   // Mb^-1 the mean of the start and end inverse inertia. The body's row is p1 - p0 - h Q (Q its forces over the move), its end rate p1 / M1.
+   // A fixed mass (a ball, a gate's plate, the jet bumper's skirt and ring, the flipper's plunger) is the same law with Mb = m: the row 2 m dq / h - 2 m v, the end rate 2 dq / h - v
+   template <class T> inline T InertiaRow(const T &dq, const T &v, const double m, const double h) { return dq * (2.0 * m / h) - v * (2.0 * m); }
+   inline double InertiaSlope(const double m, const double h) { return 2.0 * m / h; }   // the row's slope along dq
+   template <class T> inline T EndRate(const T &dq, const T &v, const double h) { return dq * (2.0 / h) - v; }
+   // An inertia that varies with the pose (the flipper's bat, the sling plate): I0 at the step's start, I1 at its end, p0 = I0 w0
+   struct MeanInertia
+   {
+      double I1, invMean, p0, p1;
+      MeanInertia(const double I0, const double I1_, const double p0_, const double dq, const double h) : I1(I1_), invMean(0.5 * (1.0 / I0 + 1.0 / I1_)), p0(p0_), p1(2.0 * dq / (h * invMean) - p0_) {}
+      double Row() const { return p1 - p0; }
+      double Slope(const double h) const { return 2.0 / (h * invMean); }
+      double EndRate() const { return p1 / I1; }
+      // dT/dq at fixed p, T = p^2 / (2 I) (the part's force takes it off): the step's mean of p^2 / 2 times the part's chord (or slope, for a very small move) of 1/I over the move
+      double KineticSlope(const double dInvI) const { return dInvI * 0.25 * (p0 * p0 + p1 * p1); }
    };
 
    // A moving part of a group (GroupStepDesign.txt piece 1; 10.1; 18): it describes its bodies, stored energy, losses, drives and grip, and the group moves them with
@@ -2902,14 +2928,14 @@ namespace GroupStep
          for (int i = 0; i < nb; i++)
          {
             const Ball &b = ball[i];
-            const V3 rc = dc[i] * (2.0 * b.m / h) - b.v * (2.0 * b.m) - F[i] * h;
+            const V3 rc = InertiaRow(dc[i], b.v, b.m, h) - F[i] * h;
             const V3 rw = dw[i] * b.I() - M[i] * h;
             Res[6 * i] = rc.x; Res[6 * i + 1] = rc.y; Res[6 * i + 2] = rc.z;
             Res[6 * i + 3] = rw.x; Res[6 * i + 4] = rw.y; Res[6 * i + 5] = rw.z;
             if (J)
                for (int a = 0; a < 3; a++)
                {
-                  J[6 * i + a][6 * i + a] += 2.0 * b.m / h;
+                  J[6 * i + a][6 * i + a] += InertiaSlope(b.m, h);
                   J[6 * i + 3 + a][6 * i + 3 + a] += b.I();
                }
          }
@@ -3651,7 +3677,7 @@ namespace GroupStep
                books.spinBrakeJ += b.brakeRate * b.I() * wa.Dot(wa) * h;
             }
             b.c = b.c + dc;
-            b.v = dc * (2.0 / h) - b.v;
+            b.v = EndRate(dc, b.v, h);
             b.w = b.w + dw;
             aLast[i] = evF[i] * (1.0 / b.m);         // the next step's first guess: the force and torque of the move taken (Eval's at it), not (v1 - v0) / h, which is
             alphaLast[i] = evM[i] * (1.0 / b.I());   // the solve's tolerance over h for a step near zero long (a stop search on a stop: 5.7e12 m/s^2, a guess 88 km off)
@@ -3774,13 +3800,13 @@ namespace GroupStep
       std::chrono::steady_clock::time_point t0;
    };
 
-   // A part with no ball this cycle: the same solve, no balls; one function for every part. False: a step could not be solved (time is lost, no energy can appear: the next cycle goes on from here).
-   // out: the group's books of this cycle, when wanted.
-   inline bool AdvanceAlone(Part &p, const double dt, const double hMin, const int tMs, Books *const out = nullptr)
+   // A part with no ball this cycle: the same solve, no balls, on the engine's settings and step floor (EngineSettings); one function for every part. False: a step could not be solved (time is lost,
+   // no energy can appear: the next cycle goes on from here). out: the group's books of this cycle, when wanted.
+   inline bool AdvanceAlone(Part &p, const double dt, const int tMs, Books *const out = nullptr)
    {
       static Group g;
       g.nb = g.ns = g.np = 0;
-      g.set.hMin = hMin;
+      g.set = EngineSettings();
       g.AddPart(&p);
       g.Configure();
       CycleBook book(g);
@@ -3791,5 +3817,15 @@ namespace GroupStep
       if (out != nullptr)
          *out = g.books;
       return ok;
+   }
+   // A part's cycle alone, as every part's host runs it: the step, and the part's counters (a step not solved, the detector of rule 8; steps taken, cost; of them on energy alone, rule 8). The steps taken
+   inline int AloneCycle(Part &p, const double dt, const int tMs, long &failedSteps, long &aloneSteps, long &energySteps)
+   {
+      Books bk;
+      if (!AdvanceAlone(p, dt, tMs, &bk))
+         failedSteps++;   // (time is lost, no energy can appear: the next cycle goes on from here)
+      aloneSteps += bk.steps;
+      energySteps += bk.energySteps;
+      return (int)bk.steps;
    }
 }

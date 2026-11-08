@@ -128,17 +128,13 @@ namespace BatPart
          if (idle && gp.solenoid == idleSol && !gp.pulse.active)
             return 0;
          const double phi0 = gp.phi, xp0 = gp.xp, iHigh0 = gp.iHigh, iLow0 = gp.iLow;
-         GroupStep::Books bk;
-         if (!GroupStep::AdvanceAlone(gp, dt, 2e-6, bookMs, &bk))
-            failedSteps++;   // (time is lost, no energy can appear: the next cycle goes on from here)
-         aloneSteps += bk.steps;
-         energySteps += bk.energySteps;
+         const int steps = GroupStep::AloneCycle(gp, dt, bookMs, failedSteps, aloneSteps, energySteps);
          // a whole cycle in which nothing moved that any ball or the table could see (angle, speed, plunger, both coil currents): the bat is at rest
          const double r = TipReach();
          idle = dt >= 0.9e-3 && !gp.hitStopLatch && !gp.pulse.active && std::fabs(gp.phi - phi0) * r < 1e-9 && std::fabs(gp.omega) * r < 1e-6 && std::fabs(gp.xp - xp0) < 1e-9 && std::fabs(gp.vp) < 1e-6
                 && std::fabs(gp.iHigh - iHigh0) < 1e-9 && std::fabs(gp.iLow - iLow0) < 1e-9;
          idleSol = gp.solenoid;
-         return (int)bk.steps;
+         return steps;
       }
 
       // The dynamic state, plain bytes (the settings, the outline and the coil input are not state)

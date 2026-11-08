@@ -269,19 +269,17 @@ namespace BatGroup
          const double phi1 = phi + dphi, phm = phi + 0.5 * dphi;
          const FM::Kin k1 = Kin(phi1), km = Kin(phm);
          const double l1 = k1.lever * 1e-3, lm = km.lever * 1e-3;
-         const double I1 = rigid ? If + mp * l1 * l1 : If;
-         const double Jb = 0.5 * (1.0 / gI0 + 1.0 / I1);
-         const double pEnd = 2.0 * dphi / (h * Jb) - gP0;
+         const GroupStep::MeanInertia mi(gI0, rigid ? If + mp * l1 * l1 : If, gP0, dphi, h);   // (the shared inertia row: the bat's inertia varies with its angle)
          double dT = 0.0;
          if (rigid)
          {
             if (std::fabs(dphi) > 1e-9)
-               dT = (1.0 / I1 - 1.0 / gI0) / dphi * 0.25 * (gP0 * gP0 + pEnd * pEnd);
+               dT = mi.KineticSlope((1.0 / mi.I1 - 1.0 / gI0) / dphi);
             else
             {
                // d(1/I)/dphi = -I'/I^2, I' = 2 mp l dl (the lever's slope along phi is k.dLever)
                const double Im = If + mp * lm * lm, Ip = 2.0 * mp * lm * km.dLever * 1e-3;
-               dT = -Ip / (Im * Im) * 0.25 * (gP0 * gP0 + pEnd * pEnd);
+               dT = mi.KineticSlope(-Ip / (Im * Im));
             }
          }
          // spring and rest stop: exact differences
@@ -296,7 +294,7 @@ namespace BatGroup
          double Qphi = -Vp + tauD - s.bDamping * om - dT;
          gLossRest = -tauD * dphi;
          gLossB = s.bDamping * om * dphi;
-         double jpp = 2.0 / (h * Jb) + s.bDamping;
+         double jpp = mi.Slope(h) + s.bDamping;
          if (J)
          {
             double kc;
@@ -339,7 +337,7 @@ namespace BatGroup
                }
             }
          }
-         double jxx = 2.0 * mp / h, jpx = 0.0;
+         double jxx = GroupStep::InertiaSlope(mp, h), jpx = 0.0;
          if (!rigid)
          {
             // the link: the mismatch's discrete gradient over (phi, x)
@@ -391,9 +389,9 @@ namespace BatGroup
             nM1 = 0.0;
             nLink = 'r';
          }
-         Res[off] = pEnd - gP0 - h * Qphi;
+         Res[off] = mi.Row() - h * Qphi;
          if (nDof == 2)
-            Res[off + 1] = 2.0 * mp * dx / h - 2.0 * mp * vp - h * Qx;
+            Res[off + 1] = GroupStep::InertiaRow(dx, vp, mp, h) - h * Qx;
          if (J)
          {
             J[off][off] += jpp;
@@ -461,8 +459,9 @@ namespace BatGroup
          if (nDof >= 1)
          {
             const double dphi = x[off], phi1 = phi + dphi;
-            const double I1 = rigid ? Inertia(phi1) : If, Jb = 0.5 * (1.0 / gI0 + 1.0 / I1);
-            double w1 = (2.0 * dphi / (h * Jb) - gP0) / I1;
+            const GroupStep::MeanInertia mi(gI0, rigid ? Inertia(phi1) : If, gP0, dphi, h);
+            const double I1 = mi.I1;
+            double w1 = mi.EndRate();
             aPhi = (w1 - omega) / h;
             if (rigid)
             {
@@ -488,7 +487,7 @@ namespace BatGroup
                omega = w1;
                if (nDof == 2)
                {
-                  double v1 = 2.0 * x[off + 1] / h - vp;
+                  double v1 = GroupStep::EndRate(x[off + 1], vp, h);
                   xp += x[off + 1];
                   if (onStop)
                   {

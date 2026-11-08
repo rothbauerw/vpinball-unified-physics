@@ -4,6 +4,8 @@
 #include <cmath>
 #include <filesystem>
 
+namespace GroupStep { struct Settings; }
+
 // Table-wide contact settings of the unified engine (see docs/unified-physics/archive/NewPhysicsReference.txt, [Contact]); implemented in contactsettings.cpp.
 
 // Table-wide contact friction settings beyond the per-object friction coefficient (the surface's static mu). Read from [Contact] of the table's
@@ -48,6 +50,7 @@ struct ContactSettings
    double arrivalDepthUm = 2.0;      // arrival_depth_um: the deepest a ball may start a contact before the step is taken again (rewind), um
    static const ContactSettings& Get();   // checks the file for changes about twice a second of game time
    static void StartPlay(const std::filesystem::path& tableFile);   // the start of a play, before any part is built: the file as it is now
+   void ToStep(GroupStep::Settings& s) const;   // the group step's settings from these keys and the step floor: every group the engine steps, an island's and a part's alone (GroupStep::EngineSettings)
    // The friction impulse a contact applies for the impulse `x` that would cancel the slip (signed): inside the static limit it sticks (x); beyond it, it slides at the dynamic limit
    // (muDynamicRatio times the static one). With the settings off (stock engine) it is the plain clamp to the static limit.
    float LimitSlip(const float x, const float maxImpulse) const

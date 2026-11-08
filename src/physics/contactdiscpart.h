@@ -100,13 +100,9 @@ namespace DiscModel
             return 0;
          gp.ClearLoads();
          gp.CycleBegin();
-         GroupStep::Books bk;
-         if (!GroupStep::AdvanceAlone(gp, dt, 2e-6, bookMs, &bk))
-            failedSteps++;   // (time is lost, no energy can appear: the next cycle goes on from here)
-         aloneSteps += bk.steps;
-         energySteps += bk.energySteps;
+         const int steps = GroupStep::AloneCycle(gp, dt, bookMs, failedSteps, aloneSteps, energySteps);
          idle = gp.NumDof() == 0 && gp.rate == 0.0;
-         return (int)bk.steps;
+         return steps;
       }
 
       // The dynamic state, plain bytes (the settings and the shape are not state; the script's volts are, so a replay keeps the drive it ran on)

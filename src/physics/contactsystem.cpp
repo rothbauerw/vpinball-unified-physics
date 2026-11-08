@@ -2429,21 +2429,13 @@ struct ContactSystemImpl
          pulls.back().p = cp;
          g.AddField(&pulls.back());
       }
+      cy.cs->ToStep(g.set);   // the engine's step settings and floor, as a part alone gets them (GroupStep::EngineSettings)
       g.set.pair = cy.rpBall;
-      g.set.rollSmooth = cy.cs->rollSmoothRadS;
-      g.set.rollModel = cy.cs->rollModel;
-      g.set.stepModel = cy.cs->stepModel;
-      g.set.swingCap = cy.cs->stepSwingCap;
-      g.set.termArrival = cy.cs->termArrival;
-      g.set.dampDirSlope = cy.cs->dampDirSlope;
-      g.set.partGuessAccel = cy.cs->partGuessAccel;
-      g.set.epsRest = cy.cs->epsRestUm * 1e-6;   // (0.01 um gives 1e-8 m exactly, the Settings default)
       if (ring)   // (cy.rpBall holds the old loop's halved modulus, and the group halves it for a pair itself; its rolling resistance is on the pair's radius, R / 2)
       {
          g.set.pair.eMpa = cy.cs->ballEMpa;
          g.set.pair.rollingMu = 0.5 * cy.cs->ballRollingResistance;
       }
-      g.set.hMin = GroupStep::GroupFixedStepS() > 0.0 ? 1e-9 : 2e-6;   // a step that cannot be solved gives up here: in real time it must not spend the frame halving (a fixed-step reference may)
       const bool hasPart = IslandHasGroupPart(cy, isl);
       static std::vector<HitBall *> balls;
       static std::vector<DepthCause> cause;
@@ -3255,7 +3247,7 @@ struct ContactSystemImpl
       CordFollow(cb, nullptr, nullptr, 0);
       if (!(cb.attached && cb.slots.empty() && !cb.PlateQuiet()))
          band->CordBegin();
-      if (!GroupStep::AdvanceAlone(*cb.fixed, dt, 2e-6, (int)g_pplayer->m_time_msec))
+      if (!GroupStep::AdvanceAlone(*cb.fixed, dt, (int)g_pplayer->m_time_msec))
          band->CordSolveFailed("the plate's step could not be solved");
    }
 

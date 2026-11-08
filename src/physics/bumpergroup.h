@@ -311,7 +311,7 @@ namespace BumperGroup
          if (ringStop != 0)
             return true;
          const double fe = fReturn + kReturn * (dr + 0.5 * dx) + mR * set->g.z;
-         Res[off + kR] = 2.0 * mR * dx / h - 2.0 * mR * vr + h * (fe - gFCoil) + cRing * dx;
+         Res[off + kR] = GroupStep::InertiaRow(dx, vr, mR, h) + h * (fe - gFCoil) + cRing * dx;
          gDrive = gFCoil * dx;
          gRingLoss = cRing * dx * dx / h;
          if (J)
@@ -319,7 +319,7 @@ namespace BumperGroup
             // (the coil's term by differences of the same closed form: the magnet's pull, a negative stiffness, and the closing speed's back EMF)
             const double e = 1e-9 + 1e-6 * std::fabs(dx);
             const double dF = gCoilOn || iCoil != 0.0 ? (CoilOver(dx + e, h).force - CoilOver(dx - e, h).force) / (2.0 * e) : 0.0;
-            J[off + kR][off + kR] += 2.0 * mR / h + 0.5 * h * kReturn + cRing - h * dF;
+            J[off + kR][off + kR] += GroupStep::InertiaSlope(mR, h) + 0.5 * h * kReturn + cRing - h * dF;
          }
          return true;
       }
@@ -332,7 +332,7 @@ namespace BumperGroup
             return -INFINITY;
          const double dx = x[off + kR], x1 = dr + dx;
          const bool nearRest = x1 < 0.5 * stroke;
-         gArriving = nearRest ? 2.0 * dx / gH - vr < 0.0 : 2.0 * dx / gH - vr > 0.0;
+         gArriving = nearRest ? GroupStep::EndRate(dx, vr, gH) < 0.0 : GroupStep::EndRate(dx, vr, gH) > 0.0;
          double e = -INFINITY;
          if (mask & 1u)
             e = std::max(e, -x1);
@@ -379,9 +379,9 @@ namespace BumperGroup
       }
       void Accept(const double *x, const int off, const double h, const bool onStop, double &driveJ, double &lossJ, bool &through) override
       {
-         vz = 2.0 * x[off + kZ] / h - vz;
-         wx = 2.0 * x[off + kThx] / h - wx;
-         wy = 2.0 * x[off + kThy] / h - wy;
+         vz = GroupStep::EndRate(x[off + kZ], vz, h);
+         wx = GroupStep::EndRate(x[off + kThx], wx, h);
+         wy = GroupStep::EndRate(x[off + kThy], wy, h);
          z += x[off + kZ];
          thx += x[off + kThx];
          thy += x[off + kThy];
@@ -398,7 +398,7 @@ namespace BumperGroup
          if (ringStop == 0)
          {
             const double dx = x[off + kR];
-            double v1 = 2.0 * dx / h - vr;
+            double v1 = GroupStep::EndRate(dx, vr, h);
             dr += dx;
             const bool rest = dr < 0.5 * stroke;
             if (onStop && (rest ? dr : stroke - dr) < 1e-7)   // the impact: the rate reverses by the restitution; a rebound that would be back within the stop's own contact time never left it
@@ -627,7 +627,7 @@ namespace BumperGroup
          Q[kThy] -= mu * (Abar * tiltA * cz[1] + Cbar * ca[1]);
          return (mu - 1.0) * (V1 - V0);
       }
-      // The part's own rows over the move dq: 2 M dq / h - 2 M v - h Q, and the losses
+      // The part's own rows over the move dq: the shared inertia row (2 M dq / h - 2 M v) - h Q, and the losses
       void Rows(const double *dq, const double h, double *r, StepLosses &l) const
       {
          const Pose qm = PoseAt(dq, 0.5), q1 = PoseAt(dq);
@@ -674,9 +674,9 @@ namespace BumperGroup
          Q[kThx] -= cTilt * dq[kThx] / h;
          Q[kThy] -= cTilt * dq[kThy] / h;
          l.viscous = cTilt * (dq[kThx] * dq[kThx] + dq[kThy] * dq[kThy]) / h;
-         const double v[3] = { vz, wx, wy };
+         const double v[3] = { vz, wx, wy }, M[3] = { m, I, I };
          for (int a = 0; a < 3; a++)
-            r[a] = (2.0 * dq[a] / h - 2.0 * v[a]) / invM[a] - h * Q[a];
+            r[a] = GroupStep::InertiaRow(dq[a], v[a], M[a], h) - h * Q[a];
       }
 
       const GroupStep::Settings *set = nullptr;

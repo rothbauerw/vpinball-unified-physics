@@ -4,6 +4,7 @@
 #include "physics/hitball.h"
 #include "parts/pintable.h"
 #include "physics/physicsini.h"
+#include "physics/groupstep.h"
 #include <filesystem>
 #include <fstream>
 
@@ -173,6 +174,9 @@ namespace
    bool pathKnown = false, loaded = false;
    uint32_t nextCheckMs = 0;
 
+   // what the group step takes from the keys: renewed whenever they are (GroupStep::EngineSettings, the settings of a part stepping alone)
+   void Publish() { cur.ToStep(GroupStep::EngineSettings()); }
+
    void LoadNow()
    {
       ContactSettings s;
@@ -180,6 +184,7 @@ namespace
       if (PhysicsIni::Active(path).unified)
          s.ballContact = true;   // one contact path: on the unified engine a ball pair is never left to the stock collision (ball_contact no longer acts there)
       cur = s;
+      Publish();
       PLOGI << "Contact settings loaded from " << path.string() << ": " << (s.enable ? "on" : "off") << ", dynamic ratio " << s.muDynamicRatio
             << ", rolling resistance " << s.rollingResistance << ", twist " << (s.twist ? "on" : "off") << " patch " << s.twistPatchMm << " mm, ball contact " << (s.ballContact ? "on" : "off") << ", roll_model " << s.rollModel << ", pivot_model " << s.pivotModel << ", step_model " << s.stepModel << ", step_swing_cap " << (s.stepSwingCap ? 1 : 0) << ", term_arrival " << (s.termArrival ? 1 : 0) << ", eps_rest_um " << s.epsRestUm << ", hinge_piece_sum " << (s.hingePieceSum ? 1 : 0) << ", damp_dir_slope " << (s.dampDirSlope ? 1 : 0) << ", part_guess_accel " << (s.partGuessAccel ? 1 : 0);
    }
@@ -201,6 +206,21 @@ void ContactSettings::StartPlay(const std::filesystem::path& tableFile)
       LoadNow();
    else
       cur.enable = PhysicsIni::Active(std::filesystem::path()).contact;   // no file: the defaults (off on the stock engine)
+   Publish();
+}
+
+// The group step's settings from [Contact], and its floor: a step that cannot be solved gives up at hMin (in real time it must not spend the frame halving; the fixed-step reference may)
+void ContactSettings::ToStep(GroupStep::Settings& s) const
+{
+   s.rollSmooth = rollSmoothRadS;
+   s.rollModel = rollModel;
+   s.stepModel = stepModel;
+   s.swingCap = stepSwingCap;
+   s.termArrival = termArrival;
+   s.dampDirSlope = dampDirSlope;
+   s.partGuessAccel = partGuessAccel;
+   s.epsRest = epsRestUm * 1e-6;   // (0.1 um gives 1e-7 m exactly, the Settings default)
+   s.hMin = GroupStep::GroupFixedStepS() > 0.0 ? 1e-9 : 2e-6;
 }
 
 const ContactSettings& ContactSettings::Get()
@@ -217,6 +237,7 @@ const ContactSettings& ContactSettings::Get()
          loaded = true;   // no file: the defaults (off on the stock engine)
          cur = ContactSettings();
          cur.enable = PhysicsIni::Active(std::filesystem::path()).contact;
+         Publish();
       }
    }
    if (pathKnown && (!loaded || g_pplayer->m_time_msec >= nextCheckMs))
@@ -235,6 +256,7 @@ const ContactSettings& ContactSettings::Get()
          loaded = true; // no file: the defaults stay (off on the stock engine)
          cur = ContactSettings();
          cur.enable = PhysicsIni::Active(std::filesystem::path()).contact;
+         Publish();
       }
    }
    return cur;

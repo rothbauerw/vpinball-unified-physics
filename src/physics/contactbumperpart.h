@@ -238,16 +238,12 @@ namespace JetBumper
          if (idle && !gp.CoilOn())
             return 0;
          const double z0 = gp.z, thx0 = gp.thx, thy0 = gp.thy, dr0 = gp.dr, i0 = gp.iCoil;
-         GroupStep::Books bk;
-         if (!GroupStep::AdvanceAlone(gp, dt, 2e-6, bookMs, &bk))
-            failedSteps++;   // (time is lost, no energy can appear: the next cycle goes on from here)
-         aloneSteps += bk.steps;
-         energySteps += bk.energySteps;
+         const int steps = GroupStep::AloneCycle(gp, dt, bookMs, failedSteps, aloneSteps, energySteps);
          // a whole cycle in which nothing moved that any ball or the table could see (the skirt, the ring, the coil's current), and nothing driven
          const double r = gp.reach;
          idle = dt >= 0.9e-3 && !gp.CoilOn() && !gp.pulseActive && std::fabs(gp.z - z0) < 1e-9 && (std::fabs(gp.thx - thx0) + std::fabs(gp.thy - thy0)) * r < 1e-9 && std::fabs(gp.dr - dr0) < 1e-9
                 && std::fabs(gp.vz) < 1e-6 && (std::fabs(gp.wx) + std::fabs(gp.wy)) * r < 1e-6 && std::fabs(gp.vr) < 1e-6 && std::fabs(gp.iCoil - i0) < 1e-9;
-         return (int)bk.steps;
+         return steps;
       }
 
       // The dynamic state, plain bytes (the settings and the shapes are not state). Restoring drops the switch changes since: the replay makes them again

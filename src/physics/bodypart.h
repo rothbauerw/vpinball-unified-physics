@@ -211,11 +211,11 @@ namespace GroupStep
          if (pivotModel == 1)
          {
             const PinMove pm = PinStep(dq, h);
-            Res[off] = mass * (2.0 * dq / h - 2.0 * rate) - h * (-Vp - lossF - cv * r + Fd + pm.M);
+            Res[off] = InertiaRow(dq, rate, mass, h) - h * (-Vp - lossF - cv * r + Fd + pm.M);
             gQ = -Vp - lossF - cv * r + Fd + pm.M + gBallQ;
-            rowT[0] = mass * (2.0 * dq / h - 2.0 * rate); rowT[1] = h * (Vp + lossF); rowT[2] = h * cv * r; rowT[3] = -h * pm.M; rowT[4] = -h * gBallQ; rowT[5] = pm.K; rowT[6] = FrictionLimit(qm, r, gBallF); rowT[7] = pm.holds ? 1.0 : 0.0; rowT[8] = pm.s1; rowT[9] = dq;
+            rowT[0] = InertiaRow(dq, rate, mass, h); rowT[1] = h * (Vp + lossF); rowT[2] = h * cv * r; rowT[3] = -h * pm.M; rowT[4] = -h * gBallQ; rowT[5] = pm.K; rowT[6] = FrictionLimit(qm, r, gBallF); rowT[7] = pm.holds ? 1.0 : 0.0; rowT[8] = pm.s1; rowT[9] = dq;
             if (J)
-               J[off][off] += 2.0 * mass / h + h * slope + h * lossSlope + cv + (pm.holds ? h * 0.5 * pm.K + pm.c : 0.0);
+               J[off][off] += InertiaSlope(mass, h) + h * slope + h * lossSlope + cv + (pm.holds ? h * 0.5 * pm.K + pm.c : 0.0);
             gViscous = cv * r * dq + lossF * dq;
             gFriction = pm.loss;
             gDrive = Fd * dq;
@@ -223,10 +223,10 @@ namespace GroupStep
          }
          const double lim = dirF != 0 ? FrictionLimit(qm, r, gBallF) : 0.0;
          const double Q = -Vp - lossF - cv * r + Fd - dirF * lim;
-         Res[off] = mass * (2.0 * dq / h - 2.0 * rate) - h * Q;
+         Res[off] = InertiaRow(dq, rate, mass, h) - h * Q;
          gQ = Q + gBallQ;
          if (J)
-            J[off][off] += 2.0 * mass / h + h * slope + h * lossSlope + cv;
+            J[off][off] += InertiaSlope(mass, h) + h * slope + h * lossSlope + cv;
          gViscous = cv * r * dq + lossF * dq;
          gFriction = dirF * lim * dq;
          gDrive = Fd * dq;
@@ -260,7 +260,7 @@ namespace GroupStep
          if (pivotModel != 1 && dirF != 0 && (mask & (1u << 31)))
          {
             // From rest the speed's zero is where it starts: an event only if the solved move goes back against the friction's way (it stays: PinOnStop). Going the friction's way there is no zero ahead, and the search for a stop must not take the start for one
-            const double back = dq == 0.0 ? (rate != 0.0 ? -std::fabs(rate) : wentBack ? 0.0 : -INFINITY) : -dirF * (2.0 * dq / gH - rate);
+            const double back = dq == 0.0 ? (rate != 0.0 ? -std::fabs(rate) : wentBack ? 0.0 : -INFINITY) : -dirF * EndRate(dq, rate, gH);
             if (back > e && (rate != 0.0 || dq == 0.0 || back > 0.0))
             {
                e = back;
@@ -296,7 +296,7 @@ namespace GroupStep
          if (gExcessTurn || gExcessStop < 0)
             return true;
          const BodyStop &s = stops[gExcessStop];
-         return s.side * (2.0 * gDqLast / gH - rate - s.speed) > 0.0;
+         return s.side * (EndRate(gDqLast, rate, gH) - s.speed) > 0.0;
       }
       // The free step passed a stop or the speed's zero, and the body is already there: it stays for this step, and the step is solved again as it is
       bool PinOnStop(const double *, int) override
@@ -321,7 +321,7 @@ namespace GroupStep
          if (!s.touching)
             stopEvents.push_back({ gExcessStop, std::fabs(rate) });
          s.touching = true;
-         const double r1 = 2.0 * gDqLast / gH - rate, f = mass * (r1 - rate) / gH;
+         const double r1 = EndRate(gDqLast, rate, gH), f = mass * (r1 - rate) / gH;
          const double vRel = std::fabs(rate - s.speed) * s.lever, F = s.side * f > 0.0 ? std::fabs(f) / s.lever : 0.0;
          if (0.5 * s.EffMass(mass) * vRel * vRel > s.HeldEnergy(F))
             return false;
@@ -380,7 +380,7 @@ namespace GroupStep
          if (NumDof() == 1)
          {
             const double dq = x[off];
-            rate = 2.0 * dq / h - rate;
+            rate = EndRate(dq, rate, h);
             q += dq;
             aLast = gQ / mass;   // the next step's first guess: the force of the move taken (Eval's at it, the balls' load included), not (r1 - r0) / h (the ball's aLast says why)
             if (pivotModel == 1)
@@ -549,7 +549,7 @@ namespace GroupStep
          const PinMove pm = pivotModel == 1 ? PinStep(dq, h) : PinMove();
          char line[300];
          snprintf(line, sizeof line, "q0 %.6g deg rate0 %.4g dq %.4g q1 %.6g deg rate1 %.4g pin %d | pin spring s0 %.4g s1 %.4g K %.4g M %.4g holds %d | stop excess %.4g | ball force %.4g N",
-                  q * 57.29577951308232, rate, dq, (q + dq) * 57.29577951308232, 2.0 * dq / h - rate, pinStop, pinS, pm.s1, pm.K, pm.M, pm.holds ? 1 : 0, StopExcess(x, off), gBallF.Length());
+                  q * 57.29577951308232, rate, dq, (q + dq) * 57.29577951308232, EndRate(dq, rate, h), pinStop, pinS, pm.s1, pm.K, pm.M, pm.holds ? 1 : 0, StopExcess(x, off), gBallF.Length());
          return line;
       }
       PinMove PinStep(const double dq, const double h) const
