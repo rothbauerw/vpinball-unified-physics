@@ -22,7 +22,7 @@ N5. One reach rule from physics (speed plus force) for grouping and step length.
 N6. Bounce too lively on long steps (bench: rebound 0.83 vs law 0.51): tied to N1; stays or goes with the design review of N1's solution. Includes steel impacts (impact law or relaxed step; VPX_OMEGAH_SCALE env var).
 N7. Stress v2 bench: ball travel energy +2 % at 57 ms; spin not counted. Check total energy in the saved run (no new run).
 N8. Test driver must refuse a ball placed inside any object, unless the file declares the overlap (rule 10b: then judged on recovery, no energy gained).
-N9. Branch pushed (64ede55a3). Engine work (part_guess_accel, clamp trace) uncommitted.
+N9. Branch pushed: every commit is on the fork. Engine work (part_guess_accel, clamp trace) uncommitted.
 N10. Performance tests: not built; review TestMatrixDesign with the user when building them. Includes the stress table driver clock after start-up and the 144 Hz frame budget. Any safety-net trip (e.g. the cord's hold and let-go) fails the run.
 N11. After N1's solution: review shear_step_motion, term_arrival, damp_dir_slope, step_swing_cap, part_guess_accel. Keep if they speed solves across the board; remove if they only treat the wire's symptom.
 
