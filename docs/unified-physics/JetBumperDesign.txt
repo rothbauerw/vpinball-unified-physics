@@ -2,7 +2,7 @@ JET BUMPER DESIGN (unified-physics branch)
 ===========================================
 Status: DESIGN, written 2026-10-26, revision 2 the same day (user review), awaiting user review. Nothing is built. Rules: docs/unified-physics/DevelopmentRules.txt (2 no hacks, 5 cost, 7 what
 breaks, 8 detectors). The design is not built around anything stock: stock properties and values are used only where they fit the model, otherwise ignored with a warning.
-Source of the data: the user, 2026-10-26 (memory project_jet_bumper_data_2026-10-26). Every number below is marked  [user]  (stated by the user),  [derived]  (computed
+Requirements: Requirements.txt section D. Source of the data: the user, 2026-10-26 (memory project_jet_bumper_data_2026-10-26). Every number below is marked  [user]  (stated by the user),  [derived]  (computed
 from user numbers) or  [guess]  (mine, unverified, to be measured or tuned by feel). Nothing marked [guess] is a finding.
 
 0. Goal

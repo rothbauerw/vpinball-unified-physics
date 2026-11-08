@@ -193,7 +193,15 @@ User: reusing the code was a main reason for the rewrite: a ring, a rubber wall 
 
 22.4 Balls. A ball meets the disc through the shared surface law with the surface moving at w x r: the disc is a carried surface of the group, and the ball's reaction turns the disc in the same solve. Shape: a solid cylinder from its bottom up to the top face (a flush disc is the top face alone); past the rim the edge counts as rounded to edge_rho, as any face edge. The playfield gets a hole of the disc's radius plus its gap (default 1/16 in), carved in the playfield's contact.
 
-23. To be written: the wire switches (WireA-D, Inder blade) on the group step. They run on it; the agreed requirements and paper design are in runs/2026-11-03-switch-requirements.
+23. The wire switches on the group step (reviewed with the user 2026-11-07; requirements: Requirements.txt section C; paper design: runs/2026-11-03-switch-requirements/design-wire.md. Not finished: the solve does not converge near touch, to-do N1)
+
+23.1 A gate on its side. A rigid steel wire fixed to the tip of a micro switch's lever, turning with it about the lever's pivot below the playfield: one body on one hinge axis (a HingeGroup part, 21.1), the axis across the lane. Mass and inertia come from the wire's real shape in steel.
+
+23.2 Spring, stops, pivot. The micro switch's lever spring is a preloaded torsion spring, tau = -k (theta - a), a < 0 its free angle beyond the rest stop, so it holds the wire up. k and a are set by the vertical force at the wire's peak at first touch and at full travel, the wire's own weight included. The requirement sets the force: a ball at rest against the wire on a 3 deg slope rolls over it and closes the switch, so the force at first touch is under m g sin(slope) / tan(contact angle). Stops: rest (wire up) and full travel, with the peak below the playfield so the ball meets no step; both the Hertz steel stop gates use. Pin friction and gravity, with the cabinet's acceleration, as gates.
+
+23.3 The switch. It closes when the peak has travelled close_mm and opens when it rises back release_mm past that point: the micro switch's differential travel, not a timer, so one pass closes it once. Hit on close, Unhit on open.
+
+23.4 Shape. The shape is the real switch's wire (from the user's photos and parts drawings, to-do N2), not VPX's mesh, which does not match it; the drawn mesh is built to match, so drawn and touched are the same. It is held as the wire's centreline, joined into capsules of the real wire's diameter: smooth normals for a ball rolling along it, and cheaper than triangles. Scale 1 is the real size; the wire's peak sits peak_mm above the playfield whatever the author's z, and the part below the surface is out of reach. Each side of a V is its own contact (21.4); out of its plane the wire bends as a cantilever from the lever tip (21.5). The Inder switch is a flat steel blade standing on edge: the mesh's triangles are its faces, with plate bending.
 
 
 == G. Bands ==

@@ -7,7 +7,7 @@ A model is done when it meets sections 1 - 5 and DevelopmentRules 3, 5 and 10. T
 1. Before writing anything
 --------------------------
 a. First write what the model must do (requirements), apart from how it's modelled, and review them with the user one at a time
-   (runs/2026-11-01-cord-requirements/requirements.md is the pattern).
+   They live in docs/unified-physics/Requirements.txt, one section per model, agreed items only; a draft stays in its run folder until agreed.
 b. Then name the closest existing model and read its files:
       moving part with its own bodies  -> jet bumper (bumpergroup.h, contactbumperpart.h) and gate/spinner (hingegroup.h, contacthingepart.h): the group step path (2a)
       static surface                   -> contactsurface.h, hitrubber.cpp (hard surfaces, ramps)

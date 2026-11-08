@@ -2,7 +2,7 @@ GATES AND SPINNERS - REBUILD DESIGN (draft 2026-10-14, for review before code)
 ==============================================================================
 
 Status: design only. Nothing here is built. Revision 2 (2026-10-14): the user's review decisions are in section 0. Hardware data: the user, 2026-10-14 (photos of wire W, wire rectangle, deep rectangle variant, plate gate in its
-bracket, spinner blade with its offset shaft). Values I estimated are marked UNVERIFIED and become settings.
+bracket, spinner blade with its offset shaft). Values I estimated are marked UNVERIFIED and become settings. Requirements: Requirements.txt section E.
 
 [0 review decisions: moved to archive/GateSpinnerDesign_moved.txt on 2026-11-07 (diary)]
 

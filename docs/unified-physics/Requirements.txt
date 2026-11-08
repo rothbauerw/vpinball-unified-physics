@@ -1,0 +1,174 @@
+REQUIREMENTS - what each model must do, agreed with the user
+=============================================================
+One section per model. Only requirements the user has reviewed and agreed are here; a draft waits in its run folder until then. What a model must do, not how it is modelled.
+ModelStandards 1a: requirements are written and reviewed one at a time before the design. Each design doc refers to its section here. Project rules (energy by construction, no stock,
+one shared contact path, what breaks) apply as always and are not repeated. Real hardware data: PartData.txt.
+Moved here on 2026-11-07: A-C word for word from runs/2026-11-01-cord-requirements, runs/2026-11-03-pile-requirements, runs/2026-11-03-switch-requirements; D-E lifted from the user's
+statements in JetBumperDesign.txt and GateSpinnerDesign.txt.
+
+A. CORD (bands and slings)
+--------------------------
+Status: DRAFT = proposed, not agreed; AGREED = the user has reviewed it.
+Typical, throughout: rubber at about 35 U, 1 m/s typical, 3 m/s extreme, angles of the existing shot grid.
+
+1. The band sends the ball back (AGREED 2026-11-01)
+User's wording 2026-11-01: a typically placed rubber will not allow a ball with typical speeds and angles to slip past the band or get stuck.
+Proposed test values: typical placement = cord at about 35 U (70 % of the ball's height); speeds = 1 m/s typical, 3 m/s extreme, over 3 unlikely (user's data 2026-10-20, ModelStandards 5c); angles = the existing shot grid.
+Stuck is tested at typical placement only. User: a ball stuck because someone sets the rubber at 45 U is real physical behaviour, and that table needs redesigning.
+Reference: user 2026-10-29 and 2026-11-01. A real ball might do it; you'd never want it on a machine. The one report the user has seen of a ball sliding under a rubber: a new machine with oiled balls, both ball and rubber with almost no friction.
+Limit: 0 shots.
+
+2. The cord's height on the ball (NICE TO HAVE, user 2026-11-01)
+Vertical movement of the band and the behaviour it brings is a nice to have, not a requirement. It's one thing we may give up to meet performance. If it is kept, the wording below is what we'd check.
+
+Behaviour, proposed 2026-11-01, mechanism left out of the requirement: on a typically placed rubber, at typical speeds and angles, the rubber mostly stays at its own height; some hits pull it down towards the ball's mid point; it doesn't go below the mid point or ride up over the ball. A test result, not a limit built into the model. The force balance below is one candidate way to get it, for the paper check.
+
+User 2026-11-01: generally the rubber doesn't move vertically on ball contact. A few examples show it, such as the 1.4 m/s video, where it pulls down towards its mid point. Mechanism unknown (the user's idea: the rubber bounces off the ball and separates for a moment, reducing friction on first impact). Restricting it vertically is allowed as a simplification; if it can move, find the mechanism or limit the amount.
+User 2026-11-01: placement matters. A rubber placed too high lets a ball squeeze under it, so the limit should be vertical movement from the rubber's own height.
+User 2026-11-01: a limit in millimetres isn't physical; rejected.
+Draft: no separate limit. The cord's place on the ball comes from a force balance: tension pulls it towards the frictionless place, friction holds it, and it slips only beyond the friction angle atan(mu). Height, placement and friction then decide it. Stuck stays 0 at every placement.
+Check (CALCULATED, sling at rest height 18.9 mm, dent about 6 mm assumed at 1.4 m/s): frictionless place about 29 deg above the ball's centre, so reaching the mid point needs friction angle about 29 deg, mu about 0.55; user's tilt estimate 0.36 - 0.58; code 0.8. This is the most friction can move it, not what it does on a typical hit; why it typically doesn't move is still unknown.
+Gap: this doesn't by itself stop a ball going under. Near the line between the posts the frictionless place goes to 90 deg, and the calculated barrier on the sling with no plate is 0.18 - 0.23 J against 0.36 - 0.50 J at 3 m/s.
+Risk to handle: on 2026-10-29 a fixed-height cord launched a ball once friction had lifted it above the cord (GroupStepDesign 10.4, 11).
+
+3. Lift (AGREED 2026-11-01)
+A typically placed rubber at typical speeds and angles doesn't throw the ball up: at most one ball diameter (27 mm), and a band with a post mid-span hardly jumps.
+Reference: user 2026-10-29 (limit), 2026-10-30 (60 - 90 mm at 2 m/s too high, mid-post band should hardly jump; slings throwing balls over the other sling is a fault); sling video 1.4 m/s, coil off, about 13 mm hop.
+Includes a ball already lifted above the cord: it must not launch (a fixed-height cord did, 2026-10-29).
+User 2026-11-01: rubbers can cause lift; excessive lift indicates a design flaw in the test or a flaw in the model. So a shot over the limit gets looked into, test first.
+
+4. Rebound (AGREED 2026-11-01, one of the most important, user)
+Free-span target, user's best guess 2026-11-01, not measured: at low speed about like a ring, maybe a little bouncier; it drops off at higher speed about half as much as a ring: about 0.8 at 3 m/s. Starting point. Bench today: about 0.99 at 3 m/s, too lively.
+
+A typically placed rubber at typical speeds and angles gives a lively, consistent bounce with no dead spots. Over an end post it behaves like a rubber ring on a post, and moving a hit a few mm along the band doesn't change the bounce much. With the coil off, the ball never leaves faster than it came.
+Reference: user 2026-10-30 (ring is the reference, post and ring should match, 1 mm shouldn't matter; dead strip beside the post is a fault); ring out/in in VPX at 35 U, 0.81 at 1 m/s, 0.69 at 3 m/s (2026-10-30 build, rubber law changed since). Sling video 1.4 m/s, coil off, out about 1.18 m/s. No measured target for a free span.
+
+5. Sling kick (AGREED 2026-11-01)
+A ball pressing a sling's band closes the switch, and the plate kicks it away fast through the band, lift at most 27 mm (requirement 3; "low" dropped, no measured height). A kick while the ball still presses leaves less lift; a late kick misses or catches it clear of the band. Energy comes only from the coil. A ball on the band, straight down included, fires it at about the speed a real one does.
+Reference: videos 2026-10-30: plate moves 33 - 39 ms after touch (1.4 m/s); plate fires while the ball presses, about 20 ms if 50 x slow (assumed), ball leaves low and fast; real plate catches a ball 15 - 20 mm clear (GroupStepDesign 11.29). User: slings not firing on straight-down hits is a fault. Old band: fires from about 0.2 m/s into the band. No measured kick speed yet.
+
+Observed by the user 2026-11-01, 1.4 m/s video: the ball has mostly cleared the rubber, the sling catches up to it as it extends out, and adds only a very small amount of energy. Bench at 1.5 m/s (results/kick15.txt): the plate never reaches the ball again, coil adds nothing. Earlier note, GroupStepDesign 11.30: the real plate catches a ball 15 - 20 mm clear, the model's plate is slower.
+
+6. Ball rolling along or resting on a band (AGREED 2026-11-01)
+A ball rolling along a band keeps rolling, with no stall, hop or launch and no visible bumps. A ball resting against a band settles and stays still.
+Reference: user 2026-10-31 (rolling along the band had issues before; check it). Limits used on the bench 2026-10-31: force ripple under 5 %, ball under 2 mm/s after 1.2 s at rest.
+
+7. Several balls and stacked rubbers (AGREED 2026-11-01)
+Two balls on one band at once meet requirements 1, 3 and 4: one ball's hit reaches the other through the band's tension, with no launch and no ball past the band. A pile of balls against a band stays stable. Stacked rubbers (one at 70 %, one right below) in high-speed zones hold a typical hit like one band.
+Reference: user 2026-10-30 (stacked rubbers, GroupStepDesign 11.20); old two-ball faults: lossless multi-ball gains up to 310 mJ (fixed), six balls past a 300 mm band. Not a real-machine measurement.
+
+8. Energy and stock (AGREED 2026-11-01)
+Energy enters only through drives (coil, gravity, nudge). The band's stored energy is one function of positions, and its length never changes without matching work. No energy gain on any step, no EnergyStep or other recovery patch, no failed steps left unhandled, no hand-back to stock. It runs on the shared contact path.
+Reference: CLAUDE.md (energy by construction, never hand back to stock, one shared contact path); user 2026-10-31 (length rule); ModelStandards 2d (one rubber code).
+Limit: rise within 1 uJ at every step (GroupStepDesign's proof limit, the only figure found; the user recalled about 0.1 uJ, not found in GroupStepDesign or ModelStandards), EnergyStep 0, stock 0. The real rise is reported on every run.
+
+9. Cost (AGREED 2026-11-01; an exception to DevelopmentRules 5's 30 us, kept by the user 2026-11-07, re-evaluated during the stress tests)
+Goal: 30 us per 1 ms of contact on a 3 m/s sling hit with one ball. A model at up to 100 us isn't killed for it. The complete model counts, every agreed requirement in and the group step included. Higher is fine while testing, as long as the path to 100 is clear. Two and six balls are reported.
+Reference: user 2026-11-01; ModelStandards 4b (30 us per object, proposed). No written reason found for 30. Calculated: the 430 us per cycle frame budget holds about 14 active objects at 30 us, 4 at 100.
+Timing a model with pieces missing doesn't count as passing.
+
+10. What the band is made of and touches (AGREED 2026-11-01)
+A band follows its real layout: posts hold it in a notch at its height; a post mid-span divides it, and shorter spans are stiffer; it touches the plate, stop posts and whatever else stands behind it, at the cord's height. Friction on those was dropped by the user 2026-11-01: with the cord at fixed height its job has gone; calculated effect at most 0.004 out/in, 1.34 mm lift, plate at rest. Posts, the plate and every other rubber contact use the same contact law and the same code as rings and rubber primitives (user 2026-11-01, ModelStandards 2d). A ball hitting it near a post or the plate meets requirements 1, 3 and 4 there too. Bands are found on their own, not listed by hand.
+Reference: user 2026-10-30 (GroupStepDesign 11.20: span post notch, shorter spans stiffer, stop contact at cord height; 11.10: cord friction on the plate), to-do 3.7 (touches objects behind it), 3.8 (detect bands), user 2026-11-01 (impacts near the post or plate).
+
+11. What the player sees (AGREED 2026-11-01)
+Thickness, user 2026-11-01: when this goes in for use, physics and drawing both use the rubber's thickness set in the editor, unless the ini overrides it. Eventually the editor value only.
+
+The drawn band follows the ball: it visibly deflects on a hit and returns.
+Nice to have, may be given up for performance like requirement 2: real ringing after a hit (a drawn effect may stand in) and twist. User 2026-11-01: twist was needed to stop the rubber being pulled too far down the face of the ball, and it affects the ball's spin on the rebound; nice to have, can be sacrificed the same as vertical movement. Giving up vertical movement removes that first need. Twist might also stop balls climbing the rubber and launching (user 2026-11-01): a model without it must show it meets requirement 3 on that case. Ringing: a visual stand-in is acceptable.
+Reference: to-do 3.9 (animation broken; can't see rubbers deflect), user 2026-10-31 (band vibration looked cool, real videos show it), 2026-10-30 (rubber visibly twists in the video).
+
+B. BALL PILES
+-------------
+What a pile of touching balls must do, reviewed with the user one item at a time (pattern: runs/2026-11-01-cord-requirements/requirements.md). Nothing is designed or built until these are settled.
+Background, measured on the bench (busiest 7 cycles in a row): magnet landing, 6th ball onto 5: build3 10.6 ms, old loop 7.6 ms; Jive Time pile at the flip 5.5 - 5.9 ms. Paper best case for the spring law with every saving found: landing 4.4 - 6 ms, flip 2.1 - 3.2 ms (inferred). ModelStandards 3a: a stiff contact whose motion during the contact doesn't matter uses the impact law (bounce from the same Hertz + damping law, then a resting constraint).
+
+1. Cost limit: CONFIRMED by the user 2026-11-03
+Physics over any 7 consecutive cycles at most 3 ms, in the worst pile case too (144 Hz frame). ModelStandards 4a updated.
+
+[Superseded 2026-11-07: DevelopmentRules 5 has no burst allowance; a window over 3 ms is a recorded fault.] AMENDED by the user 2026-11-03 (burst exception): within 0.2 s after a hit event (a landing, a flip, a fast ball into a pile), physics may reach up to 10 ms per 7 cycles (about what the user played on 11-02 at 10.6 ms: "slight fps drop, not very noticeable"). Everything else, every pile at rest included, stays at 3 ms. ModelStandards 4a updated. Reason: no measured option reaches 3 ms on the landing burst (runs/2026-11-03-options/design.md).
+
+2. Worst cases that must pass: CONFIRMED by the user 2026-11-03
+Up to 6 balls in the hit cases (lead's assumption, list accepted). Each under requirement 1:
+1. A ball landing on a magnet pile: 6th ball onto 5 (today 10.6 ms per 7 cycles, bench, build3).
+2. Flipping a pile on the bat: Jive Time pile at the flip (today 5.5 - 5.9 ms).
+3. A fast ball shot into a resting pile: 3 m/s into 3 - 6 balls, no magnet (not measured).
+4. The biggest pile at rest a table can hold (18 balls 786 us a cycle today).
+
+3. What must be accurate in a hit: CONFIRMED by the user 2026-11-03
+Rigid on rigid (user's wording; not only steel on steel): the outcome is enough, the motion during the hit is too short to see. After the hit each ball's speed within 5 % and direction within 2 deg (the 750-hit standard), against the spring law stepped at 1 us. AMENDED by the user 2026-11-03, one rule for every hit of 2 or more balls: a ball's speed within 5 % of its own speed or 1 % of the incoming ball's speed, whichever is larger (today's stepping already misses slow pile balls by 0.5 - 1.4 cm/s; the settled-pile 4 cm/s miss at 1 m/s still fails). A hit through a line of balls (cradle) to the same tolerance: the end ball leaves, the others stay. ModelStandards 3a applies: use the hit's outcome, don't step through it. Scope note (lead): rigid on rigid also covers ball on playfield, metal walls and posts, not only ball pairs.
+
+4. A pile at rest: CONFIRMED by the user 2026-11-03 (figures are the lead's choice, not measured)
+1. Still: no visible creep, under 0.1 mm/s.
+2. No sinking: overlap with balls and surfaces under 0.05 mm (real steel squash about 0.02 mm).
+3. Right forces: presses and grips as a real pile does (held by a magnet, carried by a raised bat, friction keeps balls from rolling apart).
+4. Energy never rises: settles and stays settled; no stuck ball, no shaking.
+
+5. Soft contacts in a pile: CONFIRMED by the user 2026-11-03
+Rubber rings, bands and the flipper's rubber (contacts lasting milliseconds) stay on the spring law, stepped through. A pile mixing rigid and soft contacts (Jive Time flip: balls on balls on a bat's rubber) meets 1 - 4. Open for the design: a soft contact must not set the step for the whole pile.
+
+Project rules apply as always, not repeated here: energy by construction, no stock, one shared contact path, list what breaks (rule 7).
+
+C. PLAYFIELD SWITCHES AND TRIGGERS
+----------------------------------
+Status: DRAFT = proposed, not agreed; AGREED = the user has reviewed it. Sections 1-7 reviewed 2026-11-03; star sticking deferred.
+Why now: stock triggers move a held ball outside the contact system (collideex.cpp TriggerLineSeg/TriggerHitCircle Collide, m_pos += STATICTIME * vel); these are the um-size "moved outside any step (a stock part)" warnings seen every game (inferred from their positions: top lanes, outlane, shooter lane).
+
+1. Types (user 2026-11-03)
+VPX trigger shapes: None, WireA, WireB, WireC, WireD, Star, Button, Inder (an Inder-style wire: Inder was a Spanish pinball maker; its mesh is in meshes/triggerInderMesh.h).
+Real switches not in VPX as a type: opto, magnet sensor. "None" (event only) can stand in for both.
+
+2. Wire, button and star (user 2026-11-03)
+Offer spring resistance to the ball. Trigger only when the switch closes (not on first touch).
+Star: other built-in behaviours, shown visually, e.g. sticking occasionally.
+
+3. None / opto / magnet sensor (user 2026-11-03)
+Event only: no force on the ball.
+
+4. Shape (user 2026-11-03)
+Each type's own mesh is its collidable shape, with the physics it needs (the wire, button or star moves as it is pressed).
+Later, not now: an option to add a hole in the playfield for wires.
+Measures are estimates (no machine to measure); the user is finding pictures.
+Inder: confirmed by the user as Inder's wire style.
+
+5. Mechanism and geometry (user 2026-11-03, from parts pictures; measures are estimates)
+Spring: the switch itself. Wires sit on a micro switch's lever; button and star stems sit on leaf switches.
+Wire: rigid wire on the micro switch lever, pivoting about the lever hinge below the playfield. Pictured form: 3/4 in leg up from the lever, 1 in span the ball rolls over, 1/2 in leg down; the 1/2 in / 1 in corner at or just below playfield level. Tall arched form also exists (Stern style).
+Button: cap on a stem, slides down; top about 3-4 mm above the playfield.
+Star: like the button (stem on a leaf), but tapers to playfield height at its outer edge.
+
+6. Forces (user 2026-11-03: very little resistance; gravity alone pulls a ball past a switch, no stall)
+Rule: a ball at rest against the switch on the playfield slope rolls over it. At first touch the switch pushes back along the contact normal, tilted theta from vertical (cos theta = (R - h) / R, h the switch height at the contact, R 13.5 mm). The spring force F needs F tan theta < m g sin(slope), so F < m g sin(slope) / tan theta.
+Design slope 3 deg (user 2026-11-03). Numbers (inferred): m g 0.791 N, m g sin 3 deg = 0.041 N. h 3 mm: theta 38.9 deg, F < 0.051 N. h 3.5 mm (button edge): theta 42.2 deg, F < 0.046 N. h 5 mm: F < 0.034 N. Tall arched wire: same peak height as the dimensioned wire (user 2026-11-03). Peak h 6 mm: F < 0.028 N; 7 mm: 0.023 N; 7.5 mm: 0.021 N; 8 mm: 0.018 N. So 0.02 N passes for a peak up to about 7.5 mm. Peak height: 6 mm (1/4 in) to start (user 2026-11-03: not sure, good place to start).
+AGREED as a start (user 2026-11-03): spring force about 0.02 N at first touch (under half the 3.5 mm limit), soft; closing at about two thirds of travel; stop at full travel. Pass/fail test: ball placed at rest touching each switch type, slope 3 deg (and the table's own): it rolls over, and the switch closes.
+
+7. When the switch closes (AGREED, user 2026-11-03)
+Leaf switches (button, star): close after a settable gap of travel, default 1/16 in (1.59 mm).
+Wire switches: close at about 3 mm of travel (half the 6 mm above the playfield); settable like the leaf gap (lead's assumption).
+The switch event fires on closing, not on first touch; opens again when the actuator rises back past that point.
+
+Open (one at a time)
+- Star sticking: later (user 2026-11-03).
+
+D. JET BUMPER
+-------------
+Lifted from JetBumperDesign.txt (user, 2026-10-26 unless dated). Part sizes: PartData section 3.
+1. The kick, the sensitivity and the timing come out of the real mechanism (skirt, spoon switch, coil, ring); no kick number is added to the ball.
+2. A ball that rolls up the skirt slows down by the time it reaches the bumper body.
+3. Hair-trigger (user 2026-11-02): the slowest rolling ball tilts the skirt and fires it; a ball placed at the skirt on the high side fires it. A ball that grazes the edge and changes path without firing means too stiff.
+4. The skirt does not close on a nudge or tilt (test: the largest nudge in 8 directions).
+5. A pinched ball squirts out; it never stays stuck between the ring and the playfield or skirt.
+6. Hit fires first, when the switch closes, with no speed threshold.
+7. Coil drive: on while the switch is closed, a timed pulse (15 ms to start), or an external signal (ROM-based games); supply voltage set per table.
+8. The script can read the skirt's tilt about x and y (to animate a skirt primitive) and the ring's drop.
+Stated limit: bumpers are never placed so that two balls work one bumper at once (not tested).
+
+E. GATES AND SPINNERS
+---------------------
+Lifted from GateSpinnerDesign.txt (user, 2026-10-14 unless dated). Part sizes: PartData section 2.
+1. Each is a physical model of the real part, handled completely by the contact system: no stock mover, collider, fallback, angle limits, bounce factors or damping multipliers.
+2. Gates and spinners are different parts, modelled separately.
+3. Events come from the state of a physical switch or stop, never from a time window.
+4. Neither adds energy at any collision angle (the old hinged plates did, in the user's play).
+5. Spinner spin-down varies by machine: a setting. A spinner that barely goes over the top and falls back through the switch's closed window fires a second Spin (user 2026-10-15).
+6. A held-open gate is a script open and close with a set open angle; no coil is modelled.
