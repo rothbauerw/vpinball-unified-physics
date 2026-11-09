@@ -340,6 +340,12 @@ namespace GroupStep
       // Taken in the terms' slope, G's turning (dampDirSlope) and N's slope kv (friction, lever-roll and twist limits). J is then not symmetric (it is the true derivative;
       // SolveLinear pivots on any matrix). The force is unchanged. true (default) = on; false = the mid gradient on both sides (today's slope).
       bool endGradSlope = true;
+      // termForceRows ([Contact] term_force_rows; runs/2026-11-08-lead/term_rows_design.md): a terms contact's pressing term t pushes along gdT_t, its mid gradient tg_t
+      // Gonzalez-corrected so that gdT_t . dq = a1_t - a0_t (the force sum_t s fT_t gdT_t, G = Fel / |Fel| and dd = G . dq are built on it). Newton's slope takes that same
+      // direction as the row side of each term's slope: h tk_t gdT_t tgE_t^T in the terms' slope, in G's turning K (so gK and gW: dd's change through G is
+      // (1 / fe) sum_t h tk_t [gdT_t . dq - dd (g . gdT_t)] tgE_t, 0 for one term) and in N's slope kv, kvE. The exact derivative of the residual with each term's
+      // direction held fixed. The force is unchanged. true (default) = on; false = the mid gradient tg_t as the row (today's slope).
+      bool termForceRows = true;
       // dampingIntegral ([Contact] damping_integral; runs/2026-11-08-lead/damping_integral_design.md): every depth-dependent damping in its integrated form, the law's own work
       // over the step at a steady rate: c = (W(d1) - W(d0)) / (d1 - d0), W(d) = integral of c(s) from 0 (0 for no touch), short moves by quadrature; slope d(c (d1 - d0))/d d1 = c(d1).
       // Kuwabara-Kono (W = gamma 2/3 sqrt(reff) Uc^1.5), the loss tangent's dashpot (W = 0.8 tanDelta sqrt(1.5 kH m) Uc^1.25) and Hunt-Crossley (with a bend: 1.5 alpha 0.4 kH Uc^2.5,
@@ -999,6 +1005,7 @@ namespace GroupStep
          WipeEachUse(&tkS);
          WipeEachUse(&tOnS);
          WipeEachUse(&tgES);
+         WipeEachUse(&tgFS);
          WipeEachUse(&crossS);
          Size(8);
       }
@@ -2122,6 +2129,7 @@ namespace GroupStep
       std::vector<double> tkS;
       std::vector<char> tOnS;
       std::vector<std::array<double, 4>> tgES;   // (... each term's END gradient, the column side of its slope: endGradSlope)
+      std::vector<std::array<double, 4>> tgFS;   // (... each term's force direction gdT, the row side of its slope: termForceRows)
       struct NearOff { bool &f; explicit NearOff(bool &b) : f(b) { f = false; } ~NearOff() { f = false; } };   // a step's lists end with it (Step, EnergyStep)
       static bool NearAllOn() { static const bool on = []() { const char *const e = getenv("VPX_HINGE_NEAR_ALL"); return e != nullptr && atoi(e) != 0; }(); return on; }   // diagnostics: every list = all pieces (A/B)
       // the lists of this attempt (after the parts' BeginStep: their rates now). The reach: the ball's travel 2 |v| h and the part's turn 2 |rate| h (times nearGrow),
@@ -2641,6 +2649,7 @@ namespace GroupStep
             std::vector<double> &tk = tkS;
             std::vector<char> &tOn = tOnS;
             std::vector<std::array<double, 4>> &tgE = tgES;   // each term's end gradient (endGradSlope; else = tg): the column side of its slope
+            std::vector<std::array<double, 4>> &tgF = tgFS;   // each term's force direction gdT (termForceRows; else = tg): the row side of its slope
             double dd = d1 - d0, feT = 0.0;
             if (terms)
             {
@@ -2648,6 +2657,7 @@ namespace GroupStep
                {
                   tg.resize((size_t)hm.nt);
                   tgE.resize((size_t)hm.nt);
+                  tgF.resize((size_t)hm.nt);
                   tk.resize((size_t)hm.nt);
                   tOn.resize((size_t)hm.nt);
                }
@@ -2672,6 +2682,8 @@ namespace GroupStep
                   Gonzalez(tg[t].data(), a1 - a0, noiseD, dq, W, 4, gdT, clampDump ? &cf0T : nullptr);
                   if (cf0T && t < 64)
                      tCf0 |= 1ull << t;
+                  for (int j = 0; j < 4; j++)   // the slope's row side: the direction this term's force acts along (termForceRows), or its mid gradient
+                     tgF[t][j] = set.termForceRows ? gdT[j] : tg[t][j];
                   const double fT = L.Chord(a0, a1);
                   for (int j = 0; j < 4; j++)
                      Fel[j] += s * fT * gdT[j];
@@ -3071,7 +3083,7 @@ namespace GroupStep
                   ix[p] = (p < 3 ? 6 * it.a : 6 * it.b) + p % 3;
                for (int j = 0; j < nq; j++)
                   ix[3 + j] = cUnk[qc0 + hm.c[j].coord];
-               // dampDirSlope: G's turning, h dG/du = (I - G g^T) K / fe (K = sum_t h tk_t tg_t tg_t^T, g = G's ball part), in Newton's slope: the damping's fd along it and
+               // dampDirSlope: G's turning, h dG/du = (I - G g^T) K / fe (K = sum_t h tk_t gdT_t tgE_t^T, termForceRows; else tg_t as the row; g = G's ball part), in Newton's slope: the damping's fd along it and
                // dd = G . dq's change through it, h dfd/du += (cD / (h fe)) (dq - dd g)^T K (gW, on kv too). The residual is unchanged.
                const bool dirOn = terms && set.dampDirSlope && feT > 0.0 && fe + fd > 0.0;
                double gK[4][4] = {}, gW[4] = {};
@@ -3082,7 +3094,7 @@ namespace GroupStep
                      if (tOn[t])
                         for (int p = 0; p < 4; p++)
                            for (int q = 0; q < 4; q++)
-                              K[p][q] += h * tk[t] * tg[t][p] * tgE[t][q];   // (column q: d a1/du, endGradSlope)
+                              K[p][q] += h * tk[t] * tgF[t][p] * tgE[t][q];   // (row p: the force's direction, termForceRows; column q: d a1/du, endGradSlope)
                   for (int q = 0; q < 4; q++)
                   {
                      double gKq = 0.0, w = 0.0;
@@ -3113,7 +3125,7 @@ namespace GroupStep
                                  double a = kd * gd[p] * gd[q];
                                  for (int t = 0; t < hm.nt; t++)
                                     if (tOn[t])
-                                       a += h * tk[t] * tg[t][p] * tgE[t][q];   // (row: the force's direction; column: d a1/du)
+                                       a += h * tk[t] * tgF[t][p] * tgE[t][q];   // (row: the force's direction, termForceRows; column: d a1/du)
                                  if (dirOn)
                                     a += gK[p][q];
                                  J[ix[p]][ix[q]] += a;
@@ -3169,7 +3181,7 @@ namespace GroupStep
                   for (int t = 0; t < hm.nt; t++)
                      if (tOn[t])
                      {
-                        const double w = h * tk[t] * (gd[0] * tg[t][0] + gd[1] * tg[t][1] + gd[2] * tg[t][2]);
+                        const double w = h * tk[t] * (gd[0] * tgF[t][0] + gd[1] * tgF[t][1] + gd[2] * tgF[t][2]);
                         for (int u = 0; u < 4; u++)
                            kv[u] += w * tgE[t][u];   // (d a1/du, endGradSlope)
                      }
@@ -3183,7 +3195,7 @@ namespace GroupStep
                   for (int t = 0; t < hm.nt; t++)
                      if (tOn[t])
                      {
-                        const double w = h * tk[t] * (gd[0] * tg[t][0] + gd[1] * tg[t][1] + gd[2] * tg[t][2]);
+                        const double w = h * tk[t] * (gd[0] * tgF[t][0] + gd[1] * tgF[t][1] + gd[2] * tgF[t][2]);
                         for (int u = 0; u < 4; u++)
                            kvE[u] += w * tgE[t][u];
                      }
