@@ -3100,10 +3100,10 @@ namespace GroupStep
                   vn0 += gm[3] * ball[it.b].v.x + gm[4] * ball[it.b].v.y + gm[5] * ball[it.b].v.z;
                for (int j = 0; j < nq; j++)
                   vn0 += gm[3 + j] * ci[qc0 + hm.c[j].coord].rate;
-               char ln[520];
-               snprintf(ln, sizeof ln, "  c k %d ball %d part %d %s on d0 %.5g dm %.5g d1 %.5g um fe %.6g fd %.6g N %.6g clamp %d slide %d kk %c cf0 %d terms %s tcf0 %s meff %.6g g ks %.6g N/m cD %.6g Ns/m vn0 %.6g m/s\n", k, it.a,
+               char ln[600];
+               snprintf(ln, sizeof ln, "  c k %d ball %d part %d %s on d0 %.5g dm %.5g d1 %.5g um fe %.6g fd %.6g N %.6g clamp %d slide %d kk %c cf0 %d terms %s tcf0 %s meff %.6g g ks %.6g N/m cD %.6g Ns/m vn0 %.6g m/s tw %c Mw %.4g limW %.4g N m\n", k, it.a,
                         shape[it.s] != nullptr ? shape[it.s]->part : -1, shape[it.s] != nullptr ? shape[it.s]->Name().c_str() : "-", d0 * 1e6, dm * 1e6, d1 * 1e6, fe, fd, N, fe + fd <= 0.0 ? 1 : 0, slipping ? 1 : 0, kk, cf0U ? 1 : 0,
-                        terms ? on.c_str() : "-", terms ? cf.c_str() : "-", wSum > 0.0 ? 1e3 / wSum : -1.0, L.K(d1), cD, vn0);
+                        terms ? on.c_str() : "-", terms ? cf.c_str() : "-", wSum > 0.0 ? 1e3 / wSum : -1.0, L.K(d1), cD, vn0, "-sl"[twSt], twM, twLim);
                clampCon += ln;
             }
             if (J)

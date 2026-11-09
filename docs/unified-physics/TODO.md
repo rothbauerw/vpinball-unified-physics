@@ -12,14 +12,15 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-In flight: nothing running. Goal 1 merge in pieces (step update, alone step, sleep rule, state records committed; next: the energy-decaying step, runs/2026-11-08-energy-decaying/order2, then one first-guess rule). Uncommitted: nothing. CLAUDE.md, hooks and memory are outside git.
-Next decision: build go for N1's path, the energy-decaying step (design accepted 11-08: order2/design.md, inertia/notes.md; build findings in runs/2026-11-08-lead/log.md). Test vs step_model 0, then delete it.
-N1. Wire switch at 6 mm: Newton does not converge near touch (ringing); 252 us/ms vs 30 us limit. Shared-engine item: closes only when solved there. Path chosen 11-08: the energy-decaying step (kills contact ringing within a step; hit step rule must never miss, N6).
+In flight: nothing running. grip_in_step committed (1cec677ab). energy_decay deleted (user, 11-09; snapshot backups/2026-11-09-before-delete-energy-decay). Uncommitted: clamp-trace twist fields (groupstep.h, diagnostic). CLAUDE.md, hooks and memory are outside git.
+Next decision: trace Gorgar's ball-only halvings (a ball touching down on the playfield mid-step, 3897 ms; balls against Wall6 at the Drain kicker).
+N1. Wire switch: switch bench now 0 failed attempts (11-09 commits c54f837ef, eef728db8, 08e00900d, 07b40b3c9). Cost: Gorgar's not a concern (user, 11-09); the switches' own cost vs the 30 us/ms limit still open, not yet measured per ms.
+N12. Gorgar load: cord-grip halvings fixed (1cec677ab); 3-4 ball-only halvings left (playfield touch-down mid-step; Wall6 at the Drain kicker); ~60 depth warnings < 20 um in the bottom pile and at the Drain kicker (stock kicker).
 N2. Wires B, C, D as the real switches (B V wire, C angled straight wire, D arch through playfield); lever ends wrong. Derive sizes from photos (ball 1-1/16 in as scale) and parts drawings; user checks before build.
 N3. Wire switches: option for a playfield hole under each wire.
 N4. Inder blade: hinge sizes and skin are estimates; 10-17 us per step; crawls from rest. Derive sizes; user checks before build.
 N5. One reach rule from physics (speed plus force) for grouping and step length. Grouping: Gate001's 81 mm swing as one-cycle travel joins two lanes. Step length: speed only, no force. Check all parts; ball pairs of unequal mass and resting-ball wake (read only).
-N6. Bounce too lively on long steps (bench: rebound 0.83 vs law 0.51): tied to N1; stays or goes with the design review of N1's solution. Includes steel impacts (impact law or relaxed step; VPX_OMEGAH_SCALE env var).
+N6. Bounce too lively on long steps (bench: rebound 0.83 vs law 0.51). 11-09: the deleted energy_decay fixed 7 wall hits on the 750 bench (one 7.2 -> 1.0 deg): long-step wall ringing is real; needs a physical fix. Includes steel impacts (VPX_OMEGAH_SCALE).
 N7. Stress v2 bench: ball travel energy +2 % at 57 ms; spin not counted. Check total energy in the saved run (no new run).
 N8. Test driver must refuse a ball placed inside any object, unless the file declares the overlap (rule 10b: then judged on recovery, no energy gained).
 N9. Branch pushed: every commit is on the fork. Engine work (part_guess_accel, clamp trace) uncommitted.
@@ -70,6 +71,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 ## 8. Testing
 1. Accuracy bench exists (750 hits vs 1 us); 36-39 hits always off the 5 % limit: fix them or set the limit (user).
 5. MCP server (later).
+9. 750 bench: 4 energy lines (Hgo1_2, Hgo1_29 87.1 mJ; Hgo2_55 24.9; Hgo2_66 53.4) = ball 2.3-3.8 mm in Rubber4 at first sight; likely replay starting mid-hit (inferred). Confirm, then start earlier or declare (rule 10b).
 8. Build-compare script compiles /fp:precise by default, so a reported difference is logic, not rounding (ModelStandards trap: a byte difference is not a logic difference).
 
 ## 9. Still stock (ask before converting)
