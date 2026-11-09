@@ -347,6 +347,14 @@ namespace GroupStep
       // inverse: F(dE) = fe), not the mid depth's: no cusp where a contact arrives or leaves within a step; the twist is on while kw1 > 0 or a(fe) > 0, with no gate on dm.
       // Newton's slope takes their exact derivatives (through fe). true (default) = on; false = the committed forms (point values at dm, the KK chord/midpoint switch, a(dm)).
       bool dampingIntegral = true;
+      // patchPath ([Contact] patch_path; runs/2026-11-08-lead/patch_state_design.md): every patch-sized coefficient of the step, the shear spring Kt = ktPerA a, its damper
+      // ct = shearTan sqrt(Kt mt), the twist and rolling springs Ktw, Kr ~ a^3 and their dampers ~ sqrt(Ktw), sqrt(Kr), is its mean over the depth the step travels,
+      // k_bar = (P(d1) - P(d0)) / (d1 - d0), P(d) = integral of k from 0 (0 for no touch; closed forms in u = Uc(d), dd = (1 + 1.5 kH sqrt(u) / kb) du; short moves by quadrature:
+      // Item::MeanOver). The stretch carries over in two patch changes, each by the patch rule (a patch that grows holds the force, one that shrinks holds the stretch; the
+      // spring's fall a loss): from Kt(d0) to k_bar before the step's move, from k_bar to Kt(d1) after it; the end stretch is stored on Kt(d1), the next step's start (no jump
+      // across steps). Newton's slope takes the means' exact slopes d k_bar / d d1 = (k(d1) - k_bar) / (d1 - d0) (short moves: the quadrature's). true (default) = on;
+      // false = the end depth's coefficients Kt(d1), Ktw(d1), Kr(d1) and their dampers for the whole step, with their slopes at d1.
+      bool patchPath = true;
       // partGuessAccel ([Contact] part_guess_accel): a part's first guess of its coordinate's move carries its last step's acceleration, (rate + a h / 2) h, a the force of the
       // move taken over its mass, as a ball's guess does. Newton's start only: the law and the solved step are unchanged. false (default) = rate h.
       bool partGuessAccel = false;
@@ -787,14 +795,7 @@ namespace GroupStep
       double KKStep(const double d0, const double d1, double &jacTerm) const
       {
          jacTerm = gammaKK * (d1 > 0.0 ? KKRate(d1) : 0.0);
-         if (d0 <= 0.0 && d1 <= 0.0)
-            return 0.0;
-         if (d0 > 0.0 && d1 > 0.0 && std::fabs(d1 - d0) < 0.01 * std::max(d0, d1))   // a short move: the same mean by quadrature, no cancellation (as Chord)
-         {
-            const double dm = 0.5 * (d0 + d1), g = 0.3872983346207417 * (d1 - d0);
-            return gammaKK * (5.0 * KKRate(dm - g) + 8.0 * KKRate(dm) + 5.0 * KKRate(dm + g)) / 18.0;
-         }
-         return gammaKK * (KKIntegral(d1) - KKIntegral(d0)) / (d1 - d0);
+         return gammaKK * MeanOver(d0, d1, [this](const double d) { return KKRate(d); }, [this](const double d) { return KKIntegral(d); });
       }
       // [Contact] damping_integral 0: the committed form (the chord for a long move, the coefficient at the mid depth dm for a short one)
       double KKStepMid(const double d0, const double d1, const double dm, double &jacTerm) const
@@ -808,18 +809,86 @@ namespace GroupStep
             c *= kb / (kb + 1.5 * kH * std::sqrt(Uc(dm)));
          return c;
       }
-      // [Contact] damping_integral: the mean coefficient of a damping c(d) over a move d0 -> d1 at a steady rate, (W(d1) - W(d0)) / (d1 - d0), W its integral from 0 (rate: c(d),
-      // integral: W(d), both 0 for no touch); a short move by the same 3-point quadrature as KKStep (no cancellation). W rises with d, so the mean is >= 0: it only takes energy out
-      template <class Rate, class Integral> static double MeanOver(const double d0, const double d1, const Rate &rate, const Integral &integral)
+      // [Contact] damping_integral, patch_path: the mean of a depth-dependent coefficient c(d) over a move d0 -> d1 at a steady rate, (W(d1) - W(d0)) / (d1 - d0), W its integral
+      // from 0 (rate: c(d), integral: W(d), both 0 for no touch); a short move (both touching, the change under 1 % of the depth) by 3-point Gauss quadrature (no cancellation).
+      // W rises with d, so the mean is >= 0. The rate may return several coefficients at once (Pows). MeanSlope: the mean's exact change with d1, (c(d1) - mean) / (d1 - d0),
+      // a short move's from the quadrature's own nodes (rateSlope: dc/dd)
+      static bool ShortMove(const double d0, const double d1) { return d0 > 0.0 && d1 > 0.0 && std::fabs(d1 - d0) < 0.01 * std::max(d0, d1); }
+      template <class Rate, class Integral> static auto MeanOver(const double d0, const double d1, const Rate &rate, const Integral &integral) -> decltype(rate(d0))
       {
          if (d0 <= 0.0 && d1 <= 0.0)
-            return 0.0;
-         if (d0 > 0.0 && d1 > 0.0 && std::fabs(d1 - d0) < 0.01 * std::max(d0, d1))
+            return decltype(rate(d0))();
+         if (ShortMove(d0, d1))
          {
             const double dm = 0.5 * (d0 + d1), g = 0.3872983346207417 * (d1 - d0);
             return (5.0 * rate(dm - g) + 8.0 * rate(dm) + 5.0 * rate(dm + g)) / 18.0;
          }
          return (integral(d1) - integral(d0)) / (d1 - d0);
+      }
+      template <class Rate, class RateSlope, class T> static T MeanSlope(const double d0, const double d1, const Rate &rate, const RateSlope &rateSlope, const T &mean)
+      {
+         if (d0 <= 0.0 && d1 <= 0.0)
+            return T();
+         if (ShortMove(d0, d1))   // d/dd1 of the nodes dm -+ g: 1/2 -+ 0.3873
+         {
+            const double dm = 0.5 * (d0 + d1), g = 0.3872983346207417 * (d1 - d0);
+            return (5.0 * (0.5 - 0.3872983346207417) * rateSlope(dm - g) + 4.0 * rateSlope(dm) + 5.0 * (0.5 + 0.3872983346207417) * rateSlope(dm + g)) / 18.0;
+         }
+         return (rate(d1) - mean) / (d1 - d0);
+      }
+      // [Contact] patch_path: the patch-sized coefficients go as powers of the contact's compression u = Uc(d) (a = sqrt(reff u)): Kt = ktPerA sqrt(reff) u^0.5, its damper
+      // shearTan sqrt(Kt mt) ~ u^0.25, Ktw and Kr ~ a^3 ~ u^1.5, their dampers ~ u^0.75. Pows holds the four (p05, p025, p15, p075)
+      struct Pows
+      {
+         double p05 = 0.0, p025 = 0.0, p15 = 0.0, p075 = 0.0;
+         friend Pows operator*(const double s, const Pows &a) { Pows r; r.p05 = s * a.p05; r.p025 = s * a.p025; r.p15 = s * a.p15; r.p075 = s * a.p075; return r; }
+         friend Pows operator+(const Pows &a, const Pows &b) { Pows r; r.p05 = a.p05 + b.p05; r.p025 = a.p025 + b.p025; r.p15 = a.p15 + b.p15; r.p075 = a.p075 + b.p075; return r; }
+         friend Pows operator-(const Pows &a, const Pows &b) { Pows r; r.p05 = a.p05 - b.p05; r.p025 = a.p025 - b.p025; r.p15 = a.p15 - b.p15; r.p075 = a.p075 - b.p075; return r; }
+         friend Pows operator/(const Pows &a, const double s) { Pows r; r.p05 = a.p05 / s; r.p025 = a.p025 / s; r.p15 = a.p15 / s; r.p075 = a.p075 / s; return r; }
+      };
+      Pows PowRate(const double d) const   // u^p at depth d (0 for no touch)
+      {
+         Pows r;
+         if (d <= 0.0)
+            return r;
+         const double u = Uc(d), s = std::sqrt(u), q = std::sqrt(s);
+         r.p05 = s;
+         r.p025 = q;
+         r.p15 = u * s;
+         r.p075 = s * q;
+         return r;
+      }
+      Pows PowIntegral(const double d) const   // integral of u^p over the depth from 0: dd = (1 + b sqrt(u)) du, b = 1.5 kH / kb (0 with no bend), so u^(p+1)/(p+1) + b u^(p+1.5)/(p+1.5)
+      {
+         Pows r;
+         if (d <= 0.0)
+            return r;
+         const double u = Uc(d), s = std::sqrt(u), q = std::sqrt(s), b = kb > 0.0 ? 1.5 * kH / kb : 0.0;
+         r.p05 = u * s / 1.5 + b * u * u / 2.0;
+         r.p025 = u * q / 1.25 + b * u * s * q / 1.75;
+         r.p15 = u * u * s / 2.5 + b * u * u * u / 3.0;
+         r.p075 = u * s * q / 1.75 + b * u * u * q / 2.25;
+         return r;
+      }
+      Pows PowSlope(const double d) const   // d(u^p)/dd = p u^(p-1) Uc'(d) (a short move only: d > 0)
+      {
+         Pows r;
+         if (d <= 0.0)
+            return r;
+         const double u = Uc(d), s = std::sqrt(u), q = std::sqrt(s), us = kb > 0.0 ? kb / (kb + 1.5 * kH * s) : 1.0;
+         if (u <= 0.0)
+            return r;
+         r.p05 = 0.5 / s * us;
+         r.p025 = 0.25 / (s * q) * us;
+         r.p15 = 1.5 * s * us;
+         r.p075 = 0.75 / q * us;
+         return r;
+      }
+      // the means of u^p over the step's depth path d0 -> d1 and their slopes in d1 (patch_path)
+      void PatchMeans(const double d0, const double d1, Pows &mean, Pows &slope) const
+      {
+         mean = MeanOver(d0, d1, [this](const double d) { return PowRate(d); }, [this](const double d) { return PowIntegral(d); });
+         slope = MeanSlope(d0, d1, [this](const double d) { return PowRate(d); }, [this](const double d) { return PowSlope(d); }, mean);
       }
       double UcSlope(const double d) const { return d > 0.0 && kb > 0.0 ? kb / (kb + 1.5 * kH * std::sqrt(Uc(d))) : 1.0; }   // dUc/dd: the contact's share of a depth change
       // the loss tangent's dashpot on the contact's own compression u = Uc(d): c(u) = tanDelta sqrt(1.5 kH m) u^(1/4) (= tanDelta sqrt(1.5 F m / u), Hertz), per unit of d c(Uc) Uc';
@@ -2685,23 +2754,31 @@ namespace GroupStep
                const double lp = xp.Length();
                xi0 = lp > 1e-300 ? xp * (l0 / lp) : V3();
             }
-            // the patch rule (rubbercontact.h ContactCore): a patch that grows holds the force, one that shrinks holds the stretch; the spring's fall is a loss
+            // the patch rule (rubbercontact.h ContactCore): a patch that grows holds the force, one that shrinks holds the stretch; the spring's fall is a loss.
+            // [Contact] patch_path (pp): the step's spring kS and damper ct are their means over the depth path (u^0.5, u^0.25: Item::PatchMeans; kSp, ctSp their slopes in d1);
+            // the stretch goes from k0 to kS by the rule here, and from kS to k1 after the move (below). 0: kS = k1 = Kt(d1), the damper from k1
+            const bool pp = set.patchPath;
+            Item::Pows pM, pS;
+            if (pp)
+               L.PatchMeans(d0, d1, pM, pS);
+            const double ktU = pp ? L.ktPerA * std::sqrt(L.reff) : 0.0, ctU = pp ? L.shearTan * std::sqrt(ktU * L.mt) : 0.0;   // Kt and its damper per u^0.5, u^0.25
             const double k0 = L.Kt(d0), k1 = L.Kt(d1);
+            const double kS = pp ? ktU * pM.p05 : k1, kSp = pp ? ktU * pS.p05 : 0.0, ctSp = pp ? ctU * pS.p025 : 0.0;
             const double held = 0.5 * k0 * xi0.Dot(xi0);
-            if (k1 > k0)
-               xi0 = xi0 * (k0 / k1);
-            e.slip = held - 0.5 * k1 * xi0.Dot(xi0);
-            // the patch: the spring k1 and the damper ct side by side, in series with the Coulomb slip. The trial force (no slip) is the spring's midpoint force and the
+            if (kS > k0)
+               xi0 = xi0 * (k0 / kS);
+            e.slip = held - 0.5 * kS * xi0.Dot(xi0);
+            // the patch: the spring kS and the damper ct side by side, in series with the Coulomb slip. The trial force (no slip) is the spring's midpoint force and the
             // damper's; past mu N the patch slips along the trial and the spring's end stretch is the one that carries the limit force with the damper. The force is
             // continuous across stick and slip.
             V3 Ft, xi1, FsTr;
             double ct = 0.0, limS = 0.0, flTr = 0.0;
             bool slipping = false;
-            if (k1 > 0.0)
+            if (kS > 0.0)
             {
                const V3 xtr = xi0 + ut * h;
-               ct = L.shearTan * std::sqrt(k1 * L.mt);
-               Ft = (xi0 + xtr) * (0.5 * k1) + ut * ct;
+               ct = pp ? ctU * pM.p025 : L.shearTan * std::sqrt(k1 * L.mt);
+               Ft = (xi0 + xtr) * (0.5 * kS) + ut * ct;
                FsTr = Ft;
                const double lim = L.mu * N, fl = Ft.Length();
                limS = lim;
@@ -2710,19 +2787,26 @@ namespace GroupStep
                if (fl > lim)
                {
                   Ft = fl > 0.0 ? Ft * (lim / fl) : V3();
-                  // Ft = k1 (xi0 + xi1) / 2 + ct (xi1 - xi0) / h, so the slip xtr - xi1 = (trial - Ft) / (k1 / 2 + ct / h) lies along Ft: its loss Ft . slip >= 0
-                  const double cs = 0.5 * k1 + ct / h;
-                  xi1 = (Ft - xi0 * (0.5 * k1 - ct / h)) * (1.0 / cs);
+                  // Ft = kS (xi0 + xi1) / 2 + ct (xi1 - xi0) / h, so the slip xtr - xi1 = (trial - Ft) / (kS / 2 + ct / h) lies along Ft: its loss Ft . slip >= 0
+                  const double cs = 0.5 * kS + ct / h;
+                  xi1 = (Ft - xi0 * (0.5 * kS - ct / h)) * (1.0 / cs);
                   slipping = true;
                   e.slipping = true;
                   e.slip += Ft.Dot(xtr - xi1);
                }
             }
-            e.xi1 = xi1;
             {
                const V3 dxi = xi1 - xi0;   // the damper's loss over its own stretch (ct ut^2 h while it sticks)
                e.shearDamp = slipping ? ct * dxi.Dot(dxi) / h : ct * ut.Dot(ut) * h;
             }
+            if (pp && kS > 0.0)   // patch_path: the stretch from kS to the end's patch k1 by the patch rule (a loss), stored on k1: the next step starts on it
+            {
+               const double heldS = 0.5 * kS * xi1.Dot(xi1);
+               if (k1 > kS)
+                  xi1 = xi1 * (kS / k1);
+               e.slip += heldS - 0.5 * k1 * xi1.Dot(xi1);
+            }
+            e.xi1 = xi1;
             F[it.a] = F[it.a] - V3(gd[0], gd[1], gd[2]) * N - Ft;   // (a massless part's contact: its spring is in the part's U*, only the damping here)
             M[it.a] = M[it.a] + rA.Cross(Ft * -1.0);
             if (pr)
@@ -2781,28 +2865,33 @@ namespace GroupStep
                   const double lp = tp.Length();
                   r0.th = lp > 1e-300 ? tp * (l0 / lp) : V3();
                }
+               // patch_path: the step's springs krS, kwS and dampers are their means over the depth path (u^1.5, u^0.75), the patch rule from the start's to them here and
+               // from them to the end's after each move; 0: krS = kr1, kwS = kw1, the dampers from them
                const double kr0 = L.Kr(d0), kr1 = L.Kr(d1), kw0 = L.Ktw(d0), kw1 = L.Ktw(d1);
-               const double held = 0.5 * kr0 * r0.th.Dot(r0.th) + 0.5 * kw0 * r0.tw * r0.tw;
-               if (kr1 > kr0)
-                  r0.th = r0.th * (kr0 / kr1);
-               if (kw1 > kw0)
-                  r0.tw *= kw0 / kw1;
-               e.roll = held - 0.5 * kr1 * r0.th.Dot(r0.th) - 0.5 * kw1 * r0.tw * r0.tw;   // the patch's change: a loss >= 0
                const double Ir = L.mRed * A.R * A.R;   // with 1.4: the ball's inertia about its contact point; with 0.4: about its centre (the contact's mass)
-               if (di ? L.twist && kw1 > 0.0 && N > 0.0 : L.twist && kw1 > 0.0 && N > 0.0 && am > 0.0)   // (damping_integral: no switch on dm; with no end patch, kw1 = 0, there is no twist spring or damper)
+               const double krU = pp ? L.kH * L.reff : 0.0, kwU = 16.0 / 3.0 * 0.35 * 0.75 * krU;   // Kr, Ktw per u^1.5 (a^3 = reff^1.5 u^1.5)
+               const double krS = pp ? krU * pM.p15 : kr1, kwS = pp ? kwU * pM.p15 : kw1;
+               const double held = 0.5 * kr0 * r0.th.Dot(r0.th) + 0.5 * kw0 * r0.tw * r0.tw;
+               if (krS > kr0)
+                  r0.th = r0.th * (kr0 / krS);
+               if (kwS > kw0)
+                  r0.tw *= kw0 / kwS;
+               e.roll = held - 0.5 * krS * r0.th.Dot(r0.th) - 0.5 * kwS * r0.tw * r0.tw;   // the patch's change: a loss >= 0
+               if (di ? L.twist && kwS > 0.0 && N > 0.0 : L.twist && kwS > 0.0 && N > 0.0 && am > 0.0)   // (damping_integral: no switch on dm; with no patch on the step's path, kwS = 0, there is no twist spring or damper)
                {
                   const double wn = wr.Dot(nm);
-                  const double cw = L.shearTan * std::sqrt(kw1 * 0.4 * Ir);
+                  const double cwU = pp ? L.shearTan * std::sqrt(kwU * 0.4 * Ir) : 0.0;   // patch_path: the damper per u^0.75
+                  const double cw = pp ? cwU * pM.p075 : L.shearTan * std::sqrt(kw1 * 0.4 * Ir);
                   const double twTr = r0.tw + wn * h;
-                  double Mw = 0.5 * kw1 * (r0.tw + twTr) + cw * wn;
+                  double Mw = 0.5 * kwS * (r0.tw + twTr) + cw * wn;
                   const double limW = 3.0 * kPi / 16.0 * L.mu * (di ? aE : am) * N;
                   double tw1 = twTr;
-                  kkTw = 0.5 * kw1 * h + cw;   // the resisting torque's slope in wn while it sticks; 0 at the limit
+                  kkTw = 0.5 * kwS * h + cw;   // the resisting torque's slope in wn while it sticks; 0 at the limit
                   if (std::fabs(Mw) > limW)
                   {
                      Mw = Mw > 0.0 ? limW : -limW;
-                     const double cs = 0.5 * kw1 + cw / h;
-                     tw1 = (Mw - r0.tw * (0.5 * kw1 - cw / h)) / cs;
+                     const double cs = 0.5 * kwS + cw / h;
+                     tw1 = (Mw - r0.tw * (0.5 * kwS - cw / h)) / cs;
                      e.twist = Mw * (twTr - tw1) + cw * (tw1 - r0.tw) * (tw1 - r0.tw) / h;
                      kkTw = 0.0;
                      twSt = 2;
@@ -2825,13 +2914,25 @@ namespace GroupStep
                   {
                      e.twist = cw * wn * wn * h;
                      twSt = 1;
-                     if (set.twistSlope)   // Mw = kw1 tw0' + (kw1 h / 2 + cw) wn: kw1 = Ktw(d1) ~ a^3, cw ~ sqrt(kw1); a growing patch holds kw1 tw0' = kw0 tw0
+                     if (set.twistSlope)   // Mw = kwS tw0' + (kwS h / 2 + cw) wn: kwS = Ktw(d1) ~ a^3 (patch_path: its mean), cw ~ sqrt(kwS) (its mean); a growing patch holds kwS tw0' = kw0 tw0
                      {
-                        const double a1 = L.A(d1);
-                        const double kw1p = a1 > 0.0 ? 3.0 * kw1 * L.ASlope(d1) / a1 : 0.0;
-                        const double cwp = 0.5 * cw * kw1p / kw1;
-                        twD1 = kw1p * ((kw1 > kw0 ? 0.0 : r0.tw) + 0.5 * h * wn) + cwp * wn;
+                        if (pp)   // the means' exact slopes in d1
+                           twD1 = kwU * pS.p15 * ((kwS > kw0 ? 0.0 : r0.tw) + 0.5 * h * wn) + cwU * pS.p075 * wn;
+                        else
+                        {
+                           const double a1 = L.A(d1);
+                           const double kw1p = a1 > 0.0 ? 3.0 * kw1 * L.ASlope(d1) / a1 : 0.0;
+                           const double cwp = 0.5 * cw * kw1p / kw1;
+                           twD1 = kw1p * ((kw1 > kw0 ? 0.0 : r0.tw) + 0.5 * h * wn) + cwp * wn;
+                        }
                      }
+                  }
+                  if (pp)   // patch_path: the twist from kwS to the end's patch kw1 by the patch rule (a loss), stored on kw1
+                  {
+                     const double heldS = 0.5 * kwS * tw1 * tw1;
+                     if (kw1 > kwS)
+                        tw1 *= kwS / kw1;
+                     e.roll += heldS - 0.5 * kw1 * tw1 * tw1;
                   }
                   twM = Mw;
                   twLim = limW;
@@ -2843,24 +2944,24 @@ namespace GroupStep
                   for (int j = 0; j < nq; j++)
                      qf[j] += Mw * nm.Dot(hm.c[j].W());
                }
-               if ((L.tanDelta > 0.0 || L.rollingMu > 0.0) && N > 0.0 && am > 0.0 && kr1 > 0.0)
+               if ((L.tanDelta > 0.0 || L.rollingMu > 0.0) && N > 0.0 && am > 0.0 && krS > 0.0)
                {
                   const V3 wt = wr - nm * wr.Dot(nm);
                   const double pa = N / (kPi * am * am);
                   const double muRr = std::max(std::min(2.34 * (pa / L.E) * L.tanDelta, RubberContact::kRollingMuMax), L.rollingMu);
                   const double lim = muRr * A.R * N;
-                  const double cr = L.shearTan * std::sqrt(kr1 * 1.4 * Ir);
+                  const double cr = pp ? L.shearTan * std::sqrt(krU * 1.4 * Ir) * pM.p075 : L.shearTan * std::sqrt(kr1 * 1.4 * Ir);   // (patch_path: the damper's mean, u^0.75)
                   const V3 thTr = r0.th + wt * h;
-                  V3 Mr = (r0.th + thTr) * (0.5 * kr1) + wt * cr;
+                  V3 Mr = (r0.th + thTr) * (0.5 * krS) + wt * cr;
                   V3 th1 = thTr;
-                  const double ml = Mr.Length(), sl = 0.5 * kr1 * h + cr;
+                  const double ml = Mr.Length(), sl = 0.5 * krS * h + cr;
                   const M3 Pt = M3::Tangent(nm);
                   if (ml > lim)
                   {
                      // rolls: the torque at the limit along the trial; the roll thTr - th1 lies along it, its loss Mr . roll >= 0
                      Mr = Mr * (lim / ml);
-                     const double cs = 0.5 * kr1 + cr / h;
-                     th1 = (Mr - r0.th * (0.5 * kr1 - cr / h)) * (1.0 / cs);
+                     const double cs = 0.5 * krS + cr / h;
+                     th1 = (Mr - r0.th * (0.5 * krS - cr / h)) * (1.0 / cs);
                      const V3 dth = th1 - r0.th;
                      e.roll += Mr.Dot(thTr - th1) + cr * dth.Dot(dth) / h;
                      const V3 mh = Mr * (1.0 / lim);
@@ -2877,6 +2978,13 @@ namespace GroupStep
                      for (int i = 0; i < 3; i++)
                         for (int j = 0; j < 3; j++)
                            RmS.a[i][j] = sl * Pt.a[i][j];
+                  }
+                  if (pp)   // patch_path: the tilt from krS to the end's patch kr1 by the patch rule (a loss), stored on kr1
+                  {
+                     const double heldS = 0.5 * krS * th1.Dot(th1);
+                     if (kr1 > krS)
+                        th1 = th1 * (krS / kr1);
+                     e.roll += heldS - 0.5 * kr1 * th1.Dot(th1);
                   }
                   e.ra1.th = th1;
                   rollS = true;
@@ -3028,9 +3136,9 @@ namespace GroupStep
                      snprintf(with, sizeof with, "part %d (shape %d)", sp, it.s);
                   else
                      snprintf(with, sizeof with, "surface (shape %d)", it.s);
-                  snprintf(ln, sizeof ln, "  contact k %d ball %d with %s: d0 %.5g dm %.5g d1 %.5g um n (%.4f %.4f %.4f) N %.5g fe %.5g fd %.5g cD %.4g kc %.5g kn %.5g | %s ut (%.3g %.3g %.3g) m/s xi0 (%.3g %.3g %.3g) xi1 (%.3g %.3g %.3g) um Ft (%.4g %.4g %.4g) muN %.4g k1 %.4g ct %.4g terms %d tw %c Mw %.4g limW %.4g\n",
+                  snprintf(ln, sizeof ln, "  contact k %d ball %d with %s: d0 %.5g dm %.5g d1 %.5g um n (%.4f %.4f %.4f) N %.5g fe %.5g fd %.5g cD %.4g kc %.5g kn %.5g | %s ut (%.3g %.3g %.3g) m/s xi0 (%.3g %.3g %.3g) xi1 (%.3g %.3g %.3g) um Ft (%.4g %.4g %.4g) muN %.4g kS %.4g ct %.4g terms %d tw %c Mw %.4g limW %.4g\n",
                            k, it.a, with, d0 * 1e6, dm * 1e6, d1 * 1e6, nm.x, nm.y, nm.z, N, fe, fd, cD, kc, kn, slipping ? "slide" : "stick", ut.x, ut.y, ut.z, xi0.x * 1e6, xi0.y * 1e6, xi0.z * 1e6,
-                           xi1.x * 1e6, xi1.y * 1e6, xi1.z * 1e6, Ft.x, Ft.y, Ft.z, limS, k1, ct, terms ? hm.nt : 0, "-sl"[twSt], twM, twLim);
+                           xi1.x * 1e6, xi1.y * 1e6, xi1.z * 1e6, Ft.x, Ft.y, Ft.z, limS, kS, ct, terms ? hm.nt : 0, "-sl"[twSt], twM, twLim);
                   jacWinCon += ln;
                   if (terms)
                      for (int t = 0; t < hm.nt; t++)
@@ -3043,9 +3151,9 @@ namespace GroupStep
                // shear: the tangential force Ft changes with the slip rate ut (dFt/dut = Cm, in the contact plane) and with the depth d1 (dFt/dd1 = fd1).
                // ut = sp (dc_p / h + 1/2 Skew(r_p)^T dw_p) projected, d1 changes by -sq n . dc_q; on ball p the force is -sp Ft at r_p. So, for the residual of p:
                //    d/d dc_q: sp sq [Cm; Skew(r_p) Cm] - h sp sq [fd1; Skew(r_p) fd1] n^T,   d/d dw_q: 1/2 h sp sq [Cm; Skew(r_p) Cm] Skew(r_q)^T
-               // The spring's force is k1 xi0 + k1 ut h / 2, and a growing patch holds k1 xi0 (= k0 xi0 before the hold): g = k1'(d1) ((k1 > k0 ? 0 : xi0) + ut h / 2) is its change with d1.
-               // Sticking: Cm = (k1 h / 2 + ct) Pt, fd1 = g + k1' shearTan sqrt(mt / k1) ut / 2 (ct grows with k1 too).
-               // Sliding (Ft = lim f^, f^ along the total trial force T = k1 xi0 + (k1 h / 2 + ct) ut): Cm = (lim / |T|) (k1 h / 2 + ct) (Pt - f^ f^^T),
+               // The spring's force is kS xi0 + kS ut h / 2 (kS = k1, or patch_path: its mean over the path), and a growing patch holds kS xi0 (= k0 xi0 before the hold): g = kS'(d1) ((kS > k0 ? 0 : xi0) + ut h / 2) is its change with d1.
+               // Sticking: Cm = (kS h / 2 + ct) Pt, fd1 = g + ct'(d1) ut (ct grows with the patch too: shearTan sqrt(mt / k1) k1' / 2, or patch_path its mean's slope).
+               // Sliding (Ft = lim f^, f^ along the total trial force T = kS xi0 + (kS h / 2 + ct) ut): Cm = (lim / |T|) (kS h / 2 + ct) (Pt - f^ f^^T),
                // fd1 = mu N'(d1) f^ + (lim / |T|) (Pt - f^ f^^T) (g + gc), N' = kn / h, the normal row's own slope.
                const M3 Pt = M3::Tangent(nm);
                const int nbod = pr ? 2 : 1;
@@ -3079,14 +3187,15 @@ namespace GroupStep
                         for (int u = 0; u < 4; u++)
                            kvE[u] += w * tgE[t][u];
                      }
-               if (k1 > 0.0)
+               if (kS > 0.0)
                {
                   M3 Cm;
                   V3 fd1, fN;   // fN: sliding, the limit's change per unit of N (hinge_piece_sum: taken on kv, not in fd1)
-                  const double kp = L.KtSlope(d1);
-                  const V3 g = ((k1 > k0 ? V3() : xi0) + ut * (0.5 * h)) * kp;
-                  const V3 gc = ut * (0.5 * L.shearTan * std::sqrt(L.mt / k1) * kp);
-                  const double C = 0.5 * k1 * h + ct;
+                  // the spring's and damper's change with d1: patch_path, the means' exact slopes (kSp, ctSp); 0: at d1, KtSlope and ct's through it
+                  const double kp = pp ? kSp : L.KtSlope(d1);
+                  const V3 g = ((kS > k0 ? V3() : xi0) + ut * (0.5 * h)) * kp;
+                  const V3 gc = pp ? ut * ctSp : ut * (0.5 * L.shearTan * std::sqrt(L.mt / k1) * kp);
+                  const double C = 0.5 * kS * h + ct;
                   if (!slipping)
                   {
                      for (int i = 0; i < 3; i++)

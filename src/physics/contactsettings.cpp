@@ -118,6 +118,8 @@ namespace
             s.endGradSlope = on;
          else if (key == "damping_integral")
             s.dampingIntegral = on;
+         else if (key == "patch_path")
+            s.patchPath = on;
          else if (key == "hinge_piece_sum")
             s.hingePieceSum = on;
          else if (key == "part_guess_accel")
@@ -188,7 +190,7 @@ namespace
       cur = s;
       Publish();
       PLOGI << "Contact settings loaded from " << path.string() << ": " << (s.enable ? "on" : "off") << ", dynamic ratio " << s.muDynamicRatio
-            << ", rolling resistance " << s.rollingResistance << ", twist " << (s.twist ? "on" : "off") << " patch " << s.twistPatchMm << " mm, ball contact " << (s.ballContact ? "on" : "off") << ", roll_model " << s.rollModel << ", step_model " << s.stepModel << ", step_swing_cap " << (s.stepSwingCap ? 1 : 0) << ", term_arrival " << (s.termArrival ? 1 : 0) << ", eps_rest_um " << s.epsRestUm << ", hinge_piece_sum " << (s.hingePieceSum ? 1 : 0) << ", damp_dir_slope " << (s.dampDirSlope ? 1 : 0) << ", lever_roll_slope " << (s.leverRollSlope ? 1 : 0) << ", twist_slope " << (s.twistSlope ? 1 : 0) << ", end_grad_slope " << (s.endGradSlope ? 1 : 0) << ", damping_integral " << (s.dampingIntegral ? 1 : 0) << ", part_guess_accel " << (s.partGuessAccel ? 1 : 0);
+            << ", rolling resistance " << s.rollingResistance << ", twist " << (s.twist ? "on" : "off") << " patch " << s.twistPatchMm << " mm, ball contact " << (s.ballContact ? "on" : "off") << ", roll_model " << s.rollModel << ", step_model " << s.stepModel << ", step_swing_cap " << (s.stepSwingCap ? 1 : 0) << ", term_arrival " << (s.termArrival ? 1 : 0) << ", eps_rest_um " << s.epsRestUm << ", hinge_piece_sum " << (s.hingePieceSum ? 1 : 0) << ", damp_dir_slope " << (s.dampDirSlope ? 1 : 0) << ", lever_roll_slope " << (s.leverRollSlope ? 1 : 0) << ", twist_slope " << (s.twistSlope ? 1 : 0) << ", end_grad_slope " << (s.endGradSlope ? 1 : 0) << ", damping_integral " << (s.dampingIntegral ? 1 : 0) << ", patch_path " << (s.patchPath ? 1 : 0) << ", part_guess_accel " << (s.partGuessAccel ? 1 : 0);
    }
 }
 
@@ -224,6 +226,7 @@ void ContactSettings::ToStep(GroupStep::Settings& s) const
    s.twistSlope = twistSlope;
    s.endGradSlope = endGradSlope;
    s.dampingIntegral = dampingIntegral;
+   s.patchPath = patchPath;
    s.partGuessAccel = partGuessAccel;
    s.epsRest = epsRestUm * 1e-6;   // (0.1 um gives 1e-7 m exactly, the Settings default)
    s.hMin = GroupStep::GroupFixedStepS() > 0.0 ? 1e-9 : 2e-6;
