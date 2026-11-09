@@ -16,7 +16,7 @@ In flight: nothing running. grip_in_step committed (1cec677ab). energy_decay del
 Next decision: trace Gorgar's ball-only halvings (a ball touching down on the playfield mid-step, 3897 ms; balls against Wall6 at the Drain kicker).
 N1. Wire switch: switch bench now 0 failed attempts (11-09 commits c54f837ef, eef728db8, 08e00900d, 07b40b3c9). Cost: Gorgar's not a concern (user, 11-09); the switches' own cost vs the 30 us/ms limit still open, not yet measured per ms.
 N12. Gorgar load: cord-grip halvings fixed (1cec677ab); 3-4 ball-only halvings left (playfield touch-down mid-step; Wall6 at the Drain kicker); ~60 depth warnings < 20 um in the bottom pile and at the Drain kicker (stock kicker).
-N2. Wires B, C, D as the real switches (B V wire, C angled straight wire, D arch through playfield); lever ends wrong. Derive sizes from photos (ball 1-1/16 in as scale) and parts drawings; user checks before build.
+N2. Rebuild wire switches A-E as the real parts from PartData S7 (sizes, mounting, lever angle agreed 11-09); E is a new trigger shape (editor list, drawn mesh, contact model). Wire 1.0 mm (S1).
 N3. Wire switches: option for a playfield hole under each wire.
 N4. Inder blade: hinge sizes and skin are estimates; 10-17 us per step; crawls from rest. Derive sizes; user checks before build.
 N5. One reach rule from physics (speed plus force) for grouping and step length. Grouping: Gate001's 81 mm swing as one-cycle travel joins two lanes. Step length: speed only, no force. Check all parts; ball pairs of unequal mass and resting-ball wake (read only).
