@@ -364,6 +364,15 @@ namespace GroupStep
       // + R N dmuRr/daE daE/dfe h dfe/du (muRr = 2.34 (pa / E) tanDelta between its floor rolling_resistance and its cap kRollingMuMax; at either, muRr's slope is 0).
       // roll_model 0 takes the same patch (no slope there, as today). true (default) = on; false = the mid depth's a(dm), the limit's slope muRr R h dN/du with muRr held.
       bool rollingPatch = true;
+      // stickZoneTrial ([Contact] stick_zone_trial; runs/2026-11-08-lead/slip_reversal_design.md section 2b): Newton's move and slopes unchanged; before the line search's
+      // full move (then 1/2, 1/4 ...), it tries, for each contact whose shear patch slides at the current point with N > 0, the fraction s of the move at the middle of the
+      // part of (0, 1] where that contact's trial force lies inside its Coulomb limit: |a + s C dut| <= mu (N0 + s dN), a quadratic in s, with a = the trial force at the
+      // current point, C = kS h / 2 + ct, kS, ct, the stretch and the contact's geometry (normal, lever) held at the current point, dut the slip rate's change over the
+      // move (ut's own linear form in the move: centre / h, half the spin change x lever, carried columns / h), dN the normal row's own slope over the move. A sliding
+      // patch's slope has no slope along the slip (Ft = mu N f^), so the full move overshoots a stick zone ~15x narrower (the Drain kicker 2-cycle). Accepted by the exact
+      // residual as every move; candidates ascending, then 1, 1/2 ... A contact whose interval contains s = 1 (the full move already ends inside its zone) gives no
+      // candidate; only one whose interval ends before s = 1 does. true (default) = on; false = the line search tries 1, 1/2 ... only.
+      bool stickZoneTrial = true;
       // patchPath ([Contact] patch_path; runs/2026-11-08-lead/patch_state_design.md): every patch-sized coefficient of the step, the shear spring Kt = ktPerA a, its damper
       // ct = shearTan sqrt(Kt mt), the twist and rolling springs Ktw, Kr ~ a^3 and their dampers ~ sqrt(Ktw), sqrt(Kr), is its mean over the depth the step travels,
       // k_bar = (P(d1) - P(d0)) / (d1 - d0), P(d) = integral of k from 0 (0 for no touch; closed forms in u = Uc(d), dd = (1 + 1.5 kH sqrt(u) / kb) du; short moves by quadrature:
@@ -1053,6 +1062,8 @@ namespace GroupStep
          WipeEachUse(&tgES);
          WipeEachUse(&tgFS);
          WipeEachUse(&crossS);
+         WipeEachUse(&szRec);
+         WipeEachUse(&szCand);
          Size(8);
       }
       // The start of a use (an island's steps, a part's steps alone): no ball, shape or part yet, and nothing an earlier use wrote can be read
@@ -1214,6 +1225,7 @@ namespace GroupStep
             farNow.Grow(n);
             prevSlipS.Grow(n);
             prevOnS.Grow(n);
+            szRec.Grow(n);
             esI0.Grow(n);
             size_t nU = 6 * (size_t)nb;
             for (int p = 0; p < np; p++)
@@ -2166,6 +2178,20 @@ namespace GroupStep
       Buf<double> qEnd, qMid, qF;
       Buf<V3> loadF;
       static constexpr int kGradMax = 3 + 7;   // a discrete gradient's entries: a ball's centre and a hit's columns (two balls: 6)
+      // stick_zone_trial: each contact's linear model of its trial force along a move, written by a round's Eval (with the Jacobian) at its point
+      struct StickRec
+      {
+         bool on = false;            // the shear patch slides at this point with N > 0
+         V3 a, rA, rB, nm;           // the trial force kS xi0 + C ut; the levers; the normal
+         double C = 0.0, mu = 0.0, N0 = 0.0;
+         int A = -1, B = -1, nq = 0, nn = 0;
+         V3 cV[kGradMax];            // a carried surface's column's contact-point velocity per unit rate
+         int qU[kGradMax];           // its unknown (-1: a given move)
+         double nG[kGradMax];        // N's slope on the unknown nIx (dN = sum nG d[nIx])
+         int nIx[kGradMax];
+      };
+      Buf<StickRec> szRec;
+      std::vector<double> szCand;
       Buf<char> farNow;          // not touching and out of reach in this attempt
       // [Contact] hinge_piece_sum: per contact, the pieces of its surface the ball can reach in this attempt (Shape::NearPieces), built at its start; every probe
       // of the attempt (start, middle, end, every Newton try) takes the same list. A piece off it has depth <= 0 at every place of the step (checked after the
@@ -2628,6 +2654,8 @@ namespace GroupStep
             const Item &it = item[k];
             const Item &L = law[k];
             ItemEnd &e = ie[k];
+            if (J)
+               szRec[k].on = false;   // (stick_zone_trial: written below for a sliding patch)
             if (farNow[k])
             {
                e = ItemEnd();
@@ -3296,6 +3324,43 @@ namespace GroupStep
                         fd1 = fh * (L.mu * dN) + Pg * r;
                   }
                   const M3 Dn = M3::Outer(fd1, nm);
+                  if (set.stickZoneTrial && slipping && limS > 0.0 && flTr > 0.0)   // stick_zone_trial: the trial force's linear model along a move (kS, ct, stretch, geometry held)
+                  {
+                     StickRec &sr = szRec[k];
+                     sr.on = true;
+                     sr.a = FsTr;
+                     sr.C = C;
+                     sr.mu = L.mu;
+                     sr.N0 = N;
+                     sr.A = it.a;
+                     sr.B = pr ? it.b : -1;
+                     sr.rA = rA;
+                     sr.rB = rB;
+                     sr.nm = nm;
+                     sr.nq = nq;
+                     for (int j = 0; j < nq; j++)
+                     {
+                        sr.cV[j] = hm.c[j].V();
+                        sr.qU[j] = ix[3 + j];
+                     }
+                     sr.nn = 0;   // N's slope over the unknowns: the normal row's own (h dN/du = kv, or kn gm), over h
+                     if (terms)
+                     {
+                        for (int u = 0; u < 4; u++)
+                           if (ix[u] >= 0 && kv[u] != 0.0)
+                           {
+                              sr.nG[sr.nn] = kv[u] / h;
+                              sr.nIx[sr.nn++] = ix[u];
+                           }
+                     }
+                     else if (kn != 0.0)
+                        for (int p = 0; p < na + nq; p++)
+                           if (ix[p] >= 0)
+                           {
+                              sr.nG[sr.nn] = kn / h * gm[p];
+                              sr.nIx[sr.nn++] = ix[p];
+                           }
+                  }
                   if (terms)   // (only a ball on a part: nbod 1) the limit's change with N: mu f^ (h dN/du)
                   {
                      const M3 Nn = M3::Outer(fN, V3(kv[0], kv[1], kv[2]));
@@ -3845,6 +3910,9 @@ namespace GroupStep
          char *const prevSlip = prevSlipS, *const prevOn = prevOnS;
          double *const xPrev = xPrevS, *const stpPrev = stpPrevS;
          double scalePrev = 0.0, rnPrev = INFINITY;
+         double scaleFull = 0.0;           // stick_zone_trial: the move's full scale; its stick-zone candidates szCand[iCand ..] still to try, then the full move
+         int nCand = 0, iCand = 0;
+         bool fullTried = true;
          int back = 0;
          bool gripMoved = false, endValuesHere = false;
          double lastCh = INFINITY;
@@ -3952,9 +4020,17 @@ namespace GroupStep
             if (round > 1 && !gripMoved && rn > rnPrev * (1.0 - 1e-4) && rn > set.tolV && back < 30)
             {
                bool ok = false;
-               while (!ok && scalePrev > 1e-9)
+               while (!ok && (iCand < nCand || !fullTried || scalePrev > 1e-9))
                {
-                  scalePrev *= 0.5;
+                  if (iCand < nCand)   // stick_zone_trial: the next stick-zone candidate, then the full move, then halves of it
+                     scalePrev = scaleFull * szCand[iCand++];
+                  else if (!fullTried)
+                  {
+                     scalePrev = scaleFull;
+                     fullTried = true;
+                  }
+                  else
+                     scalePrev *= 0.5;
                   for (int a = 0; a < nU; a++)
                      x[a] = xPrev[a] + stpPrev[a] * scalePrev;
                   ok = InRange(x);
@@ -4050,6 +4126,32 @@ namespace GroupStep
             }
             moved = !(ch <= set.tolV && settled);
             lastCh = ch;
+            // stick_zone_trial: the move's convergence and progress measures (ch) stay the full move's; the first trial is the first stick-zone candidate in range
+            scaleFull = scale;
+            nCand = iCand = 0;
+            fullTried = true;
+            if (set.stickZoneTrial && moved)
+            {
+               nCand = StickCandidates(stp, scale, h);
+               while (iCand < nCand)
+               {
+                  const double sc = scale * szCand[iCand++];
+                  for (int a = 0; a < nU; a++)
+                     trial[a] = x[a] + stp[a] * sc;
+                  if (InRange(trial))
+                  {
+                     scale = sc;
+                     fullTried = false;
+                     break;
+                  }
+               }
+               if (fullTried && nCand > 0)   // (none in range: the full move, its range check last so its probes are the cached ones)
+               {
+                  for (int a = 0; a < nU; a++)
+                     trial[a] = x[a] + stp[a] * scale;
+                  InRange(trial);
+               }
+            }
             for (int a = 0; a < nU; a++)
             {
                xPrev[a] = x[a];
@@ -4223,6 +4325,70 @@ namespace GroupStep
          if (endValuesHere)
             return true;
          return Eval(h, x, Res, nullptr, trialCached);   // the end values at the solution
+      }
+
+      // stick_zone_trial: the line search's first trials for Newton's move d x scale (the full move the line search tries first): per contact sliding at the point
+      // the round evaluated (szRec), the middle of the part of (0, 1] where its trial force a + s b lies inside mu N(s), N(s) = N0 + s dN >= 0; b = C dut, dut the slip
+      // rate's change over the move by ut's own form (ut = Pt (dc_a / h + wm_a x rA - dc_b / h - wm_b x rB - sum_j cV_j q_j / h), wm = w + dw / 2), the normal, levers,
+      // kS, ct and stretch held at the point. A contact whose stick interval contains s = 1 (the full move already ends inside its zone) gives no candidate: only
+      // one whose interval ends before s = 1 does. Into szCand, ascending, duplicates dropped; returns how many.
+      int StickCandidates(const double *d, double scale, double h)
+      {
+         szCand.clear();
+         for (int k = 0; k < ni; k++)
+         {
+            const StickRec &sr = szRec[k];
+            if (!sr.on)
+               continue;
+            const int ia = 6 * sr.A;
+            V3 du = V3(d[ia], d[ia + 1], d[ia + 2]) * (1.0 / h) + (V3(d[ia + 3], d[ia + 4], d[ia + 5]) * 0.5).Cross(sr.rA);
+            if (sr.B >= 0)
+            {
+               const int ib = 6 * sr.B;
+               du = du - (V3(d[ib], d[ib + 1], d[ib + 2]) * (1.0 / h) + (V3(d[ib + 3], d[ib + 4], d[ib + 5]) * 0.5).Cross(sr.rB));
+            }
+            for (int j = 0; j < sr.nq; j++)
+               if (sr.qU[j] >= 0)
+                  du = du - sr.cV[j] * (d[sr.qU[j]] / h);
+            du = du - sr.nm * du.Dot(sr.nm);
+            const V3 b = du * (sr.C * scale);
+            double dN = 0.0;
+            for (int i = 0; i < sr.nn; i++)
+               dN += sr.nG[i] * d[sr.nIx[i]];
+            dN *= scale;
+            // |a + s b|^2 <= (mu (N0 + s dN))^2: qa s^2 + qb s + qc <= 0
+            const double m2 = sr.mu * sr.mu;
+            const double qa = b.Dot(b) - m2 * dN * dN, qb = 2.0 * sr.a.Dot(b) - 2.0 * m2 * sr.N0 * dN, qc = sr.a.Dot(sr.a) - m2 * sr.N0 * sr.N0;
+            const double disc = qb * qb - 4.0 * qa * qc;
+            if (disc < 0.0 || std::fabs(qa) < 1e-300)
+               continue;
+            const double sq = std::sqrt(disc);
+            const double r0 = std::min((-qb - sq) / (2.0 * qa), (-qb + sq) / (2.0 * qa)), r1 = std::max((-qb - sq) / (2.0 * qa), (-qb + sq) / (2.0 * qa));
+            const double ivLo[2] = { qa > 0.0 ? r0 : -INFINITY, r1 }, ivHi[2] = { qa > 0.0 ? r1 : r0, INFINITY };
+            double best = INFINITY;
+            bool endIn = false;
+            for (int v = 0; v < (qa > 0.0 ? 1 : 2); v++)
+            {
+               double lo = ivLo[v], hi = ivHi[v];
+               if (dN < 0.0)   // N(s) >= 0: the normal force cannot pull
+                  hi = std::min(hi, -sr.N0 / dN);
+               else if (dN > 0.0)
+                  lo = std::max(lo, -sr.N0 / dN);
+               if (lo <= 1.0 && hi >= 1.0)   // the full move already ends inside this contact's stick zone: no candidate from it
+                  endIn = true;
+               const double lo2 = std::max(lo, 0.0), hi2 = std::min(hi, 1.0);
+               if (hi2 <= lo2 || hi2 <= 0.0)
+                  continue;
+               const double s = 0.5 * (lo2 + hi2);
+               if (s > 0.0)
+                  best = std::min(best, s);
+            }
+            if (!endIn && best < 1.0)
+               szCand.push_back(best);
+         }
+         std::sort(szCand.begin(), szCand.end());
+         szCand.erase(std::unique(szCand.begin(), szCand.end()), szCand.end());
+         return (int)szCand.size();
       }
 
       void Accept(double h, bool onStop)
