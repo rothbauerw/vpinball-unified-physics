@@ -340,6 +340,13 @@ namespace GroupStep
       // Taken in the terms' slope, G's turning (dampDirSlope) and N's slope kv (friction, lever-roll and twist limits). J is then not symmetric (it is the true derivative;
       // SolveLinear pivots on any matrix). The force is unchanged. true (default) = on; false = the mid gradient on both sides (today's slope).
       bool endGradSlope = true;
+      // dampingIntegral ([Contact] damping_integral; runs/2026-11-08-lead/damping_integral_design.md): every depth-dependent damping in its integrated form, the law's own work
+      // over the step at a steady rate: c = (W(d1) - W(d0)) / (d1 - d0), W(d) = integral of c(s) from 0 (0 for no touch), short moves by quadrature; slope d(c (d1 - d0))/d d1 = c(d1).
+      // Kuwabara-Kono (W = gamma 2/3 sqrt(reff) Uc^1.5), the loss tangent's dashpot (W = 0.8 tanDelta sqrt(1.5 kH m) Uc^1.25) and Hunt-Crossley (with a bend: 1.5 alpha 0.4 kH Uc^2.5,
+      // the contact's own stored energy; without one, today's chord). The twist limit 3 pi/16 mu a N takes the patch a(fe) of the step's mean elastic force fe (the law's own
+      // inverse: F(dE) = fe), not the mid depth's: no cusp where a contact arrives or leaves within a step; the twist is on while kw1 > 0 or a(fe) > 0, with no gate on dm.
+      // Newton's slope takes their exact derivatives (through fe). true (default) = on; false = the committed forms (point values at dm, the KK chord/midpoint switch, a(dm)).
+      bool dampingIntegral = true;
       // partGuessAccel ([Contact] part_guess_accel): a part's first guess of its coordinate's move carries its last step's acceleration, (rate + a h / 2) h, a the force of the
       // move taken over its mass, as a ball's guess does. Newton's start only: the law and the solved step are unchanged. false (default) = rate h.
       bool partGuessAccel = false;
@@ -774,8 +781,23 @@ namespace GroupStep
          return 2.0 / 3.0 * std::sqrt(reff) * u * std::sqrt(u);
       }
       // Viscoelastic damping over the step: the law's own integral at a steady rate, as Hunt-Crossley already is (runs/2026-10-31-gate-spinner-disc/patch_gs_rotor.py, without its bend in series). F = gamma a(d) d_dot, so the mean
-      // coefficient over a move is gamma (G(d1) - G(d0)) / (d1 - d0). At the mid-step depth alone it rises as sqrt(d) from a touch's start: a slope with no bound, where Newton stalls. jacTerm: its slope for the Jacobian (d(c x (d1 - d0)) / d d1)
-      double KKStep(const double d0, const double d1, const double dm, double &jacTerm) const
+      // coefficient over a move is gamma (G(d1) - G(d0)) / (d1 - d0), on the end depths as the spring's chord (never the mid-step positions' depth, which a curved surface puts deeper:
+      // runs/2026-11-08-lead/kk_damping_check.md). jacTerm: its exact slope for the Jacobian (d(c x (d1 - d0)) / d d1 = gamma a(d1) Uc'(d1))
+      double KKRate(const double d) const { return A(d) * (kb > 0.0 ? kb / (kb + 1.5 * kH * std::sqrt(Uc(d))) : 1.0); }   // a(d) Uc'(d) = dG/dd: the coefficient per gamma at depth d, the bend in series taking its share
+      double KKStep(const double d0, const double d1, double &jacTerm) const
+      {
+         jacTerm = gammaKK * (d1 > 0.0 ? KKRate(d1) : 0.0);
+         if (d0 <= 0.0 && d1 <= 0.0)
+            return 0.0;
+         if (d0 > 0.0 && d1 > 0.0 && std::fabs(d1 - d0) < 0.01 * std::max(d0, d1))   // a short move: the same mean by quadrature, no cancellation (as Chord)
+         {
+            const double dm = 0.5 * (d0 + d1), g = 0.3872983346207417 * (d1 - d0);
+            return gammaKK * (5.0 * KKRate(dm - g) + 8.0 * KKRate(dm) + 5.0 * KKRate(dm + g)) / 18.0;
+         }
+         return gammaKK * (KKIntegral(d1) - KKIntegral(d0)) / (d1 - d0);
+      }
+      // [Contact] damping_integral 0: the committed form (the chord for a long move, the coefficient at the mid depth dm for a short one)
+      double KKStepMid(const double d0, const double d1, const double dm, double &jacTerm) const
       {
          const double top = std::max(std::fabs(d0), std::fabs(d1));
          jacTerm = gammaKK * (d1 > 0.0 ? A(d1) * (kb > 0.0 ? kb / (kb + 1.5 * kH * std::sqrt(Uc(d1))) : 1.0) : 0.0);
@@ -785,6 +807,66 @@ namespace GroupStep
          if (kb > 0.0 && dm > 0.0)
             c *= kb / (kb + 1.5 * kH * std::sqrt(Uc(dm)));
          return c;
+      }
+      // [Contact] damping_integral: the mean coefficient of a damping c(d) over a move d0 -> d1 at a steady rate, (W(d1) - W(d0)) / (d1 - d0), W its integral from 0 (rate: c(d),
+      // integral: W(d), both 0 for no touch); a short move by the same 3-point quadrature as KKStep (no cancellation). W rises with d, so the mean is >= 0: it only takes energy out
+      template <class Rate, class Integral> static double MeanOver(const double d0, const double d1, const Rate &rate, const Integral &integral)
+      {
+         if (d0 <= 0.0 && d1 <= 0.0)
+            return 0.0;
+         if (d0 > 0.0 && d1 > 0.0 && std::fabs(d1 - d0) < 0.01 * std::max(d0, d1))
+         {
+            const double dm = 0.5 * (d0 + d1), g = 0.3872983346207417 * (d1 - d0);
+            return (5.0 * rate(dm - g) + 8.0 * rate(dm) + 5.0 * rate(dm + g)) / 18.0;
+         }
+         return (integral(d1) - integral(d0)) / (d1 - d0);
+      }
+      double UcSlope(const double d) const { return d > 0.0 && kb > 0.0 ? kb / (kb + 1.5 * kH * std::sqrt(Uc(d))) : 1.0; }   // dUc/dd: the contact's share of a depth change
+      // the loss tangent's dashpot on the contact's own compression u = Uc(d): c(u) = tanDelta sqrt(1.5 kH m) u^(1/4) (= tanDelta sqrt(1.5 F m / u), Hertz), per unit of d c(Uc) Uc';
+      // W = 0.8 tanDelta sqrt(1.5 kH m) Uc^(5/4). LossStep: the mean over a move, jacTerm its slope c(Uc(d1)) Uc'(d1)
+      double LossRate(const double d) const { return d > 0.0 ? tanDelta * std::sqrt(1.5 * kH * mRed) * std::sqrt(std::sqrt(Uc(d))) * UcSlope(d) : 0.0; }
+      double LossIntegral(const double d) const { if (d <= 0.0) return 0.0; const double u = Uc(d); return 0.8 * tanDelta * std::sqrt(1.5 * kH * mRed) * u * std::sqrt(std::sqrt(u)); }
+      double LossStep(const double d0, const double d1, double &jacTerm) const
+      {
+         jacTerm = LossRate(d1);
+         return MeanOver(d0, d1, [this](const double d) { return LossRate(d); }, [this](const double d) { return LossIntegral(d); });
+      }
+      // Hunt-Crossley 1.5 alpha F on the contact's own compression through a bend in series: W = 1.5 alpha 0.4 kH Uc^2.5 (the contact's stored energy, not the bend's), per unit of d
+      // 1.5 alpha F_c(Uc) Uc'. (Without a bend the caller keeps today's chord 1.5 alpha fe, the same law.) HCBendStep: the mean over a move, jacTerm its slope
+      double HCBendRate(const double d) const { if (d <= 0.0) return 0.0; const double u = Uc(d); return 1.5 * alpha * kH * u * std::sqrt(u) * UcSlope(d); }
+      double HCBendIntegral(const double d) const { if (d <= 0.0) return 0.0; const double u = Uc(d); return 1.5 * alpha * 0.4 * kH * u * u * std::sqrt(u); }
+      double HCBendStep(const double d0, const double d1, double &jacTerm) const
+      {
+         jacTerm = HCBendRate(d1);
+         return MeanOver(d0, d1, [this](const double d) { return HCBendRate(d); }, [this](const double d) { return HCBendIntegral(d); });
+      }
+      // [Contact] damping_integral: the patch of the depth dE whose elastic force is f, F(dE) = f (the law's own inverse), a = A(dE), and its slope da/df = A'(dE) / K(dE).
+      // Hertz with or without a bend: Uc = (f / kH)^(2/3), a = sqrt(reff Uc), da/df = a / (3 f). With the layer (cL > 0): dE by Newton on the convex F from the Hertz depth above it
+      void PatchOfForce(const double f, double &a, double &dadf) const
+      {
+         a = dadf = 0.0;
+         if (f <= 0.0)
+            return;
+         if (cL <= 0.0 || kb > 0.0)   // (the bend's law has no layer: F = kH Uc^1.5)
+         {
+            a = std::sqrt(reff) * std::cbrt(f / kH);
+            dadf = a / (3.0 * f);
+            return;
+         }
+         double d = std::min(std::pow(f / kH, 2.0 / 3.0), hL * (1.0 - 1e-9));
+         for (int i = 0; i < 60; i++)
+         {
+            const double k = K(d);
+            if (k <= 0.0)
+               break;
+            const double dd = (F(d) - f) / k;
+            d = std::max(d - dd, 0.5 * d);
+            if (std::fabs(dd) <= 1e-14 * d)
+               break;
+         }
+         a = A(d);
+         const double k = K(d);
+         dadf = k > 0.0 ? ASlope(d) / k : 0.0;
       }
       // the normal damping coefficient over a step, mid-step depth d and mean spring force fMean: force = c x compression rate. Hunt-Crossley's 1.5 alpha F is taken over the step, so its loss is
       // 1.5 alpha x the change in stored energy x the rate, the law's own integral at a steady rate; at the mid-step force alone the loss falls short of it by (omega h)^2 and the rebound comes out high
@@ -2539,15 +2621,48 @@ namespace GroupStep
                dd = gd[0] * dq[0] + gd[1] * dq[1] + gd[2] * dq[2] + gd[3] * dq[3];
             }
             const double fe = terms ? feT : L.Chord(d0, d1);
-            double cD, kkJac = 0.0;
-            if (L.gammaKK > 0.0)
+            // [Contact] damping_integral (di): each damping by its integrated form over the step; cDs its exact slope d(c (d1 - d0))/d d1 (Hunt-Crossley without a bend: its
+            // chord's, 1.5 alpha (fe + kc dd), taken in the slope below: hcChord). 0: the committed forms (KK by KKStepMid, the loss tangent and the bend factor at dm)
+            const bool di = set.dampingIntegral;
+            double cD, kkJac = 0.0, cDs = 0.0;
+            bool hcChord = false;
+            if (di)
             {
-               cD = L.KKStep(d0, d1, dm, kkJac);
+               double sl = 0.0;
+               if (L.gammaKK > 0.0)
+               {
+                  cD = L.KKStep(d0, d1, sl);
+                  cDs = sl;
+               }
+               else if (L.kb > 0.0)
+               {
+                  cD = L.HCBendStep(d0, d1, sl);
+                  cDs = sl;
+               }
+               else
+               {
+                  cD = 1.5 * L.alpha * fe;
+                  hcChord = true;
+               }
+               if (L.normalLoss && L.tanDelta > 0.0)
+               {
+                  cD += L.LossStep(d0, d1, sl);
+                  cDs += sl;
+               }
+            }
+            else if (L.gammaKK > 0.0)
+            {
+               cD = L.KKStepMid(d0, d1, dm, kkJac);
                if (dm > 0.0 && L.normalLoss && L.tanDelta > 0.0)
                   cD += L.tanDelta * std::sqrt(1.5 * L.F(dm) * L.mRed / dm);
             }
             else
                cD = L.DampC(dm, fe);
+            // [Contact] damping_integral: the patch of the step's mean elastic force fe (F(dE) = fe), aE, and its slope daE/dfe: the twist limit takes it (no cusp where a
+            // contact arrives or leaves within the step: fe and N are step means)
+            double aE = 0.0, dadfE = 0.0;
+            if (di)
+               L.PatchOfForce(fe, aE, dadfE);
             const double fd = cD * dd / h;
             const double N = std::max(0.0, fe + fd);   // a contact pushes, it cannot pull (Hertz, no adhesion)
             e.normalLoss = (N - fe) * dd;              // (cD dd^2 / h while it pushes; all the spring's release once damping would make it pull)
@@ -2649,6 +2764,7 @@ namespace GroupStep
             // twist (roll_model 1; twistSlope): sticking dMw/dd1 (twD1); at the limit dMw/d dm (twA) and dMw/dN (twN). twSt 0 none, 1 stick, 2 limit; twM, twLim the torque and
             // its limit (diagnostics)
             double twD1 = 0.0, twA = 0.0, twN = 0.0, twM = 0.0, twLim = 0.0;
+            double twF = 0.0;   // damping_integral: dMw/dfe at the limit (the limit's patch aE), on h dfe/du (h kc gm; a terms contact: kvE)
             int twSt = 0;
             V3 wtR, mhR;
             M3 RmS;
@@ -2673,13 +2789,13 @@ namespace GroupStep
                   r0.tw *= kw0 / kw1;
                e.roll = held - 0.5 * kr1 * r0.th.Dot(r0.th) - 0.5 * kw1 * r0.tw * r0.tw;   // the patch's change: a loss >= 0
                const double Ir = L.mRed * A.R * A.R;   // with 1.4: the ball's inertia about its contact point; with 0.4: about its centre (the contact's mass)
-               if (L.twist && kw1 > 0.0 && N > 0.0 && am > 0.0)
+               if (di ? L.twist && kw1 > 0.0 && N > 0.0 : L.twist && kw1 > 0.0 && N > 0.0 && am > 0.0)   // (damping_integral: no switch on dm; with no end patch, kw1 = 0, there is no twist spring or damper)
                {
                   const double wn = wr.Dot(nm);
                   const double cw = L.shearTan * std::sqrt(kw1 * 0.4 * Ir);
                   const double twTr = r0.tw + wn * h;
                   double Mw = 0.5 * kw1 * (r0.tw + twTr) + cw * wn;
-                  const double limW = 3.0 * kPi / 16.0 * L.mu * am * N;
+                  const double limW = 3.0 * kPi / 16.0 * L.mu * (di ? aE : am) * N;
                   double tw1 = twTr;
                   kkTw = 0.5 * kw1 * h + cw;   // the resisting torque's slope in wn while it sticks; 0 at the limit
                   if (std::fabs(Mw) > limW)
@@ -2690,11 +2806,19 @@ namespace GroupStep
                      e.twist = Mw * (twTr - tw1) + cw * (tw1 - r0.tw) * (tw1 - r0.tw) / h;
                      kkTw = 0.0;
                      twSt = 2;
-                     if (set.twistSlope)   // Mw = s 3 pi/16 mu a(dm) N: its change with dm and with N
+                     if (set.twistSlope)   // Mw = s 3 pi/16 mu a(dm) N: its change with dm and with N (damping_integral: a(fe) N, with fe and N)
                      {
                         const double cl = (Mw > 0.0 ? 1.0 : -1.0) * 3.0 * kPi / 16.0 * L.mu;
-                        twA = cl * L.ASlope(dm) * N;
-                        twN = cl * am;
+                        if (di)
+                        {
+                           twF = cl * dadfE * N;
+                           twN = cl * aE;
+                        }
+                        else
+                        {
+                           twA = cl * L.ASlope(dm) * N;
+                           twN = cl * am;
+                        }
                      }
                   }
                   else
@@ -2704,7 +2828,8 @@ namespace GroupStep
                      if (set.twistSlope)   // Mw = kw1 tw0' + (kw1 h / 2 + cw) wn: kw1 = Ktw(d1) ~ a^3, cw ~ sqrt(kw1); a growing patch holds kw1 tw0' = kw0 tw0
                      {
                         const double a1 = L.A(d1);
-                        const double kw1p = a1 > 0.0 ? 3.0 * kw1 * L.ASlope(d1) / a1 : 0.0, cwp = 0.5 * cw * kw1p / kw1;
+                        const double kw1p = a1 > 0.0 ? 3.0 * kw1 * L.ASlope(d1) / a1 : 0.0;
+                        const double cwp = 0.5 * cw * kw1p / kw1;
                         twD1 = kw1p * ((kw1 > kw0 ? 0.0 : r0.tw) + 0.5 * h * wn) + cwp * wn;
                      }
                   }
@@ -2798,8 +2923,7 @@ namespace GroupStep
 
             if (clampDump && nq > 0)   // VPX_GROUP_CLAMP_TRACE: this carried surface's contact at this Eval (read only): the residual's switches
             {
-               const double top = std::max(std::fabs(d0), std::fabs(d1));
-               const char kk = L.gammaKK > 0.0 ? (std::fabs(d1 - d0) > 1e-3 * top && top > 0.0 ? 'C' : 'M') : 'H';
+               const char kk = L.gammaKK > 0.0 ? 'K' : 'H';
                std::string on, cf;
                for (int t = 0; terms && t < hm.nt; t++)
                {
@@ -2832,7 +2956,8 @@ namespace GroupStep
                else
                   kc = 0.5 * L.K(std::max(std::max(dm, d1), 0.0));
                const double cDp = L.gammaKK > 0.0 ? (dm > 0.0 ? 0.5 * L.gammaKK * 0.5 * std::sqrt(L.reff / dm) : 0.0) : 1.5 * L.alpha * kc;
-               const double kn = fe + fd <= 0.0 ? 0.0 : L.gammaKK > 0.0 ? h * kc + kkJac : h * kc + cD + cDp * (d1 - d0);
+               const double dSl = cDs + (hcChord ? 1.5 * L.alpha * (fe + kc * dd) : 0.0);   // damping_integral: the damping's exact slope (all its laws)
+               const double kn = fe + fd <= 0.0 ? 0.0 : di ? h * kc + dSl : L.gammaKK > 0.0 ? h * kc + kkJac : h * kc + cD + cDp * (d1 - d0);
                int ix[kGradMax];   // each gradient entry's unknown; -1 = a given move
                for (int p = 0; p < na; p++)
                   ix[p] = (p < 3 ? 6 * it.a : 6 * it.b) + p % 3;
@@ -2871,7 +2996,7 @@ namespace GroupStep
                {
                   if (fe + fd > 0.0)
                   {
-                     const double kd = L.gammaKK > 0.0 ? kkJac : cD + cDp * dd;
+                     const double kd = di ? dSl : L.gammaKK > 0.0 ? kkJac : cD + cDp * dd;
                      for (int p = 0; p < 4; p++)
                         if (ix[p] >= 0)
                            for (int q = 0; q < 4; q++)
@@ -2932,7 +3057,7 @@ namespace GroupStep
                double kv[4] = { 0.0, 0.0, 0.0, 0.0 };
                if (terms && fe + fd > 0.0)
                {
-                  const double kd = L.gammaKK > 0.0 ? kkJac : cD + cDp * dd;
+                  const double kd = di ? dSl : L.gammaKK > 0.0 ? kkJac : cD + cDp * dd;
                   for (int t = 0; t < hm.nt; t++)
                      if (tOn[t])
                      {
@@ -2943,6 +3068,17 @@ namespace GroupStep
                   for (int u = 0; u < 4; u++)
                      kv[u] += dirOn ? kd * gd[u] + gW[u] : kd * gd[u];
                }
+               // damping_integral, a terms contact: the elastic force's own slope h dfe/du (each pressing term's chord slope projected on G; kv without the damping), the
+               // column the twist limit's patch aE takes. Not a terms contact: h dfe/du = h kc gm
+               double kvE[4] = { 0.0, 0.0, 0.0, 0.0 };
+               if (di && terms)
+                  for (int t = 0; t < hm.nt; t++)
+                     if (tOn[t])
+                     {
+                        const double w = h * tk[t] * (gd[0] * tg[t][0] + gd[1] * tg[t][1] + gd[2] * tg[t][2]);
+                        for (int u = 0; u < 4; u++)
+                           kvE[u] += w * tgE[t][u];
+                     }
                if (k1 > 0.0)
                {
                   M3 Cm;
@@ -3082,12 +3218,14 @@ namespace GroupStep
                }
                // twistSlope: the twist torque's change with the depth, h dMw/du_j = h gm_j (twD1 + twA / 2) + twN h dN/du_j (d d1/du = gm, d dm/du = gm / 2; h dN/du = kn gm,
                // a terms contact: kv). Ball p's spin row holds h s_p n Mw, a carried part's row -h (n . W_i) Mw
-               if (set.twistSlope && (twD1 != 0.0 || twA != 0.0 || twN != 0.0))
+               if (set.twistSlope && (twD1 != 0.0 || twA != 0.0 || twN != 0.0 || twF != 0.0))
                   for (int j = 0; j < na + nq; j++)
                   {
                      if (ix[j] < 0)
                         continue;
-                     const double c = h * gm[j] * (twD1 + 0.5 * twA) + twN * (terms ? kv[j] : kn * gm[j]);
+                     double c = h * gm[j] * (twD1 + 0.5 * twA) + twN * (terms ? kv[j] : kn * gm[j]);
+                     if (di)   // damping_integral: dMw/dfe on h dfe/du (h kc gm; a terms contact: kvE)
+                        c += twF * (terms ? kvE[j] : h * kc * gm[j]);
                      for (int p = 0; p < nbod; p++)
                      {
                         const int iw = 6 * bi[p] + 3;
