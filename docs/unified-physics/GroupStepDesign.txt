@@ -204,6 +204,14 @@ User: reusing the code was a main reason for the rewrite: a ring, a rubber wall 
 
 23.4 Shape. The shape is the real switch's wire (from the user's photos and parts drawings, to-do N2), not VPX's mesh, which does not match it; the drawn mesh is built to match, so drawn and touched are the same. It is held as the wire's centreline, joined into capsules of the real wire's diameter: smooth normals for a ball rolling along it, and cheaper than triangles. Scale 1 is the real size; the wire's peak sits peak_mm above the playfield whatever the author's z, and the part below the surface is out of reach. Each side of a V is its own contact (21.4); out of its plane the wire bends as a cantilever from the lever tip (21.5). The Inder switch is a flat steel blade standing on edge: the mesh's triangles are its faces, with plate bending.
 
+24. The rest rule (one rule for every moving part; reviewed with the user 2026-11-09, to-do N11; design runs/2026-11-09-sleep-fix/design.md)
+
+24.1 Whole state still. A part sleeps (is not stepped) only when nothing drives it, no ball touches it, and its whole state is at rest over one whole cycle: no point of its surface moved more than 1 nm at its reach, nor could its speed move it more in the next cycle, and every coil current has died away to at most 1e-9 of that coil's full current (a level, not a change: a slow coil's current changing little is still not at rest). Found when the motion-only rule let a flipper released alone sleep on its up stop with its decaying current frozen: it stayed up; sling plates stayed out the same way.
+
+24.2 One pose, one restart. Each part gives one rest pose (its coordinates at its reach and its coil currents), used alone and in a group. A cycle in which a ball touches a part starts its watch again, in the one place the group is built. Wake is unchanged: only an outside input (coil, pulse, nudge, gate hold, motor volts, a ball) can change a sleeping part.
+
+24.3 Sling plate. What depends on the plate's position (a ball's engage reach, its release from the cord, the drawn band) reads the plate at its rest angle, still and not driven, not "asleep".
+
 
 == G. Bands ==
 

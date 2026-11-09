@@ -1816,7 +1816,7 @@ struct ContactSystemImpl
          BallContact &e = *ep;
          if (e.band != nullptr)   // the band holds the ball until its own release rule lets go (the ball stays in its other contacts)
          {
-            // off the cord and clear of it; a plate on its way out can still catch a ball close by, so it stays in the group until the plate is quiet or the ball is far
+            // off the cord and clear of it; a plate on its way out can still catch a ball close by, so it stays in the group until the plate is back at its rest angle and still, or the ball is far
             // (band_plate_reach: beyond the plate's stroke at the cord, CordFixed::PlateReachM, and this rule's 1 mm; otherwise 30 mm)
             CordBand &cb = *e.band->Cord();
             int slot = -1;
@@ -1825,7 +1825,7 @@ struct ContactSystemImpl
                   slot = k;
             const double gap = slot >= 0 ? cb.Gap(slot) : 1.0;
             const double clearM = e.band->m_set.bandPlateReach ? 0.001 + cb.fixed->PlateReachM() : 0.03;
-            if (gap > clearM || (gap > 0.001 && cb.PlateQuiet()))
+            if (gap > clearM || (gap > 0.001 && cb.PlateAtRest()))
                cy.bandReleases.emplace_back(pb, "clear");
             continue;
          }
@@ -2574,6 +2574,8 @@ struct ContactSystemImpl
                      sh.part = (int)(at - parts.begin());
                      if (at == parts.end())
                      {
+                        if (GroupStep::RestWatch *const rw = mp->Rest())   // the one restart of the rest rule: a ball touches the part this cycle, so its watch starts again from its pose now (GroupStep::RestWatch)
+                           rw->Restart(mp->RestPose());
                         mp->CycleBegin();
                         parts.push_back(mp);
                         g.AddPart(mp->GroupPart());
@@ -2614,6 +2616,8 @@ struct ContactSystemImpl
       {
          CordFollow(*c->Cord(), g.ball, balls.data(), g.nb);
          g.AddPart(c->Cord()->fixed.get());
+         c->Cord()->fixed->plateRest.Reset();   // the same restart for the cord's plate (it joins the group here, not above): a ball touches it, its watch alone starts again when it is alone
+         c->Cord()->fixed->plateIdle = false;
          c->Cord()->fixed->AddPostShapes(g, c->Cord()->fixedTube);
          c->CordBegin();
          c->m_cordStepped = true;
@@ -3910,7 +3914,7 @@ void ContactSystemImpl::CordNear(const double dt)
             continue;
          // a plate on its way out carries the cord this far past its rest line (as the release rule): band_plate_reach, the plate's stroke at the cord (CordFixed::PlateReachM); otherwise 30 mm
          const bool bound = band->m_set.bandPlateReach;
-         const double plateReach = band->CordOn() && !band->Cord()->PlateQuiet() ? (bound ? band->Cord()->fixed->PlateReachM() : 0.03) : 0.0;
+         const double plateReach = band->CordOn() && !band->Cord()->PlateAtRest() ? (bound ? band->Cord()->fixed->PlateReachM() : 0.03) : 0.0;
          // a real section thicker than the table's: the cord's surface stands out from the table's tube by twice the difference (its centre moves out by it, and its radius grows by it); the probe below reads the table's tube
          const double fixedRc = band->CordOn() ? band->Cord()->fixed->rc : 0.0;
          // band_plate_reach: as far past the band's box (its points and the table's tube radius) as the engage rule below can take a ball: the real section standing out, the release gap, and the farther of the plate's stroke and two cycles' closing

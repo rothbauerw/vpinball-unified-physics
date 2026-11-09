@@ -14,6 +14,7 @@ struct CordBand
    CordFixed::PlateTube fixedTube;           // what a ball meets on its plate
    static constexpr int kMaxBalls = 8;       // balls in one island with a cord; the others are left out that cycle
    bool PlateQuiet() const { return fixed->PlateQuiet(); }
+   bool PlateAtRest() const { return fixed->PlateAtRest(); }   // at its rest angle and still (CordFixed::Part::PlateAtRest)
    bool OnCord(const int i) const { return fixed->OnCord(i); }
    double Gap(const int slot) const { return fixed->CordGap(slot); }
    double Closing(const int i, const GroupStep::V3 &v) const { return fixed->ClosingOnCord(i, v); }

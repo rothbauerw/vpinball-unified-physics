@@ -123,4 +123,6 @@ public:
    virtual bool Sleeping() const { return false; }                                                   // no ball near and nothing to step: no group this cycle
    virtual bool RestNumbers(double &, double &) const { return false; }                             // pile sleep's log: what AtRest is decided on, the move over the last cycle in a group and the surface speed (m, m/s); false = not given
    virtual bool AtRest() const { return false; }                                                     // nothing driven and nothing moved over the last whole cycle: it stays out of a ball's solve while no ball can reach it (a part that does not say so is always in)
+   virtual GroupStep::RestWatch *Rest() { return nullptr; }                                          // its rest watch (GroupStep::RestWatch): the group restarts it where it is built, with RestPose
+   virtual GroupStep::RestWatch::Pose RestPose() const { return {}; }                                // its one rest pose, alone and in a group: its coordinates and internal states
 };

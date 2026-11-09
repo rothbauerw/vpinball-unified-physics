@@ -29,9 +29,8 @@ namespace BatPart
    // what the engine side keeps (PartRecords: part of its state)
    struct EngineState
    {
-      bool idle = false, marked = false;
-      double markPhi = 0.0, markXp = 0.0;   // the angle and plunger at the start of its last cycle in a group (AtRest)
-      GroupStep::RestWatch rest;            // the rest rule's watch alone
+      bool idle = false;
+      GroupStep::RestWatch rest;            // the rest rule's watch, alone and over its last cycle in a group (RestPose)
    };
 
    class Part : public ContactMovingPart, public EngineState
@@ -126,20 +125,17 @@ namespace BatPart
          layerM = gp.layerM;
          return &gp.rp;
       }
-      void CycleBegin() override
-      {
-         idle = false;
-         markPhi = gp.phi;
-         markXp = gp.xp;
-         marked = true;
-      }
-      // the one rest rule (GroupStep::RestWatch), as every part: driven while its coil or the pivot's pulse is on; the bat (at its tip) and the plunger still
+      void CycleBegin() override { idle = false; }
+      // the one rest rule (GroupStep::RestWatch), as every part: driven while its coil or the pivot's pulse is on; the bat (at its tip) and the plunger still, and both windings' currents
+      // died away (fractions of the held coil's current: full scale 1)
       bool Sleeping() const override { return idle; }
+      GroupStep::RestWatch *Rest() override { return &rest; }
+      GroupStep::RestWatch::Pose RestPose() const override { return GroupStep::RestWatch::Pose().Add(gp.phi, TipReach()).Add(gp.xp, 1.0).State(gp.iHigh, 1.0).State(gp.iLow, 1.0); }
       bool AtRest() const override
       {
          if (gp.solenoid || gp.pulse.active)
             return false;
-         return idle || (marked && GroupStep::RestWatch::Still(std::fabs(gp.phi - markPhi) * TipReach() + std::fabs(gp.xp - markXp), RestSpeed()));
+         return idle || rest.Rests(RestPose(), RestSpeed());
       }
       void TouchBegan(int, const int ballIndex, const double vn) override { events.push_back({ Event::Hit, ballIndex, std::max(0.0, vn) }); }   // (the engine's touch: the release gap is its hysteresis)
 
@@ -152,7 +148,7 @@ namespace BatPart
             return 0;
          const bool was = idle;
          const int steps = GroupStep::AloneCycle(gp, dt, bookMs, failedSteps, aloneSteps, energySteps);
-         idle = rest.Step(GroupStep::RestWatch::Pose().Add(gp.phi, TipReach()).Add(gp.xp, 1.0), RestSpeed(), gp.solenoid || gp.pulse.active, restTouched, dt);
+         idle = rest.Step(RestPose(), RestSpeed(), gp.solenoid || gp.pulse.active, restTouched, dt);
          GroupStep::RestWatch::Book(3, was, idle);
          return steps;
       }

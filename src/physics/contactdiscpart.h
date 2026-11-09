@@ -23,9 +23,8 @@ namespace DiscModel
    // what the engine side keeps (PartRecords: part of its state)
    struct EngineState
    {
-      bool idle = false, marked = false;
-      double markQ = 0.0;          // the angle at the start of its last cycle in a group (AtRest)
-      GroupStep::RestWatch rest;   // the rest rule's watch alone
+      bool idle = false;
+      GroupStep::RestWatch rest;   // the rest rule's watch, alone and over its last cycle in a group (RestPose)
    };
 
    class Engine : public ContactMovingPart, public EngineState
@@ -89,22 +88,22 @@ namespace DiscModel
       void CycleBegin() override
       {
          idle = false;
-         markQ = gp.q;
-         marked = true;
          gp.CycleBegin();
       }
       bool Sleeping() const override { return idle; }
       // Nothing moved over the last cycle in a group: it stays out of a ball's solve while no ball can reach it. A part out of the solve still moves alone
       bool RestNumbers(double &moveM, double &speedMS) const override
       {
-         moveM = marked ? std::fabs(gp.q - markQ) * gp.reach : -1.0;
+         moveM = rest.CycleMoved(RestPose());
          speedMS = std::fabs(gp.rate) * gp.reach;
          return true;
       }
       bool AtRest() const override
       {
-         return gp.volts == 0.0 && (idle || (marked && GroupStep::RestWatch::Still(std::fabs(gp.q - markQ) * gp.reach, std::fabs(gp.rate) * gp.reach)));   // the one rest rule: the motor drives it; its move over its last cycle in a group, and its speed now
+         return gp.volts == 0.0 && (idle || rest.Rests(RestPose(), std::fabs(gp.rate) * gp.reach));   // the one rest rule: the motor drives it; its move over its last cycle in a group, and its speed now
       }
+      GroupStep::RestWatch *Rest() override { return &rest; }
+      GroupStep::RestWatch::Pose RestPose() const override { return GroupStep::RestWatch::Pose().Add(gp.q, gp.reach); }   // its one rest pose: the angle at the reach (the motor's current is not modelled: no internal state)
       // No ball near: the same group with no balls, asleep while the friction holds it still; the script's drive wakes it
       int AdvanceAlone(const double dt) override
       {
@@ -114,7 +113,7 @@ namespace DiscModel
          gp.ClearLoads();
          gp.CycleBegin();
          const int steps = GroupStep::AloneCycle(gp, dt, bookMs, failedSteps, aloneSteps, energySteps);
-         idle = rest.Step(GroupStep::RestWatch::Pose().Add(gp.q, gp.reach), std::fabs(gp.rate) * gp.reach, gp.volts != 0.0, restTouched, dt);   // the one rest rule: driven while the motor has volts
+         idle = rest.Step(RestPose(), std::fabs(gp.rate) * gp.reach, gp.volts != 0.0, restTouched, dt);   // the one rest rule: driven while the motor has volts
          GroupStep::RestWatch::Book(2, was, idle);
          return steps;
       }

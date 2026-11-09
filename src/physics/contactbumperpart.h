@@ -26,9 +26,8 @@ namespace JetBumper
    struct EngineState
    {
       bool collidable = true;          // false: the bumper is not there at all (no contact, no switch, no coil, no events, parts at rest)
-      bool idle = false, marked = false;
-      GroupStep::RestWatch rest;       // the rest rule's watch alone
-      double markZ = 0.0, markThx = 0.0, markThy = 0.0, markDr = 0.0;   // the state at the start of its last cycle in a group (AtRest)
+      bool idle = false;
+      GroupStep::RestWatch rest;       // the rest rule's watch, alone and over its last cycle in a group (RestPose)
    };
 
    class EnginePart : public ContactMovingPart, public EngineState
@@ -215,27 +214,25 @@ namespace JetBumper
          layerM = 0.0;
          return surface == 0 ? &gp.cfg.skirtMat : surface == 1 ? &gp.cfg.ringMat : &gp.cfg.bodyMat;
       }
-      void CycleBegin() override
-      {
-         idle = false;
-         markZ = gp.z;
-         markThx = gp.thx;
-         markThy = gp.thy;
-         markDr = gp.dr;
-         marked = true;
-      }
+      void CycleBegin() override { idle = false; }
       void TouchBegan(int, int, double) override {}   // (the bumper's Hit is its switch closing, not a touch)
       bool Sleeping() const override { return idle; }
       // The one rest rule (GroupStep::RestWatch) over its last cycle in a group: not driven (the coil's supply or a pulse), the skirt's and ring's move since the cycle's start and their speed now
-      // within 1 nm. A part out of the solve still moves alone, so a part caught at the top of a bounce only steps alone
+      // within 1 nm, and the coil's current died away. A part out of the solve still moves alone, so a part caught at the top of a bounce only steps alone
       bool AtRest() const override
       {
          if (gp.CoilOn() || gp.pulseActive)
             return false;
          if (idle || !collidable)
             return true;
+         return rest.Rests(RestPose(), RestSpeed());
+      }
+      GroupStep::RestWatch *Rest() override { return &rest; }
+      // its one rest pose: the skirt (z, both tilts at the reach), the ring, and the coil's current (full scale: its steady current with the coil held on)
+      GroupStep::RestWatch::Pose RestPose() const override
+      {
          const double r = gp.reach;
-         return marked && GroupStep::RestWatch::Still(std::fabs(gp.z - markZ) + (std::fabs(gp.thx - markThx) + std::fabs(gp.thy - markThy)) * r + std::fabs(gp.dr - markDr), RestSpeed());
+         return GroupStep::RestWatch::Pose().Add(gp.z, 1.0).Add(gp.thx, r).Add(gp.thy, r).Add(gp.dr, 1.0).State(gp.iCoil, gp.cfg.coilD.iss);
       }
 
       // A bumper no ball is near: the same group with no balls, asleep while nothing is driven or moving, its state kept as it is (a part at rest sleeps, ModelStandards 3c)
@@ -247,9 +244,8 @@ namespace JetBumper
             return 0;
          const bool was = idle;
          const int steps = GroupStep::AloneCycle(gp, dt, bookMs, failedSteps, aloneSteps, energySteps);
-         // the one rest rule (GroupStep::RestWatch): driven while the coil's supply or a pulse is on; the skirt (z, both tilts at the reach) and the ring still for a whole cycle
-         const double r = gp.reach;
-         idle = rest.Step(GroupStep::RestWatch::Pose().Add(gp.z, 1.0).Add(gp.thx, r).Add(gp.thy, r).Add(gp.dr, 1.0), RestSpeed(), gp.CoilOn() || gp.pulseActive, restTouched, dt);
+         // the one rest rule (GroupStep::RestWatch): driven while the coil's supply or a pulse is on; the skirt and the ring still for a whole cycle, the coil's current died away (RestPose)
+         idle = rest.Step(RestPose(), RestSpeed(), gp.CoilOn() || gp.pulseActive, restTouched, dt);
          GroupStep::RestWatch::Book(0, was, idle);
          return steps;
       }

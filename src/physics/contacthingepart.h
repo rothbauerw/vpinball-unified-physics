@@ -25,9 +25,8 @@ namespace HingeModel
    struct EngineState
    {
       bool collidable = true;          // false: the balls pass; it keeps moving under gravity and its drive
-      bool idle = false, marked = false;
-      double markQ = 0.0;              // the angle at the start of its last cycle in a group (AtRest)
-      GroupStep::RestWatch rest;       // the rest rule's watch alone
+      bool idle = false;
+      GroupStep::RestWatch rest;       // the rest rule's watch, alone and over its last cycle in a group (RestPose)
    };
 
    class Engine : public ContactMovingPart, public EngineState
@@ -157,8 +156,6 @@ namespace HingeModel
       void CycleBegin() override
       {
          idle = false;
-         markQ = gp.q;
-         marked = true;
          gp.CycleBegin();
       }
       void TouchBegan(int, const int ballIndex, const double vn) override
@@ -170,7 +167,7 @@ namespace HingeModel
       // Nothing driven and nothing moved over the last cycle in a group: it stays out of a ball's solve while no ball can reach it. A part out of the solve still moves alone
       bool RestNumbers(double &moveM, double &speedMS) const override
       {
-         moveM = marked ? std::fabs(gp.q - markQ) * gp.reach : -1.0;
+         moveM = rest.CycleMoved(RestPose());
          speedMS = std::fabs(gp.rate) * gp.reach;
          return true;
       }
@@ -178,8 +175,10 @@ namespace HingeModel
       {
          if (gp.AnyStopMoving())
             return false;
-         return idle || (marked && GroupStep::RestWatch::Still(std::fabs(gp.q - markQ) * gp.reach, std::fabs(gp.rate) * gp.reach));   // the one rest rule: its move over its last cycle in a group, and its speed now
+         return idle || rest.Rests(RestPose(), std::fabs(gp.rate) * gp.reach);   // the one rest rule: its move over its last cycle in a group, and its speed now
       }
+      GroupStep::RestWatch *Rest() override { return &rest; }
+      GroupStep::RestWatch::Pose RestPose() const override { return GroupStep::RestWatch::Pose().Add(gp.q, gp.reach); }   // its one rest pose: the angle at the reach (no coil: no internal state)
       // No ball near: the same group with no balls, asleep while nothing is driven or moving, its state kept as it is
       int AdvanceAlone(const double dt) override
       {
@@ -189,7 +188,7 @@ namespace HingeModel
          gp.ClearLoads();
          gp.CycleBegin();
          const int steps = GroupStep::AloneCycle(gp, dt, bookMs, failedSteps, aloneSteps, energySteps);
-         idle = rest.Step(GroupStep::RestWatch::Pose().Add(gp.q, gp.reach), std::fabs(gp.rate) * gp.reach, gp.AnyStopMoving(), restTouched, dt);   // the one rest rule: driven while a stop moves
+         idle = rest.Step(RestPose(), std::fabs(gp.rate) * gp.reach, gp.AnyStopMoving(), restTouched, dt);   // the one rest rule: driven while a stop moves
          GroupStep::RestWatch::Book(1, was, idle);
          return steps;
       }

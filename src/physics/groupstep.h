@@ -416,18 +416,24 @@ namespace GroupStep
    }
 
    // One rest rule for every moving part (ModelStandards 3c: a part with nothing driving it and nothing touching it sleeps), alone and in a group alike:
-   // nothing drives it (each part names its drives: a coil's supply, a pulse, a moving stop, a pending trigger, a motor), no ball touches it, and over one whole cycle no point of its surface
-   // moved more than kMoveM, nor could its surface speed move it more in the next cycle. Alone, the time watched adds up over the part's steps (a cycle can come in shares); a move past the
-   // limit, a drive or a touch starts the watch again from where the part is. In a group the window is the group's cycle (from the part's mark at CycleBegin), with the same limit.
+   // nothing drives it (each part names its drives: a coil's supply, a pulse, a moving stop, a pending trigger, a motor), no ball touches it, over one whole cycle no point of its surface
+   // moved more than kMoveM, nor could its surface speed move it more in the next cycle, and every internal state has died away (a coil's current, each winding: |i| <= kStateFrac of its
+   // full scale, a level, not a change: a sleeping part is not stepped, so a current still decaying would freeze with it). Alone, the time watched adds up over the part's steps (a cycle can
+   // come in shares); a move past the limit, a live state, a drive or a touch starts the watch again from where the part is. In a group the window is the group's cycle: the group restarts
+   // the watch of every part a ball touched where it builds the group (Restart, the part's pose then is the one mark), with the same limits.
+   // (GroupStepDesign beside the rest rule; runs/2026-11-09-sleep-fix/design.md)
    struct RestWatch
    {
-      static constexpr double kMoveM = 1e-9;    // m, at the part's reach: the one limit
-      static constexpr double kCycleS = 1e-3;   // s: one physics cycle
-      static constexpr int kMax = 4;
-      struct Pose   // the part's coordinates and the lever that turns each into a surface move (m per unit)
+      static constexpr double kMoveM = 1e-9;      // m, at the part's reach: the one limit
+      static constexpr double kStateFrac = 1e-9;  // an internal state at rest: at most this fraction of its full scale (a coil's current with the coil held on). With the supply off a current only
+                                                  // decays, so its level at a share's end is enough: at a 100 ms time constant a change test would pass it still at 1e-7 of full
+      static constexpr double kCycleS = 1e-3;     // s: one physics cycle
+      static constexpr int kMax = 4, kMaxState = 2;
+      struct Pose   // the part's coordinates and the lever that turns each into a surface move (m per unit); its internal states and the full scale of each
       {
-         int n = 0;
+         int n = 0, ns = 0;
          double q[kMax] = {}, reach[kMax] = {};
+         double s[kMaxState] = {}, full[kMaxState] = {};
          Pose &Add(const double v, const double r)
          {
             q[n] = v;
@@ -435,27 +441,55 @@ namespace GroupStep
             n++;
             return *this;
          }
+         Pose &State(const double v, const double fullScale)
+         {
+            s[ns] = v;
+            full[ns] = fullScale;
+            ns++;
+            return *this;
+         }
+         bool Live() const   // an internal state not yet died away
+         {
+            for (int i = 0; i < ns; i++)
+               if (std::fabs(s[i]) > kStateFrac * full[i])
+                  return true;
+            return false;
+         }
       };
       Pose mark;
       double t = 0.0;
       bool on = false;
+      bool cycled = false;   // the group restarted it (Restart): mark is the pose at the start of the part's last cycle in a group, the window AtRest judges
+      Pose cycleMark;
       void Reset()
       {
          on = false;
          t = 0.0;
       }
-      double Moved(const Pose &p) const
+      static double Moved(const Pose &p, const Pose &from)
       {
          double m = 0.0;
          for (int i = 0; i < p.n; i++)
-            m += std::fabs(p.q[i] - mark.q[i]) * p.reach[i];
+            m += std::fabs(p.q[i] - from.q[i]) * p.reach[i];
          return m;
       }
+      double Moved(const Pose &p) const { return Moved(p, mark); }
       static bool Still(const double movedM, const double speedMS) { return movedM <= kMoveM && speedMS * kCycleS <= kMoveM; }
-      // a share dt of the part alone ended at pose p, surface speed speedMS (m/s): true = it rests
+      // a group holding the part is built this cycle (a ball touches it): the watch alone starts again, and the pose now is the mark of the group's cycle
+      void Restart(const Pose &p)
+      {
+         Reset();
+         cycleMark = p;
+         cycled = true;
+      }
+      // the group's test (AtRest), with nothing driving the part: over its last cycle in a group it moved no more than the limit, its speed now could not, and its states have died away
+      bool Rests(const Pose &p, const double speedMS) const { return cycled && !p.Live() && Still(Moved(p, cycleMark), speedMS); }
+      // the move over its last cycle in a group (pile sleep's log); -1 = never in a group
+      double CycleMoved(const Pose &p) const { return cycled ? Moved(p, cycleMark) : -1.0; }
+      // a share dt of the part alone ended at pose p, surface speed speedMS (m/s): true = it rests. A live state restarts the watch as a drive does
       bool Step(const Pose &p, const double speedMS, const bool driven, const bool touched, const double dt)
       {
-         if (driven || touched)
+         if (driven || touched || p.Live())
          {
             Reset();
             return false;
