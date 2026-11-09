@@ -16,7 +16,6 @@ In flight: nothing running. stick_zone_trial committed (49155d9e2). CLAUDE.md, h
 Next decision: the user picks the next item (proposed: 8.1, the off-limit hits' direction errors). Closed 11-09: no step accepted after a cut (100,361 steps, max residual 4.8e-9 m/s; runs/2026-11-09-end-residual).
 N1. Wire switch: switch bench now 0 failed attempts (11-09 commits c54f837ef, eef728db8, 08e00900d, 07b40b3c9). Cost: Gorgar's not a concern (user, 11-09); the switches' own cost vs the 30 us/ms limit still open, not yet measured per ms.
 N12. Gorgar load: 0 halvings (cord grip 1cec677ab, rolling patch 87ec36642, stick-zone trial 49155d9e2: Drain-kicker 2-cycle gone, rounds per step -10 %); ~60 depth warnings < 20 um in the bottom pile and at the Drain kicker (stock kicker).
-N2. Rebuild wire switches A-E as the real parts from PartData S7 (sizes, mounting, lever angle agreed 11-09); E is a new trigger shape (editor list, drawn mesh, contact model). Wire 1.0 mm (S1).
 N3. Wire switches: option for a playfield hole under each wire.
 N5. One reach rule from physics (speed plus force) for grouping and step length. Grouping: Gate001's 81 mm swing as one-cycle travel joins two lanes. Step length: speed only, no force. Check all parts; ball pairs of unequal mass and resting-ball wake (read only).
 N7. Stress v2 bench: ball travel energy +2 % at 57 ms; spin not counted. Check total energy in the saved run (no new run).
