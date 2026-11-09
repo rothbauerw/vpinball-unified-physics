@@ -323,6 +323,11 @@ namespace GroupStep
       // forces change, at h dG/du = (I - G g^T) K / fe (K = sum_t h tk_t tg_t tg_t^T, g = G's ball part). Newton's slope then takes fd h dG/du and dd = G . dq's change
       // through G, (kd / h) G dq^T dG/du; N's slope (kv) the latter. The force is unchanged. true (default) = on; false = G held fixed in the slope.
       bool dampDirSlope = true;
+      // leverRollSlope ([Contact] lever_roll_slope; runs/2026-11-08-lead/slope_terms_design.md): Newton's slope takes two terms of laws the residual already computes.
+      // The contact point rA = -n (R - dm / 2) moves with the mid depth (d dm / du = gm / 2): the slip changes by (gm / 4) sum_p wm_p x n and the torque arm by (gm / 4) s_p n, on the
+      // balls' force and spin rows. The rolling limit lim = muRr R N (roll_model 1, rolling) changes with N: muRr R (h dN/du) along the torque's direction, on the spin rows.
+      // The force is unchanged. true (default) = on; false = both held fixed in the slope.
+      bool leverRollSlope = true;
       // partGuessAccel ([Contact] part_guess_accel): a part's first guess of its coordinate's move carries its last step's acceleration, (rate + a h / 2) h, a the force of the
       // move taken over its mass, as a ball's guess does. Newton's start only: the law and the solved step are unchanged. false (default) = rate h.
       bool partGuessAccel = false;
@@ -2608,7 +2613,8 @@ namespace GroupStep
                wr = wr - hm.c[j].W() * (dq[3 + j] / h);
             const double am = L.A(dm);
             double kTw = 0.0, sRo = 0.0, rhoR = 0.0, wlR = 0.0, kkTw = 0.0;
-            V3 wtR;
+            double limN = 0.0;   // rolling at the limit (roll_model 1): d lim / dN = muRr R, the torque along mhR (leverRollSlope)
+            V3 wtR, mhR;
             M3 RmS;
             bool rollS = false;
             e.ra1 = RubberContact::RollAngle();
@@ -2683,6 +2689,8 @@ namespace GroupStep
                      for (int i = 0; i < 3; i++)
                         for (int j = 0; j < 3; j++)
                            RmS.a[i][j] = lim / ml * sl * (Pt.a[i][j] - Q.a[i][j]);
+                     limN = muRr * A.R;
+                     mhR = mh;
                   }
                   else
                   {
@@ -2969,6 +2977,28 @@ namespace GroupStep
                            J[qi][qj] += vi.Dot(MulV(Cm, hm.c[j].V())) - h * vi.Dot(fd1) * hm.c[j].slope * hm.grad - (terms ? vi.Dot(fN) * kv[3] : 0.0);
                      }
                   }
+                  // leverRollSlope: the contact point moves with the mid depth, d rr_p / du_j = s_p (gm_j / 4) n (dm moves half the depth's change), so the slip takes
+                  // (gm_j / 4) wS, wS = sum_p wm_p x n. On ball p's force row (h s_p Ft) and spin row (h s_p rr_p x Ft), every unknown the depth moves:
+                  //    h gm_j s_p Cm wS / 4,   h gm_j (n x Ft / 4 + s_p rr_p x Cm wS / 4)
+                  if (set.leverRollSlope && dm > 0.0)
+                  {
+                     V3 wS;
+                     for (int p = 0; p < nbod; p++)
+                        wS = wS + wm[bi[p]].Cross(nm);
+                     const V3 fw = MulV(Cm, wS) * 0.25, nF = nm.Cross(Ft) * 0.25;
+                     for (int p = 0; p < nbod; p++)
+                     {
+                        const V3 fr = fw * sg[p], mr = nF + rr[p].Cross(fw) * sg[p];
+                        const int ib = 6 * bi[p];
+                        for (int j = 0; j < na + nq; j++)
+                           if (ix[j] >= 0)
+                           {
+                              const double c = h * gm[j];
+                              J[ib][ix[j]] += c * fr.x; J[ib + 1][ix[j]] += c * fr.y; J[ib + 2][ix[j]] += c * fr.z;
+                              J[ib + 3][ix[j]] += c * mr.x; J[ib + 4][ix[j]] += c * mr.y; J[ib + 5][ix[j]] += c * mr.z;
+                           }
+                     }
+                  }
                }
                // twist and rolling on the spins
                if (kTw > 0.0)
@@ -3036,6 +3066,20 @@ namespace GroupStep
                      }
                   }
                }
+               // leverRollSlope: rolling at the limit, ball p's spin row h s_p mhR lim changes with N by s_p mhR muRr R (h dN/du_j); h dN/du is the normal row's
+               // own slope (kn gm; a terms contact: kv)
+               if (set.leverRollSlope && limN > 0.0)
+                  for (int p = 0; p < nbod; p++)
+                  {
+                     const V3 mr = mhR * (limN * sg[p]);
+                     const int iw = 6 * bi[p] + 3;
+                     for (int j = 0; j < na + nq; j++)
+                        if (ix[j] >= 0)
+                        {
+                           const double c = terms ? kv[j] : kn * gm[j];
+                           J[iw][ix[j]] += c * mr.x; J[iw + 1][ix[j]] += c * mr.y; J[iw + 2][ix[j]] += c * mr.z;
+                        }
+                  }
             }
          }
          if (carried)
