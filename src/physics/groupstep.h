@@ -334,6 +334,12 @@ namespace GroupStep
       // normal row's own slope (kn gm; a terms contact: kv). On the balls' spin rows (h s_p n) and a carried part's rows (-(n . W)). The torque is unchanged.
       // true (default) = on; false = only dMw/dwn (today's slope).
       bool twistSlope = true;
+      // endGradSlope ([Contact] end_grad_slope; runs/2026-11-08-lead/end_gradient_design.md): a terms contact's (hinge_piece_sum) pressing term t gives h tk_t tg_t (d a1_t/du)^T,
+      // the force along its own direction tg_t (the mid gradient: the row side) times its END depth's change over the unknowns. d a1_t/du is the end place's own gradient
+      // (h1.t[t]: -n, slope), not the mid one: a ball crossing a wire's crest turns the normal within the step (the mid y slope 6 % off at 3497 ms on the switch table).
+      // Taken in the terms' slope, G's turning (dampDirSlope) and N's slope kv (friction, lever-roll and twist limits). J is then not symmetric (it is the true derivative;
+      // SolveLinear pivots on any matrix). The force is unchanged. true (default) = on; false = the mid gradient on both sides (today's slope).
+      bool endGradSlope = true;
       // partGuessAccel ([Contact] part_guess_accel): a part's first guess of its coordinate's move carries its last step's acceleration, (rate + a h / 2) h, a the force of the
       // move taken over its mass, as a ball's guess does. Newton's start only: the law and the solved step are unchanged. false (default) = rate h.
       bool partGuessAccel = false;
@@ -841,6 +847,7 @@ namespace GroupStep
          WipeEachUse(&tgS);
          WipeEachUse(&tkS);
          WipeEachUse(&tOnS);
+         WipeEachUse(&tgES);
          WipeEachUse(&crossS);
          Size(8);
       }
@@ -1963,6 +1970,7 @@ namespace GroupStep
       std::vector<std::array<double, 4>> tgS;   // (Eval, hinge_piece_sum: each term's gradient, its chord slope and whether it presses; kept to save the allocation)
       std::vector<double> tkS;
       std::vector<char> tOnS;
+      std::vector<std::array<double, 4>> tgES;   // (... each term's END gradient, the column side of its slope: endGradSlope)
       struct NearOff { bool &f; explicit NearOff(bool &b) : f(b) { f = false; } ~NearOff() { f = false; } };   // a step's lists end with it (Step, EnergyStep)
       static bool NearAllOn() { static const bool on = []() { const char *const e = getenv("VPX_HINGE_NEAR_ALL"); return e != nullptr && atoi(e) != 0; }(); return on; }   // diagnostics: every list = all pieces (A/B)
       // the lists of this attempt (after the parts' BeginStep: their rates now). The reach: the ball's travel 2 |v| h and the part's turn 2 |rate| h (times nearGrow),
@@ -2481,12 +2489,14 @@ namespace GroupStep
             std::vector<std::array<double, 4>> &tg = tgS;
             std::vector<double> &tk = tkS;
             std::vector<char> &tOn = tOnS;
+            std::vector<std::array<double, 4>> &tgE = tgES;   // each term's end gradient (endGradSlope; else = tg): the column side of its slope
             double dd = d1 - d0, feT = 0.0;
             if (terms)
             {
                if (tk.size() < (size_t)hm.nt)
                {
                   tg.resize((size_t)hm.nt);
+                  tgE.resize((size_t)hm.nt);
                   tk.resize((size_t)hm.nt);
                   tOn.resize((size_t)hm.nt);
                }
@@ -2499,6 +2509,13 @@ namespace GroupStep
                      continue;
                   const V3 &tn = hm.t[t].n;
                   tg[t][0] = -tn.x; tg[t][1] = -tn.y; tg[t][2] = -tn.z; tg[t][3] = hm.t[t].slope;
+                  if (set.endGradSlope)   // d a1/du: the end place's own gradient
+                  {
+                     const V3 &en = h1.t[t].n;
+                     tgE[t][0] = -en.x; tgE[t][1] = -en.y; tgE[t][2] = -en.z; tgE[t][3] = h1.t[t].slope;
+                  }
+                  else
+                     tgE[t] = tg[t];
                   double gdT[kGradMax];
                   bool cf0T = false;
                   Gonzalez(tg[t].data(), a1 - a0, noiseD, dq, W, 4, gdT, clampDump ? &cf0T : nullptr);
@@ -2832,7 +2849,7 @@ namespace GroupStep
                      if (tOn[t])
                         for (int p = 0; p < 4; p++)
                            for (int q = 0; q < 4; q++)
-                              K[p][q] += h * tk[t] * tg[t][p] * tg[t][q];
+                              K[p][q] += h * tk[t] * tg[t][p] * tgE[t][q];   // (column q: d a1/du, endGradSlope)
                   for (int q = 0; q < 4; q++)
                   {
                      double gKq = 0.0, w = 0.0;
@@ -2863,7 +2880,7 @@ namespace GroupStep
                                  double a = kd * gd[p] * gd[q];
                                  for (int t = 0; t < hm.nt; t++)
                                     if (tOn[t])
-                                       a += h * tk[t] * tg[t][p] * tg[t][q];
+                                       a += h * tk[t] * tg[t][p] * tgE[t][q];   // (row: the force's direction; column: d a1/du)
                                  if (dirOn)
                                     a += gK[p][q];
                                  J[ix[p]][ix[q]] += a;
@@ -2921,7 +2938,7 @@ namespace GroupStep
                      {
                         const double w = h * tk[t] * (gd[0] * tg[t][0] + gd[1] * tg[t][1] + gd[2] * tg[t][2]);
                         for (int u = 0; u < 4; u++)
-                           kv[u] += w * tg[t][u];
+                           kv[u] += w * tgE[t][u];   // (d a1/du, endGradSlope)
                      }
                   for (int u = 0; u < 4; u++)
                      kv[u] += dirOn ? kd * gd[u] + gW[u] : kd * gd[u];
