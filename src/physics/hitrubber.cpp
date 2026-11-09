@@ -1155,7 +1155,7 @@ void HitRubber::BandAdvance(const float dtime)
    if (!CordOn())
       return;
    if (!m_cordStepped)
-      ContactSystem::StepCordAlone(this, dtime);
+      ContactSystem::StepCordAlone(this);   // (for the seconds the contact system's Step stored)
    m_cordStepped = false;
    CordFinish(dtime);
 }

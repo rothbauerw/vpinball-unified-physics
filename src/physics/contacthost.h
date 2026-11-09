@@ -124,7 +124,8 @@ public:
    bool SlowContact(HitBall *ball);
    bool ContactOwns(const BallS &ball) const;   // this host is one of the surfaces of a force-model contact that holds the ball
    // Once per physics interval (the host's mover): a moving part advances alone for what the contact system did not step of the interval (ContactPartHost); nothing for a surface.
-   virtual void PartAdvance(float /*dtime*/) {}
+   // The interval is the engine's current sub-interval in seconds, as ContactSystem::Step stored it (ContactSystem::SubIntervalS).
+   virtual void PartAdvance() {}
 
    // ---- ContactSurface ----
    const std::string &Name() const override { return m_name; }

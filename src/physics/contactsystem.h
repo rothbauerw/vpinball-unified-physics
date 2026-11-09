@@ -36,8 +36,10 @@ namespace ContactSystem
    // The table runs on the unified engine: only with  unified = 1  in the table's physics ini; no ini or no key = stock VPX physics.
    bool Unified();
 
-   // One cycle's step of every ball the contact system holds (dtime in the engine's step units). Its events (ball-ball callbacks, part hits, the parts' own events) are only queued here.
-   void Step(float dtime);
+   // One sub-interval's step of every ball the contact system holds: hS, the engine's sub-interval of the cycle in seconds (PhysicsEngine::PhysicsSimulateCycle makes it; the only
+   // place seconds are made). Step stores it for the parts and cords advanced alone after it (SubIntervalS). Its events (ball-ball callbacks, part hits, the parts' own events) are only queued here.
+   void Step(double hS);
+   double SubIntervalS();   // the engine's current sub-interval in seconds, as the last Step was given it
 void NotePlaced(const HitBall *ball);   // a script or the driver put this ball where it is: a position move no step did, and no fault (GroupStepDesign 17)
    // Pile sleep ([Contact] sleep = 1, runs/2026-11-03-pile-sleep/design.md): a group of balls at rest stops being stepped until something can change it.
    void SleepCycleStart();                                  // once per physics cycle, before the magnets and the balls' velocities: the wakes known at the cycle's start
@@ -53,12 +55,13 @@ void NotePlaced(const HitBall *ball);   // a script or the driver put this ball 
    // Test mode (env VPX_SNAPSHOT_TEST=1; =2 is the negative control that leaves the parts out of the restore): after every Step the snapshot is restored and the step is taken again; any difference in the result is logged. Islands with a bat or a band are skipped
    // (their state is not saved yet).
    bool SnapshotTestOn();
-   void SnapshotTest(float dtime);
+   void SnapshotTest(double hS);   // hS: the sub-interval in seconds, as Step
 
    // The overlap check and the replay of the sub-interval (UnifiedContactDesign.txt section 11, point 2): after UpdateDisplacements, before Dispatch. A free ball found inside a moving part is engaged at
    // the time its gap was zero, with the part where it really was, and the sub-interval is stepped again from there. VPX_OVERLAP_REPLAY=0 switches it off (test). TakeReplayStats: the replays and their cost
-   // since the last call, for the cost log.
-   void CheckOverlaps(float hittime);
+   // since the last call, for the cost log. hittime: the sub-interval in the engine's time units, only for the free balls' straight flight (velocity x stock time); hS: the same sub-interval
+   // in seconds, for the replay's steps and the parts' advance.
+   void CheckOverlaps(float hittime, double hS);
    void TakeReplayStats(unsigned &count, unsigned &us);
 
    // Fires the events queued by Step and by the parts, in the order they happened. Called by the engine after the free balls have moved (UpdateDisplacements), the order of stock VPX: displacements,
@@ -79,15 +82,15 @@ void NotePlaced(const HitBall *ball);   // a script or the driver put this ball 
    // An event raised inside the step: fired after it (the script never runs inside the step)
    void DeferEvent(std::function<void()> f);
 
-   // Takes the free balls that can touch a surface this cycle into the contact (before the stock hit search); [Features] proximity_engage, VPX_PROXIMITY=0|1
-   void EngageNear(float dtime);
+   // Takes the free balls that can touch a surface this cycle into the contact (before the stock hit search); [Features] proximity_engage, VPX_PROXIMITY=0|1. cycleS: the cycle in seconds
+   void EngageNear(double cycleS);
 
    // Engagement: a surface (the host) takes a ball into the force model; the ball stays until it is clear of every surface and receding
    bool Engage(ContactHost *host, HitBall *pb, const char *how);   // the ball is on this surface's law from now on, whatever holds it; false only for the playfield over a kicker's hole
    void ShoveKeepsOthers(const HitBall *pb, Vertex3Ds &delta);   // a position move of a held ball, VPX units: what would press it deeper into a surface of its contact is taken back
    void SeatKeepsOthers(const HitBall *pb, const ContactSurface *self, const RubberContact::BallSI &bs, const RubberContact::V3 &c0, RubberContact::V3 &c);   // a seat may not press the ball into another surface of its contact
    bool EngageBand(HitRubber *band, HitBall *pb);               // a band takes the ball: its nodes join the ball's contact (the ball stays in the other contacts it has)
-   void StepCordAlone(HitRubber *band, float dtime);   // a cord with no ball on it this cycle (its plate moving by itself, a ball just gone)
+   void StepCordAlone(HitRubber *band);   // a cord with no ball on it this cycle (its plate moving by itself, a ball just gone), for the engine's current sub-interval (SubIntervalS)
    void Release(HitBall *ball, const char *why);                  // no-op if the contact system does not hold the ball
    void ReleaseHost(ContactHost *host);                            // the host is destroyed
    bool Holds(const HitBall *ball);

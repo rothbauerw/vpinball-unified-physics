@@ -952,13 +952,19 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
       m_hitoctree_dynamic.Update();
    }
 
+   // The contact system works in seconds, made here only: the cycle is the engine's integer microseconds. Each stock sub-interval gets the share of it that its hittime is of the
+   // cycle's dtime; the last gets what is left, so the sub-intervals sum to exactly the cycle. The stock objects still move by their float time.
+   const double cycleS = (double)(m_nextPhysicsFrameTime - m_curPhysicsFrameTime) / 1000000.0;
+   const double sPerDtime = cycleS / (double)dtime;
+   double doneS = 0.0;
+
    static FILE *const ctLog = []() -> FILE * { const char *const p = getenv("VPX_CONTACT_TIMING"); FILE *const f = (p != nullptr && *p) ? fopen(p, "w") : nullptr; if (f != nullptr) fputs("t_ms,step_us,pre_us,near_us,bodies,islands,substeps,bats,band_bodies,rest_bodies,max_steps,items,probes,gather_us,setup_us,substep_us,write_us,rewinds,mag_us,snap_us,replays,replay_us\n", f); return f; }();   // cost log: one row per call that did work
    uint64_t ctNear = 0;
    if (ContactSystem::Unified())
    {
       const TestDriver::Timed tdContact(TestDriver::kContact);
       const uint64_t n0 = ctLog != nullptr ? usec() : 0;
-      ContactSystem::EngageNear(dtime);
+      ContactSystem::EngageNear(cycleS);
       ctNear = ctLog != nullptr ? usec() - n0 : 0;
    }
 
@@ -1084,6 +1090,9 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
 
       if (hittime > STATICTIME) StaticCnts = STATICCNTS; // allow more zeros next round
 
+      const double hS = dtime - hittime > 0.f ? (double)hittime * sPerDtime : cycleS - doneS;   // this sub-interval in seconds (the last one, as the loop condition finds it: the rest of the cycle)
+      doneS += hS;
+
       std::optional<TestDriver::Timed> tdContact(std::in_place, TestDriver::kContact);   // the contact system's step, to the snapshot test below
       if (ContactSystem::Unified())
          ContactSystem::SaveStart();   // the state of the start of this sub-interval, for a replay (docs/unified-physics/archive/UnifiedContactDesign.txt 11, point 2)
@@ -1100,9 +1109,9 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
                     + (splitBall->m_d.m_lockedInKicker ? " kickerlocked" : "") + (InPlayfieldHole(splitBall->m_d.m_pos) ? " inhole" : "") + (splitBall->m_bandOwner != nullptr ? " band" : "");
          ContactProf::Split(splitCause, splitStatic, what.c_str());
       }
-      ContactSystem::Step(hittime); // contact-held balls: surface contacts and, for touching balls, ball-to-ball contact, stepped together
+      ContactSystem::Step(hS); // contact-held balls: surface contacts and, for touching balls, ball-to-ball contact, stepped together
       if (ContactSystem::Unified() && ContactSystem::SnapshotTestOn())
-         ContactSystem::SnapshotTest(hittime);   // test mode: the same step again from the snapshot must give the same result
+         ContactSystem::SnapshotTest(hS);   // test mode: the same step again from the snapshot must give the same result
       tdContact.reset();
       const uint64_t ctT1 = ctLog != nullptr ? usec() : 0;
       {
@@ -1133,7 +1142,7 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
       if (ContactSystem::Unified())
       {
          const TestDriver::Timed tdContactOverlaps(TestDriver::kContact);
-         ContactSystem::CheckOverlaps(hittime);   // a free ball found inside a moving part: the sub-interval is replayed with the ball engaged at its first contact (docs/unified-physics/archive/UnifiedContactDesign.txt 11, point 2)
+         ContactSystem::CheckOverlaps(hittime, hS);   // a free ball found inside a moving part: the sub-interval is replayed with the ball engaged at its first contact (docs/unified-physics/archive/UnifiedContactDesign.txt 11, point 2)
          unsigned nRep = 0, usRep = 0;
          ContactSystem::TakeReplayStats(nRep, usRep);
          s_ctReplays += nRep;

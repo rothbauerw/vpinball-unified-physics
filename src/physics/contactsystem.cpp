@@ -122,6 +122,7 @@ using namespace RubberContact;
 // bookkeeping for the log and the release. HitBall::m_contact points at the ball's entry.
 static std::list<BallContact> g_engaged;
 static double g_frameUsedS = 0.0;   // how much of this physics step (1 ms) the sub-intervals before this one took (the engine splits a step at a hit)
+static double g_subS = 0.0;         // the engine's current sub-interval in seconds, as ContactSystem::Step was given it (the parts and cords advanced alone after it read it)
 static std::vector<const HitBall *> g_placed;   // the balls a script or the driver put where they are since the last cycle (NotePlaced)
 static ContactSystem::CycleStats g_last;
 static std::vector<std::function<void()>> g_deferred;      // events raised inside the step, fired after it (Finish)
@@ -135,12 +136,12 @@ static constexpr float kFlipperHorizonVpt = 1.0f;   // trace only: VPX time unit
 
 struct ContactSystemImpl
 {
-   static void StepBalls(float dtime);
+   static void StepBalls(double dt);   // dt: seconds
    static void Release(HitBall *ball, const char *why);
    static void Regather(BallContact &e, const Vertex3Ds &pos, float radiusU);
    static bool EngageImpl(ContactHost *host, HitBall *pb, const char *how);
-   static void EngageNear(float dtime);
-   static void CordNear(float dtime);
+   static void EngageNear(double dt);   // dt: the cycle in seconds
+   static void CordNear(double dt);     // likewise
 
    // A ball in the step: its SI state, the substep's forces, and what the step needs to know about it.
    struct Body
@@ -208,7 +209,6 @@ struct ContactSystemImpl
       int steps = 1;                     // the current island's substeps
       int stepsWhy = TestDriver::ContactCost::kEnd;   // the rule that set them (fixed-step islands; test driver cost split)
       int stepsPair = 1;                 // the substeps its ball pairs need alone (the arrival-time loop adds the surfaces' own)
-      float dtimeF = 0.0f;               // the cycle in engine time units
       std::vector<std::pair<int, int>> links;
       std::vector<ContactMovingPart *> islandParts;   // the moving parts (gates, spinners) the current island steps (contactmovingpart.h)
       std::vector<std::pair<HitBall *, const char *>> bandReleases;   // balls the band lets go of (after the write-back: the release can fire the script)
@@ -3231,11 +3231,10 @@ struct ContactSystemImpl
       return true;
    }
 
-   // a cord with no ball this cycle: a plate moving by itself, or the path letting go of a ball just gone (GroupStepDesign 8 point 5)
-   static void CordAlone(HitRubber *const band, const float dtime)
+   // a cord with no ball this cycle: a plate moving by itself, or the path letting go of a ball just gone (GroupStepDesign 8 point 5); dt: seconds
+   static void CordAlone(HitRubber *const band, const double dt)
    {
       CordBand &cb = *band->Cord();
-      const double dt = (double)dtime * DEFAULT_STEPTIME_S;
       if (dt <= 0.0)
          return;
       if (cb.attached && cb.slots.empty() && cb.PlateQuiet() && !band->SlingTriggerPending())
@@ -3723,7 +3722,7 @@ struct ContactSystemImpl
       static const bool on = []() { const char *const e = getenv("VPX_PREVENT"); return !(e != nullptr && atoi(e) == 0); }();
       return on;
    }
-   static void CheckOverlaps(float hittime);
+   static void CheckOverlaps(float hittime, double hS);   // hittime: engine time units (the free flight only); hS: the same in seconds
    static void SeatAtTouch(const std::vector<SurfaceContact> &items, const BallSI &bs, V3 &c, const V3 &v, double &delta0, double &rewound);
    static void SeatKeepsOthers(const std::vector<SurfaceContact> &items, const ContactSurface *self, const BallSI &bs, const V3 &c0, V3 &c);
    static void DispatchPending()
@@ -3744,14 +3743,14 @@ bool ContactSystemImpl::s_append = false;
 
 void ContactProfCensus(const ContactSurface *s, bool empty, size_t cand);
 
-void ContactSystemImpl::StepBalls(const float dtime)
+// dt: the time to step, seconds
+void ContactSystemImpl::StepBalls(const double dt)
 {
    if (!s_append)
       DispatchPending();   // (the engine dispatches after every step; this keeps a step that was not followed by one from losing its events)
    g_last = ContactSystem::CycleStats();
    if (g_engaged.empty() && !(ContactSettings::Get().ballContact && g_pplayer->m_vball.size() >= 2))   // (two free balls are solved here too)
       return;
-   const double dt = (double)dtime * DEFAULT_STEPTIME_S;
    if (dt <= 0.0)
       return;
    static Cycle cy;   // buffers are reused between cycles
@@ -3765,7 +3764,6 @@ void ContactSystemImpl::StepBalls(const float dtime)
       cy.partHits.clear();
    }
    cy.hitFloor = std::min(0.5f, g_pplayer->m_physics->HitSpeedMin());
-   cy.dtimeF = dtime;
    if (!s_append)
       cy.bandReleases.clear();
    for (BallPairState &p : g_ballPairs)
@@ -3891,10 +3889,9 @@ void ContactSystemImpl::StepBalls(const float dtime)
 // closing on it faster than it can cross the gap in two cycles (reach 2 vn dt + the release gap; a ball released at the gap, receding, is not taken back). The first touch is
 // then found by the substeps, and the part's hit event is queued from there (PartHit).
 // A cord takes a ball before it touches, and the group steps it from there (GroupStepDesign 15): the band is never found by the stock collision, and the ball does not start inside the cord.
-// Every ball, one already held for the playfield included: its contact is handed over to the band.
-void ContactSystemImpl::CordNear(const float dtime)
+// Every ball, one already held for the playfield included: its contact is handed over to the band. dt: the cycle in seconds (CordNear and EngageNear).
+void ContactSystemImpl::CordNear(const double dt)
 {
-   const double dt = (double)dtime * DEFAULT_STEPTIME_S;
    for (auto *const ball : g_pplayer->m_vball)
    {
       HitBall *const pb = &ball->m_hitBall;
@@ -3935,9 +3932,9 @@ void ContactSystemImpl::CordNear(const float dtime)
    }
 }
 
-void ContactSystemImpl::EngageNear(const float dtime)
+void ContactSystemImpl::EngageNear(const double dt)
 {
-   CordNear(dtime);
+   CordNear(dt);
    CPROF(EngageNear);
    ContactProf::Cycle();
    static const bool on = []()
@@ -3969,7 +3966,6 @@ void ContactSystemImpl::EngageNear(const float dtime)
       }
       else
          i++;
-   const double dt = (double)dtime * DEFAULT_STEPTIME_S;
    for (auto *const ball : g_pplayer->m_vball)
    {
       HitBall *const pb = &ball->m_hitBall;
@@ -4293,9 +4289,9 @@ void ContactSystemImpl::Release(HitBall *const ball, const char *why)
    g_engaged.erase(itE);
 }
 
-void ContactSystem::StepCordAlone(HitRubber *const band, const float dtime)
+void ContactSystem::StepCordAlone(HitRubber *const band)
 {
-   ContactSystemImpl::CordAlone(band, dtime);
+   ContactSystemImpl::CordAlone(band, g_subS);
 }
 
 bool ContactSystem::EngageBand(HitRubber *const band, HitBall *const pb)
@@ -4357,9 +4353,9 @@ void ContactSystemImpl::Regather(BallContact &e, const Vertex3Ds &pos, const flo
       e.items = std::move(next);
 }
 
-void ContactSystem::EngageNear(const float dtime)
+void ContactSystem::EngageNear(const double cycleS)
 {
-   ContactSystemImpl::EngageNear(dtime);
+   ContactSystemImpl::EngageNear(cycleS);
 }
 
 // A surface's collider, or the slow pass, found the ball: the ball is on this surface's law from now on, whatever holds it. False only for what no surface law covers yet: the playfield
@@ -4588,14 +4584,26 @@ void ContactSystem::SleepWakeAtStart(const HitBall *const ball, const char *cons
    ContactSystemImpl::SleepWakeBall(ball, cause, false);
 }
 
-void ContactSystem::Step(float dtime)
+// A step of dt seconds: the engine's whole sub-interval (Step), or a piece of it in an overlap replay (CheckOverlaps)
+static void StepSeconds(const double dt)
 {
-   ContactSystemImpl::StepBalls(dtime);
-   if (dtime > 0.f)
+   ContactSystemImpl::StepBalls(dt);
+   if (dt > 0.0)
    {
       g_placed.clear();
-      g_frameUsedS += (double)dtime * DEFAULT_STEPTIME_S;
+      g_frameUsedS += dt;
    }
+}
+
+void ContactSystem::Step(const double hS)
+{
+   g_subS = hS;
+   StepSeconds(hS);
+}
+
+double ContactSystem::SubIntervalS()
+{
+   return g_subS;
 }
 
 const ContactSystem::CycleStats &ContactSystem::LastCycle()
@@ -4843,7 +4851,7 @@ namespace
    }
 }
 
-void ContactSystem::SnapshotTest(const float dtime)
+void ContactSystem::SnapshotTest(const double hS)
 {
    static long compared = 0, mismatches = 0, skipped = 0;
    if (!g_snap.valid)
@@ -4858,7 +4866,7 @@ void ContactSystem::SnapshotTest(const float dtime)
       return;   // nothing the step touched
    const Fp a = Fingerprint();
    RestoreStart();
-   Step(dtime);
+   Step(hS);
    const Fp b = Fingerprint();
    compared++;
    if (a.balls != b.balls || a.contacts != b.contacts || a.pairs != b.pairs || a.parts != b.parts)
@@ -4889,12 +4897,13 @@ void ContactSystem::TakeReplayStats(unsigned &count, unsigned &us)
    g_replayCount = g_replayUs = 0;
 }
 
-void ContactSystem::CheckOverlaps(const float hittime)
+void ContactSystem::CheckOverlaps(const float hittime, const double hS)
 {
-   ContactSystemImpl::CheckOverlaps(hittime);
+   ContactSystemImpl::CheckOverlaps(hittime, hS);
 }
 
-void ContactSystemImpl::CheckOverlaps(const float hittime)
+// hittime: the sub-interval in the engine's time units, only for the free balls' straight flight (velocity x stock time); hS: the same sub-interval in seconds, for everything else
+void ContactSystemImpl::CheckOverlaps(const float hittime, const double hS)
 {
    using namespace RubberContact;
    static const bool on = []() { const char *const e = getenv("VPX_OVERLAP_REPLAY"); return !(e != nullptr && atoi(e) == 0); }();
@@ -4907,7 +4916,6 @@ void ContactSystemImpl::CheckOverlaps(const float hittime)
    if (parts.empty())
       return;
    const double tol = ContactSettings::Get().arrivalDepthUm * 1e-6;
-   const double dtS = (double)hittime * DEFAULT_STEPTIME_S;
    auto isFree = [](const HitBall *pb) { return pb->m_contact == nullptr && pb->m_bandOwner == nullptr && !pb->m_d.m_lockedInKicker; };
    struct Cand
    {
@@ -4986,7 +4994,7 @@ void ContactSystemImpl::CheckOverlaps(const float hittime)
          if (e.t > t)
          {
             s_append = !first;
-            ContactSystem::Step((float)((e.t - t) * (double)hittime));
+            StepSeconds((e.t - t) * hS);
             s_append = false;
             first = false;
             t = e.t;
@@ -4994,7 +5002,7 @@ void ContactSystemImpl::CheckOverlaps(const float hittime)
          for (ContactHost *const o : Hosts())   // a part no engaged ball held has not moved yet: it is at the start of the sub-interval. It moves on to the engagement, as it would have alone (gapAt measures it so)
             if (ContactMovingPart *const mp = o->MovingPart())
             {
-               const double idle = dtS * e.t - mp->steppedS;
+               const double idle = hS * e.t - mp->steppedS;
                if (idle > 1e-9)
                {
                   mp->AdvanceAlone(idle);
@@ -5008,7 +5016,7 @@ void ContactSystemImpl::CheckOverlaps(const float hittime)
       if (tEnd > t)
       {
          s_append = !first;
-         ContactSystem::Step((float)((tEnd - t) * (double)hittime));
+         StepSeconds((tEnd - t) * hS);
          s_append = false;
       }
    };
@@ -5024,7 +5032,7 @@ void ContactSystemImpl::CheckOverlaps(const float hittime)
       for (ContactHost *const o : parts)
       {
          ContactMovingPart *const mp = o->MovingPart();
-         const double idle = dtS * t - mp->steppedS;
+         const double idle = hS * t - mp->steppedS;
          ContactMovingPart::State tmp;
          const bool adv = idle > 1e-9;
          if (adv)
@@ -5119,7 +5127,7 @@ void ContactSystemImpl::CheckOverlaps(const float hittime)
    // the parts: advanced alone for what the contact system did not step them, as the movers do after a step
    for (ContactHost *const o : Hosts())
       if (o->MovingPart() != nullptr)
-         o->PartAdvance(hittime);
+         o->PartAdvance();
    for (Ball *const b : g_pplayer->m_vball)
       b->m_hitBall.m_rubberAdvanced = false;   // every ball has been moved for this sub-interval
    for (const auto &nh : noPastHost)

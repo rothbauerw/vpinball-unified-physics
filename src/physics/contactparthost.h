@@ -32,8 +32,9 @@ public:
                    const std::filesystem::path &iniPath, const std::string &name, const char *kind, const float lo[3], const float hi[3]);
    // The gravity a part feels (m/s^2, table frame): gravity minus the cabinet's nudge acceleration, as the balls feel it
    static RubberContact::V3 PartGravitySI();
-   // Once per physics interval (the mover): advance the part alone for the time no island stepped it, publish its pose, queue its events
-   void PartAdvance(float dtime) override;
+   // Once per physics interval (the mover): advance the part alone for the time no island stepped it, publish its pose, queue its events. The interval: the engine's current
+   // sub-interval in seconds (ContactSystem::SubIntervalS)
+   void PartAdvance() override;
    // The host's contact settings (the release gap, the material the contact system's step rule reads) when the part's own settings change (a flipper's rubber keys)
    void SetContactSettings(const RubberObjectSettings &s) { m_set = s; }
 
@@ -64,7 +65,7 @@ private:
       bool AddToList() const override { return true; }
       void UpdateDisplacements(const float) override {}
       void UpdateVelocities() override {}
-      void PreUpdateDisplacements(const float dtime) override { m_owner->PartAdvance(dtime); }
+      void PreUpdateDisplacements(const float) override { m_owner->PartAdvance(); }   // (the part advances by the seconds the contact system's Step stored, not by the engine's float time)
 
    private:
       ContactPartHost *m_owner;

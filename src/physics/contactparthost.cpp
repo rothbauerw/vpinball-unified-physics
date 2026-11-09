@@ -39,7 +39,7 @@ RubberContact::V3 ContactPartHost::PartGravitySI()
    return RubberContact::V3(dv.x * k, dv.y * k, dv.z * k);
 }
 
-void ContactPartHost::PartAdvance(const float dtime)
+void ContactPartHost::PartAdvance()
 {
    const RubberContact::V3 g = PartGravitySI();
    if (!m_gravityLogged)
@@ -49,8 +49,8 @@ void ContactPartHost::PartAdvance(const float dtime)
    }
    m_part->SetGravity(g);   // (a nudge wakes a sleeping part)
    {
-      // the contact system stepped it with its balls for steppedS; the rest of the interval it moves alone
-      const double rest = (double)dtime * DEFAULT_STEPTIME_S - m_part->steppedS;
+      // the contact system stepped it with its balls for steppedS; the rest of the sub-interval it moves alone
+      const double rest = ContactSystem::SubIntervalS() - m_part->steppedS;
       if (rest > 1e-9)
          m_part->AdvanceAlone(rest);
       m_part->steppedS = 0.0;
