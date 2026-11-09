@@ -184,19 +184,17 @@ namespace PartsIni
    }
 
    // Wire trigger settings over `s` (runs/2026-11-03-switch-requirements/design-wire.md topic 4): [Triggers] for all, then [Trigger:<name>]. Lengths in mm, forces in N.
-   inline void LoadWireSwitch(WireSwitchGroup::Settings &s, const std::filesystem::path &file, const std::string &name)
+   // Every key read and not used is named in *ignored (the trigger shows it on screen, rule 8).
+   inline void LoadWireSwitch(WireSwitchGroup::Settings &s, const std::filesystem::path &file, const std::string &name, std::string *ignored = nullptr)
    {
       ReadSections(file, "triggers", "trigger:" + name, [&](const std::string &k, double v, const std::string &) {
-         if (k == "peak_mm") s.peakMm = v;
+         if (k == "heightoffset_mm") s.heightOffsetMm = v;
          else if (k == "stop_below_mm") s.stopBelowMm = v;
          else if (k == "close_mm") s.closeMm = v;
          else if (k == "release_mm") s.releaseMm = v;
          else if (k == "spring_n") s.springN = v;
          else if (k == "spring_full_n") s.springFullN = v;
          else if (k == "wire_d_mm") s.wireDMm = v;
-         else if (k == "hinge_back_mm") s.hingeBackMm = v;
-         else if (k == "lever_node") s.leverNode = (int)v;
-         else if (k == "hinge_below_mm") s.hingeBelowMm = v;
          else if (k == "wire_model" || k == "wire_sum")   // removed 2026-11-05 (the wire has its mass; hinge_piece_sum is the union): read and ignored, said once
          {
             static bool said = false;
@@ -204,7 +202,12 @@ namespace PartsIni
                PLOGI << "[Triggers] " << k << " is no longer used (2026-11-05): ignored";
             said = true;
          }
-         else PLOGW << "Trigger " << name << ": unknown key '" << k << "' ignored";
+         else
+         {
+            PLOGW << "Trigger " << name << ": unknown key '" << k << "' ignored";
+            if (ignored != nullptr)
+               *ignored += (ignored->empty() ? "" : ", ") + k;
+         }
       });
    }
 }

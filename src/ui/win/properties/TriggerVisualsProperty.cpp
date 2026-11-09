@@ -17,6 +17,7 @@ TriggerVisualsProperty::TriggerVisualsProperty(const vector<IWinUIPart *> *pvsel
     m_shapeList.push_back("Wire C"s);
     m_shapeList.push_back("Wire D"s);
     m_shapeList.push_back("Inder"s);
+    m_shapeList.push_back("Wire E"s);
 
     m_wireThicknessEdit.SetDialog(this);
     m_starRadiusEdit.SetDialog(this);

@@ -42,7 +42,7 @@ void TriggerUIPart::UpdatePropertyPane(PropertyPane& props)
          [](const Trigger* trigger) { return trigger->m_d.m_reflectionEnabled; }, //
          [](Trigger* trigger, bool v) { trigger->m_d.m_reflectionEnabled = v; });
       props.Combo<Trigger>(
-         m_part, "Shape"s, vector<string> { "None"s, "Wire A"s, "Star"s, "Wire B"s, "Button"s, "Wire C"s, "Wire D"s, "Inder"s },
+         m_part, "Shape"s, vector<string> { "None"s, "Wire A"s, "Star"s, "Wire B"s, "Button"s, "Wire C"s, "Wire D"s, "Inder"s, "Wire E"s },
          [](const Trigger* trigger) { return trigger->m_d.m_shape; }, //
          [](Trigger* trigger, int v) { trigger->m_d.m_shape = static_cast<TriggerShape>(v); });
       props.InputFloat<Trigger>(

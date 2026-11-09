@@ -1346,7 +1346,7 @@ PropFloatUnbounded(DefaultPropsTrigger, ScaleY, "ScaleY"s, ""s, 1.f);
 PropBool(DefaultPropsTrigger, Enabled, "Enabled"s, ""s, true);
 PropBool(DefaultPropsTrigger, Visible, "Visible"s, ""s, true);
 PropFloatUnbounded(DefaultPropsTrigger, HitHeight, "HitHeight"s, ""s, 50.f);
-PropEnum(DefaultPropsTrigger, Shape, "Shape"s, ""s, TriggerShape, TriggerWireA, "None"s, "Wire A"s, "Star"s, "Wire B"s, "Button"s, "Wire C"s, "Wire D"s, "Inder"s);
+PropEnum(DefaultPropsTrigger, Shape, "Shape"s, ""s, TriggerShape, TriggerWireA, "None"s, "Wire A"s, "Star"s, "Wire B"s, "Button"s, "Wire C"s, "Wire D"s, "Inder"s, "Wire E"s);
 PropString(DefaultPropsTrigger, Surface, "Surface"s, ""s, ""s);
 PropFloatUnbounded(DefaultPropsTrigger, AnimSpeed, "AnimSpeed"s, ""s, 1.f);
 PropBool(DefaultPropsTrigger, ReflectionEnabled, "Reflection Enabled"s, ""s, true);

@@ -58,8 +58,38 @@ Trigger::StaticMeshData Trigger::SetupMeshData(const TriggerShape shape)
    }
 }
 
+namespace
+{
+   WireShape::Shape ToWireShape(const TriggerShape shape)
+   {
+      return shape == TriggerWireB ? WireShape::Shape::WireB : shape == TriggerWireC ? WireShape::Shape::WireC : shape == TriggerWireD ? WireShape::Shape::WireD
+         : shape == TriggerWireE ? WireShape::Shape::WireE : WireShape::Shape::WireA;
+   }
+}
+
 void Trigger::GetWireOutline(vector<Vertex2D> &outline) const
 {
+   if (CentrelineShape(m_d.m_shape))
+   {
+      // the plan view of the wire's tube (the same centreline as the physics, wireshape.h): its plane is vertical, so a strip one wire wide from end to end
+      const WireShape::Centreline cl = WireShape::MakeCentreline(ToWireShape(m_d.m_shape));
+      WireShape::Placement pl;
+      pl.x = m_d.m_vCenter.x;
+      pl.y = m_d.m_vCenter.y;
+      pl.rotDeg = m_d.m_rotation;
+      const WireShape::WireBody wb = WireShape::Place(cl, pl, WireSwitchGroup::Settings().wireDMm);
+      double s0 = 1e30, s1 = -1e30;
+      for (const WireShape::V3 &p : wb.nodes)
+      {
+         const double s = (p - wb.pivot).Dot(wb.lane);
+         s0 = std::min(s0, s - wb.r);
+         s1 = std::max(s1, s + wb.r);
+      }
+      const WireShape::V3 e(wb.lane.y, -wb.lane.x, 0.);
+      const auto corner = [&](const double s, const double w) { const WireShape::V3 p = wb.pivot + wb.lane * s + e * w; return Vertex2D((float)p.x, (float)p.y); };
+      outline = { corner(s0, -wb.r), corner(s1, -wb.r), corner(s1, wb.r), corner(s0, wb.r), corner(s0, -wb.r) };
+      return;
+   }
    const StaticMeshData meshData = SetupMeshData(m_d.m_shape);
    if (meshData.indices.empty())
       return;
@@ -167,10 +197,11 @@ namespace
          m_model->Collect();
          m_model->bookMs = (int)g_pplayer->m_time_msec;
          m_trigger->m_partAngle = (float)m_model->part.q;   // (the angle the renderer turns the drawn switch by)
-         if (!m_notice.empty() && g_pplayer->m_liveUI != nullptr)   // the load-time detector, on screen once the player runs
+         if (!m_notices.empty() && g_pplayer->m_liveUI != nullptr)   // the load-time detectors, on screen once the player runs
          {
-            g_pplayer->m_liveUI->PushNotification(m_notice, 10000);
-            m_notice.clear();
+            for (const std::string &msg : m_notices)
+               g_pplayer->m_liveUI->PushNotification(msg, 10000);
+            m_notices.clear();
          }
          static const bool gapLog = []() { const char *const e = getenv("VPX_WIRE_GAP"); return e != nullptr && atoi(e) != 0; }();
          if (gapLog && m_host != nullptr && m_gapLines < 600)   // diagnostic (off by default): each ball near the wire, its probe gap and whether its contact holds the wire
@@ -284,7 +315,7 @@ namespace
 
    public:
       const ContactHost *m_host = nullptr;   // (the gap log)
-      std::string m_notice;                  // a load-time detector's message, shown at the first cycle
+      std::vector<std::string> m_notices;    // the load-time detectors' messages, shown at the first cycle
    };
 }
 
@@ -296,7 +327,7 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       return;
 
    const float height = m_ptable->GetSurfaceHeight(m_d.m_szSurface, m_d.m_vCenter.x, m_d.m_vCenter.y);
-   const bool wire = m_d.m_shape == TriggerWireA || m_d.m_shape == TriggerWireB || m_d.m_shape == TriggerWireC || m_d.m_shape == TriggerWireD;
+   const bool wire = CentrelineShape(m_d.m_shape);
    if (!isUI && ContactSystem::Unified())
    {
       const std::filesystem::path ini = ContactHost::IniPathFor(m_ptable->m_filename);
@@ -305,63 +336,65 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       if (s_noted != g_pplayer)
       {
          s_noted = g_pplayer;
-         PLOGI << "Triggers: [Features] triggers = " << (on ? 1 : 0) << (on ? ": WireA-D are rollover switches of the contact system (group step); None, Star, Button and Inder stay stock sensors (not converted)" : ": every trigger is a stock sensor");
+         PLOGI << "Triggers: [Features] triggers = " << (on ? 1 : 0) << (on ? ": WireA-E are rollover switches of the contact system (group step); None, Star, Button and Inder stay stock sensors (not converted)" : ": every trigger is a stock sensor");
       }
       if (on && wire)
       {
-         // the real wire: a steel wire on a micro switch lever, hinged below the playfield (design-wire.md); no stock sensor, mover or volume
+         // the real wire (PartData S7): a steel wire on a micro switch lever, the switch on a bracket under the playfield (GroupStepDesign 23.4); no stock sensor, mover or volume
          constexpr double U = ContactSystem::kMetresPerUnit;
          WireSwitchModel::Settings s;
-         if (m_d.m_shape == TriggerWireB)
-            s.hingeBackMm = 27.0;   // the user's layouts 2026-11-04 (bench runs/2026-11-04-wire-bcd): B a standard-size micro switch; C held at the low end of its visible strand
-         if (m_d.m_shape == TriggerWireC)
-            s.leverNode = 1;
-         PartsIni::LoadWireSwitch(s, ini, GetName());
-         WireShape::Pose pose;
-         pose.x = m_d.m_vCenter.x;
-         pose.y = m_d.m_vCenter.y;
-         pose.rotDeg = m_d.m_rotation;
-         pose.scaleX = m_d.m_scaleX;
-         // on the trigger's own surface (user 2026-11-04): the arch top peak_mm above it. Detector (rule 8): a wire whose top ends below the playfield under it can never be reached
-         // (Gorgar's old triggerWall at -25, a workaround that sank the drawn wire)
+         std::string ignoredKeys;
+         PartsIni::LoadWireSwitch(s, ini, GetName(), &ignoredKeys);
+         std::vector<std::string> notices;   // load-time detectors (rule 8): on screen at the first cycle and in the log as WARN
+         if (!ignoredKeys.empty())
+            notices.push_back("Wire trigger " + GetName() + ": ini key(s) " + ignoredKeys + " not used (removed or unknown); remove them from the table's physics ini");
+         if (s.wireDMm <= 0.0)
+         {
+            notices.push_back("Wire trigger " + GetName() + ": wire_d_mm " + std::to_string(s.wireDMm) + " is not a wire; the default 1.0 mm is used. Set wire_d_mm above 0");
+            s.wireDMm = WireSwitchGroup::Settings().wireDMm;
+         }
+         if (s.wireDMm >= WireShape::kMaxWireDMm)
+            notices.push_back("Wire trigger " + GetName() + ": wire_d_mm " + std::to_string(s.wireDMm) + " folds on the inside of its 1.3 mm bends (needs under 2.6 mm); check wire_d_mm");
+         if (m_d.m_scaleX != 1.f || m_d.m_scaleY != 1.f)
+            notices.push_back("Wire trigger " + GetName() + ": Scale X / Y (" + std::to_string(m_d.m_scaleX) + ", " + std::to_string(m_d.m_scaleY) + ") are not used: a real wire has one size. Set them to 1");
+         // the playfield top = the trigger's Surface (user 2026-11-09); the trigger's x, y = the middle of the wire's part above it; the pivot 19.3 mm below it plus heightoffset_mm
          const float floorZ = height;
          const float playfieldZ = m_ptable->GetSurfaceHeight(string(), m_d.m_vCenter.x, m_d.m_vCenter.y);
-         pose.surfaceZ = floorZ;
-         pose.peakMm = s.peakMm;
-         pose.wireDmm = s.wireDMm;
-         pose.thicknessVpu = m_d.m_wireThickness;
-         const WireShape::Shape shape = m_d.m_shape == TriggerWireB ? WireShape::Shape::WireB : m_d.m_shape == TriggerWireC ? WireShape::Shape::WireC : m_d.m_shape == TriggerWireD ? WireShape::Shape::WireD : WireShape::Shape::WireA;
-         const WireShape::WireBody wb = shape == WireShape::Shape::WireD ? WireShape::Build(shape, &triggerDWireMesh[0].x, triggerDWireNumVertices, 8, pose)
-                                                                          : WireShape::Build(shape, &triggerSimple[0].x, triggerSimpleNumVertices, 8, pose);
-         if (wb.caps.empty())
+         const WireShape::Shape shape = ToWireShape(m_d.m_shape);
+         const WireShape::Centreline cl = WireShape::MakeCentreline(shape);
+         WireShape::Placement pl;
+         pl.x = m_d.m_vCenter.x;
+         pl.y = m_d.m_vCenter.y;
+         pl.rotDeg = m_d.m_rotation;
+         pl.surfaceZ = floorZ;
+         pl.heightOffsetMm = s.heightOffsetMm;
+         const WireShape::WireBody wb = WireShape::Place(cl, pl, s.wireDMm);
+         WireShape::WireBody wm = wb;   // the part's wire, metres (the adapter takes wb.caps, VPU: ActiveBall is the ball nearest it)
+         for (WireShape::Capsule &c : wm.caps)
          {
-            PLOGW << "Trigger " << GetName() << ": the wire's centreline could not be traced from its mesh: no switch";
-            return;
+            c.a = c.a * U;
+            c.b = c.b * U;
+            c.r = c.r * U;
          }
-         std::vector<WireShape::Capsule> chain;   // the part's wire, metres (the adapter takes wb.caps, VPU: ActiveBall is the ball nearest it)
-         for (const WireShape::Capsule &c : wb.caps)
-         {
-            WireShape::Capsule m;
-            m.a = c.a * U;
-            m.b = c.b * U;
-            m.r = c.r * U;
-            chain.push_back(m);
-         }
+         for (WireShape::V3 *p : { &wm.pivot, &wm.leverEnd, &wm.peak, &wm.knee })
+            *p = *p * U;
+         wm.r = wb.r * U;
          m_partModel = std::make_shared<WireSwitchModel::WireSwitch>();
-         m_partModel->Build(s, (double)floorZ * U, chain, RubberContact::BallSI());
-         // the drawn wire is the physics' wire (requirements.md section 4): the same body transform and tube (wireshape.h PoseDrawn)
+         m_partModel->Build(s, (double)floorZ * U, wm, RubberContact::BallSI());
+         // the drawn wire is the physics' wire (requirements.md section 4): a tube of the same radius around the same centreline (wireshape.h BuildTube)
          {
-            const StaticMeshData md = SetupMeshData(m_d.m_shape);
-            m_partDrawn.assign(md.vertices.size() * 8, 0.f);
-            m_partDrawWorst = WireShape::PoseDrawn(wb, &md.vertices[0].x, md.vertices.size(), 8, m_partDrawn.data(), 8);
-            for (size_t i = 0; i < md.vertices.size(); i++)
-            {
-               m_partDrawn[i * 8 + 6] = md.vertices[i].tu;
-               m_partDrawn[i * 8 + 7] = md.vertices[i].tv;
-            }
+            std::vector<float> v;
+            std::vector<uint16_t> idx;
+            WireShape::BuildTube(wb.nodes, wb.lane, wb.r, 12, v, idx);
+            m_tubeVerts.resize(v.size() / 8);
+            memcpy(m_tubeVerts.data(), v.data(), v.size() * sizeof(float));
+            m_tubeIdx.assign(idx.begin(), idx.end());
+            m_partDrawWorst = 0.;
+            for (const Vertex3D_NoTex2 &tv : m_tubeVerts)
+               m_partDrawWorst = std::max(m_partDrawWorst, std::fabs(WireShape::DistToChain(WireShape::V3(tv.x, tv.y, tv.z), wb.caps) - wb.r));
          }
          {
-            // the drawn switch turns with the part about its hinge (Render); the check (rule 8 log): rest vertices against the physics shape, the drawn top above the playfield
+            // the drawn switch turns with the part about its hinge (Render); the check (rule 8 log): rest vertices against the physics shape, the rest pose's named points
             const HingeGroup::Part &g = m_partModel->part;
             m_hingeA = Vertex3Ds((float)(g.A.x / U), (float)(g.A.y / U), (float)(g.A.z / U));
             m_hingeE = Vertex3Ds((float)g.E.x, (float)g.E.y, (float)g.E.z);
@@ -369,13 +402,16 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
             m_hingeZ = Vertex3Ds((float)g.Z.x, (float)g.Z.y, (float)g.Z.z);
             m_partAngle = (float)g.q;
             m_partDraw = true;
-            Vertex3Ds sphere;
-            const std::unique_ptr<std::vector<Vertex3D_NoTex2>> drawn = GenerateMesh(sphere);
-            double topZ = -1e30;
-            for (const Vertex3D_NoTex2 &v : *drawn)
+            double topZ = -1e30, nodeTopZ = -1e30;
+            for (const Vertex3D_NoTex2 &v : m_tubeVerts)
                topZ = std::max(topZ, (double)v.z);
-            PLOGI << "Trigger " << GetName() << ": drawn on the physics pose: rest vertices off the physics shape by at most " << m_partDrawWorst * WireShape::kMmPerVpu * 1e3 << " um, drawn top "
-                  << (topZ - playfieldZ) * WireShape::kMmPerVpu << " mm above the playfield (" << (topZ - floorZ) * WireShape::kMmPerVpu << " mm above its surface)";
+            for (const WireShape::V3 &n : wb.nodes)
+               nodeTopZ = std::max(nodeTopZ, n.z);
+            const auto mmAbove = [&](const double z) { return (z - floorZ) * WireShape::kMmPerVpu; };
+            PLOGI << "Trigger " << GetName() << ": drawn tube " << m_tubeVerts.size() << " vertices, off the physics shape by at most " << m_partDrawWorst * WireShape::kMmPerVpu * 1e3 << " um; drawn top "
+                  << (topZ - playfieldZ) * WireShape::kMmPerVpu << " mm above the playfield (" << mmAbove(topZ) << " mm above its surface); centreline top " << mmAbove(nodeTopZ) << " mm";
+            PLOGI << "Trigger " << GetName() << ": rest pose above its surface, mm: pivot " << mmAbove(wb.pivot.z) << ", lever end " << mmAbove(wb.leverEnd.z) << ", peak " << mmAbove(wb.peak.z)
+                  << (cl.hasKnee ? ", knee " + std::to_string(mmAbove(wb.knee.z)) : std::string()) << "; pivot at (" << wb.pivot.x << ", " << wb.pivot.y << ") VPU, the wire toward (" << wb.lane.x << ", " << wb.lane.y << ")";
          }
          RubberObjectSettings hs;
          ContactHost::LoadHardSurfaceSettings(hs, ini, "trigger", GetName(), s.elasticity, s.friction);
@@ -387,18 +423,18 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          WireSwitchAdapter *const adapterRaw = adapter.get();
          m_partHost = new ContactPartHost(this, m_partModel, std::move(adapter), hs, ini, GetName(), "trigger", lo, hi);
          adapterRaw->m_host = m_partHost;
-         if (floorZ + s.peakMm / WireShape::kMmPerVpu < playfieldZ)
-         {
-            adapterRaw->m_notice = "Wire trigger " + GetName() + " sits below the playfield: no ball can reach it; check its Surface";
-            PLOGW << adapterRaw->m_notice << " (its top at z " << floorZ + s.peakMm / WireShape::kMmPerVpu << " VPU on '" << m_d.m_szSurface << "', the playfield at z " << playfieldZ << ")";
-         }
+         // a wire whose peak ends below the playfield under it can never be reached (Gorgar's old triggerWall at -25, a workaround that sank the drawn wire)
+         if (wb.peak.z < playfieldZ)
+            notices.push_back("Wire trigger " + GetName() + " sits below the playfield: no ball can reach it; check its Surface and heightoffset_mm");
+         for (const std::string &n : notices)
+            PLOGW << n;
+         adapterRaw->m_notices = std::move(notices);
          m_partHost->SetHardSurface(s.elasticity, s.friction);
          physics->AddCollider(m_partHost, isUI);
          const WireSwitchGroup::Part &w = m_partModel->part;
-         const WireShape::V3 tip(w.TipWorld().x / U, w.TipWorld().y / U, w.TipWorld().z / U);
-         PLOGI << "Trigger " << GetName() << ": wire switch part on the group step (shape Wire" << "ABCD"[(int)shape] << ", " << chain.size() << " capsules, wire " << 2e3 * chain[0].r  << " mm: hinge body with its mass)";
-         PLOGI << "Trigger " << GetName() << ": scale " << m_d.m_scaleX << ", peak " << s.peakMm << " mm above its surface '" << m_d.m_szSurface << "' at z " << floorZ << " VPU (playfield z " << playfieldZ << "); lever end node " << s.leverNode << " at (" << tip.x << ", " << tip.y << ") VPU; pivot " << s.hingeBackMm << " mm back, "
-               << s.hingeBelowMm << " mm below; spring " << s.springN << " N at first touch, " << s.springFullN << " N at full travel; close " << s.closeMm << " mm, release " << s.releaseMm << " mm; mass "
+         PLOGI << "Trigger " << GetName() << ": wire switch part on the group step (shape Wire" << "ABCDE"[(int)shape] << ", " << wm.caps.size() << " capsules, wire " << 2e3 * wm.r << " mm: hinge body with its mass)";
+         PLOGI << "Trigger " << GetName() << ": surface '" << m_d.m_szSurface << "' at z " << floorZ << " VPU (playfield z " << playfieldZ << "), heightoffset " << s.heightOffsetMm << " mm; spring " << s.springN
+               << " N at first touch, " << s.springFullN << " N at full travel; close " << s.closeMm << " mm, release " << s.releaseMm << " mm, full travel " << s.stopBelowMm << " mm under the playfield; mass "
                << w.mp.m * 1e3 << " g, I " << w.mp.I << " kg m^2, reach " << reach * 1e3 << " mm)";
          return;
       }
@@ -467,7 +503,8 @@ void Trigger::PhysicRelease(PhysicsEngine* physics, const bool isUI)
       m_partModel = nullptr;   // (the host is owned by the physics engine)
       m_partHost = nullptr;
       m_partDraw = false;
-      m_partDrawn.clear();
+      m_tubeVerts.clear();
+      m_tubeIdx.clear();
       m_partAngle = 0.f;
    }
 }
@@ -516,15 +553,22 @@ void Trigger::UpdateMesh()
    if (m_d.m_shape == TriggerNone)
       return;
 
-   const StaticMeshData meshData = SetupMeshData(m_d.m_shape);
-   if (meshData.indices.empty())
+   if (!m_partDraw)   // no switch part: the stock mesh, or for WireE (no stock mesh) its rest tube
+   {
+      m_tubeVerts.clear();
+      m_tubeIdx.clear();
+      if (m_d.m_shape == TriggerWireE)
+         MakeRestTube();
+   }
+   const std::span<const WORD> indices = m_tubeVerts.empty() ? SetupMeshData(m_d.m_shape).indices : std::span<const WORD>(m_tubeIdx);
+   if (indices.empty())
       return;
 
    m_triggerVertices = GenerateMesh(m_boundingSphereCenter);
    if (m_triggerVertices == nullptr)
       return;
-   std::shared_ptr<IndexBuffer> triggerIndexBuffer = std::make_shared<IndexBuffer>(m_renderer->m_renderDevice, (unsigned int)meshData.indices.size(), meshData.indices.data());
-   std::shared_ptr<VertexBuffer> vertexBuffer = std::make_shared<VertexBuffer>(m_renderer->m_renderDevice, (unsigned int)meshData.vertices.size(), (float *)m_triggerVertices->data(), true);
+   std::shared_ptr<IndexBuffer> triggerIndexBuffer = std::make_shared<IndexBuffer>(m_renderer->m_renderDevice, (unsigned int)indices.size(), indices.data());
+   std::shared_ptr<VertexBuffer> vertexBuffer = std::make_shared<VertexBuffer>(m_renderer->m_renderDevice, (unsigned int)m_triggerVertices->size(), (float *)m_triggerVertices->data(), true);
    m_meshBuffer = std::make_shared<MeshBuffer>(GetName(), vertexBuffer, triggerIndexBuffer, true);
 }
 
@@ -646,7 +690,7 @@ void Trigger::Render(const unsigned int renderMask)
    }
 
    m_renderer->m_renderDevice->ResetRenderState();
-   if (m_d.m_shape == TriggerWireA || m_d.m_shape == TriggerWireB || m_d.m_shape == TriggerWireC || m_d.m_shape == TriggerWireD || m_d.m_shape == TriggerInder)
+   if (CentrelineShape(m_d.m_shape) || m_d.m_shape == TriggerInder)
       m_renderer->m_renderDevice->SetRenderState(RenderState::CULLMODE, RenderState::CULL_NONE);
    m_renderer->m_renderDevice->m_basicShader->SetBasic(m_ptable->GetMaterial(m_d.m_szMaterial), nullptr);
    if (m_partDraw)
@@ -684,15 +728,15 @@ void Trigger::ExportMesh(ObjLoader& loader)
    const auto triggerVertices = GenerateMesh(boundingSphereCenter);
    if (!triggerVertices)
       return;
-   const StaticMeshData meshData = SetupMeshData(m_d.m_shape);
+   const std::span<const WORD> indices = m_tubeVerts.empty() ? SetupMeshData(m_d.m_shape).indices : std::span<const WORD>(m_tubeIdx);
    loader.WriteObjectName(name);
-   loader.WriteVertexInfo(triggerVertices->data(), (unsigned int)meshData.vertices.size());
+   loader.WriteVertexInfo(triggerVertices->data(), (unsigned int)triggerVertices->size());
    const Material * const mat = m_ptable->GetMaterial(m_d.m_szMaterial);
    loader.WriteMaterial(m_d.m_szMaterial, string(), mat);
    loader.UseTexture(m_d.m_szMaterial);
 
-   loader.WriteFaceInfoList(meshData.indices.data(), (unsigned int)meshData.indices.size());
-   loader.UpdateFaceOffset((unsigned int)meshData.vertices.size());
+   loader.WriteFaceInfoList(indices.data(), (unsigned int)indices.size());
+   loader.UpdateFaceOffset((unsigned int)triggerVertices->size());
 }
 
 // Ported at: VisualPinball.Engine/VPT/Trigger/TriggerMeshGenerator.cs
@@ -704,6 +748,9 @@ std::unique_ptr<std::vector<Vertex3D_NoTex2>> Trigger::GenerateMesh(Vertex3Ds &b
    if (m_d.m_shape == TriggerWireC) zoffset = -19.0f;
 
    boundingSphereCenter.Set(m_d.m_vCenter.x, m_d.m_vCenter.y, baseHeight);
+
+   if (!m_tubeVerts.empty())   // WireA-E: the tube around the physics' centreline, already placed (PhysicSetup, MakeRestTube)
+      return std::make_unique<std::vector<Vertex3D_NoTex2>>(m_tubeVerts);
 
    const StaticMeshData meshData = SetupMeshData(m_d.m_shape);
    const std::span<const Vertex3D_NoTex2> &verts = meshData.vertices;
@@ -761,10 +808,25 @@ std::unique_ptr<std::vector<Vertex3D_NoTex2>> Trigger::GenerateMesh(Vertex3Ds &b
          outVerts[i].y += outVerts[i].ny * m_d.m_wireThickness;
          outVerts[i].z += outVerts[i].nz * m_d.m_wireThickness;
       }
-      if (m_partDrawn.size() == verts.size() * 8)   // a converted wire (WireA-D): the physics' pose (PhysicSetup, wireshape.h PoseDrawn)
-         memcpy(&outVerts[i].x, &m_partDrawn[i * 8], 6 * sizeof(float));
    }
    return triggerVertices;
+}
+
+void Trigger::MakeRestTube()
+{
+   const WireShape::Centreline cl = WireShape::MakeCentreline(ToWireShape(m_d.m_shape));
+   WireShape::Placement pl;
+   pl.x = m_d.m_vCenter.x;
+   pl.y = m_d.m_vCenter.y;
+   pl.rotDeg = m_d.m_rotation;
+   pl.surfaceZ = m_ptable->GetSurfaceHeight(m_d.m_szSurface, m_d.m_vCenter.x, m_d.m_vCenter.y);
+   const WireShape::WireBody wb = WireShape::Place(cl, pl, WireSwitchGroup::Settings().wireDMm);
+   std::vector<float> v;
+   std::vector<uint16_t> idx;
+   WireShape::BuildTube(wb.nodes, wb.lane, wb.r, 12, v, idx);
+   m_tubeVerts.resize(v.size() / 8);
+   memcpy(m_tubeVerts.data(), v.data(), v.size() * sizeof(float));
+   m_tubeIdx.assign(idx.begin(), idx.end());
 }
 
 void Trigger::FlipX(const Vertex2D &pvCenter)

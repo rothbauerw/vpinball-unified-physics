@@ -99,7 +99,7 @@ void TriggerWinUIPart::UIRenderPass2(Sur* const psur)
       psur->Line(m_trigger->m_d.m_vCenter.x - r2, m_trigger->m_d.m_vCenter.y + r2, m_trigger->m_d.m_vCenter.x + r2, m_trigger->m_d.m_vCenter.y - r2);
    }
 
-   if (m_trigger->m_d.m_shape == TriggerWireA || m_trigger->m_d.m_shape == TriggerWireB || m_trigger->m_d.m_shape == TriggerWireC || m_trigger->m_d.m_shape == TriggerWireD || m_trigger->m_d.m_shape == TriggerInder)
+   if (m_trigger->m_d.m_shape == TriggerWireA || m_trigger->m_d.m_shape == TriggerWireB || m_trigger->m_d.m_shape == TriggerWireC || m_trigger->m_d.m_shape == TriggerWireD || m_trigger->m_d.m_shape == TriggerInder || m_trigger->m_d.m_shape == TriggerWireE)
    {
       vector<Vertex2D> outline;
       m_trigger->GetWireOutline(outline);

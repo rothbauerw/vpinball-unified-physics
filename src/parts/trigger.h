@@ -108,7 +108,7 @@ public:
    void TriggerAnimationHit();
    void TriggerAnimationUnhit();
    void OnHit(bool hit);
-   // unified engine: a wire trigger (WireA-D) is a rollover wire switch of the contact system, no stock sensor (trigger.cpp, design-wire.md)
+   // unified engine: a wire trigger (WireA-E) is a rollover wire switch of the contact system, no stock sensor (trigger.cpp, design-wire.md)
    bool OnWirePart() const { return m_partHost != nullptr; }
    // the switch part's angle about its hinge, rad, published by the physics each cycle (trigger.cpp WireSwitchAdapter::Publish); the renderer turns the drawn switch by it
    float m_partAngle = 0.f;
@@ -132,6 +132,9 @@ private:
       std::span<const WORD> indices;
    };
    static StaticMeshData SetupMeshData(TriggerShape shape);
+   // WireA-E: the real parts' fixed centrelines (wireshape.h), drawn as a tube of the physics' radius; the stock meshes only when the triggers feature is off (WireE has none: its rest tube)
+   static bool CentrelineShape(TriggerShape shape) { return shape == TriggerWireA || shape == TriggerWireB || shape == TriggerWireC || shape == TriggerWireD || shape == TriggerWireE; }
+   void MakeRestTube();   // m_tubeVerts / m_tubeIdx at the agreed mount with the default wire (no physics: a WireE drawn by the stock path)
 
    // Generates the render mesh and the mesh bounding sphere center for the current m_d
    std::unique_ptr<std::vector<Vertex3D_NoTex2>> GenerateMesh(Vertex3Ds &boundingSphereCenter) const;
@@ -155,8 +158,9 @@ private:
    float m_vertexBuffer_animHeightOffset = -FLT_MAX;
    bool m_doAnimation = false;
    bool m_moveDown = false;
-   // a converted switch (WireA-D; set by PhysicSetup, which runs before RenderSetup): drawn on the physics' pose (wireshape.h PoseDrawn), turned about its hinge (axis point, VPU; axis frame)
-   std::vector<float> m_partDrawn;   // the drawn rest vertices, Vertex3D_NoTex2 layout
+   // a converted switch (WireA-E; set by PhysicSetup, which runs before RenderSetup): the tube around the physics' centreline (wireshape.h BuildTube), turned about its hinge (axis point, VPU; axis frame)
+   std::vector<Vertex3D_NoTex2> m_tubeVerts;   // the drawn tube at rest, world, VPU (empty: the stock mesh)
+   std::vector<WORD> m_tubeIdx;
    bool m_partDraw = false;
    double m_partDrawWorst = 0.;      // the drawn rest vertices' worst distance from the physics shape, VPU
    Vertex3Ds m_hingeA, m_hingeE, m_hingeN, m_hingeZ;

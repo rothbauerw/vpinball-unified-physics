@@ -7,11 +7,11 @@
 //   stops    rest (wire up, theta 0) and full travel (the peak stop_below_mm below the playfield): BodyStop, the Hertz steel stop with viscoelastic restitution, as gates
 //   pivot    Coulomb pin friction, gravity with the cabinet's acceleration, as gates
 //   switch   closes when the peak has travelled close_mm; opens when it rises back release_mm past that point (the micro switch's differential travel). Hit on close, Unhit on open
-// Frame (hingegroup.h): the wire is fixed to the tip of the micro switch's lever and turns with it about the lever's pivot (user's photos, 2026-11-04). The switch hangs under the playfield below the near end
-// of the slot, the axis runs ACROSS the lane (perpendicular to the wire's plane), N points along the lane from the wire to the pivot, so a positive theta swings the wire down and away from the pivot.
-// The lever tip holds the chain node leverNode (user's layouts 2026-11-04: A, B, D a chain end, C the low end of its visible strand); the pivot sits hinge_back_mm along the lane behind it
-// (away from the wire's top) and hinge_below_mm below the playfield (both UNVERIFIED, estimated from the product photo). Shape: the mesh's centreline (wireshape.h), every capsule touchable and carrying mass;
-// the caller passes it in metres. Out of the wire's plane (along the axis) the wire bends as a cantilever from the lever tip. Pure SI.
+// Frame (hingegroup.h): the wire is fixed to the micro switch's lever and turns with it about the lever's pivot (PartData S7: the switch on a bracket flush under the playfield,
+// the pivot 19.3 mm below the playfield top). The axis runs ACROSS the lane (perpendicular to the wire's plane), N points along the lane from the wire to the pivot, so a positive
+// theta swings the wire down and away from the pivot. The shape, the pivot, the lever end and the peak are fixed per shape (wireshape.h MakeCentreline, placed by Place); the
+// caller passes them in metres. Every capsule is touchable and carries mass; the lever's own mass is left out (user 2026-11-09: about 0.16 g within 20 mm of the pivot,
+// 5 - 10 % of the inertia). Out of the wire's plane (along the axis) the wire bends as a cantilever from the lever end. Pure SI.
 
 #pragma once
 
@@ -29,16 +29,13 @@ namespace WireSwitchGroup
 
    struct Settings
    {
-      double peakMm = 6.0;            // wire top above the playfield at rest
-      double stopBelowMm = 1.0;       // full travel: the peak this far below the playfield
+      double heightOffsetMm = 0.0;    // the switch's mount raised (+) or lowered (-) from the agreed bracket height (pivot 19.3 mm below the playfield top): the whole switch and wire move
+      double stopBelowMm = 3.0;       // full travel: the peak this far below the playfield (user 2026-11-09: a ball cannot press it below the surface, so the wire never bottoms out in play)
       double closeMm = 3.0;           // the switch closes at this travel of the peak
       double releaseMm = 0.5;         // and opens when the peak rises back this far past the close point
       double springN = 0.02;          // net vertical force at the peak at first touch, the wire's weight included
       double springFullN = 0.03;      // at full travel
-      double wireDMm = 1.4;           // 0: the mesh's tube + WireThickness (the caller's WireShape::Pose)
-      double hingeBackMm = 18.0;      // UNVERIFIED (product photo): the pivot, along the lane behind the switch leg's end, away from the span
-      double hingeBelowMm = 15.0;     // UNVERIFIED (product photo): the pivot below the playfield
-      int leverNode = -1;             // the chain node the lever tip holds (0 = the chain's first point, i = the end of capsule i - 1); -1: the chain's lower end. Per shape, user's layouts 2026-11-04
+      double wireDMm = 1.0;           // the steel wire's diameter (PartData S1): the touched tube, the drawn tube and the mass; under 2.6 mm (the 1.3 mm bends fold above that)
       double stopArmMm = 5.0, stopEdgeMm = 0.4;   // the lever on the switch body's stops, as the gate's
       double stopE = 0.2;             // both stops' restitution, ESTIMATE (unmeasured): the thin spring-steel wire loses most of an impact in its own bending (user 2026-11-04; 0.5 rebounded past the close point at 3 m/s)
       double muPivot = 0.3;
@@ -52,51 +49,36 @@ namespace WireSwitchGroup
    public:
       Settings set;
 
-      // surfaceZ: the playfield's height under the wire. chain: the wire's traced centreline (wireshape.h Build, converted to metres, world frame), each capsule touchable and carrying its mass;
-      // rho from the chain (the Pose's wire_d_mm). The lever tip: Settings::leverNode; the lane runs from it toward the wire's top
-      void Build(const Settings &s, const double surfaceZ, const std::vector<WireShape::Capsule> &chain, const BallSI &b, const V3 &gravity)
+      // body: the placed wire in metres (wireshape.h Place: chain, pivot, lane from the switch toward the wire, lever end, peak); surfaceZ: the playfield top under the wire, m
+      void Build(const Settings &s, const double surfaceZ, const WireShape::WireBody &body_, const BallSI &b, const V3 &gravity)
       {
          set = s;
          const double mm = 1e-3;
-         const V3 e0(chain.front().a.x, chain.front().a.y, chain.front().a.z), e1(chain.back().b.x, chain.back().b.y, chain.back().b.z);
-         const int nNode = (int)chain.size() + 1;
-         const auto node = [&](const int i) { const WireShape::V3 &p = i == 0 ? chain.front().a : chain[i - 1].b; return V3(p.x, p.y, p.z); };
-         tip = s.leverNode >= 0 && s.leverNode < nNode ? node(s.leverNode) : e0.z <= e1.z ? e0 : e1;
-         // the lane runs from the lever tip toward the wire's top (the pivot sits behind the tip, away from it)
-         V3 top = node(0);
-         for (int i = 1; i < nNode; i++)
-            if (node(i).z > top.z)
-               top = node(i);
-         V3 lane(top.x - tip.x, top.y - tip.y, 0.0);
-         lane = lane / lane.Length();
-         Begin(V3(tip.x, tip.y, surfaceZ) - lane * (s.hingeBackMm * mm) - V3(0.0, 0.0, s.hingeBelowMm * mm), lane * -1.0, gravity);
+         const std::vector<WireShape::Capsule> &chain = body_.caps;
+         const V3 lane(body_.lane.x, body_.lane.y, 0.0);
+         Begin(V3(body_.pivot.x, body_.pivot.y, body_.pivot.z), lane * -1.0, gravity);
          muPivot = s.muPivot;
          rho = chain.empty() ? 0.5 * s.wireDMm * mm : chain[0].r;
          rPin = rho;
          const double lam = s.density * GroupStep::kPi * rho * rho;
-         // body coordinates at theta 0: x along the axis (E), y = -height above the hinge, z = distance along N from the hinge (the wire is in front of it, z < 0); the peak is the highest centreline point
+         // body coordinates at theta 0: x along the axis (E), y = -height above the hinge, z = distance along N from the hinge (the wire is in front of it, z < 0)
          const auto body = [&](const WireShape::V3 &p) { const V3 r = V3(p.x, p.y, p.z) - A; return V3(r.Dot(E), -r.Dot(Z), r.Dot(N)); };
          double reachM = 0.0;
-         peakY = INFINITY;
-         peakZ = 0.0;
          for (const WireShape::Capsule &c : chain)
             for (const V3 &p : { body(c.a), body(c.b) })
-            {
                reachM = std::max(reachM, p.Length() + rho);
-               if (p.y - rho < peakY)
-               {
-                  peakY = p.y - rho;
-                  peakZ = p.z;
-               }
-            }
+         const V3 pk = body(body_.peak);   // the named peak (the wire file's corner), not searched for
+         peakY = pk.y;
+         peakZ = pk.z;
          for (const WireShape::Capsule &c : chain)
             AddWire(body(c.a), body(c.b), lam, true);
-         tipBody = body(WireShape::V3(tip.x, tip.y, tip.z));
+         tip = V3(body_.leverEnd.x, body_.leverEnd.y, body_.leverEnd.z);
+         tipBody = body(body_.leverEnd);
          FinishShape(reachM);
 
-         // the travel of the peak: rest stop at theta 0, full travel where it has dropped peak + stop_below, the switch's make and break
+         // the travel of the peak: rest stop at theta 0, full travel where it is stop_below under the playfield, the switch's make and break
          q = rate = 0.0;
-         thFull = AngleAtDrop((s.peakMm + s.stopBelowMm) * mm);
+         thFull = AngleAtDrop(body_.peak.z - surfaceZ + s.stopBelowMm * mm);
          switchMake = AngleAtDrop(s.closeMm * mm);
          switchBreak = AngleAtDrop(std::max(s.closeMm - s.releaseMm, 0.0) * mm);
          const auto stop = [&](const double at, const int side) {
@@ -150,7 +132,7 @@ namespace WireSwitchGroup
          const double d = 2.0 * rho, I = GroupStep::kPi * d * d * d * d / 64.0;
          return 3.0 * set.steelEGpa * 1e9 * I / (y * y * y);
       }
-      // the wire's plane holds N, out of it is the axis (x); held at the lever tip
+      // the wire's plane holds N, out of it is the axis (x); held at the lever end
       double BendAlongNormal(const V3 &nb, const V3 &pb) const override
       {
          const double oop = std::fabs(nb.x);
@@ -168,7 +150,7 @@ namespace WireSwitchGroup
          return phi + std::acos(std::max(-1.0, std::min(1.0, c)));
       }
       double peakY = 0.0, peakZ = 0.0, thFull = 0.0, switchMake = 0.0, switchBreak = 0.0;
-      V3 tip, tipBody;   // the switch leg's end (the lever tip): world, body coordinates
+      V3 tip, tipBody;   // the lever end (where the wire leaves the lever): world, body coordinates
       int stopRest = -1, stopFull = -1;
    };
 }

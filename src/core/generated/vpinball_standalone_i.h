@@ -665,7 +665,8 @@ typedef enum TriggerShape {
     TriggerButton = 4,
     TriggerWireC = 5,
     TriggerWireD = 6,
-    TriggerInder = 7
+    TriggerInder = 7,
+    TriggerWireE = 8
 } TriggerShape;
 typedef enum RampType {
     RampTypeFlat = 0,

@@ -17,11 +17,11 @@ namespace WireSwitchModel
       WireSwitch() : HingeModel::Engine(part) {}
       WireSwitchGroup::Part part;
 
-      // chain: the traced centreline in metres, world frame (wireshape.h Build); surfaceZ: the playfield under the wire, m
-      void Build(const Settings &s, const double surfaceZ, const std::vector<WireShape::Capsule> &chain, const RubberContact::BallSI &b)
+      // body: the placed wire in metres, world frame (wireshape.h Place); surfaceZ: the playfield top under the wire, m
+      void Build(const Settings &s, const double surfaceZ, const WireShape::WireBody &body, const RubberContact::BallSI &b)
       {
          ball = b;
-         part.Build(s, surfaceZ, chain, b, V3(0.0, 0.0, -9.81));
+         part.Build(s, surfaceZ, body, b, V3(0.0, 0.0, -9.81));
       }
    };
 }
