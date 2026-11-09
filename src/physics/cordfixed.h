@@ -457,8 +457,13 @@ public:
                }
             }
             // the grip
+            // ([Contact] grip_in_step: its limit is mu times the pull the cord presses the ball with at mid-step, Tm Gfree, from this Eval's own unknowns, as a contact's mu N)
+            if (gripInStep)
+               q.f = grip ? mu * Tm * q.om.Gfree : 0.0;
             q.xiT1 = q.xiB1 = 0.0;
             q.lossTw = 0.0;
+            double dfT = 0.0, dfB = 0.0;   // d fT / d f, d fB / d f: the grip's force's change with its limit (grip_in_step's slope)
+            V3 tG, bG, RnG;                 // (the axes and lever the grip acted on, for that slope)
             if (q.f > 0.0 && (q.om.Deff > 0.0 || q.o1.Deff > 0.0))
             {
                const V3 &tt = sp.t;
@@ -474,21 +479,32 @@ public:
                double fT = 0.0, fB = 0.0;
                Chord(q.kT, q.f, q.xiT, St, fT, q.xiT1, q.pT0, q.pT1);
                Chord(q.kB, q.f, q.xiB, Sb, fB, q.xiB1, q.pB0, q.pB1);
+               if (gripInStep && J)
+               {
+                  dfT = ChordDf(q.kT, q.f, q.xiT, St);
+                  dfB = ChordDf(q.kB, q.f, q.xiB, Sb);
+                  tG = tt;
+                  bG = bm;
+                  RnG = Rn;
+               }
                // the rubber's own loss on the twist spring: tan_delta, the shared law's shear damper (ContactCore: tan_delta sqrt(k mt), spring and damper within the limit), on the step's own slip, so its work is the loss booked; none while it slides
                q.lossTw = 0.0;
                if (twistLoss)
                {
                   const double mt = 1.0 / (1.0 / bb.m + bb.R * bb.R / bb.I());
-                  const auto Damp = [&](const double k, const double xi1, const double S, double &fc) {
+                  const auto Damp = [&](const double k, const double xi1, const double S, double &fc, double &dfc) {
                      if (k <= 0.0 || std::fabs(xi1) * k > q.f)
                         return;
-                     const double fD = std::min(std::max(fc + tanD * std::sqrt(k * mt) * S / h, -q.f), q.f) - fc;
+                     const double tr = fc + tanD * std::sqrt(k * mt) * S / h;
+                     const double fD = std::min(std::max(tr, -q.f), q.f) - fc;
+                     if (tr > q.f || tr < -q.f)   // (held at the limit: it moves with it)
+                        dfc = tr > q.f ? 1.0 : -1.0;
                      fc += fD;
                      q.lossTw += fD * S;
                   };
-                  Damp(q.kB, q.xiB1, Sb, fB);
+                  Damp(q.kB, q.xiB1, Sb, fB, dfB);
                   if (patchShear)
-                     Damp(q.kT, q.xiT1, St, fT);
+                     Damp(q.kT, q.xiT1, St, fT, dfT);
                }
                const V3 Fs = (tt * fT + bm * fB) * -1.0;
                F[i] = F[i] - tt * fT - sp.up * (upB * fB);
@@ -513,6 +529,23 @@ public:
                   for (int a = 0; a < 3; a++)
                      for (int c = 0; c < 3; c++)
                         J[6 * i + a][6 * k + c] += 0.5 * h * sp.k * ga[a] * gb[c];
+               }
+               // grip_in_step: the grip's force moves with its limit f = mu Tm Gfree, through the tension (dTm / d dc_k = 0.5 k G_k, the span's own term above; Gfree's turning held
+               // fixed as G's is): on the ball's force rows -(t dfT + up upB dfB) df and its spin rows Rn x -(t dfT + b dfB) df
+               if (gripInStep && (dfT != 0.0 || dfB != 0.0) && Tm > 0.0)
+               {
+                  const double upB = sp.up.Dot(bG);
+                  const V3 dFd = tG * dfT + sp.up * (upB * dfB), dMd = RnG.Cross(tG * dfT + bG * dfB);
+                  const double fr[6] = { dFd.x, dFd.y, dFd.z, dMd.x, dMd.y, dMd.z };
+                  const double cf = mu * q.om.Gfree * 0.5 * sp.k;
+                  for (int k = 0; k < nb; k++)
+                  {
+                     const Out &ok = st[(size_t)k * ns + j].om;
+                     const double gb[3] = { ok.G.x, ok.G.y, ok.G.z };
+                     for (int a = 0; a < 6; a++)
+                        for (int c = 0; c < 3; c++)
+                           J[6 * i + a][6 * k + c] += h * fr[a] * cf * gb[c];
+                  }
                }
             }
          }
@@ -599,7 +632,7 @@ public:
    }
    double KineticJ() const override { return pl.on ? 0.5 * Inertia(phi) * omega * omega : 0.0; }
    void ScaleSpeeds(double f) override { omega *= f; }
-   // the limit from the middle of the step
+   // the limit from the middle of the step ([Contact] grip_in_step 0 only: with 1 each Eval works it out itself and the group does not call this)
    double UpdateGrip(const double *, double h) override
    {
       if (!grip)
@@ -1843,6 +1876,20 @@ private:
          fc = (p1 - p0) / S;
       else
          fc = k * x0;
+   }
+   // d fc / d f of Chord at the same k, xi0, S (grip_in_step's slope): through the energy beyond the limit, f |xi1| - f lim / 2, and the start held at the limit when it was beyond it
+   static double ChordDf(const double k, const double f, const double xi0, const double S)
+   {
+      if (k <= 0.0 || f <= 0.0)
+         return 0.0;
+      const double lim = f / k;
+      const bool cut = std::fabs(xi0) > lim;
+      const double s0 = xi0 > 0.0 ? 1.0 : -1.0, x0 = cut ? s0 * lim : xi0, dx0 = cut ? s0 / k : 0.0, xi1 = x0 + S;
+      if (std::fabs(S) <= 1e-14)
+         return k * dx0;
+      const double dp0 = k * x0 * dx0;
+      const double dp1 = std::fabs(xi1) <= lim ? k * xi1 * dx0 : std::fabs(xi1) + f * (xi1 > 0.0 ? 1.0 : -1.0) * dx0 - lim;
+      return (dp1 - dp0) / S;
    }
    struct Scr
    {

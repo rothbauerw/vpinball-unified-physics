@@ -346,6 +346,11 @@ namespace GroupStep
       // (1 / fe) sum_t h tk_t [gdT_t . dq - dd (g . gdT_t)] tgE_t, 0 for one term) and in N's slope kv, kvE. The exact derivative of the residual with each term's
       // direction held fixed. The force is unchanged. true (default) = on; false = the mid gradient tg_t as the row (today's slope).
       bool termForceRows = true;
+      // gripInStep ([Contact] grip_in_step; runs/2026-11-08-lead/cord_grip_design.md): a part's grip limit (the cord's mu Tm Gfree) is worked out inside each Eval from that
+      // Eval's own mid tension and mid geometry, as a contact's mu N is, so the solve's residual is one fixed function of the unknowns; Newton's slope takes the sliding grip's
+      // change through the limit (mu Gfree dTm/du). true (default) = on; false = the limit refreshed between the solve's rounds from the last round (Part::UpdateGrip), which
+      // turns off the line search's backtrack, the cached-residual exit and the end checks in any round it moved.
+      bool gripInStep = true;
       // dampingIntegral ([Contact] damping_integral; runs/2026-11-08-lead/damping_integral_design.md): every depth-dependent damping in its integrated form, the law's own work
       // over the step at a steady rate: c = (W(d1) - W(d0)) / (d1 - d0), W(d) = integral of c(s) from 0 (0 for no touch), short moves by quadrature; slope d(c (d1 - d0))/d d1 = c(d1).
       // Kuwabara-Kono (W = gamma 2/3 sqrt(reff) Uc^1.5), the loss tangent's dashpot (W = 0.8 tanDelta sqrt(1.5 kH m) Uc^1.25) and Hunt-Crossley (with a bend: 1.5 alpha 0.4 kH Uc^2.5,
@@ -602,6 +607,7 @@ namespace GroupStep
    public:
       virtual ~Part() = default;
       bool guessAccel = false;   // [Contact] part_guess_accel (Settings::partGuessAccel, set by the group before BeginStep)
+      bool gripInStep = true;    // [Contact] grip_in_step (Settings::gripInStep, set by the group before BeginStep): its grip limit from each Eval's own unknowns; false = UpdateGrip between rounds
       mutable const std::vector<int> *nearNow = nullptr;   // [Contact] hinge_piece_sum: the probe of a surface it carries takes only these pieces (this attempt's list); null = all
       // what it is
       virtual int NumDof() const = 0;
@@ -3725,6 +3731,7 @@ namespace GroupStep
          for (int p = 0; p < np; p++)
          {
             part[p]->guessAccel = set.partGuessAccel;
+            part[p]->gripInStep = set.gripInStep;
             part[p]->WipeAttemptWork();   // (an attempt's own values start afresh: PartRecords)
             if (!part[p]->BeginStep(ball, nb, h, x, partOff[p]))
             {
@@ -4029,10 +4036,11 @@ namespace GroupStep
                   x[a] = trial[a];
             }
             scalePrev = scale;
-            // the parts' grip on the new move (held through the next round's Newton move)
+            // the parts' grip on the new move (held through the next round's Newton move); with grip_in_step each Eval works it out itself: nothing moves between rounds
             double gch = 0.0;
-            for (int p = 0; p < np; p++)
-               gch = std::max(gch, part[p]->UpdateGrip(x, h));
+            if (!set.gripInStep)
+               for (int p = 0; p < np; p++)
+                  gch = std::max(gch, part[p]->UpdateGrip(x, h));
             gripMoved = gch > set.tolV;
             rd.scale = scale;
             rd.grip = gch;
