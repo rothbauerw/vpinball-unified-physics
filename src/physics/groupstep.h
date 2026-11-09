@@ -358,6 +358,12 @@ namespace GroupStep
       // inverse: F(dE) = fe), not the mid depth's: no cusp where a contact arrives or leaves within a step; the twist is on while kw1 > 0 or a(fe) > 0, with no gate on dm.
       // Newton's slope takes their exact derivatives (through fe). true (default) = on; false = the committed forms (point values at dm, the KK chord/midpoint switch, a(dm)).
       bool dampingIntegral = true;
+      // rollingPatch ([Contact] rolling_patch; runs/2026-11-08-lead/rolling_patch_design.md): rolling resistance's patch is the patch of the step's mean elastic force fe,
+      // aE = A(dE) with F(dE) = fe (PatchOfForce, as the twist limit's under damping_integral), not the mid depth's a(dm): its pressure pa = N / (pi aE^2) and its gate
+      // (rolling acts while N > 0 and aE > 0, no switch on dm). Newton's slope (lever_roll_slope) takes the limit lim = muRr R N's full change: R (muRr + N dmuRr/dN) h dN/du
+      // + R N dmuRr/daE daE/dfe h dfe/du (muRr = 2.34 (pa / E) tanDelta between its floor rolling_resistance and its cap kRollingMuMax; at either, muRr's slope is 0).
+      // roll_model 0 takes the same patch (no slope there, as today). true (default) = on; false = the mid depth's a(dm), the limit's slope muRr R h dN/du with muRr held.
+      bool rollingPatch = true;
       // patchPath ([Contact] patch_path; runs/2026-11-08-lead/patch_state_design.md): every patch-sized coefficient of the step, the shear spring Kt = ktPerA a, its damper
       // ct = shearTan sqrt(Kt mt), the twist and rolling springs Ktw, Kr ~ a^3 and their dampers ~ sqrt(Ktw), sqrt(Kr), is its mean over the depth the step travels,
       // k_bar = (P(d1) - P(d0)) / (d1 - d0), P(d) = integral of k from 0 (0 for no touch; closed forms in u = Uc(d), dd = (1 + 1.5 kH sqrt(u) / kb) du; short moves by quadrature:
@@ -2780,9 +2786,10 @@ namespace GroupStep
             else
                cD = L.DampC(dm, fe);
             // [Contact] damping_integral: the patch of the step's mean elastic force fe (F(dE) = fe), aE, and its slope daE/dfe: the twist limit takes it (no cusp where a
-            // contact arrives or leaves within the step: fe and N are step means)
+            // contact arrives or leaves within the step: fe and N are step means); [Contact] rolling_patch: rolling resistance takes it too
+            const bool rpP = set.rollingPatch;
             double aE = 0.0, dadfE = 0.0;
-            if (di)
+            if (di || rpP)
                L.PatchOfForce(fe, aE, dadfE);
             const double fd = cD * dd / h;
             const double N = std::max(0.0, fe + fd);   // a contact pushes, it cannot pull (Hertz, no adhesion)
@@ -2897,6 +2904,8 @@ namespace GroupStep
             const double am = L.A(dm);
             double kTw = 0.0, sRo = 0.0, rhoR = 0.0, wlR = 0.0, kkTw = 0.0;
             double limN = 0.0;   // rolling at the limit (roll_model 1): d lim / dN = muRr R, the torque along mhR (leverRollSlope)
+            double limF = 0.0;   // rolling_patch: rolling at the limit, d lim / dfe through the patch aE (muRr between its floor and cap), on h dfe/du; limN then R (muRr + N dmuRr/dN)
+            const double aR = rpP ? aE : am;   // rolling resistance's patch: rolling_patch, the step's mean elastic force's aE; 0, the mid depth's a(dm)
             // twist (roll_model 1; twistSlope): sticking dMw/dd1 (twD1); at the limit dMw/d dm (twA) and dMw/dN (twN). twSt 0 none, 1 stick, 2 limit; twM, twLim the torque and
             // its limit (diagnostics)
             double twD1 = 0.0, twA = 0.0, twN = 0.0, twM = 0.0, twLim = 0.0;
@@ -2996,11 +3005,12 @@ namespace GroupStep
                   for (int j = 0; j < nq; j++)
                      qf[j] += Mw * nm.Dot(hm.c[j].W());
                }
-               if ((L.tanDelta > 0.0 || L.rollingMu > 0.0) && N > 0.0 && am > 0.0 && krS > 0.0)
+               if ((L.tanDelta > 0.0 || L.rollingMu > 0.0) && N > 0.0 && aR > 0.0 && krS > 0.0)   // (rolling_patch: no switch on dm, the patch aE of the step's fe)
                {
                   const V3 wt = wr - nm * wr.Dot(nm);
-                  const double pa = N / (kPi * am * am);
-                  const double muRr = std::max(std::min(2.34 * (pa / L.E) * L.tanDelta, RubberContact::kRollingMuMax), L.rollingMu);
+                  const double pa = N / (kPi * aR * aR);
+                  const double muP = 2.34 * (pa / L.E) * L.tanDelta;   // the law's own value, before its cap and floor
+                  const double muRr = std::max(std::min(muP, RubberContact::kRollingMuMax), L.rollingMu);
                   const double lim = muRr * A.R * N;
                   const double cr = pp ? L.shearTan * std::sqrt(krU * 1.4 * Ir) * pM.p075 : L.shearTan * std::sqrt(kr1 * 1.4 * Ir);   // (patch_path: the damper's mean, u^0.75)
                   const V3 thTr = r0.th + wt * h;
@@ -3022,6 +3032,12 @@ namespace GroupStep
                         for (int j = 0; j < 3; j++)
                            RmS.a[i][j] = lim / ml * sl * (Pt.a[i][j] - Q.a[i][j]);
                      limN = muRr * A.R;
+                     // rolling_patch: muRr = 2.34 tanDelta N / (pi aE^2 E) between floor and cap: dmuRr/dN = muRr / N, dmuRr/daE = -2 muRr / aE (0 at the cap or the floor)
+                     if (rpP && muP < RubberContact::kRollingMuMax && muP > L.rollingMu)
+                     {
+                        limN = 2.0 * muRr * A.R;
+                        limF = -2.0 * muRr * A.R * N / aR * dadfE;
+                     }
                      mhR = mh;
                   }
                   else
@@ -3059,11 +3075,11 @@ namespace GroupStep
                   qf[j] -= Mtw * nm.Dot(hm.c[j].W());
                e.twist = -Mtw * wn * h;
             }
-            if (set.rollModel != 1 && (L.tanDelta > 0.0 || L.rollingMu > 0.0) && N > 0.0 && am > 0.0)
+            if (set.rollModel != 1 && (L.tanDelta > 0.0 || L.rollingMu > 0.0) && N > 0.0 && aR > 0.0)   // (rolling_patch: the same patch aE; no slope of rho here, as with 0)
             {
                const V3 wt = wr - nm * wr.Dot(nm);
                const double wl = wt.Length();
-               const double pa = N / (kPi * am * am);
+               const double pa = N / (kPi * aR * aR);
                const double muRr = std::max(std::min(2.34 * (pa / L.E) * L.tanDelta, RubberContact::kRollingMuMax), L.rollingMu);
                const double rho = muRr * A.R * N;
                sRo = wl > 1e-9 ? rho * std::tanh(wl / set.rollSmooth) / wl : rho / set.rollSmooth;
@@ -3229,9 +3245,9 @@ namespace GroupStep
                      kv[u] += dirOn ? kd * gd[u] + gW[u] : kd * gd[u];
                }
                // damping_integral, a terms contact: the elastic force's own slope h dfe/du (each pressing term's chord slope projected on G; kv without the damping), the
-               // column the twist limit's patch aE takes. Not a terms contact: h dfe/du = h kc gm
+               // column the twist limit's patch aE takes (and rolling_patch's rolling limit). Not a terms contact: h dfe/du = h kc gm
                double kvE[4] = { 0.0, 0.0, 0.0, 0.0 };
-               if (di && terms)
+               if ((di || rpP) && terms)
                   for (int t = 0; t < hm.nt; t++)
                      if (tOn[t])
                      {
@@ -3441,17 +3457,23 @@ namespace GroupStep
                   }
                }
                // leverRollSlope: rolling at the limit, ball p's spin row h s_p mhR lim changes with N by s_p mhR muRr R (h dN/du_j); h dN/du is the normal row's
-               // own slope (kn gm; a terms contact: kv)
+               // own slope (kn gm; a terms contact: kv). rolling_patch: limN = R (muRr + N dmuRr/dN), and limF = d lim/dfe through the patch aE on h dfe/du (h kc gm; a terms
+               // contact: kvE)
                if (set.leverRollSlope && limN > 0.0)
                   for (int p = 0; p < nbod; p++)
                   {
-                     const V3 mr = mhR * (limN * sg[p]);
+                     const V3 mr = mhR * (limN * sg[p]), mf = mhR * (limF * sg[p]);
                      const int iw = 6 * bi[p] + 3;
                      for (int j = 0; j < na + nq; j++)
                         if (ix[j] >= 0)
                         {
                            const double c = terms ? kv[j] : kn * gm[j];
                            J[iw][ix[j]] += c * mr.x; J[iw + 1][ix[j]] += c * mr.y; J[iw + 2][ix[j]] += c * mr.z;
+                           if (limF != 0.0)
+                           {
+                              const double cF = terms ? kvE[j] : h * kc * gm[j];
+                              J[iw][ix[j]] += cF * mf.x; J[iw + 1][ix[j]] += cF * mf.y; J[iw + 2][ix[j]] += cF * mf.z;
+                           }
                         }
                   }
             }
