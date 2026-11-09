@@ -328,6 +328,12 @@ namespace GroupStep
       // balls' force and spin rows. The rolling limit lim = muRr R N (roll_model 1, rolling) changes with N: muRr R (h dN/du) along the torque's direction, on the spin rows.
       // The force is unchanged. true (default) = on; false = both held fixed in the slope.
       bool leverRollSlope = true;
+      // twistSlope ([Contact] twist_slope; runs/2026-11-08-lead/twist_slope_design.md): Newton's slope takes the twist torque Mw's change with the depth (roll_model 1).
+      // Sticking, Mw = kw1 tw0' + (kw1 h / 2 + cw) wn: dMw/dd1 = kw1' (G tw0 + h wn / 2) + cw' wn, kw1' = 3 kw1 a'(d1) / a(d1), cw' = cw kw1' / (2 kw1), G = 0 while the patch
+      // grows (it holds kw0 tw0), 1 otherwise; d d1/du = gm. At the limit, Mw = s 3 pi/16 mu a(dm) N: h dMw/du = s 3 pi/16 mu (a'(dm) N h gm / 2 + a(dm) h dN/du), h dN/du the
+      // normal row's own slope (kn gm; a terms contact: kv). On the balls' spin rows (h s_p n) and a carried part's rows (-(n . W)). The torque is unchanged.
+      // true (default) = on; false = only dMw/dwn (today's slope).
+      bool twistSlope = true;
       // partGuessAccel ([Contact] part_guess_accel): a part's first guess of its coordinate's move carries its last step's acceleration, (rate + a h / 2) h, a the force of the
       // move taken over its mass, as a ball's guess does. Newton's start only: the law and the solved step are unchanged. false (default) = rate h.
       bool partGuessAccel = false;
@@ -729,6 +735,15 @@ namespace GroupStep
          return hz + lw;
       }
       double A(double d) const { return d > 0.0 ? std::sqrt(reff * Uc(d)) : 0.0; }   // contact patch radius
+      double ASlope(double d) const   // da/dd = 1/2 sqrt(reff / Uc) Uc'(d), Uc' = kb / (kc + kb) with the bend in series (kc = 1.5 kH sqrt(Uc)), else 1
+      {
+         if (d <= 0.0)
+            return 0.0;
+         const double u = Uc(d);
+         if (u <= 0.0)
+            return 0.0;
+         return kb > 0.0 ? 0.5 * std::sqrt(reff / u) * kb / (1.5 * kH * std::sqrt(u) + kb) : 0.5 * std::sqrt(reff / u);
+      }
       double Kt(double d) const { return ktPerA * A(d); }
       // the rolling and twist springs of the patch (roll_model 1): tilting (4/3) E* a^3 and torsion (16/3) G* a^3 of a Hertz contact, G* = E* (1 - nu) / 2 with nu 0.3
       // (E* = 3 kH / (4 sqrt(reff)): the normal law's own contact modulus, a pair's compliances added)
@@ -2614,6 +2629,10 @@ namespace GroupStep
             const double am = L.A(dm);
             double kTw = 0.0, sRo = 0.0, rhoR = 0.0, wlR = 0.0, kkTw = 0.0;
             double limN = 0.0;   // rolling at the limit (roll_model 1): d lim / dN = muRr R, the torque along mhR (leverRollSlope)
+            // twist (roll_model 1; twistSlope): sticking dMw/dd1 (twD1); at the limit dMw/d dm (twA) and dMw/dN (twN). twSt 0 none, 1 stick, 2 limit; twM, twLim the torque and
+            // its limit (diagnostics)
+            double twD1 = 0.0, twA = 0.0, twN = 0.0, twM = 0.0, twLim = 0.0;
+            int twSt = 0;
             V3 wtR, mhR;
             M3 RmS;
             bool rollS = false;
@@ -2653,9 +2672,27 @@ namespace GroupStep
                      tw1 = (Mw - r0.tw * (0.5 * kw1 - cw / h)) / cs;
                      e.twist = Mw * (twTr - tw1) + cw * (tw1 - r0.tw) * (tw1 - r0.tw) / h;
                      kkTw = 0.0;
+                     twSt = 2;
+                     if (set.twistSlope)   // Mw = s 3 pi/16 mu a(dm) N: its change with dm and with N
+                     {
+                        const double cl = (Mw > 0.0 ? 1.0 : -1.0) * 3.0 * kPi / 16.0 * L.mu;
+                        twA = cl * L.ASlope(dm) * N;
+                        twN = cl * am;
+                     }
                   }
                   else
+                  {
                      e.twist = cw * wn * wn * h;
+                     twSt = 1;
+                     if (set.twistSlope)   // Mw = kw1 tw0' + (kw1 h / 2 + cw) wn: kw1 = Ktw(d1) ~ a^3, cw ~ sqrt(kw1); a growing patch holds kw1 tw0' = kw0 tw0
+                     {
+                        const double a1 = L.A(d1);
+                        const double kw1p = a1 > 0.0 ? 3.0 * kw1 * L.ASlope(d1) / a1 : 0.0, cwp = 0.5 * cw * kw1p / kw1;
+                        twD1 = kw1p * ((kw1 > kw0 ? 0.0 : r0.tw) + 0.5 * h * wn) + cwp * wn;
+                     }
+                  }
+                  twM = Mw;
+                  twLim = limW;
                   e.ra1.tw = tw1;
                   kTw = kkTw > 0.0 ? 1.0 : 0.0;   // (the Jacobian's gate)
                   M[it.a] = M[it.a] - nm * Mw;
@@ -2842,16 +2879,16 @@ namespace GroupStep
                if (jacWinDump)   // VPX_GROUP_JAC_WINDOW: this contact's state at this Eval (read only)
                {
                   const int sp = !pr && shape[it.s] != nullptr ? shape[it.s]->part : -1;
-                  char with[40], ln[700];
+                  char with[40], ln[780];
                   if (pr)
                      snprintf(with, sizeof with, "ball %d", it.b);
                   else if (sp >= 0)
                      snprintf(with, sizeof with, "part %d (shape %d)", sp, it.s);
                   else
                      snprintf(with, sizeof with, "surface (shape %d)", it.s);
-                  snprintf(ln, sizeof ln, "  contact k %d ball %d with %s: d0 %.5g dm %.5g d1 %.5g um n (%.4f %.4f %.4f) N %.5g fe %.5g fd %.5g cD %.4g kc %.5g kn %.5g | %s ut (%.3g %.3g %.3g) m/s xi0 (%.3g %.3g %.3g) xi1 (%.3g %.3g %.3g) um Ft (%.4g %.4g %.4g) muN %.4g k1 %.4g ct %.4g terms %d\n",
+                  snprintf(ln, sizeof ln, "  contact k %d ball %d with %s: d0 %.5g dm %.5g d1 %.5g um n (%.4f %.4f %.4f) N %.5g fe %.5g fd %.5g cD %.4g kc %.5g kn %.5g | %s ut (%.3g %.3g %.3g) m/s xi0 (%.3g %.3g %.3g) xi1 (%.3g %.3g %.3g) um Ft (%.4g %.4g %.4g) muN %.4g k1 %.4g ct %.4g terms %d tw %c Mw %.4g limW %.4g\n",
                            k, it.a, with, d0 * 1e6, dm * 1e6, d1 * 1e6, nm.x, nm.y, nm.z, N, fe, fd, cD, kc, kn, slipping ? "slide" : "stick", ut.x, ut.y, ut.z, xi0.x * 1e6, xi0.y * 1e6, xi0.z * 1e6,
-                           xi1.x * 1e6, xi1.y * 1e6, xi1.z * 1e6, Ft.x, Ft.y, Ft.z, limS, k1, ct, terms ? hm.nt : 0);
+                           xi1.x * 1e6, xi1.y * 1e6, xi1.z * 1e6, Ft.x, Ft.y, Ft.z, limS, k1, ct, terms ? hm.nt : 0, "-sl"[twSt], twM, twLim);
                   jacWinCon += ln;
                   if (terms)
                      for (int t = 0; t < hm.nt; t++)
@@ -3026,6 +3063,27 @@ namespace GroupStep
                      }
                   }
                }
+               // twistSlope: the twist torque's change with the depth, h dMw/du_j = h gm_j (twD1 + twA / 2) + twN h dN/du_j (d d1/du = gm, d dm/du = gm / 2; h dN/du = kn gm,
+               // a terms contact: kv). Ball p's spin row holds h s_p n Mw, a carried part's row -h (n . W_i) Mw
+               if (set.twistSlope && (twD1 != 0.0 || twA != 0.0 || twN != 0.0))
+                  for (int j = 0; j < na + nq; j++)
+                  {
+                     if (ix[j] < 0)
+                        continue;
+                     const double c = h * gm[j] * (twD1 + 0.5 * twA) + twN * (terms ? kv[j] : kn * gm[j]);
+                     for (int p = 0; p < nbod; p++)
+                     {
+                        const int iw = 6 * bi[p] + 3;
+                        const double cs = c * sg[p];
+                        J[iw][ix[j]] += cs * nm.x; J[iw + 1][ix[j]] += cs * nm.y; J[iw + 2][ix[j]] += cs * nm.z;
+                     }
+                     for (int i = 0; i < nq; i++)
+                     {
+                        const int qi = cUnk[qc0 + hm.c[i].coord];
+                        if (qi >= 0)
+                           J[qi][ix[j]] += -c * nm.Dot(hm.c[i].W());
+                     }
+                  }
                if (sRo > 0.0 || rollS)
                {
                   // the rolling torque -rho tanh(|wt| / s) wt^ : its derivative along wt^ is rho sech^2 / s, across it rho tanh / |wt| (sRo); roll_model 1: the spring's (RmS)
