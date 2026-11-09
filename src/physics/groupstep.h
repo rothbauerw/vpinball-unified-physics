@@ -524,7 +524,7 @@ namespace GroupStep
          t += dt;
          return t >= kCycleS * (1.0 - 1e-9) && Still(0.0, speedMS);
       }
-      // diagnostics (VPX_GROUP_STATS): per part kind (0 jet bumper, 1 gate / spinner / wire switch / Inder blade, 2 disc, 3 flipper, 4 sling plate) the steps alone taken, and how often one ended asleep after being awake
+      // diagnostics (VPX_GROUP_STATS): per part kind (0 jet bumper, 1 gate / spinner / wire switch, 2 disc, 3 flipper, 4 sling plate) the steps alone taken, and how often one ended asleep after being awake
       static long *Counts()
       {
          static long c[10] = {};

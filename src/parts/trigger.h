@@ -155,8 +155,8 @@ private:
    float m_vertexBuffer_animHeightOffset = -FLT_MAX;
    bool m_doAnimation = false;
    bool m_moveDown = false;
-   // a converted switch (WireA-D, Inder; set by PhysicSetup, which runs before RenderSetup): drawn on the physics' pose (wireshape.h PoseDrawn), turned about its hinge (axis point, VPU; axis frame)
-   std::vector<float> m_partDrawn;   // WireA-D: the drawn rest vertices, Vertex3D_NoTex2 layout (empty: Inder draws GenerateMesh, which its blade is built from)
+   // a converted switch (WireA-D; set by PhysicSetup, which runs before RenderSetup): drawn on the physics' pose (wireshape.h PoseDrawn), turned about its hinge (axis point, VPU; axis frame)
+   std::vector<float> m_partDrawn;   // the drawn rest vertices, Vertex3D_NoTex2 layout
    bool m_partDraw = false;
    double m_partDrawWorst = 0.;      // the drawn rest vertices' worst distance from the physics shape, VPU
    Vertex3Ds m_hingeA, m_hingeE, m_hingeN, m_hingeZ;

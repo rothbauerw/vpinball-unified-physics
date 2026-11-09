@@ -12,15 +12,13 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-In flight: nothing running. grip_in_step committed (1cec677ab). energy_decay deleted (user, 11-09; snapshot backups/2026-11-09-before-delete-energy-decay). Uncommitted: clamp-trace twist fields (groupstep.h, diagnostic). CLAUDE.md, hooks and memory are outside git.
-Next decision: trace Gorgar's ball-only halvings (a ball touching down on the playfield mid-step, 3897 ms; balls against Wall6 at the Drain kicker).
+In flight: nothing running. stick_zone_trial committed (49155d9e2). CLAUDE.md, hooks and memory are outside git.
+Next decision: the user picks the next item (proposed: 8.1, the off-limit hits' direction errors). Closed 11-09: no step accepted after a cut (100,361 steps, max residual 4.8e-9 m/s; runs/2026-11-09-end-residual).
 N1. Wire switch: switch bench now 0 failed attempts (11-09 commits c54f837ef, eef728db8, 08e00900d, 07b40b3c9). Cost: Gorgar's not a concern (user, 11-09); the switches' own cost vs the 30 us/ms limit still open, not yet measured per ms.
-N12. Gorgar load: cord-grip halvings fixed (1cec677ab); 3-4 ball-only halvings left (playfield touch-down mid-step; Wall6 at the Drain kicker); ~60 depth warnings < 20 um in the bottom pile and at the Drain kicker (stock kicker).
+N12. Gorgar load: 0 halvings (cord grip 1cec677ab, rolling patch 87ec36642, stick-zone trial 49155d9e2: Drain-kicker 2-cycle gone, rounds per step -10 %); ~60 depth warnings < 20 um in the bottom pile and at the Drain kicker (stock kicker).
 N2. Rebuild wire switches A-E as the real parts from PartData S7 (sizes, mounting, lever angle agreed 11-09); E is a new trigger shape (editor list, drawn mesh, contact model). Wire 1.0 mm (S1).
 N3. Wire switches: option for a playfield hole under each wire.
-N4. Inder blade: hinge sizes and skin are estimates; 10-17 us per step; crawls from rest. Derive sizes; user checks before build.
 N5. One reach rule from physics (speed plus force) for grouping and step length. Grouping: Gate001's 81 mm swing as one-cycle travel joins two lanes. Step length: speed only, no force. Check all parts; ball pairs of unequal mass and resting-ball wake (read only).
-N6. Bounce too lively on long steps (bench: rebound 0.83 vs law 0.51). 11-09: the deleted energy_decay fixed 7 wall hits on the 750 bench (one 7.2 -> 1.0 deg): long-step wall ringing is real; needs a physical fix. Includes steel impacts (VPX_OMEGAH_SCALE).
 N7. Stress v2 bench: ball travel energy +2 % at 57 ms; spin not counted. Check total energy in the saved run (no new run).
 N8. Test driver must refuse a ball placed inside any object, unless the file declares the overlap (rule 10b: then judged on recovery, no energy gained).
 N9. Branch pushed: every commit is on the fork. Engine work (part_guess_accel, clamp trace) uncommitted.
@@ -69,7 +67,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 1. Constant-speed AC motor option.
 
 ## 8. Testing
-1. Accuracy bench exists (750 hits vs 1 us); 36-39 hits always off the 5 % limit: fix them or set the limit (user).
+1. Accuracy bench (750 hits vs 1 us): 32 off the limit, mostly direction errors (2-7 deg) at normal step lengths: look at the contact's sideways side (friction, shear). Fix, or set the limit (user).
 5. MCP server (later).
 9. 750 bench: 4 energy lines (Hgo1_2, Hgo1_29 87.1 mJ; Hgo2_55 24.9; Hgo2_66 53.4) = ball 2.3-3.8 mm in Rubber4 at first sight; likely replay starting mid-hit (inferred). Confirm, then start earlier or declare (rule 10b).
 8. Build-compare script compiles /fp:precise by default, so a reported difference is logic, not rounding (ModelStandards trap: a byte difference is not a logic difference).
@@ -77,7 +75,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 ## 9. Still stock (ask before converting)
 1. Stand-up and drop targets.
 2. Kickers.
-3. Switches and triggers: wire switch work in progress (N1-N4).
+3. Switches and triggers: wire switch work in progress (N1-N3). Inder, Star, Button and None triggers stay stock (Inder blade model deleted 11-09: no part data).
 4. Plunger: other tables, auto plunger, mechanical input.
 5. Ramps: wire-ramp types, rebound, cost.
 6. Playfield material values unverified: compare with the user's video of a ball rolling on a playfield.

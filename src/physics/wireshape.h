@@ -32,7 +32,7 @@ struct Capsule
    double r = 0.; // tube radius
 };
 
-enum class Shape { WireA, WireB, WireC, WireD, Inder };
+enum class Shape { WireA, WireB, WireC, WireD };
 
 constexpr double kMmPerVpu = 25.4 * 1.0625 / 50.; // same as VPUTOMM
 constexpr double kStdSpanMm = 25.4;               // span at Scale X = 1 (the pictured wire: 1 in)

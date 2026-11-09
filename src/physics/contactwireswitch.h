@@ -23,11 +23,5 @@ namespace WireSwitchModel
          ball = b;
          part.Build(s, surfaceZ, chain, b, V3(0.0, 0.0, -9.81));
       }
-      // a blade (Inder): its posed mesh in metres, world frame (WireSwitchGroup::PoseBlade)
-      void Build(const Settings &s, const double surfaceZ, const WireSwitchGroup::Blade &bl, const RubberContact::BallSI &b)
-      {
-         ball = b;
-         part.Build(s, surfaceZ, bl, b, V3(0.0, 0.0, -9.81));
-      }
    };
 }
