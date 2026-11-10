@@ -46,6 +46,7 @@ namespace PhysicsIni
       float hitSpeedMin = 0.5f;   // [Features] hit_speed_min: impacts slower than this (ball velocity units, 18.53 = 1 m/s) do not fire the playfield Hit event
       bool magnets = true;        // electromagnets ([Magnet:<name>] sections); off = none
       bool turntables = true;     // turntables ([Turntable:<name>] sections); off = none
+      bool playfieldCuts = true;  // playfield_cuts: holes cut in the playfield ([PlayfieldCut:<name>] sections, playfieldcut.h; the slot under a wire switch); off = every cut ignored, the playfield solid (on while tested, rule 6)
       bool hitSpeed = true;       // PROTOTYPE: Ball.HitSpeed (normal speed before an impact) and the table's Hit event for the playfield; off = neither
    };
 
@@ -84,7 +85,7 @@ namespace PhysicsIni
    inline void WarnUnknownSection(const std::string &lowerName)
    {
       static const char *const plain[] = { "features", "contact", "flippers", "rubbers", "slings", "playfield", "surfaces", "gates", "spinners", "bumpers" };
-      static const char *const kinds[] = { "flipper:", "rubber:", "sling:", "wall:", "primitive:", "magnet:", "turntable:", "gate:", "spinner:", "ramp:", "bumper:" };
+      static const char *const kinds[] = { "flipper:", "rubber:", "sling:", "wall:", "primitive:", "magnet:", "turntable:", "playfieldcut:", "gate:", "spinner:", "ramp:", "bumper:" };
       for (const char *p : plain)
          if (lowerName == p)
             return;
@@ -158,6 +159,8 @@ namespace PhysicsIni
             f.magnets = on;
          else if (key == "turntables")
             f.turntables = on;
+         else if (key == "playfield_cuts")
+            f.playfieldCuts = on;
          else if (key == "hit_speed")
             f.hitSpeed = on;
          else if (key == "hit_speed_min")
@@ -176,7 +179,7 @@ namespace PhysicsIni
       if (!ContactSystem::Unified())
       {
          f.flippers = f.flipperRubber = f.rubbers = f.playfieldContact = f.surfaceRubbers = f.hardSurfaces = f.proximityEngage = f.hinges = f.triggers = false;
-         f.bands = f.slings = f.contact = f.magnets = f.turntables = f.hitSpeed = false;
+         f.bands = f.slings = f.contact = f.magnets = f.turntables = f.playfieldCuts = f.hitSpeed = false;
          return f;
       }
       if (!file.empty())

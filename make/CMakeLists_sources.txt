@@ -217,6 +217,8 @@ set(VPX_SOURCES
    src/physics/magnetcore.h
    src/physics/magnetballs.cpp
    src/physics/magnetballs.h
+   src/physics/playfieldcut.cpp
+   src/physics/playfieldcut.h
    src/physics/turntable.cpp
    src/physics/turntable.h
    src/physics/contactsystem.cpp

@@ -28,6 +28,7 @@ void ContactTraceBall(const char *stage, const HitBall *pb, bool items, int isla
 #include "physics/physicsini.h"
 #include "physics/magnet.h"
 #include "physics/turntable.h"
+#include "physics/playfieldcut.h"
 #include "physics/testdriver.h"
 #include "parts/ball.h"
 #include "parts/flipper.h"
@@ -374,6 +375,7 @@ void PhysicsEngine::AddCabinetBoundingHitShapes(PinTable *const table)
    }
    m_hitPlayfield.m_surfaceHost = m_playfieldHost;
    Turntables::Setup(this, table, m_vmover, m_ownedHosts);   // discs set into the playfield (the holes are read by the playfield host)
+   PlayfieldCuts::Setup(this, table);                        // holes cut in the playfield: exact rims read by the playfield host's probe (after the playfield host, whose height they read)
    {
       const std::filesystem::path ini = HitRubber::IniPathFor(table->m_filename);
       const PhysicsIni::Features feat = PhysicsIni::Active(ini);

@@ -13,6 +13,7 @@
 #include "physics/hitrubber.h"
 #include "physics/cordband.h"
 #include "physics/turntable.h"
+#include "physics/playfieldcut.h"
 #include "physics/contactsystem.h"
 #include "physics/hitball.h"
 #include "physics/magnet.h"
@@ -1003,6 +1004,8 @@ RubberContact::TubeProbe HitRubber::Probe(const RubberContact::BallSI &bs, const
          const RubberContact::CarvedHole *holes = nullptr;
          int nHoles = 0;
          Turntables::Holes(holes, nHoles);   // the playfield has a round hole under every turntable disc
+         if (PlayfieldCuts::Any(this))   // holes cut in the playfield (playfieldcut.h): the faces inside a cut left out, its exact rim's contacts added. The cuts within the face list's reach are tested
+            return PlayfieldCuts::Probe(this, bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, it.candR >= 0.0 ? it.candR : 1e30, holes, nHoles, false, 0.0);
          return RubberContact::ProbeTriangles(bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, holes, nHoles);
       }
       return RubberContact::ProbeTriangles(bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c);   // (no carved hole: a ball inside a non-legacy kicker's circle is handed to the stock contact instead, see InPlayfieldHole; a carved hole let balls fall through a plane playfield)
@@ -1012,6 +1015,13 @@ RubberContact::TubeProbe HitRubber::Probe(const RubberContact::BallSI &bs, const
 
 RubberContact::TubeProbe HitRubber::ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const
 {
+   if (m_surface != nullptr && m_surfaceKind == "playfield" && PlayfieldCuts::Any(this))   // (as Probe, with the patch sum of the faces' folds or of the cut's rim contacts)
+   {
+      const RubberContact::CarvedHole *holes = nullptr;
+      int nHoles = 0;
+      Turntables::Holes(holes, nHoles);
+      return PlayfieldCuts::Probe(this, bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, it.candR >= 0.0 ? it.candR : 1e30, holes, nHoles, true, it.gs.zero);
+   }
    RubberContact::TubeProbe pr = Probe(bs, it, c);
    if (m_surface != nullptr)
    {
@@ -1028,6 +1038,8 @@ RubberContact::TubeProbe HitRubber::ProbePatch(const RubberContact::BallSI &bs, 
 
 double HitRubber::ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, const int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, const double a, const double hMax, const double touchM, const double arriveM) const
 {
+   if (m_surface != nullptr && m_surfaceKind == "playfield" && PlayfieldCuts::Any(this))   // (as Probe: the faces not inside a cut, and the cut's rim contacts other than the probe's nearest)
+      return PlayfieldCuts::ArrivalS(this, bs, m_surface->tris, it.Faces(c), nearestSeg, c, v, a, hMax, touchM, arriveM, it.candR >= 0.0 ? it.candR : 1e30);
    if (m_surface != nullptr)
       return RubberContact::ArrivalTriangles(bs, m_surface->tris, it.Faces(c), nearestSeg, c, v, a, hMax, touchM, arriveM);
    return RubberContact::ArrivalTube(bs, m_ptsSI.data(), (int)m_ptsSI.size(), m_radiusSI, m_tubePre, nearestSeg, c, v, a, hMax, touchM, arriveM);
