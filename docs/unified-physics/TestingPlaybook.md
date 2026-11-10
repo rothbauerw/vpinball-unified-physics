@@ -27,8 +27,9 @@ No dates, no "learned", no superseded text. What a test is for, its cap and hand
   A changed header: list every .cpp that includes it, then compare the compiled count with `grep -l` of the includers. A missed includer gives a mixed exe with no error; the lead checks the count before any result counts.
   After main is built, `python bench_snapshot.py` refreshes `src\`, `obj_*\` and `main_exe\` (check no session is building from them).
 - **Accuracy bench**: `runs\2026-11-01-roll-smooth` (report.md run 1). 750 real hits (stress p1-p3, Gorgar), each replayed alone: `run_replay.py <tag> <exe> <mode>`; the reference is the same with `-env VPX_GROUP_HFIX=1` (1 us steps);
-  `cmp_replay.py <ref tag> <tag> q20` judges each hit at the reference's first quiet ms after 20 ms (not mid-bounce; the same instant for every build): exit speed 5 %, direction 2 deg
-  (not judged under 0.05 m/s). Reference: SHREF (1 us).
+  runs with `-env VPX_TEST_IMPULSES=1`; `judge_hit.py <ref> <ref 0.5 us> <build> <build 0.3> <build 0.2>` judges each hit by the impulse its surface gave
+  (bounce, slide, spin; runs\2026-11-10-hit-judge\design.md): noise floor from the 0.5 us twin, step error or fault by convergence, and pass = the exit
+  direction error moves the ball under 1 mm by its next contact. `check_imp.py <run out folder>` checks the log adds up to each ball's momentum change.
 - **Not covered by the bench** (use a VPX run): cost against the frame limit, drawing, real input, table restart and teardown, magnets on, scripts that act on the game, script and frame timers,
   drop targets (they fall per frame), ROM tables. A pile with address-order splits (Gorgar pile) does not repeat on the bench, nor in VPX.
 
@@ -76,6 +77,7 @@ VPX_PHYSICS_INI=<file>     use this physics ini instead of <table>.physics.ini /
 VPX_UNIFIED=0|1            run.ps1's own variable (default 1), written into the run's ini; the engine does not read it.
 VPX_PLAY_UNFOCUSED=1       the game keeps running without window focus; also turns off the anti-hung time skip.
 VPX_TEST_INPUT=<file>      test driver input (section 5).            VPX_TEST_OUT=<folder>   where the driver writes.
+VPX_TEST_IMPULSES=1        the driver also writes impulses.csv: per ball and source (contact surface, gravity, stock object, driver), cumulative J and L in SI.
 VPX_BENCH=1                the real bench: no frames, no input, virtual 7 ms frames, physics as fast as the CPU goes, one run per process; acts as VPX_PLAY_UNFOCUSED.
 VPX_BENCH_PREROLL=<ms>     bench physics time before the driver's time 0 (default 3000).     VPX_BENCH_MS=<ms>   stop at this time on a run with no input file.
 ```

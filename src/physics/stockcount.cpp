@@ -219,6 +219,17 @@ namespace StockCount
       }
       if (acted)
          (s_contact ? r->contactActs : r->collideActs)++;
+      if (acted)   // test tooling (VPX_TEST_IMPULSES=1): the change this stock call made to the ball's momentum and angular momentum, by its object's name (no-op otherwise)
+      {
+         const float v0[3] = { s_vel.x, s_vel.y, s_vel.z }, L0[3] = { s_L.x, s_L.y, s_L.z };
+         TestDriver::AddBallChange(s_ball, r->name.empty() ? std::string("stock") : r->name, v0, L0);
+         if (s_other != nullptr)
+         {
+            const float ov0[3] = { s_oVel.x, s_oVel.y, s_oVel.z }, oL0[3] = { s_oL.x, s_oL.y, s_oL.z };
+            const char *const n = TestDriver::BallName(s_ball);
+            TestDriver::AddBallChange(s_other, std::string("ball") + (n != nullptr ? n : "?"), ov0, oL0);
+         }
+      }
       if (r->firstBall.empty() && r->Used())
       {
          r->firstT = ReportTime();

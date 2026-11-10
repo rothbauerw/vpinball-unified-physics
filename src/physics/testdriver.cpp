@@ -2,9 +2,11 @@
 
 #include "core/stdafx.h"
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include "physics/testdriver.h"
 #include "parts/ball.h"
@@ -58,6 +60,8 @@ namespace TestDriver
          float x, y, z, vx, vy, vz, radius, mass;   // start state (VPX units; z = centre)
          float wx = 0.f, wy = 0.f, wz = 0.f;        // start spin, rad/s
          bool respawnDue = false;
+         bool replaced = false;      // VPX_TEST_IMPULSES: removed to be made again (respawn, a "ball" line on a live name): the new ball's change is logged as "driver"
+         float vel0[3] = {}, L0[3] = {};
       };
 
       struct Count
@@ -101,6 +105,9 @@ namespace TestDriver
          Count fast, below, outside, gone;
          vector<string> errors;
          FILE *csv = nullptr;
+         // VPX_TEST_IMPULSES=1 (test tooling): impulses.csv, the impulse each source gave each ball (AddImpulse), cumulative from the start, SI: J (N s), L (N m s, about the ball's centre)
+         FILE *imp = nullptr;
+         std::map<std::pair<string, string>, std::array<double, 6>> impSum;   // (ball, source) -> Jx, Jy, Jz, Lx, Ly, Lz
          // timing (TestMatrixDesign section 3 points 9 and 10)
          bool detail = true;
          vector<CycleTime> cycleTimes;
@@ -229,6 +236,18 @@ namespace TestDriver
             fputs("t_ms,ball,x,y,z,vx,vy,vz,wx,wy,wz\n", s.csv);   // VPX units: position U, velocity U per 10 ms, angular momentum as stored
          else
             Warn("cannot write " + OutPath("balls.csv"));
+         if (s.imp != nullptr)
+            fclose(s.imp);
+         s.imp = nullptr;
+         s.impSum.clear();
+         if (const char *const e = getenv("VPX_TEST_IMPULSES"); e != nullptr && atoi(e) != 0)
+         {
+            s.imp = fopen(OutPath("impulses.csv").c_str(), "w");
+            if (s.imp != nullptr)
+               fputs("t_ms,ball,surface,Jx,Jy,Jz,Lx,Ly,Lz\n", s.imp);   // SI, cumulative from the start: N s, N m s
+            else
+               Warn("cannot write " + OutPath("impulses.csv"));
+         }
          PLOGI << "Test driver: " << s.actions.size() << " actions from " << s.input << ", output " << s.outDir << ", time 0 = engine time " << tMs << " ms (start-up done)";
       }
 
@@ -268,6 +287,25 @@ namespace TestDriver
          b.ball = nullptr;
       }
 
+      // VPX_TEST_IMPULSES: a ball removed to be made again at once (respawn, a "ball" line on a live name): its state before (KeepForDriver, before Remove) and the new ball's
+      // change as "driver" (LogDriver, after Create). Kept out of line: Create and Remove stay as they were, so their float code (the start spin) is unchanged
+      __declspec(noinline) void KeepForDriver(TBall &b)
+      {
+         b.replaced = false;
+         if (s.imp == nullptr || !Alive(b.ball))
+            return;
+         const HitBall &hb = b.ball->m_hitBall;
+         b.vel0[0] = hb.m_d.m_vel.x; b.vel0[1] = hb.m_d.m_vel.y; b.vel0[2] = hb.m_d.m_vel.z;
+         b.L0[0] = hb.m_angularmomentum.x; b.L0[1] = hb.m_angularmomentum.y; b.L0[2] = hb.m_angularmomentum.z;
+         b.replaced = true;
+      }
+      __declspec(noinline) void LogDriver(TBall &b)
+      {
+         if (b.replaced && b.ball != nullptr)
+            AddBallChange(&b.ball->m_hitBall, "driver", b.vel0, b.L0);
+         b.replaced = false;
+      }
+
       bool Num(const Action &a, size_t i, float &v)
       {
          if (i >= a.args.size())
@@ -302,7 +340,10 @@ namespace TestDriver
                b->name = a.args[0];
             }
             else
+            {
+               KeepForDriver(*b);
                Remove(*b);
+            }
             b->x = v[0];
             b->y = v[1];
             b->radius = v[6];
@@ -315,6 +356,7 @@ namespace TestDriver
             b->wy = v[9];
             b->wz = v[10];
             Create(*b);
+            LogDriver(*b);
          }
          else if (a.verb == "roll")
          {
@@ -322,8 +364,10 @@ namespace TestDriver
             if (r != nullptr && Alive(r->ball))
             {
                HitBall &hb = r->ball->m_hitBall;
+               const float vel0[3] = { hb.m_d.m_vel.x, hb.m_d.m_vel.y, hb.m_d.m_vel.z }, L0[3] = { hb.m_angularmomentum.x, hb.m_angularmomentum.y, hb.m_angularmomentum.z };
                const float L = hb.Inertia() * (float)DEFAULT_STEPTIME_S / (hb.m_d.m_radius * 0.53975e-3f) / (float)kMps;   // (spin = z x v / R; angular momentum = spin x the engine's inertia x its time unit; v in U per 10 ms over kMps)
                hb.m_angularmomentum = Vertex3Ds(-hb.m_d.m_vel.y * L, hb.m_d.m_vel.x * L, 0.f);
+               AddBallChange(&hb, "driver", vel0, L0);
             }
             else
                Warn(at + "no such ball");
@@ -638,6 +682,11 @@ namespace TestDriver
             fclose(s.csv);
             s.csv = nullptr;
          }
+         if (s.imp != nullptr)
+         {
+            fclose(s.imp);
+            s.imp = nullptr;
+         }
          std::ostringstream cost;
          const bool costPass = Cost(cost);   // (sets the tick rate the csv uses)
          WriteTimes();
@@ -696,8 +745,10 @@ namespace TestDriver
       for (TBall &b : s.balls)
          if (b.respawnDue)
          {
+            KeepForDriver(b);
             Remove(b);
             Create(b);
+            LogDriver(b);
             s.respawns++;
          }
       while (s.next < s.actions.size() && s.actions[s.next].t <= t && !s.ended)
@@ -742,6 +793,48 @@ namespace TestDriver
          if (s.respawnOn && d.m_pos.y > s.respawnY)
             b.respawnDue = true;   // taken at the start of the next cycle, so this cycle's checks and record see where the ball went
       }
+      if (rec && s.imp != nullptr)
+         for (const auto &e : s.impSum)
+         {
+            if (std::none_of(s.balls.begin(), s.balls.end(), [&e](const TBall &b) { return b.ball != nullptr && b.name == e.first.first; }))
+               continue;   // (a ball no longer in play: its sums stay as last written)
+            const std::array<double, 6> &v = e.second;
+            fprintf(s.imp, "%u,%s,%s,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g\n", t, e.first.first.c_str(), e.first.second.c_str(), v[0], v[1], v[2], v[3], v[4], v[5]);
+         }
+   }
+
+   void AddImpulse(const void *hitBall, const std::string &source, const double J[3], const double L[3])
+   {
+      if (s.imp == nullptr || !s.started || s.ended)
+         return;
+      const char *const n = BallName(hitBall);
+      std::array<double, 6> &v = s.impSum[std::make_pair(string(n != nullptr ? n : "?"), source)];
+      for (int a = 0; a < 3; a++)
+      {
+         v[a] += J[a];
+         v[3 + a] += L[a];
+      }
+   }
+
+   __declspec(noinline) void AddBallChange(const void *hitBall, const std::string &source, const float vel0[3], const float L0[3])   // (out of line: its callers' float code stays as it was)
+   {
+      if (s.imp == nullptr || !s.started || s.ended || hitBall == nullptr)
+         return;
+      const HitBall &hb = *static_cast<const HitBall *>(hitBall);
+      const double m = ContactSystem::kMassUnitKg * (double)hb.m_d.m_mass, R = (double)hb.m_d.m_radius * ContactSystem::kMetresPerUnit;
+      const double lScale = (double)hb.Inertia() * DEFAULT_STEPTIME_S;   // angular momentum as stored = w (rad/s) x lScale (contactsystem.cpp Body::lScale)
+      const double I = 0.4 * m * R * R;
+      const float v1[3] = { hb.m_d.m_vel.x, hb.m_d.m_vel.y, hb.m_d.m_vel.z }, L1[3] = { hb.m_angularmomentum.x, hb.m_angularmomentum.y, hb.m_angularmomentum.z };
+      double J[3], L[3];
+      bool any = false;
+      for (int a = 0; a < 3; a++)
+      {
+         J[a] = m * ((double)v1[a] - (double)vel0[a]) * ContactSystem::kVelocityScale;
+         L[a] = I * ((double)L1[a] - (double)L0[a]) / lScale;
+         any = any || J[a] != 0.0 || L[a] != 0.0;
+      }
+      if (any)
+         AddImpulse(hitBall, source, J, L);
    }
 
    void LoopStart()

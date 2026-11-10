@@ -51,6 +51,11 @@ namespace TestDriver
    };
    ContactCost *Contact();   // null unless this cycle is timed in detail
    const char *BallName(const void *hitBall);   // the driver's name of a ball (its HitBall), null for a ball the driver did not make
+   // test tooling (VPX_TEST_IMPULSES=1): an impulse a source gave a ball, SI (J in N s, L in N m s about its centre), summed into impulses.csv (one row per ball and source each recorded cycle)
+   void AddImpulse(const void *hitBall, const std::string &source, const double J[3], const double L[3]);
+   // the same for a change made outside the group (stock collide and contact, the driver's sets): the ball's momentum and angular momentum now less before
+   // (vel0: m_d.m_vel, L0: m_angularmomentum, VPX units, taken before the change), in SI
+   void AddBallChange(const void *hitBall, const std::string &source, const float vel0[3], const float L0[3]);
    inline uint64_t Ticks() { return __rdtsc(); }
    struct KindTimer
    {

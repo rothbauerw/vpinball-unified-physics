@@ -2422,6 +2422,10 @@ struct ContactSystemImpl
       static std::deque<SurfaceShape> shapes;
       shapes.clear();
       g.BeginUse();
+      g.ImpClear();   // (test tooling: a use whose result was not kept leaves nothing)
+      static std::map<int, std::string> impShapeNames, impPartNames;   // (test tooling: names of the shapes and parts with no Name() of their own, by index in this use)
+      impShapeNames.clear();
+      impPartNames.clear();
       static std::deque<PullField> pulls;
       pulls.clear();
       for (const Magnets::CellPull &cp : Magnets::CellPulls())
@@ -2621,7 +2625,14 @@ struct ContactSystemImpl
          g.AddPart(c->Cord()->fixed.get());
          c->Cord()->fixed->plateRest.Reset();   // the same restart for the cord's plate (it joins the group here, not above): a ball touches it, its watch alone starts again when it is alone
          c->Cord()->fixed->plateIdle = false;
+         const int impS0 = g.ns;   // (test tooling: the cord's shapes' names below)
          c->Cord()->fixed->AddPostShapes(g, c->Cord()->fixedTube);
+         if (GroupStep::Group::ImpOn())   // test tooling (VPX_TEST_IMPULSES=1): the cord's posts and plate, and its own force on a ball, by its rubber's name
+         {
+            for (int s = impS0; s < g.ns; s++)
+               impShapeNames[s] = c->Name() + (g.shape[s] == &c->Cord()->fixedTube ? std::string(".plate") : ".post" + std::to_string(s - impS0));
+            impPartNames[g.np - 1] = c->Name() + ".cord";
+         }
          c->CordBegin();
          c->m_cordStepped = true;
       }
@@ -3067,6 +3078,34 @@ struct ContactSystemImpl
             kd.w = w.w;
          }
          ib++;
+      }
+      if (GroupStep::Group::ImpOn())   // test tooling (VPX_TEST_IMPULSES=1): the cycle's impulses by ball and source to the test driver, now that its result is kept
+      {
+         for (const auto &e : g.imp)
+         {
+            const int i = e.first.first;
+            if (i < 0 || i >= g.nb)
+               continue;
+            std::string src = e.first.second;
+            if (src.size() > 1 && src[0] == '#')   // a ball pair: "ball" and the other ball's driver name
+            {
+               const int j = std::atoi(src.c_str() + 1);
+               const char *const nj = j >= 0 && j < g.nb ? TestDriver::BallName(balls[j]) : nullptr;
+               src = std::string("ball") + (nj != nullptr ? nj : src.c_str() + 1);
+            }
+            else if ((src.compare(0, 5, "shape") == 0 || src.compare(0, 4, "part") == 0) && src.find_first_not_of("0123456789", src[0] == 's' ? 5 : 4) == std::string::npos
+                     && src.size() > (src[0] == 's' ? 5u : 4u))   // the group's own "shape<s>" / "part<p>" (a cord's post, plate or own force): its rubber's name
+            {
+               const bool isShape = src[0] == 's';
+               const std::map<int, std::string> &nm = isShape ? impShapeNames : impPartNames;
+               const auto f = nm.find(std::atoi(src.c_str() + (isShape ? 5 : 4)));
+               if (f != nm.end())
+                  src = f->second;
+            }
+            const double J[3] = { e.second.J.x, e.second.J.y, e.second.J.z }, L[3] = { e.second.L.x, e.second.L.y, e.second.L.z };
+            TestDriver::AddImpulse(balls[i], src, J, L);
+         }
+         g.ImpClear();
       }
       // the part's hit events, and what the touches keep
       for (int k = 0; k < g.ni; k++)

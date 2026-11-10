@@ -31,7 +31,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "physics/rubbercontact.h"
@@ -2170,7 +2172,87 @@ namespace GroupStep
       Jac JacFd() { return Jac(jacFdS, jStride); }
       int jacRound = 0;
 
+      // Test tooling, off by default (VPX_TEST_IMPULSES=1; read only: no value of a step depends on it): the impulse each force of the group gives each ball over the
+      // accepted steps, h x the force and h x the torque about the ball's centre of the Eval the step was accepted on (implicit midpoint: m (v1 - v0) = h x their sum, to the
+      // solve's tolerance). Keyed by group ball and source: a contact's shape Name() ("shape<s>" when it has none), "#<j>" for the pair with group ball j, "gravity",
+      // "fext" (the held outside force), "field", "pairform", "brake" (the spin brake's torque), "part<p>" (a part's own force on a ball, the cord's), "energystep" (an
+      // energy step's whole momentum change less gravity's: it has no force law). Summed over a use; the owner clears it (ImpClear) and keeps it only when it keeps the use's result.
+      static bool ImpOn() { static const bool on = []() { const char *const e = getenv("VPX_TEST_IMPULSES"); return e != nullptr && atoi(e) != 0; }(); return on; }
+      struct ImpSum { V3 J, L; };
+      std::map<std::pair<int, std::string>, ImpSum> imp;
+      void ImpClear() { imp.clear(); }
+      void ImpAdd(const int b, const std::string &src, const V3 &J, const V3 &L)
+      {
+         if (J.x == 0.0 && J.y == 0.0 && J.z == 0.0 && L.x == 0.0 && L.y == 0.0 && L.z == 0.0)
+            return;
+         ImpSum &s = imp[std::make_pair(b, src)];
+         s.J = s.J + J;
+         s.L = s.L + L;
+      }
+
    private:
+      // ImpOn: the last Eval's forces by source. Per ball: gravity, fExt, the fields, the pair form (forces), the brake (torque); per item k, impIt[4k ..]: its force and
+      // torque on ball a, then on ball b (a pair); per part and ball (p * nb + i): the part's own force and torque
+      std::vector<V3> impG, impX, impFld, impForm, impBrake, impIt, impPF, impPM;
+      void ImpAccept(const double h)
+      {
+         if (impG.size() < (size_t)nb || impIt.size() < 4 * (size_t)ni || impPF.size() < (size_t)np * nb)   // (no Eval of this shape before: a gap the check shows)
+            return;
+         for (int i = 0; i < nb; i++)
+         {
+            ImpAdd(i, "gravity", impG[i] * h, V3());
+            ImpAdd(i, "fext", impX[i] * h, V3());
+            ImpAdd(i, "field", impFld[i] * h, V3());
+            ImpAdd(i, "pairform", impForm[i] * h, V3());
+            ImpAdd(i, "brake", V3(), impBrake[i] * h);
+         }
+         for (int k = 0; k < ni; k++)
+         {
+            if (farNow[k])
+               continue;
+            const Item &it = item[k];
+            const V3 *const o = &impIt[4 * (size_t)k];
+            std::string name;
+            if (it.b >= 0)
+               name = "#" + std::to_string(it.b);
+            else
+            {
+               if (shape[it.s] != nullptr)
+                  name = shape[it.s]->Name();
+               if (name.empty())
+                  name = "shape" + std::to_string(it.s);
+            }
+            ImpAdd(it.a, name, o[0] * h, o[1] * h);
+            if (it.b >= 0)
+               ImpAdd(it.b, "#" + std::to_string(it.a), o[2] * h, o[3] * h);
+         }
+         for (int p = 0; p < np; p++)
+            for (int i = 0; i < nb; i++)
+               ImpAdd(i, "part" + std::to_string(p), impPF[(size_t)p * nb + i] * h, impPM[(size_t)p * nb + i] * h);
+      }
+      // an energy step's momentum change (EnergyStepCore): its own entry, the impulses of the Accepts inside it dropped (some are restored)
+      double EnergyStep(const double hTry)
+      {
+         if (!ImpOn())
+            return EnergyStepCore(hTry);
+         const std::map<std::pair<int, std::string>, ImpSum> imp0 = imp;
+         std::vector<V3> v0((size_t)nb), w0((size_t)nb);
+         for (int i = 0; i < nb; i++)
+         {
+            v0[i] = ball[i].v;
+            w0[i] = ball[i].w;
+         }
+         const double hs = EnergyStepCore(hTry);
+         imp = imp0;
+         for (int i = 0; i < nb; i++)
+         {
+            const V3 G = set.g * ball[i].m * hs;
+            ImpAdd(i, "gravity", G, V3());
+            ImpAdd(i, "energystep", (ball[i].v - v0[i]) * ball[i].m - G, (ball[i].w - w0[i]) * ball[i].I());
+         }
+         return hs;
+      }
+
       // scratch of the step being solved (no allocation)
       struct ItemEnd
       {
@@ -2633,6 +2715,20 @@ namespace GroupStep
             M[i] = V3();
             posScale = std::max(posScale, std::fabs(ball[i].c.x) + std::fabs(ball[i].c.y) + std::fabs(ball[i].c.z));
          }
+         const bool impOn = ImpOn();   // (test tooling: the forces by source, read only)
+         if (impOn)
+         {
+            for (std::vector<V3> *const v : { &impG, &impX, &impFld, &impForm, &impBrake })
+               v->assign((size_t)nb, V3());
+            impIt.assign(4 * (size_t)ni, V3());
+            impPF.assign((size_t)np * nb, V3());
+            impPM.assign((size_t)np * nb, V3());
+            for (int i = 0; i < nb; i++)
+            {
+               impG[i] = set.g * ball[i].m;
+               impX[i] = ball[i].fExt;
+            }
+         }
          if (J)
             for (int r = 0; r < nU; r++)
                for (int c = 0; c < nU; c++)
@@ -2658,6 +2754,12 @@ namespace GroupStep
                if (J)
                   AddBlock(J, 6 * i + 3, 6 * i + 3, M3::Tangent(ball[i].brakeAxis), 0.5 * h * c);   // (the mid-step spin moves half as far as the end)
             }
+         if (impOn)
+            for (int i = 0; i < nb; i++)
+            {
+               impBrake[i] = M[i];    // (M starts at zero: the brake is its only term so far)
+               impFld[i] = F[i];      // (the fields' and the pair form's: by the change they make to F)
+            }
          // the fields' stored energy: its discrete gradient over the ball's move (Gonzalez), so the work it does is the exact difference at any step length
          for (int i = 0; nf > 0 && i < nb; i++)
             if (ball[i].fieldScale != 0.0)
@@ -2672,6 +2774,12 @@ namespace GroupStep
                F[i] = F[i] - V3(gd[0], gd[1], gd[2]);
                if (J)
                   AddBlock(J, 6 * i, 6 * i, hf, 0.5 * h);   // (the midpoint moves half as far as the end)
+            }
+         if (impOn)
+            for (int i = 0; i < nb; i++)
+            {
+               impFld[i] = F[i] - impFld[i];
+               impForm[i] = F[i];
             }
          // the pair form: each term's discrete gradient over the move (Gonzalez), so its work is the exact change of -g q. Its curvature (about g / l, 0.4 N/mm against
          // the contacts' 3.5e3 N/mm) is left out of the Jacobian: it changes the rounds, not the answer
@@ -2698,10 +2806,42 @@ namespace GroupStep
             if (two)
                F[T.b] = F[T.b] + V3(gd[3], gd[4], gd[5]) * T.g;
          }
+         if (impOn)
+            for (int i = 0; i < nb; i++)
+               impForm[i] = F[i] - impForm[i];
 
          for (int k = 0; k < ni; k++)
          {
             const Item &it = item[k];
+            // impOn: this contact's force and torque on its balls, by the change it makes to F and M (taken on every way out of the loop's body)
+            struct ImpItem
+            {
+               const V3 *F, *M;
+               V3 *o;
+               int a, b;
+               V3 f0a, m0a, f0b, m0b;
+               ImpItem(const V3 *F_, const V3 *M_, V3 *o_, const int a_, const int b_) : F(F_), M(M_), o(o_), a(a_), b(b_)
+               {
+                  if (o == nullptr)
+                     return;
+                  f0a = F[a];
+                  m0a = M[a];
+                  if (b >= 0)
+                  {
+                     f0b = F[b];
+                     m0b = M[b];
+                  }
+               }
+               ~ImpItem()
+               {
+                  if (o == nullptr)
+                     return;
+                  o[0] = F[a] - f0a;
+                  o[1] = M[a] - m0a;
+                  o[2] = b >= 0 ? F[b] - f0b : V3();
+                  o[3] = b >= 0 ? M[b] - m0b : V3();
+               }
+            } impItem(F, M, impOn ? &impIt[4 * (size_t)k] : nullptr, it.a, it.b);
             const Item &L = law[k];
             ItemEnd &e = ie[k];
             if (J)
@@ -3607,11 +3747,25 @@ namespace GroupStep
                if (part[p]->NumCoords() > 0)
                   part[p]->Loads((const double *)qF + coordOff[p], loadF[p]);
          for (int p = 0; p < np; p++)
+         {
+            if (impOn)
+               for (int i = 0; i < nb; i++)
+               {
+                  impPF[(size_t)p * nb + i] = F[i];
+                  impPM[(size_t)p * nb + i] = M[i];
+               }
             if (!part[p]->Eval(xv, partOff[p], h, F, M, Res, J))
             {
                partEvalFailed = true;
                return false;
             }
+            if (impOn)
+               for (int i = 0; i < nb; i++)
+               {
+                  impPF[(size_t)p * nb + i] = F[i] - impPF[(size_t)p * nb + i];
+                  impPM[(size_t)p * nb + i] = M[i] - impPM[(size_t)p * nb + i];
+               }
+         }
          if (carried)
             for (int c = 0; c < nCoord; c++)
             {
@@ -3666,7 +3820,7 @@ namespace GroupStep
       // from (its speed and the force at the solve's first guess, one explicit round, stable within the step rule's omega h) with the path's elements kept, and whatever that costs in stored energy and height
       // is paid by all the speeds together (the discrete gradient's correction: the change acts along the motion). Energy that falls is booked as a loss, so nothing can be gained. What the speeds cannot pay
       // is taken shorter; speeds too small to pay for any move turn back: no move, no change in energy. The next step starts from a new state and goes back to the solve.
-      double EnergyStep(const double hTry)
+      double EnergyStepCore(const double hTry)
       {
          struct InEnergy { bool &f; explicit InEnergy(bool &b) : f(b) { f = true; } ~InEnergy() { f = false; } } inEnergy(histInEnergy);   // (diagnostics: the history's label)
          const NearOff nearOff(nearOn);
@@ -4456,6 +4610,8 @@ namespace GroupStep
          const bool hist = np > 0 && HistoryTraceOn();   // (diagnostics, read only)
          const HistE histS0 = hist ? HistEnergy() : HistE();
          const Books histBk0 = hist ? books : Books();
+         if (ImpOn())   // (test tooling: the impulses of the Eval this step was accepted on)
+            ImpAccept(h);
          for (int p = 0; p < np; p++)   // before the balls move: a part reads their state at the step's start
          {
             double dJ = 0.0, lJ = 0.0;
