@@ -15,6 +15,7 @@
 #include "physics/hitrubber.h"
 #include "physics/contactsystem.h"
 #include "utils/objloader.h"
+#include "physics/contactsettings.h"
 
 
 Ramp::~Ramp()
@@ -667,6 +668,7 @@ void Ramp::SetupHitObject(PhysicsEngine* physics, HitObject *obj, const bool isU
       obj->m_elasticity = mat->m_fElasticity;
       obj->SetFriction(mat->m_fFriction);
       obj->m_scatter = ANGTORAD(mat->m_fScatterAngle);
+      UsePhysicsDefaults(m_ptable, mat, "Ramp", GetName(), 0.3f, -1.f, 0.3f, obj);   // no physics material: the type's VPX defaults (Settings_properties.inl)
    }
    else
    {

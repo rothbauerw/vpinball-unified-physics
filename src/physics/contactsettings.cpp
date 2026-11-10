@@ -5,6 +5,9 @@
 #include "parts/pintable.h"
 #include "physics/physicsini.h"
 #include "physics/groupstep.h"
+#include "physics/contactsystem.h"
+#include "ui/live/LiveUI.h"
+#include <set>
 #include <filesystem>
 #include <fstream>
 
@@ -126,6 +129,8 @@ namespace
             s.termForceRows = on;
          else if (key == "gonzalez_mass")
             s.gonzalezMass = on;
+         else if (key == "physics_defaults")
+            s.physicsDefaults = on;
          else if (key == "grip_in_step")
             s.gripInStep = on;
          else if (key == "patch_path")
@@ -200,7 +205,7 @@ namespace
       cur = s;
       Publish();
       PLOGI << "Contact settings loaded from " << path.string() << ": " << (s.enable ? "on" : "off") << ", dynamic ratio " << s.muDynamicRatio
-            << ", rolling resistance " << s.rollingResistance << ", twist " << (s.twist ? "on" : "off") << " patch " << s.twistPatchMm << " mm, ball contact " << (s.ballContact ? "on" : "off") << ", roll_model " << s.rollModel << ", step_model " << s.stepModel << ", step_swing_cap " << (s.stepSwingCap ? 1 : 0) << ", term_arrival " << (s.termArrival ? 1 : 0) << ", eps_rest_um " << s.epsRestUm << ", hinge_piece_sum " << (s.hingePieceSum ? 1 : 0) << ", damp_dir_slope " << (s.dampDirSlope ? 1 : 0) << ", lever_roll_slope " << (s.leverRollSlope ? 1 : 0) << ", twist_slope " << (s.twistSlope ? 1 : 0) << ", end_grad_slope " << (s.endGradSlope ? 1 : 0) << ", term_force_rows " << (s.termForceRows ? 1 : 0) << ", gonzalez_mass " << (s.gonzalezMass ? 1 : 0) << ", damping_integral " << (s.dampingIntegral ? 1 : 0) << ", rolling_patch " << (s.rollingPatch ? 1 : 0) << ", stick_zone_trial " << (s.stickZoneTrial ? 1 : 0) << ", patch_path " << (s.patchPath ? 1 : 0) << ", grip_in_step " << (s.gripInStep ? 1 : 0) << ", part_guess_accel " << (s.partGuessAccel ? 1 : 0);
+            << ", rolling resistance " << s.rollingResistance << ", twist " << (s.twist ? "on" : "off") << " patch " << s.twistPatchMm << " mm, ball contact " << (s.ballContact ? "on" : "off") << ", roll_model " << s.rollModel << ", step_model " << s.stepModel << ", step_swing_cap " << (s.stepSwingCap ? 1 : 0) << ", term_arrival " << (s.termArrival ? 1 : 0) << ", eps_rest_um " << s.epsRestUm << ", hinge_piece_sum " << (s.hingePieceSum ? 1 : 0) << ", damp_dir_slope " << (s.dampDirSlope ? 1 : 0) << ", lever_roll_slope " << (s.leverRollSlope ? 1 : 0) << ", twist_slope " << (s.twistSlope ? 1 : 0) << ", end_grad_slope " << (s.endGradSlope ? 1 : 0) << ", term_force_rows " << (s.termForceRows ? 1 : 0) << ", gonzalez_mass " << (s.gonzalezMass ? 1 : 0) << ", physics_defaults " << (s.physicsDefaults ? 1 : 0) << ", damping_integral " << (s.dampingIntegral ? 1 : 0) << ", rolling_patch " << (s.rollingPatch ? 1 : 0) << ", stick_zone_trial " << (s.stickZoneTrial ? 1 : 0) << ", patch_path " << (s.patchPath ? 1 : 0) << ", grip_in_step " << (s.gripInStep ? 1 : 0) << ", part_guess_accel " << (s.partGuessAccel ? 1 : 0);
    }
 }
 
@@ -284,6 +289,31 @@ const ContactSettings& ContactSettings::Get()
       }
    }
    return cur;
+}
+
+bool UsePhysicsDefaults(const PinTable *const table, const Material *const mat, const char *const kind, const std::string &name, const float elasticity, const float falloff, const float friction, HitObject *const obj)
+{
+   if (!table->IsDummyMaterial(mat) || !ContactSystem::Unified() || !ContactSettings::Get().physicsDefaults)
+      return false;
+   obj->m_elasticity = elasticity;
+   if (falloff >= 0.f)
+      obj->m_elasticityFalloff = falloff;
+   obj->SetFriction(friction);
+   static const void *play = nullptr;   // the notice: once per object and play (an object makes many hit objects)
+   static std::set<std::string> said;
+   if (play != g_pplayer)
+   {
+      play = g_pplayer;
+      said.clear();
+   }
+   if (said.insert(name).second)
+   {
+      const std::string msg = std::string(kind) + " " + name + " has no physics material: VPX defaults used (elasticity " + std::to_string(elasticity) + ", friction " + std::to_string(friction) + ")";
+      PLOGW << msg;
+      if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+         g_pplayer->m_liveUI->PushNotification(msg, 10000);
+   }
+   return true;
 }
 
 // Ported at: VisualPinball.Unity/VisualPinball.Unity/VPT/Ball/BallCollider.cs

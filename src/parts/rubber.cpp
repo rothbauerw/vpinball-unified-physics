@@ -19,6 +19,7 @@
 #include "renderer/trace.h"
 #include "utils/objloader.h"
 #include "physics/hitrubber.h"
+#include "physics/contactsettings.h"
 
 
 Rubber::~Rubber()
@@ -604,6 +605,7 @@ void Rubber::SetupHitObject(PhysicsEngine* physics, HitObject *obj, const bool i
       obj->m_elasticityFalloff = mat->m_fElasticityFalloff;
       obj->SetFriction(mat->m_fFriction);
       obj->m_scatter = ANGTORAD(mat->m_fScatterAngle);
+      UsePhysicsDefaults(m_ptable, mat, "Rubber", GetName(), 0.8f, 0.3f, 0.6f, obj);   // no physics material: the type's VPX defaults (Settings_properties.inl)
    }
    else
    {

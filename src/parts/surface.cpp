@@ -17,6 +17,7 @@
 #include "physics/contactsystem.h"
 #include "renderer/VertexBuffer.h"
 #include "utils/objloader.h"
+#include "physics/contactsettings.h"
 
 
 Surface::~Surface()
@@ -286,6 +287,7 @@ void Surface::SetupHitObject(PhysicsEngine* physics, HitObject * const obj, cons
       obj->m_elasticityFalloff = mat->m_fElasticityFalloff;
       obj->SetFriction(mat->m_fFriction);
       obj->m_scatter = ANGTORAD(mat->m_fScatterAngle);
+      UsePhysicsDefaults(m_ptable, mat, "Wall", GetName(), 0.3f, 0.f, 0.3f, obj);   // no physics material: the type's VPX defaults (Settings_properties.inl)
    }
    else
    {

@@ -23,6 +23,7 @@
 #include "renderer/trace.h"
 #include "renderer/VertexBuffer.h"
 #include "utils/objloader.h"
+#include "physics/contactsettings.h"
 
 
 HitTarget::~HitTarget()
@@ -368,6 +369,7 @@ void HitTarget::SetupHitObject(PhysicsEngine* physics, HitObject *obj, const boo
       obj->m_elasticityFalloff = mat->m_fElasticityFalloff;
       obj->SetFriction(mat->m_fFriction);
       obj->m_scatter = ANGTORAD(mat->m_fScatterAngle);
+      UsePhysicsDefaults(m_ptable, mat, "Hit target", GetName(), 0.35f, 0.5f, 0.2f, obj);   // no physics material: the type's VPX defaults (Settings_properties.inl)
    }
    else
    {

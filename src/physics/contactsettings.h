@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <filesystem>
+#include <string>
 
 namespace GroupStep { struct Settings; }
 
@@ -48,6 +49,7 @@ struct ContactSettings
    bool dampingIntegral = true;      // damping_integral (default 1 since 2026-11-09, on while tested): 1 = every depth-dependent damping of the group step in its integrated form, the law's own work over the step at a steady rate, c = (W(d1) - W(d0)) / (d1 - d0), with its exact slope c(d1) in Newton's (Kuwabara-Kono, the loss tangent's dashpot, Hunt-Crossley on the contact's own share of a bend), and the twist limit from the patch of the step's mean elastic force a(fe) instead of the mid depth's (runs/2026-11-08-lead/damping_integral_design.md); 0 = the committed forms (point values at the mid depth, the Kuwabara-Kono chord/midpoint switch, the mid depth's patch for the twist limit)
    bool rollingPatch = true;         // rolling_patch (default 1 since 2026-11-09, on while tested): 1 = rolling resistance takes the patch of the step's mean elastic force a(fe) (as the twist limit under damping_integral) for its pressure N / (pi a^2) and its gate (no switch on the mid depth), with the rolling limit's full slope in Newton's (through N and a(fe); 0 at the floor or the cap of muRr) (runs/2026-11-08-lead/rolling_patch_design.md); 0 = the mid depth's patch a(dm), the limit's slope with muRr held
    bool stickZoneTrial = true;       // stick_zone_trial (default 1 since 2026-11-09, on while tested): 1 = the group step's line search first tries, for each contact whose shear patch slides at the current point with N > 0, the fraction of Newton's move at the middle of the part of the move where its trial force lies inside mu N (a quadratic along the move, the patch's spring, damper, stretch and geometry held at the point; none from a contact whose part contains the full move's end, s = 1), ascending, then the full move, 1/2, 1/4 ...; acceptance by the exact residual as every trial (runs/2026-11-08-lead/slip_reversal_design.md section 2b); 0 = the full move, 1/2, 1/4 ... only
+   bool physicsDefaults = true;      // physics_defaults (default 1 since 2026-11-10, on while tested): 1 = a wall, rubber, primitive, ramp or hit target with override physics off and no physics material on the table takes its type's VPX defaults (elasticity, falloff, friction: Settings_properties.inl), with a notice, not the blank material's 0s (a dead, frictionless object; runs/2026-11-10-physics-defaults/design.md); scatter stays 0 (the unified contact never reads it); 0 = the blank material, as stock
    bool gonzalezMass = true;         // gonzalez_mass (default 1 since 2026-11-10, on while tested): 1 = each stored energy's exact-energy correction (Gonzalez) is split over the bodies by mass, the kinetic-energy metric, so each body's speed changes by its own move and a light part takes no false force from a heavy ball's move (runs/2026-11-10-gonzalez-metric/design.md; removed the 15441 ms halvings on a wire switch); 0 = split by inverse mass (the old rule)
    bool termForceRows = true;        // term_force_rows (default 1 since 2026-11-09, on while tested): 1 = Newton's slope of a terms contact (hinge_piece_sum) takes each pressing term's force direction gdT (its mid gradient Gonzalez-corrected so that gdT . dq = a1 - a0, the direction its force acts along) as the row side of the term's slope, in the terms' slope, G's turning (gK, and dd's change through G, gW: 0 for one term) and the normal force's slope kv (friction, lever-roll and twist limits); the column side stays d a1 / du; the force is unchanged (runs/2026-11-08-lead/term_rows_design.md); 0 = the mid gradient tg as the row (today's slope)
    bool gripInStep = true;           // grip_in_step (default 1 since 2026-11-09, on while tested): 1 = a part's grip limit (the cord's mu Tm Gfree) is worked out inside each of the group step's evaluations from that evaluation's own mid tension and mid geometry, as a contact's mu N is, with Newton's slope through it (runs/2026-11-08-lead/cord_grip_design.md); 0 = the limit refreshed between the solve's rounds from the last round (the line search is then off in any round it moved)
@@ -69,3 +71,10 @@ struct ContactSettings
       return copysignf((float)muDynamicRatio * maxImpulse, x);
    }
 };
+
+class Material;
+class HitObject;
+class PinTable;
+// An object whose physics come from its physics material (override physics off): with no such material on the table (the blank one, all 0) and the unified physics on,
+// its type's VPX defaults (ContactSettings::physicsDefaults); falloff < 0: the type has none. A notice once per object and play. True when they were used
+bool UsePhysicsDefaults(const PinTable *table, const Material *mat, const char *kind, const std::string &name, float elasticity, float falloff, float friction, HitObject *obj);

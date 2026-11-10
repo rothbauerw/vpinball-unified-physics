@@ -21,6 +21,7 @@
 #include "forsyth.h"
 #include "progmesh.h"
 #include "miniz/miniz.h"
+#include "physics/contactsettings.h"
 
 
 Primitive::~Primitive()
@@ -390,6 +391,7 @@ void Primitive::SetupHitObject(PhysicsEngine* physics, HitObject *obj, const boo
        obj->m_elasticityFalloff = mat->m_fElasticityFalloff;
        obj->SetFriction(mat->m_fFriction);
        obj->m_scatter = ANGTORAD(mat->m_fScatterAngle);
+       UsePhysicsDefaults(m_ptable, mat, "Primitive", GetName(), 0.3f, 0.5f, 0.3f, obj);   // no physics material: the type's VPX defaults (Settings_properties.inl)
    }
    else
    {
