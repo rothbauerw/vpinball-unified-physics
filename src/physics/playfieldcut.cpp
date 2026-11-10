@@ -24,6 +24,10 @@ namespace
    constexpr double kThickM = 12.7e-3;        // the playfield's thickness: the through-hole's walls (1/2 in, user 2026-11-09)
    constexpr double kWidthMaxMm = 5.03;       // width_mm default and largest: 0.198 in, the slot under a wire switch (PartData 7)
    constexpr double kWidthMinMm = 3.175;      // width_mm smallest: 1/8 in
+   constexpr double kGrooveRadiusM = 0.625 * 25.4e-3;   // the plunger lane groove's floor radius (5/8 in, the cutter's; fixed, not a setting: paper runs/2026-11-10-plunger-groove/paper.md section 1)
+   constexpr double kGrooveDepthM = 0.188 * 25.4e-3;    // its depth at the plunger end (0.188 in), falling linearly to 0 at the far tip (fixed, not a setting: paper section 1)
+   constexpr double kGrooveLenMinMm = 12.0 * 25.4;      // length_mm smallest and largest for a groove: the 12 - 20 in the paper checked (section 3: brute force, cases)
+   constexpr double kGrooveLenMaxMm = 20.0 * 25.4;
 
    void Notice(const std::string &msg)   // rule 8: on screen and in the log, once per table start (Setup runs once per start)
    {
@@ -36,7 +40,7 @@ namespace
    {
       std::string name, shape;
       double x = 0.0, y = 0.0, angle = 0.0, lengthMm = -1.0, widthMm = kWidthMaxMm;
-      bool xSet = false, ySet = false, lengthSet = false;
+      bool xSet = false, ySet = false, lengthSet = false, widthSet = false;
       std::vector<std::string> unknown;
    };
 
@@ -77,7 +81,7 @@ namespace
          else if (key == "y") { cur->y = v; cur->ySet = true; }
          else if (key == "angle") cur->angle = v;
          else if (key == "length_mm") { cur->lengthMm = v; cur->lengthSet = true; }
-         else if (key == "width_mm") cur->widthMm = v;
+         else if (key == "width_mm") { cur->widthMm = v; cur->widthSet = true; }
          else cur->unknown.push_back(line);
       }
       return out;
@@ -94,6 +98,49 @@ namespace
    constexpr double kReachPadM = 1e-9;  // added to every reach: a point is passed over only when it is surely beyond it (rounding is ~1e-17 m)
    constexpr double kNoLimitM = 1e30;   // a reach that passes over nothing
 
+   // ---- The plunger lane groove (paper runs/2026-11-10-plunger-groove/paper.md sections 1 - 2) ----
+   // Frame: X along the groove from the plunger end (X = 0) to the far tip, Y across, Z up from the playfield's top. Three exact pieces, joined tangent:
+   //   floor  a cylinder of radius Rg about a straight axis through (0, 0, Pz), Pz = Rg / cos a - D0, direction (cos a, 0, sin a), tan a = D0 / Lg: the vertical depth is D0 (1 - X / Lg)
+   //   rim    the rolling-ball fillet between the top and the floor: exactly a tube of radius rho about its spine, the plane Z = -rho cut with the cylinder of radius B = Rg + rho,
+   //          a level ellipse X = (B cos phi - u0) / sin a, Y = B sin phi, u0 = (Pz + rho) cos a; its exposed arc runs from +Z (tangent to the top) to -r (r the unit direction from
+   //          the axis to the spine point; tangent to the floor)
+   //   top    the playfield's own faces outside the spine's outline (FacesLeft, as for the slot)
+   // The plunger end is OPEN (the user's choice until another is made, paper section 4 option A): the groove runs on out of the cut's area, past X = 0, and the ball is held by the plunger
+   // tip, so the cut's pieces end at X = 0 and add no end piece (a square, round or ramp end is its own piece, added at the end of GrooveExtrema, not a change to the three above).
+   struct GrooveShape
+   {
+      double Lg = 0, a = 0, s = 0, c = 1, Rg = kGrooveRadiusM, D0 = kGrooveDepthM, rho = kEdgeRhoM;   // length, tilt (sin, cos), floor radius, depth at X = 0, rim radius
+      double Pz = 0, B = 0, K = 0, u0 = 0, phiE = 0, tE = 0, xv = 0, yh = 0;   // axis height at X = 0, spine radius, K = B cos^2 a, u0, the arc's end (X = 0) and tan(phiE / 2), the vertex X, half-width at X = 0
+      double floorR1 = 0;   // the floor's Hertz radius across (concave): 1 / (1 / R - 1 / Rg) for the ball it was built for (logged)
+
+      void Build(const double length)
+      {
+         Lg = length;
+         a = std::atan(D0 / Lg);
+         s = std::sin(a);
+         c = std::cos(a);
+         Pz = Rg / c - D0;
+         B = Rg + rho;
+         K = B * c * c;
+         u0 = (Pz + rho) * c;
+         phiE = std::acos(u0 / B);
+         tE = std::tan(0.5 * phiE);
+         xv = (B - u0) / s;
+         yh = B * std::sin(phiE);
+      }
+      // the outline the top leaves out: inside the spine's ellipse, on the groove's side of the open plunger end
+      bool InsideOutline(const double X, const double Y) const
+      {
+         if (X < 0.0)   // (the open end: the cut's area ends here)
+            return false;
+         const double u = u0 + X * s;
+         return std::abs(u) < B && Y * Y < B * B - u * u;
+      }
+      // h(t), t = tan(phi / 2): the sign of d/dphi of the squared distance from the ball's centre to the spine (paper section 1); P = u0 + X s, Q = Y s^2
+      double H(const double t, const double P, const double Q) const { return ((Q * t + 2.0 * (K + P)) * t * t - 2.0 * (K - P)) * t - Q; }
+      double Hp(const double t, const double P, const double Q) const { return (4.0 * Q * t + 6.0 * (K + P)) * t * t - 2.0 * (K - P); }
+   };
+
    struct Rim
    {
       const ContactSurface *host = nullptr;
@@ -107,6 +154,8 @@ namespace
       double total = 0.0;          // logged: the centre line's length
       std::vector<double> rampU;   // the + end's ramp centre line at tau_j = tauJ j / kRampSamples: its u (decreasing in j), for the inside test
       double kapTip = 0.0, kapRound = 0.0;   // logged: the curvature (1/m, toward the hole) at the tip and on the round end
+      bool groove = false;   // a plunger lane groove (gr; the frame above with (cx, cy) its plunger end on the axis, along toward the tip), not a slot
+      GrooveShape gr;
 
       // the ramp's centre line at tau (u past the end of the straight part, t across) and its derivative in tau: the outline point plus rho along the outline's outward normal
       void Ramp(const double tau, double &u, double &t, double &du, double &dt) const
@@ -179,13 +228,14 @@ namespace
          Ramp(tau, cu, ct, du, dt);
          return T < ct;
       }
-      // a point of the playfield's faces that is not surface: inside the centre line, at the top or below it within the playfield's thickness (the through-hole; a thin playfield mesh's underside)
+      // a point of the playfield's faces that is not surface: inside the centre line (a groove: its spine), at the top or below it within the playfield's thickness (the through-hole or the
+      // groove; a thin playfield mesh's underside)
       bool Holds(const V3 &p) const
       {
          if (p.z > z0 + 1e-6 || p.z < z0 - kThickM - 1e-6)
             return false;
          const double dx = p.x - cx, dy = p.y - cy;
-         return Inside(dx * lx + dy * ly, dx * px + dy * py);
+         return groove ? gr.InsideOutline(dx * lx + dy * ly, dx * px + dy * py) : Inside(dx * lx + dy * ly, dx * px + dy * py);
       }
       double BoxDist(const V3 &q) const
       {
@@ -200,11 +250,13 @@ namespace
       }
    };
 
-   // A rim contact: one true local minimum of the distance from the ball's centre to a cut's centre line, the rim's surface facing the ball (its upper inner part)
+   // A cut's contact: one true local minimum of the distance from the ball's centre to a rim's centre line, the rim's surface facing the ball (its upper inner part), or to a groove's floor
    struct RimHit
    {
       int cut;
-      double delta, dist, reff, loop;   // depth R + rho - dist, the tube law's effective radius, the place on the loop (piece + fraction, 0 .. kPieces)
+      double delta, dist, reff, loop;   // depth R + rho - dist, the law's effective radius, the place on the loop (slot: piece + fraction, 0 .. kPieces; groove rim: the spine's phi)
+      double rho;                       // the piece's tube radius: the rim's rho; 0 for a groove's floor (dist is then to the surface)
+      bool floor;                       // a groove's floor (no hump lies between it and another contact)
       V3 point, normal;
    };
    // A local maximum of the same distance (the hump between two minima along the line): the place on the loop and the distance
@@ -244,7 +296,7 @@ namespace
       return 1;
    }
 
-   // Every rim contact (true local minimum of the distance, facing the ball, within reachMin of the centre) of cut ci for a ball (radius R) at c, and every local maximum of the distance
+   // Every rim contact (true local minimum of the distance, facing the ball, its gap dist - (R + rho) within reachGap) of cut ci for a ball (radius R) at c, and every local maximum of the distance
    // (humps, when humps is given), in loop order. The distance's extrema along the line are its normal foot points: where the line's normal passes through the ball's centre (the line is
    // level, so the 3D distance's extrema are the plane's). g = (c - A).T > 0 while the distance falls along the loop: a minimum where g turns from > 0 to <= 0, a hump from <= 0 to > 0.
    // The line is tangent-continuous, so g is continuous along it: its sign at the junctions, shared by the two pieces that meet there, says whether a piece holds a root (minima and humps
@@ -256,9 +308,16 @@ namespace
    //               u = L - tau^2, w = c tau) with the ball's centre at (u0, w0), d/dtau of half the squared distance is F(tau) = 2 tau^3 + q tau - c w0, q = c^2 - 2 (L - u0), times a
    //               positive factor (g has the sign of F on the + end, of -F on the - end). F' = 6 tau^2 + q splits the ramp at tau = +-sqrt(-q / 6) (q < 0) into monotone pieces,
    //               each holding one root where the signs at its ends differ: the cubic's root in it.
-   void RimExtrema(const int ci, const double R, const V3 &c, std::vector<RimHit> &out, std::vector<RimHump> *humps, const double reachMin)
+   void GrooveExtrema(const int ci, const double R, const V3 &c, std::vector<RimHit> &out, std::vector<RimHump> *humps, const double reachGap);
+   void RimExtrema(const int ci, const double R, const V3 &c, std::vector<RimHit> &out, std::vector<RimHump> *humps, const double reachGap)
    {
       const Rim &m = g_rims[ci];
+      if (m.groove)
+      {
+         GrooveExtrema(ci, R, c, out, humps, reachGap);
+         return;
+      }
+      const double reachMin = R + m.rho + reachGap;
       double cs, ct, dz;
       SlotFrame(m, c, cs, ct, dz);
       // one extremum: the point (s, t), the unit tangent along the loop, the curvature toward the hole (1/m)
@@ -283,14 +342,16 @@ namespace
          h.normal = dv / dist;
          h.delta = R + m.rho - dist;
          h.loop = loop;
-         // the tube law (rubbercontact.h ProbeTube): across the rim 1/R1 = 1/R + 1/rho; along it the centre line's curvature (TubeAlongCurvature), concave bends held within 20 ball radii
+         h.rho = m.rho;
+         h.floor = false;
+         // the tube law (rubbercontact.h ProbeTube): across the rim 1/R1 = 1/R + 1/rho; along it the centre line's curvature (TubeAlongCurvature, Meusnier: the 3D cosine between the normal
+         // and the line's in-plane normal), concave bends held within 20 ball radii
          double kLong = 0.0;
-         const double nh = std::hypot(h.normal.x, h.normal.y);
-         if (std::abs(kin) > 1e-9 && nh > 1e-9)
+         if (std::abs(kin) > 1e-9)
          {
             const double sg = kin > 0.0 ? 1.0 : -1.0, nis = Tt * sg, nit = -Ts * sg;   // toward the centre of curvature (slot frame)
             const double dnx = m.lx * nis + m.px * nit, dny = m.ly * nis + m.py * nit;
-            kLong = RubberContact::TubeAlongCurvature(std::abs(kin), m.rho, -(h.normal.x * dnx + h.normal.y * dny) / nh);
+            kLong = RubberContact::TubeAlongCurvature(std::abs(kin), m.rho, -(h.normal.x * dnx + h.normal.y * dny));
          }
          const double R1 = 1.0 / (1.0 / R + 1.0 / m.rho), R2 = 1.0 / std::max(1.0 / R + kLong, 0.05 / R);
          h.reff = std::sqrt(R1 * R2);
@@ -379,6 +440,131 @@ namespace
       }
    }
 
+   // A groove's contacts (paper section 1, "Extrema, per piece"): every true local minimum of the distance from the ball's centre to its floor and to its rim, each piece in closed form, and
+   // (humps given) the rim's humps; gap = dist - (R + rho) within reachGap. The top is the playfield's faces (FacesLeft). Same rules as the slot: every true local minimum is a contact.
+   //   floor  the foot on the ray from the axis through the ball's centre: dist = Rg - r (r the centre's distance from the axis); a contact when the foot lies on the floor, within
+   //          +-theta_r of straight down in its section (cos theta_r = e / B, e = (the axis' height there + rho) / cos a) and on the groove's side of the plunger end
+   //   rim    the spine is level, so its 3D extrema are the plane's: the real roots of h(t) on the arc |phi| <= phiE (GrooveShape::H, no squaring: every real root is a true extremum).
+   //          h's critical points (exact for Q = 0, 3 Newton steps) split the arc into monotone brackets; a sign change holds one root, seeded by the depressed cubic with Q t^4 dropped
+   //          (CubicRoots) and polished by 2 Newton steps held in its bracket (paper: 1.2e-15 mm from the exact roots). A minimum is a contact when the direction spine -> centre lies in the
+   //          exposed arc (from +Z to -r, both in the spine's normal plane).
+   void GrooveExtrema(const int ci, const double R, const V3 &c, std::vector<RimHit> &out, std::vector<RimHump> *humps, const double reachGap)
+   {
+      const Rim &m = g_rims[ci];
+      const GrooveShape &g = m.gr;
+      const double dx = c.x - m.cx, dy = c.y - m.cy;
+      const double X = dx * m.lx + dy * m.ly, Y = dx * m.px + dy * m.py, Z = c.z - m.z0;   // the ball's centre in the groove's frame
+      const auto world = [&](const double x, const double y, const double z) { return V3(m.cx + m.lx * x + m.px * y, m.cy + m.ly * x + m.py * y, m.z0 + z); };
+      const auto worldDir = [&](const double x, const double y, const double z) { return V3(m.lx * x + m.px * y, m.ly * x + m.py * y, z); };
+      // the floor: w = C - (axis point at X = 0), sax its part along the axis, v the rest (perpendicular to the axis), up = (-sin a, 0, cos a)
+      {
+         const double wz = Z - g.Pz, sax = X * g.c + wz * g.s;
+         const double vx = X - sax * g.c, vy = Y, vz = wz - sax * g.s, rc = std::sqrt(vx * vx + vy * vy + vz * vz);
+         const double down = g.s * vx - g.c * vz;   // -v.up: rc cos(theta), theta the foot's angle from straight down in its section
+         const double e = (g.Pz + sax * g.s + g.rho) / g.c;
+         // on the floor: past the plunger end (open: sax >= 0), before the tip (e < B), within the edge: cos theta >= cos theta_r = e / B (theta_r < 90 deg, e > 0)
+         if (rc > 1e-12 && sax >= 0.0 && e < g.B && down * g.B >= e * rc)
+         {
+            const double dist = g.Rg - rc;
+            if (dist - R <= reachGap)
+            {
+               RimHit h;
+               h.cut = ci;
+               h.dist = dist;
+               h.delta = R - dist;
+               h.rho = 0.0;
+               h.floor = true;
+               h.loop = 0.0;
+               h.normal = worldDir(-vx / rc, -vy / rc, -vz / rc);   // surface -> centre: toward the axis
+               h.point = world(sax * g.c + g.Rg * vx / rc, g.Rg * vy / rc, g.Pz + sax * g.s + g.Rg * vz / rc);
+               // the law for a concave surface (rubbercontact.h EffectiveRadius(R, -Rg)): across 1/R1 = 1/R - 1/Rg, held within 20 ball radii; along the straight generator R2 = R
+               const double R1 = 1.0 / std::max(1.0 / R - 1.0 / g.Rg, 0.05 / R);
+               h.reff = std::sqrt(R1 * R);
+               out.push_back(h);
+            }
+         }
+      }
+      // the rim
+      const double P = g.u0 + X * g.s, Q = Y * g.s * g.s, KP = g.K + P;
+      if (KP <= 0.0)   // (the centre a metre behind the plunger end, past the ellipse's far end: no extremum on the arc)
+         return;
+      double br[4];   // the monotone brackets' ends, ascending in t
+      int nb = 0;
+      br[nb++] = -g.tE;
+      if (g.K > P)
+         for (const double sg : { -1.0, 1.0 })
+         {
+            double tc = sg * std::sqrt((g.K - P) / (3.0 * KP));   // h's critical points, exact for Q = 0; 3 Newton steps on h'
+            for (int it = 0; it < 3; it++)
+            {
+               const double d2 = 12.0 * Q * tc * tc + 12.0 * KP * tc;
+               if (d2 == 0.0)
+                  break;
+               tc -= g.Hp(tc, P, Q) / d2;
+            }
+            if (tc > -g.tE && tc < g.tE && tc > br[nb - 1])
+               br[nb++] = tc;
+         }
+      br[nb++] = g.tE;
+      double seed[3];
+      int ns = 0;
+      for (int i = 0; i + 1 < nb; i++)
+      {
+         const double lo = br[i], hi = br[i + 1], hl = g.H(lo, P, Q), hh = g.H(hi, P, Q);
+         if ((hl > 0.0) == (hh > 0.0))   // (a root exactly on a bracket's end counts as h <= 0, once)
+            continue;
+         if (ns == 0)
+            ns = CubicRoots(-(g.K - P) / KP, -Q / (2.0 * KP), seed);
+         double t = 0.5 * (lo + hi);
+         for (int j = 0; j < ns; j++)
+            if (seed[j] >= lo && seed[j] <= hi)
+            {
+               t = seed[j];
+               break;
+            }
+         for (int it = 0; it < 2; it++)
+         {
+            const double d = g.Hp(t, P, Q);
+            if (d != 0.0)
+               t = std::clamp(t - g.H(t, P, Q) / d, lo, hi);
+         }
+         const double t2 = t * t, cp = (1.0 - t2) / (1.0 + t2), sp = 2.0 * t / (1.0 + t2), phi = 2.0 * std::atan(t);
+         const double Sx = (g.B * cp - g.u0) / g.s, Sy = g.B * sp, Sz = -g.rho;   // the spine point
+         const double ex = X - Sx, ey = Y - Sy, ez = Z - Sz, d3 = std::sqrt(ex * ex + ey * ey + ez * ez);
+         if (hh <= 0.0)   // h from > 0 to <= 0: the distance rises then falls, a hump
+         {
+            if (humps != nullptr)
+               humps->push_back({ ci, phi, d3 });
+            continue;
+         }
+         if (d3 <= 1e-12 || d3 - (R + g.rho) > reachGap)
+            continue;
+         // the exposed arc: n between +Z and m = -r = (-s cos phi, -sin phi, c cos phi) in the spine's normal plane, nin = m's horizontal part made unit (toward the groove, the spine's
+         // centre of curvature): n.nin >= 0 and n no farther from +Z than m
+         const double mh = std::sqrt(g.s * g.s * cp * cp + sp * sp), ninx = -g.s * cp / mh, niny = -sp / mh;   // (mh: m's horizontal length, the sine of the arc's end angle)
+         const double nx = ex / d3, ny = ey / d3, nz = ez / d3, nn = nx * ninx + ny * niny;
+         if (nn < 0.0 || nn * (g.c * cp) - nz * mh > 0.0)
+            continue;
+         RimHit h;
+         h.cut = ci;
+         h.dist = d3;
+         h.delta = R + g.rho - d3;
+         h.rho = g.rho;
+         h.floor = false;
+         h.loop = phi;
+         h.normal = worldDir(nx, ny, nz);
+         h.point = world(Sx, Sy, Sz);
+         // the tube law (as the slot's): across 1/R1 = 1/R + 1/rho; along it the spine's curvature k = (B^2 / sin a) / |S'|^3 (the ellipse's), by Meusnier with the 3D cosine between n and
+         // the spine's outward in-plane normal (-nin): -nn (the inner side: concave), concave bends held within 20 ball radii
+         const double sp2 = g.B * g.B * (sp * sp / (g.s * g.s) + cp * cp), k = g.B * g.B / g.s / (sp2 * std::sqrt(sp2));
+         const double kLong = RubberContact::TubeAlongCurvature(k, g.rho, -nn);
+         const double R1 = 1.0 / (1.0 / R + 1.0 / g.rho), R2 = 1.0 / std::max(1.0 / R + kLong, 0.05 / R);
+         h.reff = std::sqrt(R1 * R2);
+         out.push_back(h);
+      }
+      // the plunger end: OPEN adds no piece (GrooveShape comment). Another end shape adds its own pieces' minima here, in a function of its own.
+   }
+
    // the cuts of this host within reach of a ball at c
    void NearCuts(const ContactSurface *host, const V3 &c, const double reachM, std::vector<int> &out)
    {
@@ -450,6 +636,94 @@ namespace
       m.kapTip = m.RampCurvature(0.0);
       m.kapRound = 1.0 / m.r;
    }
+
+   // A [PlayfieldCut:<name>] shape = groove: its keys (playfieldcut.h), its playfield host and the groove's numbers; R a standard ball for the logged paper numbers
+   void SetupGroove(const CutKeys &k, const std::vector<HitRubber *> &pf, const double R)
+   {
+      const std::string where = "Playfield cut " + k.name + ": ";
+      if (k.widthSet)
+         Notice(where + "width_mm is not a groove key (its radius is fixed): ignored (physics ini)");
+      double lengthMm = k.lengthMm;
+      if (lengthMm > kGrooveLenMaxMm || lengthMm < kGrooveLenMinMm)
+      {
+         const double lim = lengthMm > kGrooveLenMaxMm ? kGrooveLenMaxMm : kGrooveLenMinMm;
+         std::ostringstream o;
+         o << where << "groove length_mm " << lengthMm << " is outside " << kGrooveLenMinMm << " .. " << kGrooveLenMaxMm << ": using " << lim << " (physics ini)";
+         Notice(o.str());
+         lengthMm = lim;
+      }
+      HitRubber *host = nullptr;   // the highest playfield surface at the plunger end
+      double zU = 0.0;
+      for (HitRubber *const h : pf)
+      {
+         double z;
+         if (h->SurfaceHeightAt(k.x, k.y, z) && (host == nullptr || z > zU))
+         {
+            host = h;
+            zU = z;
+         }
+      }
+      if (host == nullptr)
+      {
+         Notice(where + "no playfield surface at its plunger end: the groove is ignored (physics ini x, y)");
+         return;
+      }
+      Rim m;
+      m.groove = true;
+      m.host = host;
+      m.name = k.name;
+      m.cx = k.x * U;
+      m.cy = k.y * U;
+      m.z0 = zU * U;
+      const double rot = k.angle * (M_PI / 180.0);
+      m.lx = -std::sin(rot);
+      m.ly = std::cos(rot);
+      m.px = -m.ly;
+      m.py = m.lx;
+      m.rho = kEdgeRhoM;
+      GrooveShape &g = m.gr;
+      g.Build(lengthMm * 1e-3);
+      // the playfield must be flat over the groove and 1 mm round it (the rim's top tangent line is the top's edge): its top height on a 1 mm grid
+      bool flat = true;
+      for (double s = -1e-3; flat && s <= g.xv + 1e-3 + 1e-9; s += 1e-3)
+         for (double t = -(g.yh + 1e-3); flat && t <= g.yh + 1e-3 + 1e-9; t += 1e-3)
+         {
+            double z;
+            flat = host->SurfaceHeightAt((m.cx + m.lx * s + m.px * t) / U, (m.cy + m.ly * s + m.py * t) / U, z) && std::abs(z - zU) * U <= 1e-6;
+         }
+      if (!flat)
+      {
+         Notice(where + "the playfield is not flat over the groove (a raised or curved playfield, or its edge): the groove is ignored (physics ini x, y, angle, length_mm)");
+         return;
+      }
+      // the world box: X from the plunger end to the spine's vertex, |Y| <= the half-width at X = 0, Z from the floor's lowest point (X = 0) to the top
+      for (int i = 0; i < 3; i++)
+      {
+         m.lo[i] = 1e30;
+         m.hi[i] = -1e30;
+      }
+      for (int corner = 0; corner < 8; corner++)
+      {
+         const double s = corner & 1 ? g.xv : 0.0, t = (corner & 2 ? 1.0 : -1.0) * g.yh, z = corner & 4 ? 0.0 : -g.D0;
+         const double v[3] = { m.cx + m.lx * s + m.px * t, m.cy + m.ly * s + m.py * t, m.z0 + z };
+         for (int i = 0; i < 3; i++)
+         {
+            m.lo[i] = std::min(m.lo[i], v[i]);
+            m.hi[i] = std::max(m.hi[i], v[i]);
+         }
+      }
+      // logged paper numbers (paper sections 1, 2, 3a): a ball resting on the floor's bottom 20 mm from the plunger end has its centre Rg - R from the axis, straight below it
+      g.floorR1 = 1.0 / (1.0 / R - 1.0 / g.Rg);
+      const double sax = (20e-3 - (g.Rg - R) * g.s) / g.c, zc = g.Pz + sax * g.s - (g.Rg - R) * g.c;
+      std::ostringstream o;
+      o << "Playfield cut " << k.name << ": groove in the playfield " << host->Name() << " (exact floor and rim), plunger end " << k.x << ", " << k.y << " (playfield z " << zU << "), angle " << k.angle
+        << " deg (toward the tip " << m.lx << ", " << m.ly << "), length " << lengthMm << " mm, depth " << g.D0 * 1e3 << " mm at the plunger end (open) to 0 at the tip, radius " << g.Rg * 1e3
+        << " mm, rim radius " << m.rho * 1e3 << " mm (assumed); tilt " << g.a * 180.0 / M_PI << " deg, opening " << 2.0 * g.yh * 1e3 << " mm at the plunger end, spine vertex at "
+        << g.xv * 1e3 << " mm, its radius " << g.B * g.s * 1e6 << " um. Paper, 27 mm ball: floor Hertz radius " << std::sqrt(g.floorR1 * R) * 1e3 << " mm; resting 20 mm from the plunger end, centre "
+        << zc * 1e3 << " mm above the top";
+      PLOGI << o.str();
+      g_rims.push_back(std::move(m));
+   }
 }
 
 namespace PlayfieldCuts
@@ -487,14 +761,19 @@ namespace PlayfieldCuts
          const std::string where = "Playfield cut " + k.name + ": ";
          for (const std::string &line : k.unknown)
             Notice(where + "unknown key, ignored line '" + line + "' (physics ini)");
-         if (k.shape != "slot")
+         if (k.shape != "slot" && k.shape != "groove")
          {
-            Notice(where + (k.shape.empty() ? std::string("no shape") : "shape '" + k.shape + "' is not known") + ": the cut is ignored. The only shape is slot (physics ini)");
+            Notice(where + (k.shape.empty() ? std::string("no shape") : "shape '" + k.shape + "' is not known") + ": the cut is ignored. The shapes are slot and groove (physics ini)");
             continue;
          }
          if (!k.xSet || !k.ySet || !k.lengthSet || k.lengthMm < 0.0)
          {
             Notice(where + "needs x, y and length_mm (0 or more): the cut is ignored (physics ini)");
+            continue;
+         }
+         if (k.shape == "groove")
+         {
+            SetupGroove(k, pf, R);
             continue;
          }
          double widthMm = k.widthMm;
@@ -592,7 +871,7 @@ namespace PlayfieldCuts
       hits.clear();
       humps.clear();
       for (const int ci : cuts)
-         RimExtrema(ci, bs.R, c, hits, patch ? &humps : nullptr, bs.R + g_rims[ci].rho + extra + kReachPadM);
+         RimExtrema(ci, bs.R, c, hits, patch ? &humps : nullptr, extra + kReachPadM);
       int best = -1;   // the deepest: a face (-1) or a rim contact
       double bestDelta = pr.seg >= 0 ? pr.delta : -1e30;
       for (size_t j = 0; j < hits.size(); j++)
@@ -615,7 +894,7 @@ namespace PlayfieldCuts
       pr.delta = b.delta;
       pr.overlap = b.delta > 0.0;
       pr.reff = b.reff;
-      pr.rho = g_rims[b.cut].rho;
+      pr.rho = b.rho;
       pr.seg = (int)tris.size() + b.cut;
       if (!patch || !pr.overlap || pr.delta <= zero)
          return pr;
@@ -654,18 +933,29 @@ namespace PlayfieldCuts
                const RimHit &h1 = hits[i], &h2 = hits[j];
                if (h1.cut != ci || h2.cut != ci || h1.delta - zero <= 0.0 || h2.delta - zero <= 0.0)
                   continue;
-               // the largest distance on each arc between them (forward from h1 to h2, and the rest); the hump is the lower of the two
-               const double fwd = std::fmod(h2.loop - h1.loop + 2.0 * tot, tot);
-               double m1 = -1.0, m2 = -1.0;
-               for (const RimHump &q : humps)
-               {
-                  if (q.cut != ci)
+               double hump = -1.0;
+               if (g_rims[ci].groove)   // a groove: a floor contact keeps weight 1 (its pieces meet tangent: no hump between, and never two pressing at once, paper section 3e); two rim
+               {                        // contacts: the largest distance on the open spine arc between them
+                  if (h1.floor || h2.floor)
                      continue;
-                  double &mm = std::fmod(q.loop - h1.loop + 2.0 * tot, tot) < fwd ? m1 : m2;
-                  mm = std::max(mm, q.dist);
+                  for (const RimHump &q : humps)
+                     if (q.cut == ci && q.loop > std::min(h1.loop, h2.loop) && q.loop < std::max(h1.loop, h2.loop))
+                        hump = std::max(hump, q.dist);
+               }
+               else   // a slot: the largest distance on each arc between them (forward from h1 to h2, and the rest); the hump is the lower of the two
+               {
+                  const double fwd = std::fmod(h2.loop - h1.loop + 2.0 * tot, tot);
+                  double m1 = -1.0, m2 = -1.0;
+                  for (const RimHump &q : humps)
+                  {
+                     if (q.cut != ci)
+                        continue;
+                     double &mm = std::fmod(q.loop - h1.loop + 2.0 * tot, tot) < fwd ? m1 : m2;
+                     mm = std::max(mm, q.dist);
+                  }
+                  hump = m1 < 0.0 ? m2 : m2 < 0.0 ? m1 : std::min(m1, m2);
                }
                const double d1 = h1.delta - zero, d2 = h2.delta - zero;
-               const double hump = m1 < 0.0 ? m2 : m2 < 0.0 ? m1 : std::min(m1, m2);
                const double ds = hump < 0.0 ? -1.0 : top - hump;   // (no hump found: free between)
                const double s = std::min(std::max(ds / std::min(d1, d2), 0.0), 1.0), p1 = d1 - ds, p2 = d2 - ds;
                const double f1 = p1 + p2 > 0.0 ? p1 / (p1 + p2) : 0.5;
@@ -705,7 +995,7 @@ namespace PlayfieldCuts
       for (const int ci : cuts)
       {
          hits.clear();
-         RimExtrema(ci, bs.R, c, hits, nullptr, bs.R + g_rims[ci].rho + beyondM + kReachPadM);
+         RimExtrema(ci, bs.R, c, hits, nullptr, beyondM + kReachPadM);
          int skip = -1;   // the probe's nearest on this cut: its deepest (the probe takes the first of equals)
          if (nearestSeg == nT + ci)
             for (size_t j = 0; j < hits.size(); j++)
@@ -715,7 +1005,7 @@ namespace PlayfieldCuts
          {
             if ((int)j == skip)
                continue;
-            const double gap = hits[j].dist - (bs.R + g_rims[ci].rho);
+            const double gap = hits[j].dist - (bs.R + hits[j].rho);
             if (gap <= touchM)   // touching: the step's own law has it
                continue;
             h = RubberContact::ArrivalStep(gap - arriveM, std::max(-v.Dot(hits[j].normal), 0.0), a, h);
@@ -731,6 +1021,8 @@ namespace PlayfieldCuts
          return out;
       for (const Rim &m : g_rims)
       {
+         if (m.groove)   // (the groove is not drawn yet: a later piece)
+            continue;
          DrawnSlot d;
          d.name = m.name;
          d.unit = U;

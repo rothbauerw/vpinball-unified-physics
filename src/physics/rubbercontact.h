@@ -455,8 +455,9 @@ namespace RubberContact
       }
    };
 
-   // Surface curvature along the tube at the contact (signed, 1/m, > 0 convex): for a centreline of curvature k the outer equator gives
-   // cos/(1/k + rho cos), the inner one is concave. cosang = +1 outer equator, -1 inner (in-plane direction of the normal against the centre of curvature).
+   // Surface curvature along the tube at the contact (signed, 1/m, > 0 convex), the torus's curvature along its parallel (Meusnier): for a centreline of curvature k,
+   // cos/(1/k + rho cos), cosang the 3D cosine between the contact's unit normal and the centreline's in-plane normal pointing away from its centre of curvature
+   // (+1 the outer equator, -1 the inner one, 0 the top: a normal along the binormal sees no bend along the tube).
    inline double TubeAlongCurvature(double k, double rho, double cosang)
    {
       if (k < 1e-9)
@@ -653,12 +654,8 @@ namespace RubberContact
             dnx = ok ? dn.x / dl : 0.0;
             dny = ok ? dn.y / dl : 0.0;
          }
-         const double nh = std::sqrt(pr.normal.x * pr.normal.x + pr.normal.y * pr.normal.y);
-         if (ok && nh > 1e-9)
-         {
-            const double cosang = -(pr.normal.x * dnx + pr.normal.y * dny) / nh;
-            kLong = TubeAlongCurvature(k, rho, cosang);
-         }
+         if (ok)   // (the 3D cosine between the unit normal and the horizontal unit dn: Meusnier, TubeAlongCurvature)
+            kLong = TubeAlongCurvature(k, rho, -(pr.normal.x * dnx + pr.normal.y * dny));
       }
       const double R1 = 1.0 / (1.0 / ball.R + 1.0 / rho);
       // concave bends tighter than the ball would give a zero or negative radius; keep the along-tube radius within 20 ball radii

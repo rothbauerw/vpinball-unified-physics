@@ -1,13 +1,21 @@
 #pragma once
 // Playfield cuts: holes cut in the playfield (design runs/2026-11-09-slot-hole/design.md, section 2 third version). Each cut is a [PlayfieldCut:<name>] section of the table's physics ini;
-// [Features] playfield_cuts = 0 ignores every one. The only shape so far is the slot a wire switch pokes through:
+// [Features] playfield_cuts = 0 ignores every one. Two shapes: the plunger lane groove (below) and the slot a wire switch pokes through:
 //   [PlayfieldCut:<name>]
-//   shape = slot        the only shape; any other value: the cut is ignored (on-screen notice and WARN)
+//   shape = slot        (or groove, below); any other value: the cut is ignored (on-screen notice and WARN)
 //   x, y                centre of the straight part, VPX units
 //   angle               direction of the slot, degrees, the trigger's rotation convention: along (-sin angle, cos angle) (wireshape.h Place)
 //   length_mm           the straight part, between the round ends' centres
 //   width_mm            default and largest 5.03 (0.198 in, PartData 7), smallest 3.175 (1/8 in); outside: the nearest limit, with a notice and a WARN
 // Playfield only (no z key): the cut is at the playfield's height at its centre, and the playfield must be flat over the cut's band (else the cut is ignored, with a notice).
+//
+// The plunger lane groove (paper runs/2026-11-10-plunger-groove/paper.md; physics only, not drawn yet):
+//   [PlayfieldCut:<name>]
+//   shape = groove      a round-bottomed groove routed along the plunger lane: radius 0.625 in, depth 0.188 in at the plunger end falling linearly to 0 at the far tip (both fixed)
+//   x, y                the plunger end, on the groove's axis, VPX units. The end is open: the groove runs on out of the cut's area there, the ball is held by the plunger tip
+//   angle               direction from the plunger end toward the tip, degrees, the slot's convention: along (-sin angle, cos angle)
+//   length_mm           plunger end to tip; typical and limit 304.8 .. 508 (12 .. 20 in, the range the paper checked); outside: the nearest limit, with a notice and a WARN
+// Its contacts are exact: the floor (a tilted cylinder), the rim (a 0.25 mm tube about a level ellipse) and the playfield's own faces outside the rim (playfieldcut.cpp GrooveShape).
 //
 // Shape, in the slot's frame (s along the slot, t across, z up from the playfield top; a = width / 2, u = |s| - length / 2 past each end of the straight part):
 //   outline (where the top ends)  straight sides t = +-a; the drilled round end w^2 = a^2 - u^2 up to U1 = L - sqrt(L^2 - a^2); then the drill tip's ramp w^2 = a^2 - U1^2 - 2 U1 (u - U1),
