@@ -86,6 +86,10 @@ Whether the band now uses the same spring law is to be checked (to-do 3.0).
    16.5 Hunt-Crossley over the step. With longer steps the damper sampled at the mid-step force lost too little, as h^2 (rebound high). Its coefficient now takes the mean spring force over the step (the chord the step already computes): the loss is 1.5 alpha x (V1 - V0) x the rate, the law's own integral at a steady rate. No new evaluation, c >= 0, the energy book unchanged, 1 us results unchanged. Item::DampC.
    16.9 Dropped: an unsteady contact's shear clock lifted by its Coulomb stretch bound (shear_step_motion, 11-05 to 11-08). Same lesson as 16.3: the 750-hit bench lost
    accuracy on slow playfield and rubber hits (speed p95 0.56 -> 1.71 %), because the shear's shorter step was also what resolved the normal hit.
+   16.10 One clock (2026-11-10, runs/2026-11-10-one-clock/design.md). The shear clock (rule 2, shearInStep) is deleted: an unsteady contact is stepped at omegaH / omN,
+   omegaH 0.6 -> 0.39. For a ball on a fixed surface omT / omN = sqrt(3.5 kt/kn) = 1.53 on rubber, 1.70 on steel, so the shear clock always bound and resolved the bounce
+   at 0.39 (0.35 steel); the bounce is now resolved there by its own clock (16.9's lesson kept). On a light part the rubbing is far faster and no longer sets the step:
+   wire switch B 24 -> 5 steps per cycle. 750 hits vs SHREF (q20): 22 -> 21 off-limit, steps 233,754 -> 233,580 (with gonzalez_mass).
 
 
 == D. Step length, guards and the hard step ==
@@ -244,7 +248,7 @@ User: reusing the code was a main reason for the rewrite: a ring, a rubber wall 
 
 
 10.3 The step length with a band in the group   (approved by the user 2026-10-29)
-   The band's rules join the group's ChooseStep (the shortest wins): a ball on the cord at omegaH 0.6 on the cord's stiffness and at most 2 deg of turn round it a
+   The band's rules join the group's ChooseStep (the shortest wins): a ball on the cord at omegaH (0.39 since 2026-11-10) on the cord's stiffness and at most 2 deg of turn round it a
    step; a squash on a post, stop or the plate face reached in about two steps and stepped at 0.6 while it is struck; the plate's springs at 0.6, at most 2 deg of
    turn a step, a step ending exactly on the coil stop. The steady rule applies to the band's squash too: touching with its compression rate and slip rate within
    vSteady (0.05 m/s) it takes omegaHRest (2.4), as every steady contact does. The cord itself is soft and never sets short steps.

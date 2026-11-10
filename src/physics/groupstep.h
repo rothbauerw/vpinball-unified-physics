@@ -299,9 +299,9 @@ namespace GroupStep
       RubberParams pair;     // ball on ball (steel)
       bool ballPairs = true;
       // the step (ChooseStep): accuracy only
-      double omegaH = 0.6;                     // h <= omegaH / omega of the stiffest contact (normal, and shear when shearInStep)
+      double omegaH = 0.39;                    // h <= omegaH / omega of the stiffest unsteady contact's normal spring (the bounce; one clock: runs/2026-11-10-one-clock/design.md.
+                                               // 0.39 = the old 0.6 on the shear clock for a ball on rubber, omT = 1.53 omN; a light part's faster rubbing no longer sets the step)
       bool gonzalezMass = true;                // each stored energy's correction (Gonzalez) split by mass, the kinetic-energy metric (ContactSettings gonzalez_mass)
-      bool shearInStep = true;                 // the shear spring's stiffness counts in the step choice (false: the normal stiffness only; the solve is stable either way)
       bool slideFree = true;                   // a slide at the friction limit counts as steady (docs/unified-physics/GroupStepDesign.txt 16: its force is mu N, the spring's stiffness is not in the motion)
       // The step rule by motion (docs/unified-physics/GroupStepDesign.txt 9, 16, 17): a contact that is steady only needs its normal stiffness resolved to omegaHRest; an impact, a slip the spring can still catch or a fast
       // arrival keeps the strict rule above. Steady is motion, not load: its closing rate is within vSteady, the net force on its bodies cannot change that rate by more in the contact's own time (at a hit's
@@ -1542,13 +1542,13 @@ namespace GroupStep
          }
       }
 
-      // What set the last ChooseStep (diagnostics for the offline trace; always kept): the rule (0 hMax, 1 normal stiffness, 2 shear stiffness, 3 arrival,
+      // What set the last ChooseStep (diagnostics for the offline trace; always kept): the rule (0 hMax, 1 normal stiffness, 3 arrival,
       // 4 turning, 5 floor 0.1 us, 7 a steady contact's normal stiffness at omegaHRest, 8 a part: partRule is its own), the contact (-1 = none) and that
       // contact's values at the choice
       struct StepDiag
       {
          int rule = 0, item = -1, partRule = -1;
-         double delta = 0.0, dDot = 0.0, omN = 0.0, omT = 0.0;
+         double delta = 0.0, dDot = 0.0, omN = 0.0;
          int unsteady = 0;                   // the steady test the contact failed, the first in order: 0 none (steady, or no test), 1 closing speed, 2 acceleration, 3 slip
          double unsteadyVal = 0.0, unsteadyLim = 0.0;   // that test's value and limit (m/s, m/s^2, m/s)
          int term = -1;                      // >= 0: the contact's term (Hit::t) whose arrival set the step (termArrival); delta and dDot are then that term's
@@ -1649,19 +1649,14 @@ namespace GroupStep
                return lo;
             };
             const double lo = reachDepth(vc);
-            // an unsteady contact's clock at the expected depth dE: the normal one, and the shear one (Settings::shearInStep); shearSets: the shear clock binds
-            const auto unsteadyClock = [&](const double dE, bool &shearSets, double &omN) {
-               const double ktE = L.Kt(dE);
+            // an unsteady contact's clock at the expected depth dE: its normal spring's (the bounce)
+            const auto unsteadyClock = [&](const double dE, double &omN) {
                omN = std::sqrt(L.K(dE) / L.mRed);
-               const double omT = std::sqrt(ktE / L.mt);
-               const double om = set.shearInStep ? std::max(omN, omT) : omN;
-               const double hs = om > 0.0 ? set.omegaH / om : set.hMax;
-               shearSets = set.shearInStep && omT > omN;
-               return hs;
+               return omN > 0.0 ? set.omegaH / omN : set.hMax;
             };
             const double dE = std::max(hp.delta, lo);
             const double ktE = L.Kt(dE);
-            const double omN = std::sqrt(L.K(dE) / L.mRed), omT = std::sqrt(ktE / L.mt);
+            const double omN = std::sqrt(L.K(dE) / L.mRed);
             // steady (Settings): by the motion, at the contact's own time scale. At the friction limit (Coulomb): a spring within mu N holds at most (mu N)^2 / (2 kt) of energy, so a slip with more than that
             // in 1/2 mt u^2 cannot be stopped by it: the contact slides, its force is mu N whatever the spring's stiffness, and the spring's time scale is not in the motion.
             bool steady = false;
@@ -1700,9 +1695,7 @@ namespace GroupStep
                      why = 1, whyVal = dDot, whyLim = set.vSteady;
                }
             }
-            const double om = steady ? omN : (set.shearInStep ? std::max(omN, omT) : omN);
-            double hs = om > 0.0 ? (steady ? set.omegaHRest : set.omegaH) / om : set.hMax;
-            const bool shearSets = set.shearInStep && omT > omN;
+            double hs = omN > 0.0 ? (steady ? set.omegaHRest : set.omegaH) / omN : set.hMax;
             if (set.stepModel == 1 && steady && hp.delta > 0.0)   // by the motion in its mode (Settings::stepModel)
             {
                const double omR = std::sqrt(L.K(hp.delta) / L.mRed);
@@ -1724,7 +1717,6 @@ namespace GroupStep
                   dg.delta = hp.delta;
                   dg.dDot = dDot;
                   dg.omN = omN;
-                  dg.omT = omT;
                   dg.unsteady = why;
                   dg.unsteadyVal = whyVal;
                   dg.unsteadyLim = whyLim;
@@ -1734,10 +1726,10 @@ namespace GroupStep
             if (hp.delta < 0.0 && dDot > 0.0)   // reached in about two steps, not overshot
             {
                const double ha = 0.5 * -hp.delta / dDot;
-               lim(std::max(ha, hs), ha > hs ? 3 : (shearSets ? 2 : 1));
+               lim(std::max(ha, hs), ha > hs ? 3 : 1);
             }
             else
-               lim(hs, steady ? 7 : (shearSets ? 2 : 1));
+               lim(hs, steady ? 7 : 1);
             // termArrival: each term not yet pressing is an approaching contact of its own: the arrival rule with the clock an untouched contact gets there
             // (unsteady, at the depth its own closing speed reaches), not the contact's (a resting contact's clock can be hMax)
             for (int t = 0; terms && t < hp.nt; t++)
@@ -1749,12 +1741,11 @@ namespace GroupStep
                const double ha = 0.5 * -ht.d / dDotT;
                if (ha >= h)
                   continue;   // (max(ha, hsT) >= h: no limit; the clock is not needed)
-               bool shT = false;
                double omNT = 0.0;
-               const double hsT = unsteadyClock(reachDepth(std::max(dDotT, set.vFloor)), shT, omNT);
+               const double hsT = unsteadyClock(reachDepth(std::max(dDotT, set.vFloor)), omNT);
                if (std::max(ha, hsT) < h)
                {
-                  lim(std::max(ha, hsT), ha > hsT ? 3 : (shT ? 2 : 1));
+                  lim(std::max(ha, hsT), ha > hsT ? 3 : 1);
                   dg.term = t;
                   dg.delta = ht.d;
                   dg.dDot = dDotT;
