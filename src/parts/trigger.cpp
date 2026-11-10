@@ -72,7 +72,8 @@ void Trigger::GetWireOutline(vector<Vertex2D> &outline) const
    if (CentrelineShape(m_d.m_shape))
    {
       // the plan view of the wire's tube (the same centreline as the physics, wireshape.h): its plane is vertical, so a strip one wire wide from end to end
-      const WireShape::Centreline cl = WireShape::MakeCentreline(ToWireShape(m_d.m_shape));
+      const WireSwitchGroup::Settings ds;   // the editor's outline: the default steps and wire (the table's ini is read at play)
+      const WireShape::Centreline cl = WireShape::MakeCentreline(ToWireShape(m_d.m_shape), ds.bendStepDeg, ds.archStepDeg);
       WireShape::Placement pl;
       pl.x = m_d.m_vCenter.x;
       pl.y = m_d.m_vCenter.y;
@@ -355,13 +356,23 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          }
          if (s.wireDMm >= WireShape::kMaxWireDMm)
             notices.push_back("Wire trigger " + GetName() + ": wire_d_mm " + std::to_string(s.wireDMm) + " folds on the inside of its 1.3 mm bends (needs under 2.6 mm); check wire_d_mm");
+         if (!(s.bendStepDeg > 0.0))
+         {
+            notices.push_back("Wire trigger " + GetName() + ": bend_step_deg " + std::to_string(s.bendStepDeg) + " cuts no pieces; the default is used. Set bend_step_deg above 0");
+            s.bendStepDeg = WireSwitchGroup::Settings().bendStepDeg;
+         }
+         if (!(s.archStepDeg > 0.0))
+         {
+            notices.push_back("Wire trigger " + GetName() + ": arch_step_deg " + std::to_string(s.archStepDeg) + " cuts no pieces; the default is used. Set arch_step_deg above 0");
+            s.archStepDeg = WireSwitchGroup::Settings().archStepDeg;
+         }
          if (m_d.m_scaleX != 1.f || m_d.m_scaleY != 1.f)
             notices.push_back("Wire trigger " + GetName() + ": Scale X / Y (" + std::to_string(m_d.m_scaleX) + ", " + std::to_string(m_d.m_scaleY) + ") are not used: a real wire has one size. Set them to 1");
          // the playfield top = the trigger's Surface (user 2026-11-09); the trigger's x, y = the middle of the wire's part above it; the pivot 19.3 mm below it plus heightoffset_mm
          const float floorZ = height;
          const float playfieldZ = m_ptable->GetSurfaceHeight(string(), m_d.m_vCenter.x, m_d.m_vCenter.y);
          const WireShape::Shape shape = ToWireShape(m_d.m_shape);
-         const WireShape::Centreline cl = WireShape::MakeCentreline(shape);
+         const WireShape::Centreline cl = WireShape::MakeCentreline(shape, s.bendStepDeg, s.archStepDeg);
          WireShape::Placement pl;
          pl.x = m_d.m_vCenter.x;
          pl.y = m_d.m_vCenter.y;
@@ -432,9 +443,9 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          m_partHost->SetHardSurface(s.elasticity, s.friction);
          physics->AddCollider(m_partHost, isUI);
          const WireSwitchGroup::Part &w = m_partModel->part;
-         PLOGI << "Trigger " << GetName() << ": wire switch part on the group step (shape Wire" << "ABCDE"[(int)shape] << ", " << wm.caps.size() << " capsules, wire " << 2e3 * wm.r << " mm: hinge body with its mass)";
+         PLOGI << "Trigger " << GetName() << ": wire switch part on the group step (shape Wire" << "ABCDE"[(int)shape] << ", " << wm.caps.size() << " capsules, at most " << cl.sagittaMm * 1e3 << " um off the true bends, wire " << 2e3 * wm.r << " mm: hinge body with its mass)";
          PLOGI << "Trigger " << GetName() << ": surface '" << m_d.m_szSurface << "' at z " << floorZ << " VPU (playfield z " << playfieldZ << "), heightoffset " << s.heightOffsetMm << " mm; spring " << s.springN
-               << " N at first touch, " << s.springFullN << " N at full travel; close " << s.closeMm << " mm, release " << s.releaseMm << " mm, full travel " << s.stopBelowMm << " mm under the playfield; mass "
+               << " N at first touch, " << s.springFullN << " N at full travel; close " << s.closeMm << " mm, release " << s.releaseMm << " mm, full travel " << s.stopBelowMm << " mm under the playfield; wire_d_mm " << s.wireDMm << ", wire_bend " << s.wireBend << ", bend_step_deg " << s.bendStepDeg << ", arch_step_deg " << s.archStepDeg << "; mass "
                << w.mp.m * 1e3 << " g, I " << w.mp.I << " kg m^2, reach " << reach * 1e3 << " mm)";
          return;
       }
@@ -814,7 +825,8 @@ std::unique_ptr<std::vector<Vertex3D_NoTex2>> Trigger::GenerateMesh(Vertex3Ds &b
 
 void Trigger::MakeRestTube()
 {
-   const WireShape::Centreline cl = WireShape::MakeCentreline(ToWireShape(m_d.m_shape));
+   const WireSwitchGroup::Settings ds;   // the default steps and wire (the table's ini is read at play)
+   const WireShape::Centreline cl = WireShape::MakeCentreline(ToWireShape(m_d.m_shape), ds.bendStepDeg, ds.archStepDeg);
    WireShape::Placement pl;
    pl.x = m_d.m_vCenter.x;
    pl.y = m_d.m_vCenter.y;

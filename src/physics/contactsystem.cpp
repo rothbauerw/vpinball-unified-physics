@@ -2093,6 +2093,7 @@ struct ContactSystemImpl
       BallSI bs;
       double heldReff = 0.0;   // > 0: the radius this touch started with (the group takes a shape's law anew each cycle; a polygon's radius jumps at a corner, the energy must not)
       double heldKb = 0.0;     // the bend this touch started with, for the same reason
+      double heldKtb = 0.0;    // and its bend across the normal
       ContactMovingPart *mp = nullptr;   // a part on the group: its own surface, which moves with it
       int surface = 0;
       std::string Name() const override { return r != nullptr ? r->Name() : std::string(); }
@@ -2110,6 +2111,7 @@ struct ContactSystemImpl
             {
                h.reff = heldReff;
                h.kb = heldKb;
+               h.ktb = heldKtb;
             }
             return;
          }
@@ -2553,6 +2555,7 @@ struct ContactSystemImpl
                   sh.onlyBall = ib;
                   sh.heldReff = (ring || mp != nullptr) && it.Surf(sf).touching ? it.Surf(sf).reff : 0.0;
                   sh.heldKb = mp != nullptr && it.Surf(sf).touching ? it.Surf(sf).kb : 0.0;
+                  sh.heldKtb = mp != nullptr && it.Surf(sf).touching ? it.Surf(sf).ktb : 0.0;
                   if (hasPart && mp == nullptr && it.r->MovingPart() != nullptr)   // a part still on the old loop is a surface at its present pose in this cycle, its reaction left out, until it moves over (GroupStepDesign 3)
                   {
                      static const void *warned = nullptr;
@@ -3091,6 +3094,7 @@ struct ContactSystemImpl
             it.touching = sh->surface == 0 ? gi.touching : it.touching || gi.touching;
             kept.reff = gi.touching ? gi.reff : 0.0;
             kept.kb = gi.touching ? gi.kb : 0.0;
+            kept.ktb = gi.touching ? gi.ktb : 0.0;
             GroupStep::Hit hp;
             g.ProbeItem(k, hp);
             kept.endDepth = hp.delta;
@@ -4827,6 +4831,7 @@ namespace
             f.contacts = FnvV(f.contacts, it.gs.zero);
             f.contacts = FnvV(f.contacts, it.gs.reff);
             f.contacts = FnvV(f.contacts, it.gs.kb);
+            f.contacts = FnvV(f.contacts, it.gs.ktb);
             f.contacts = FnvV(f.contacts, it.touching);
             f.contacts = FnvV(f.contacts, it.partTouching);
             f.contacts = FnvV(f.contacts, it.fnLast);

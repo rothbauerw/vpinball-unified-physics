@@ -24,6 +24,7 @@ struct SurfaceState
    RubberContact::RollAngle ra;   // the rolling and twist springs' angles then (roll_model 1)
    double zero = 0.0, reff = 0.0;
    double kb = 0.0;         // the bend in series this touch started with (a part's surface)
+   double ktb = 0.0;        // and its bend across the normal, in series with the shear spring (a wire switch's wire_bend)
    double endDepth = 0.0;   // a part's surface: its depth at the cycle's end, from its zero (a fixed surface's is SurfaceContact::endDepth, the energy check's)
 };
 

@@ -204,6 +204,7 @@ namespace GroupStep
       double curvDist = 0.0;   // > 0: the ball turns round a centre this far away while it rolls along the surface (a post, a tube): the step's turning rule
       double grad = 1.0;       // the depth's gradient is n x grad (below 1 where the contact patch spans a fold of the surface)
       double kb = 0.0;         // > 0: the surface bends in series with the contact here (N/m along the normal): a massless spring, taken with the law when a touch starts and held while it lasts
+      double ktb = 0.0;        // > 0: the surface bends across the normal too, in series with the shear spring (N/m, the stiffer tangential direction; a wire switch's wire_bend): held as kb
       int nc = 0;              // the columns in use; 0 = a fixed surface
       Column c[7];             // one rigid body's 6 coordinates and 1 given motion of its frame: a physical size, not a table limit
       int nt = 0;              // > 0: the union's terms (hinge_piece_sum), the same list in the same order at every place of the ball; delta, n, c are the union's
@@ -218,6 +219,7 @@ namespace GroupStep
          curvDist = o.curvDist;
          grad = o.grad;
          kb = o.kb;
+         ktb = o.ktb;
          nc = o.nc;
          for (int j = 0; j < nc; j++)
             c[j] = o.c[j];
@@ -705,6 +707,7 @@ namespace GroupStep
       double alpha = 0.0, gammaKK = 0.0, tanDelta = 0.0, shearTan = 0.0, mu = 0.0, rollingMu = 0.0;
       bool normalLoss = false, twist = false;
       double kb = 0.0;                // the surface's bend in series with the contact (0 = none): V(d) = min over u of Hertz(u) + 1/2 kb (d - u)^2, kH u^1.5 = kb (d - u)
+      double ktb = 0.0;               // the surface's bend across the normal in series with the shear spring (0 = none): Kt = Kc kt_b / (Kc + kt_b), Kc the patch's ktPerA a
       // the contact's share of the depth
       double Uc(const double d) const
       {
@@ -826,7 +829,39 @@ namespace GroupStep
             return 0.0;
          return kb > 0.0 ? 0.5 * std::sqrt(reff / u) * kb / (1.5 * kH * std::sqrt(u) + kb) : 0.5 * std::sqrt(reff / u);
       }
-      double Kt(double d) const { return ktPerA * A(d); }
+      double Kt(double d) const
+      {
+         const double k = ktPerA * A(d);
+         return ktb > 0.0 && k > 0.0 ? k * ktb / (k + ktb) : k;
+      }
+      // with the bend across (ktb > 0): the integral of Kt over the depth from 0, for its mean over a step (patch_path; Kt is no power of u then). With x = Kc / kt_b = ktU s / kt_b,
+      // s = sqrt(u), ktU = ktPerA sqrt(reff), dd = (1 + b s) 2 s ds, b = 1.5 kH / kb (0 with no bend): 2 kt_b^3 / ktU^2 (F2(x) + beta F3(x)), beta = b kt_b / ktU,
+      // F2 = x^2/2 - x + ln(1 + x), F3 = x^3/3 - x^2/2 + x - ln(1 + x); below x 0.05 by their series (the closed forms cancel there)
+      double KtIntegral(const double d) const
+      {
+         if (d <= 0.0 || ktPerA <= 0.0)
+            return 0.0;
+         const double ktU = ktPerA * std::sqrt(reff), x = ktU * std::sqrt(Uc(d)) / ktb, beta = (kb > 0.0 ? 1.5 * kH / kb : 0.0) * ktb / ktU;
+         double f2, f3;
+         if (x < 0.05)
+         {
+            f2 = f3 = 0.0;
+            double xp = x * x * x, sg = 1.0;   // F2 = sum (-1)^k x^(k+3) / (k+3), F3 = sum (-1)^k x^(k+4) / (k+4)
+            for (int k = 0; k < 12; k++, sg = -sg)
+            {
+               f2 += sg * xp / (k + 3);
+               f3 += sg * xp * x / (k + 4);
+               xp *= x;
+            }
+         }
+         else
+         {
+            const double l = std::log1p(x);
+            f2 = x * x / 2.0 - x + l;
+            f3 = x * x * x / 3.0 - x * x / 2.0 + x - l;
+         }
+         return 2.0 * ktb * ktb * ktb / (ktU * ktU) * (f2 + beta * f3);
+      }
       // the rolling and twist springs of the patch (roll_model 1): tilting (4/3) E* a^3 and torsion (16/3) G* a^3 of a Hertz contact, G* = E* (1 - nu) / 2 with nu 0.3
       // (E* = 3 kH / (4 sqrt(reff)): the normal law's own contact modulus, a pair's compliances added)
       double Kr(double d) const { const double a = A(d); return kH / std::sqrt(reff) * a * a * a; }
@@ -835,12 +870,20 @@ namespace GroupStep
       {
          if (d <= 0.0)
             return 0.0;
+         double sl;
          if (kb > 0.0)
          {
             const double u = Uc(d), kc = 1.5 * kH * std::sqrt(u);
-            return u > 0.0 ? 0.5 * ktPerA * std::sqrt(reff / u) * kb / (kc + kb) : 0.0;
+            sl = u > 0.0 ? 0.5 * ktPerA * std::sqrt(reff / u) * kb / (kc + kb) : 0.0;
          }
-         return 0.5 * ktPerA * std::sqrt(reff / d);
+         else
+            sl = 0.5 * ktPerA * std::sqrt(reff / d);
+         if (ktb > 0.0)   // the bend across in series: dKt/dKc = (kt_b / (Kc + kt_b))^2
+         {
+            const double r = ktb / (ktPerA * A(d) + ktb);
+            sl *= r * r;
+         }
+         return sl;
       }
       double KKIntegral(const double d) const   // 2/3 sqrt(reff) d^1.5, 0 for no touch
       {
@@ -2384,6 +2427,7 @@ namespace GroupStep
       {
          const Ball &A = bs[it.a];
          hp.kb = 0.0;
+         hp.ktb = 0.0;
          hp.nc = 0;   // (hits are kept and reused: a fixed surface writes no columns, and must not inherit a carried one's)
          if (it.b < 0)
          {
@@ -2422,6 +2466,7 @@ namespace GroupStep
          }
          it.reff = hp.reff;
          it.kb = it.b >= 0 ? 0.0 : hp.kb;
+         it.ktb = it.b >= 0 ? 0.0 : hp.ktb;
          it.kH = 4.0 / 3.0 * Estar * std::sqrt(it.reff);
          it.hL = it.b >= 0 ? 0.0 : shape[it.s]->layerM;
          it.cL = it.hL > 0.0 ? it.kH * rp.betaLayer * it.reff * std::sqrt(it.reff) : 0.0;
@@ -2850,7 +2895,16 @@ namespace GroupStep
                L.PatchMeans(d0, d1, pM, pS);
             const double ktU = pp ? L.ktPerA * std::sqrt(L.reff) : 0.0, ctU = pp ? L.shearTan * std::sqrt(ktU * L.mt) : 0.0;   // Kt and its damper per u^0.5, u^0.25
             const double k0 = L.Kt(d0), k1 = L.Kt(d1);
-            const double kS = pp ? ktU * pM.p05 : k1, kSp = pp ? ktU * pS.p05 : 0.0, ctSp = pp ? ctU * pS.p025 : 0.0;
+            double kS = pp ? ktU * pM.p05 : k1, kSp = pp ? ktU * pS.p05 : 0.0, ctSp = pp ? ctU * pS.p025 : 0.0;
+            // a bend across in series (Item::ktb, a wire switch's wire_bend): Kt is no power of u, so its mean over the path is by the quadrature or its integral (Item::MeanOver,
+            // KtIntegral) and its slope by MeanSlope; the damper shearTan sqrt(kS mt) on that mean
+            const bool bendT = pp && L.ktb > 0.0;
+            if (bendT)
+            {
+               kS = Item::MeanOver(d0, d1, [&L](const double d) { return L.Kt(d); }, [&L](const double d) { return L.KtIntegral(d); });
+               kSp = Item::MeanSlope(d0, d1, [&L](const double d) { return L.Kt(d); }, [&L](const double d) { return L.KtSlope(d); }, kS);
+               ctSp = kS > 0.0 ? 0.5 * L.shearTan * std::sqrt(L.mt / kS) * kSp : 0.0;
+            }
             const double held = 0.5 * k0 * xi0.Dot(xi0);
             if (kS > k0)
                xi0 = xi0 * (k0 / kS);
@@ -2864,7 +2918,7 @@ namespace GroupStep
             if (kS > 0.0)
             {
                const V3 xtr = xi0 + ut * h;
-               ct = pp ? ctU * pM.p025 : L.shearTan * std::sqrt(k1 * L.mt);
+               ct = bendT ? L.shearTan * std::sqrt(kS * L.mt) : pp ? ctU * pM.p025 : L.shearTan * std::sqrt(k1 * L.mt);
                Ft = (xi0 + xtr) * (0.5 * kS) + ut * ct;
                FsTr = Ft;
                const double lim = L.mu * N, fl = Ft.Length();

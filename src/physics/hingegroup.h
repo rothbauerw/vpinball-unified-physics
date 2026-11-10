@@ -60,6 +60,13 @@ namespace HingeGroup
          const double oop = std::fabs(nb.z);
          return oop > 1e-6 ? BendKb(std::max(std::fabs(pb.y), 1e-4)) / (oop * oop) : 0.0;
       }
+      // the bend in series with a touch at pb on wire piece w (-1: a face): along the normal (kb) and across it (ktb, in series with the shear spring; 0 = none).
+      // Here: out of the plane only (BendAlongNormal); a wire switch with [Triggers] wire_bend has the whole wire's
+      virtual void Bend(const V3 &nb, const V3 &pb, int, double &kb, double &ktb) const
+      {
+         kb = BendAlongNormal(nb, pb);
+         ktb = 0.0;
+      }
       virtual bool NearStart(double th) const = 0;         // near its start angle: a Hit fires only then
       virtual int LimitKind(int) const { return 0; }       // a touch of this stop as an event: +1 EOS, -1 BOS, 0 none
       virtual void UpdateSwitches() = 0;                   // after a step
@@ -183,6 +190,7 @@ namespace HingeGroup
             if (pr.seg >= 0 && pr.delta > best.delta)
             {
                best = pr;
+               bestI = -1;
             }
          }
          const V3 nb = best.normal;
@@ -195,7 +203,7 @@ namespace HingeGroup
          const V3 pb = cb - nb * (R - 0.5 * std::max(best.delta, 0.0));
          h.nc = 1;
          h.c[0].Set(0, nb.z * pb.y - nb.y * pb.z, fr * pb.y - dn * pb.z, E);
-         h.kb = BendAlongNormal(nb, pb);
+         Bend(nb, pb, bestI, h.kb, h.ktb);
          if (noteOn)   // (what the probe returns: the deepest piece or a face, its body normal and slope)
          {
             const size_t n0 = strlen(probeNote);
@@ -259,7 +267,8 @@ namespace HingeGroup
          RubberContact::FoldSum sum;
          V3 bestN(0.0, 1.0, 0.0);
          double bestD = -INFINITY, bestReff = 0.0;
-         const auto add = [&](const double d, const V3 &nb, const double s, const double reff) {
+         int bestW = -1;   // the deepest piece's wire (-1: a face), for its bend
+         const auto add = [&](const double d, const V3 &nb, const double s, const double reff, const int wi) {
             const V3 pb = cb - nb * (R - 0.5 * std::max(d, 0.0));
             GroupStep::HitTerm &t = h.t[h.nt++];
             t.d = d;
@@ -277,6 +286,7 @@ namespace HingeGroup
                bestD = d;
                bestN = nb;
                bestReff = reff;
+               bestW = wi;
             }
          };
          // the pieces: this attempt's list (nearNow, GroupStep::Group::BuildNear) or all, in their order
@@ -293,21 +303,21 @@ namespace HingeGroup
                GroupStep::envStats.capsules++;
                const TubeProbe pr = RubberContact::ProbeTube(b, pts, 2, rho, cb);
                if (pr.seg >= 0)
-                  add(S - pr.dist, pr.normal, 1.0, pr.reff);
+                  add(S - pr.dist, pr.normal, 1.0, pr.reff, pc.i);
                else
-                  add(-S, bestN, 1.0, 0.0);   // (a piece of no length: never touched, kept so the list is the same everywhere)
+                  add(-S, bestN, 1.0, 0.0, pc.i);   // (a piece of no length: never touched, kept so the list is the same everywhere)
             }
             else if (pc.kind == 1)
             {
                const Joint &j = joints[(size_t)pc.i];
                const V3 cv = cb - j.v;
                const double dist = cv.Length();
-               add(S - dist, dist > 1e-12 ? cv / dist : bestN, -(double)j.weight, 0.0);
+               add(S - dist, dist > 1e-12 ? cv / dist : bestN, -(double)j.weight, 0.0, -1);
             }
             else if (pc.kind == 2)   // each flat quad by its own two triangles (convex and flat: its nearest point is exact)
             {
                const TubeProbe pr = RubberContact::ProbeTriangles(b, tris, quads[(size_t)pc.i].cand, halfT, cb, nullptr, 0, halfT);
-               add(pr.seg >= 0 ? pr.delta : -S, pr.seg >= 0 ? pr.normal : bestN, 1.0, pr.seg >= 0 ? pr.reff : 0.0);
+               add(pr.seg >= 0 ? pr.delta : -S, pr.seg >= 0 ? pr.normal : bestN, 1.0, pr.seg >= 0 ? pr.reff : 0.0, -1);
             }
             else   // a shared line, taken back once: where both nearest points are on it, the smaller element's depth is its own and cancels
             {
@@ -315,7 +325,7 @@ namespace HingeGroup
                const V3 pts[2] = { l.a, l.b };
                GroupStep::envStats.capsules++;
                const TubeProbe pr = RubberContact::ProbeTube(b, pts, 2, l.r, cb);
-               add(pr.seg >= 0 ? R + l.r - pr.dist : -S, pr.seg >= 0 ? pr.normal : bestN, -1.0, 0.0);
+               add(pr.seg >= 0 ? R + l.r - pr.dist : -S, pr.seg >= 0 ? pr.normal : bestN, -1.0, 0.0, -1);
             }
          }
          TubeProbe u;
@@ -334,7 +344,7 @@ namespace HingeGroup
          const V3 pb = cb - nb * (R - 0.5 * std::max(u.delta, 0.0));
          h.nc = 1;
          h.c[0].Set(0, nb.z * pb.y - nb.y * pb.z, fr * pb.y - dn * pb.z, E);
-         h.kb = BendAlongNormal(nb, pb);
+         Bend(nb, pb, bestW, h.kb, h.ktb);
          GroupStep::envStats.terms += h.nt;
          if (ProbeNoteOn())
          {

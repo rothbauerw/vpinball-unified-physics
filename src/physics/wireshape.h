@@ -3,7 +3,8 @@
 // Plain math only (no engine types) so offline benches and the engine can both include it. Built once at load; no runtime cost.
 // Each shape is a fixed centreline in mm in the switch frame: x along the wire's plane from the lever's pivot away from the switch, z the height above the playfield
 // top at rest with the switch at its agreed mount (pivot 19.3 mm below the playfield top). D's arch is a 14.7 mm arc; every other bend a 1.3 mm centreline-radius
-// arc tangent to both straight runs (runs/2026-11-09-wire-sizes/radii/radii.md); arcs sampled every 5 deg. The lever end, the peak and the knee are named points
+// arc tangent to both straight runs (runs/2026-11-09-wire-sizes/radii/radii.md); each arc cut into straight pieces of at most the bend's or the arch's step
+// (WireSwitchGroup::Settings bendStepDeg, archStepDeg; runs/2026-11-09-bend-steps/design.md). The lever end, the peak and the knee are named points
 // (the wire files' corners), not searched for. No mesh tracing: the drawn tube is built from the same centreline (BuildTube), so drawn = touched.
 #pragma once
 
@@ -40,7 +41,6 @@ constexpr double kMmPerVpu = 25.4 * 1.0625 / 50.; // same as VPUTOMM
 constexpr double kPivotZMm = -19.3;                // the lever's pivot below the playfield top at the agreed mount (S7: bracket flush under the playfield)
 constexpr double kBendRMm = 1.3;                   // centreline radius of every bend but D's arch (measured 1.2 - 1.4 mm on every bend of 50 deg or more)
 constexpr double kArchRMm = 14.7;                  // D's arch radius (user 2026-11-09)
-constexpr double kArcStepDeg = 5.;                 // arcs sampled at most this many degrees per capsule
 constexpr double kMaxWireDMm = 2. * kBendRMm;      // a wire this thick or thicker folds on the inside of a 1.3 mm bend
 constexpr double kPi = 3.14159265358979323846;
 
@@ -79,12 +79,15 @@ struct Centreline
    P2 leverEnd, peak, knee;      // named points (the wire file's corners); knee only where the file names one (A, B)
    bool hasKnee = false;
    double spanMid = 0.;          // x of the middle of the part above the playfield: the trigger's x, y
+   double sagittaMm = 0.;        // the largest gap between an arc and its straight pieces, r (1 - cos(piece angle / 2)): the shape's error at the bends
 };
 
-// Arc about c of radius r from angle a0 to a1 (rad), at most kArcStepDeg per piece; the first point is skipped when out already ends there
-inline void AppendArc(std::vector<P2>& out, const P2& c, double r, double a0, double a1)
+// Arc about c of radius r from angle a0 to a1 (rad), at most stepDeg per piece; the first point is skipped when out already ends there; *sag keeps the largest
+// gap between the arc and a piece
+inline void AppendArc(std::vector<P2>& out, const P2& c, double r, double a0, double a1, double stepDeg, double* sag)
 {
-   const int n = std::max(1, (int)std::ceil(std::fabs(a1 - a0) / (kArcStepDeg * kPi / 180.) - 1e-9));
+   const int n = std::max(1, (int)std::ceil(std::fabs(a1 - a0) / (stepDeg * kPi / 180.) - 1e-9));
+   *sag = std::max(*sag, r * (1. - std::cos(0.5 * std::fabs(a1 - a0) / n)));
    for (int k = 0; k <= n; k++)
    {
       const double a = a0 + (a1 - a0) * k / n;
@@ -95,8 +98,8 @@ inline void AppendArc(std::vector<P2>& out, const P2& c, double r, double a0, do
    }
 }
 
-// Straight runs through c[0] .. c.back(), each inner corner rounded by an arc of centreline radius r tangent to both runs
-inline void AppendFilleted(std::vector<P2>& out, const std::vector<P2>& c, double r)
+// Straight runs through c[0] .. c.back(), each inner corner rounded by an arc of centreline radius r tangent to both runs, cut at most stepDeg per piece
+inline void AppendFilleted(std::vector<P2>& out, const std::vector<P2>& c, double r, double stepDeg, double* sag)
 {
    if (out.empty() || (out.back() - c[0]).Len() > 1e-6)
       out.push_back(c[0]);
@@ -113,7 +116,7 @@ inline void AppendFilleted(std::vector<P2>& out, const std::vector<P2>& c, doubl
       const P2 a = c[i] - in * (r * std::tan(0.5 * turn));
       const P2 ctr = a + P2 { -in.z * side, in.x * side } * r;
       const double a0 = std::atan2(a.z - ctr.z, a.x - ctr.x);
-      AppendArc(out, ctr, r, a0, a0 + side * turn);
+      AppendArc(out, ctr, r, a0, a0 + side * turn, stepDeg, sag);
    }
    out.push_back(c.back());
 }
@@ -127,10 +130,12 @@ inline P2 RaiseLever(const P2& p, double deg)
 }
 
 // The agreed rest pose of each shape (the wire files' points; heights from the playfield top at heightoffset 0). A, B and C: the lever raised 2026-11-09 (user) so the
-// rounded centreline's top is 6.0 mm (A, B) and C's free tip 8.0 mm; the files' points as photographed are turned up by that angle about the pivot
-inline Centreline MakeCentreline(Shape s)
+// rounded centreline's top is 6.0 mm (A, B) and C's free tip 8.0 mm; the files' points as photographed are turned up by that angle about the pivot.
+// bendStepDeg: the 1.3 mm bends' pieces at most this many degrees; archStepDeg: D's 14.7 mm arch's (WireSwitchGroup::Settings; 5 and 5 = the shapes before 2026-11-09)
+inline Centreline MakeCentreline(Shape s, double bendStepDeg, double archStepDeg)
 {
    Centreline cl;
+   double* const sag = &cl.sagittaMm;
    const auto up = [](std::vector<P2> v, double deg) { for (P2& p : v) p = RaiseLever(p, deg); return v; };
    switch (s)
    {
@@ -139,7 +144,7 @@ inline Centreline MakeCentreline(Shape s)
       constexpr double raiseDeg = 1.90;   // rounded top 6.0 mm
       const std::vector<P2> c = up({ { 7.4, -17.6 }, { 22.3, -14.3 }, { 33.4, 5.3 }, { 53.8, -4.8 }, { 51.0, -16.7 } }, raiseDeg);
       cl.leverEnd = c[1]; cl.peak = c[2]; cl.knee = c[3]; cl.hasKnee = true;
-      AppendFilleted(cl.pts, c, kBendRMm);
+      AppendFilleted(cl.pts, c, kBendRMm, bendStepDeg, sag);
    }
       break;
    case Shape::WireB:   // V wire on a basic switch: lever run 19.3, rise 27.4, fall 30.8, tail 12.0 mm
@@ -147,7 +152,7 @@ inline Centreline MakeCentreline(Shape s)
       constexpr double raiseDeg = 0.97;   // rounded top 6.0 mm
       const std::vector<P2> c = up({ { 1.6, -18.0 }, { 20.5, -14.3 }, { 39.0, 5.9 }, { 61.3, -15.4 }, { 72.9, -18.6 } }, raiseDeg);
       cl.leverEnd = c[1]; cl.peak = c[2]; cl.knee = c[3]; cl.hasKnee = true;
-      AppendFilleted(cl.pts, c, kBendRMm);
+      AppendFilleted(cl.pts, c, kBendRMm, bendStepDeg, sag);
    }
       break;
    case Shape::WireC:   // one-way: lever run, a leaning rise, a diagonal up to the tip (the peak)
@@ -155,7 +160,7 @@ inline Centreline MakeCentreline(Shape s)
       constexpr double raiseDeg = 2.06;   // free tip 8.0 mm
       const std::vector<P2> c = up({ { 2.7, -18.0 }, { 27.2, -14.9 }, { 32.0, -1.5 }, { 56.2, 6.0 } }, raiseDeg);
       cl.leverEnd = c[1]; cl.peak = c[3];
-      AppendFilleted(cl.pts, c, kBendRMm);
+      AppendFilleted(cl.pts, c, kBendRMm, bendStepDeg, sag);
    }
       break;
    case Shape::WireD:   // the arch: file x runs from the arch top toward the pivot (41.2), here x = 41.2 - file x
@@ -170,14 +175,14 @@ inline Centreline MakeCentreline(Shape s)
       const P2 dl = cl.leverEnd - ctr;
       const double aT = std::atan2(dl.z, dl.x) - std::acos(kArchRMm / dl.Len());
       const P2 tan { ctr.x + kArchRMm * std::cos(aT), ctr.z + kArchRMm * std::sin(aT) };
-      AppendFilleted(cl.pts, { start, cl.leverEnd, tan }, kBendRMm);
-      AppendArc(cl.pts, ctr, kArchRMm, aT + (aT < 0. ? 2. * kPi : 0.), 0.);
-      AppendFilleted(cl.pts, { side, corner, tip }, kBendRMm);
+      AppendFilleted(cl.pts, { start, cl.leverEnd, tan }, kBendRMm, bendStepDeg, sag);
+      AppendArc(cl.pts, ctr, kArchRMm, aT + (aT < 0. ? 2. * kPi : 0.), 0., archStepDeg, sag);
+      AppendFilleted(cl.pts, { side, corner, tip }, kBendRMm, bendStepDeg, sag);
       break;
    }
    case Shape::WireE:   // Cherry DB: along the lever 17.4, up leg 15.3, diagonal 17.9, down leg 30.8 mm
       cl.leverEnd = { 25.8, -14.3 }; cl.peak = { 45.7, 9.4 };
-      AppendFilleted(cl.pts, { { 8.5, -15.7 }, cl.leverEnd, { 30.2, 0.4 }, cl.peak, { 45.5, -21.5 } }, kBendRMm);
+      AppendFilleted(cl.pts, { { 8.5, -15.7 }, cl.leverEnd, { 30.2, 0.4 }, cl.peak, { 45.5, -21.5 } }, kBendRMm, bendStepDeg, sag);
       break;
    }
    // the part above the playfield: from the first to the last crossing of z = 0
@@ -243,7 +248,7 @@ inline WireBody Place(const Centreline& cl, const Placement& pl, double wireDMm)
 }
 
 // The drawn wire: a tube of radius r around the nodes (a planar chain whose plane holds the unit horizontal lane), `sides` vertices per ring, a half sphere at each
-// end, so every vertex lies on the touched capsules (within r (1 - cos 2.5 deg) on the inside of a 5 deg sample). Vertex layout x, y, z, nx, ny, nz, tu, tv.
+// end, so every vertex lies on the touched capsules (within r (1 - cos(step / 2)) on the inside of a joint between an arc's pieces). Vertex layout x, y, z, nx, ny, nz, tu, tv.
 inline void BuildTube(const std::vector<V3>& nodes, const V3& lane, double r, int sides, std::vector<float>& verts, std::vector<uint16_t>& idx)
 {
    verts.clear();
