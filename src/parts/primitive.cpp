@@ -15,6 +15,7 @@
 #include "renderer/trace.h"
 #include "physics/hitrubber.h"
 #include "physics/contactsystem.h"
+#include "parts/playfieldcutdraw.h"
 #include "utils/objloader.h"
 #include "utils/color.h"
 
@@ -906,6 +907,10 @@ void Primitive::RenderSetup(Renderer *renderer)
 
    m_currentFrame = -1.f;
 
+   // the playfield with holes cut in it (physics ini [PlayfieldCut:<name>]): its mesh re-cut with each cut's outline left out and the cuts' walls and floors made, once here (playfieldcutdraw.h)
+   if (IsPlayfield())
+      PlayfieldCutDraw::Setup(this, m_renderer);
+
    if (m_mesh.NumVertices() > 0 && !m_mesh.m_indices.empty())
    {
       std::shared_ptr<VertexBuffer> vertexBuffer = std::make_shared<VertexBuffer>(m_renderer->m_renderDevice, (unsigned int)m_mesh.NumVertices(), nullptr, !(m_d.m_staticRendering || m_mesh.m_animationFrames.empty()));
@@ -927,6 +932,8 @@ void Primitive::RenderSetup(Renderer *renderer)
 void Primitive::RenderRelease()
 {
    assert(m_renderer != nullptr);
+   if (IsPlayfield())
+      PlayfieldCutDraw::Release(this);   // the table's own mesh again (RenderSetup)
    m_meshBuffer = nullptr;
    m_meshEdgeBuffer = nullptr;
    m_lightmap = nullptr;
@@ -1070,6 +1077,7 @@ void Primitive::Render(const unsigned int renderMask)
    if (lightmap)
       m_renderer->m_renderDevice->m_basicShader->SetVector(ShaderUniform::lightCenter_doShadow, m_lightmap->m_d.m_vCenter.x, m_lightmap->m_d.m_vCenter.y, m_lightmap->GetCurrentHeight(), 1.0f);
 
+   bool cutWalls = false;   // the playfield's cuts' walls and floors are drawn after it (not in its reflections-only pass)
    if (m_d.m_addBlend)
    {
       // Additive blending is a special unlit mode with depth mask disabled
@@ -1172,6 +1180,7 @@ void Primitive::Render(const unsigned int renderMask)
          || refractions // Refractions must be rendered back to front since they rely on what is behind
          || (mat->m_bOpacityActive && !m_d.m_staticRendering /* && !m_renderer->m_renderDevice->GetRenderState().IsOpaque() */), // We can not use the real render state opaque state since Blood Machine and other tables use depth masks
          m_d.m_vPosition, m_d.m_depthBias, m_meshBuffer, RenderDevice::TRIANGLELIST, 0, m_groupdRendering ? m_numGroupIndices : (uint32_t)m_mesh.NumIndices());
+      cutWalls = m_useAsPlayfield && !is_reflection_only_pass;
    }
 
    // Draw the front of the primitive if backface enabled
@@ -1182,6 +1191,9 @@ void Primitive::Render(const unsigned int renderMask)
          m_meshBuffer, RenderDevice::TRIANGLELIST, 0,
          m_groupdRendering ? m_numGroupIndices : (uint32_t)m_mesh.NumIndices());
    }
+
+   if (cutWalls)
+      PlayfieldCutDraw::Draw(this, m_renderer, mat);
 
    // Restore state
    m_renderer->UpdateBasicShaderMatrix();

@@ -170,6 +170,8 @@ set(VPX_SOURCES
    src/parts/pintable.h
    src/parts/plunger.cpp
    src/parts/plunger.h
+   src/parts/playfieldcutdraw.cpp
+   src/parts/playfieldcutdraw.h
    src/parts/primitive.cpp
    src/parts/primitive.h
    src/parts/ramp.cpp

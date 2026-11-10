@@ -22,132 +22,8 @@ namespace
    constexpr double kEdgeRhoM = 0.25e-3;      // the rim's rounding radius (user 2026-11-09: ASSUMED, not measured)
    constexpr double kRampDepthM = 1.75e-3;    // the ramp floor's depth on the axis at the round end's edge (u = a), rising linearly to 0 at the tip (design section 2 revised: drill cross-section)
    constexpr double kThickM = 12.7e-3;        // the playfield's thickness: the through-hole's walls (1/2 in, user 2026-11-09)
-   constexpr double kBandMarginM = 1.0e-3;    // the band reaches this far past the outline (flat there)
-   constexpr double kTolM = 0.5e-6;           // the faces' largest distance from the shape on the top, rims and outline curves (design section 2: under the 0.8 um squash of a resting ball)
-   constexpr int kFilletSeg = 16;             // facets on a rim's rounding (at most 90 deg: 5.6 deg each, 0.3 um inside the 0.25 mm circle)
-   constexpr int kFloorSeg = 12;              // facets on each half of the ramp floor's arc (a ball reaches the floor only at the tip)
-   constexpr double kMaxStepU = 0.2e-3;       // largest step between cross-sections along the ramp (the floor depth and rim radius change along it)
    constexpr double kWidthMaxMm = 5.03;       // width_mm default and largest: 0.198 in, the slot under a wire switch (PartData 7)
    constexpr double kWidthMinMm = 3.175;      // width_mm smallest: 1/8 in
-
-   // The slot in its own frame (playfieldcut.h): a = half-width, hs = half the straight part, the round end to U1, the ramp from U1 (half-width wJ) to a point at L
-   struct SlotShape
-   {
-      double a, hs, L, U1, wJ;
-      SlotShape(const double a_, const double hs_) : a(a_), hs(hs_), L(kRampM)
-      {
-         U1 = L - std::sqrt(L * L - a * a);
-         wJ = std::sqrt(a * a - U1 * U1);
-      }
-      double W(const double u) const   // the outline's half-width (where the top ends)
-      {
-         if (u <= 0.0)
-            return a;
-         if (u <= U1)
-            return std::sqrt(std::max(0.0, a * a - u * u));
-         if (u < L)
-            return std::sqrt(std::max(0.0, wJ * wJ - 2.0 * U1 * (u - U1)));
-         return 0.0;
-      }
-      double C(const double u) const { return u <= 0.0 ? a : u < a ? std::sqrt(a * a - u * u) : 0.0; }   // the through-hole's half-width
-      bool Floor(const double u) const { return u > U1 && u < L; }
-      double D(const double u) const { return kRampDepthM * (L - u) / (L - a); }   // the floor's depth on the axis
-      double UofW(const double w) const { return U1 + (wJ * wJ - w * w) / (2.0 * U1); }   // on the ramp
-   };
-
-   struct PT
-   {
-      double t, z;
-   };
-
-   // Half a cross-section (t >= 0) at u, from the band's edge inward: the band edge, the rim's top tangent point, nf points round the rim (the last where it meets the wall or
-   // floor), nfl points down the floor (to the hole's edge or the axis), the wall's foot. Always 3 + nf + nfl points (collapsed where a part is missing), so sections join face to face.
-   void Profile(const SlotShape &sh, const double u, const double T, const int nf, const int nfl, std::vector<PT> &p)
-   {
-      p.clear();
-      p.push_back({ T, 0.0 });
-      const double w = sh.W(u);
-      if (w <= 1e-12)   // the tip and past it: flat
-      {
-         p.insert(p.end(), (size_t)(2 + nf + nfl), PT { 0.0, 0.0 });
-         return;
-      }
-      const double c = sh.C(u);
-      const bool fl = sh.Floor(u);
-      double r = kEdgeRhoM, D = 0.0, rho = 0.0, zc = 0.0;
-      if (fl)
-      {
-         D = sh.D(u);
-         r = std::min(r, D);   // the rounding is no deeper than the cut (near the tip)
-         rho = (w * w + D * D) / (2.0 * D);   // the floor arc through (+-w, 0) and (0, -D): centre (0, zc)
-         zc = rho - D;
-      }
-      // the rounding: a circle of radius r tangent to the top (centre (tf, -r)) and to the cut (the hole's wall or the floor's circle)
-      const auto dA = [&](const double tf) { return c > 0.0 ? tf - c : 1e30; };
-      const auto dB = [&](const double tf) { return fl ? std::hypot(tf, -r - zc) - rho : 1e30; };
-      double lo = 0.0, hi = w + 2.0 * r + std::abs(zc) + 1e-3;
-      for (int k = 0; k < 100; k++)
-      {
-         const double m = 0.5 * (lo + hi);
-         (std::min(dA(m), dB(m)) < r ? lo : hi) = m;
-      }
-      const double tf = 0.5 * (lo + hi);
-      const PT P { tf, -r };
-      PT Q;
-      bool onFloor = false;
-      if (dA(tf) <= dB(tf))
-         Q = { c, -r };
-      else
-      {
-         const double l = std::hypot(tf, -r - zc);
-         Q = { rho * tf / l, zc + rho * (-r - zc) / l };
-         onFloor = true;
-      }
-      const double th1 = std::atan2(Q.z - P.z, Q.t - P.t);
-      p.push_back({ tf, 0.0 });
-      for (int i = 1; i <= nf; i++)
-      {
-         const double th = 0.5 * M_PI + (th1 - 0.5 * M_PI) * i / nf;
-         p.push_back(i == nf ? Q : PT { P.t + r * std::cos(th), P.z + r * std::sin(th) });
-      }
-      if (onFloor && Q.t > c)
-      {
-         const double psQ = std::atan2(Q.z - zc, Q.t);
-         const double psE = c > 0.0 ? std::atan2(-std::sqrt(std::max(0.0, rho * rho - c * c)), c) : -0.5 * M_PI;
-         for (int i = 1; i <= nfl; i++)
-         {
-            const double ps = psQ + (psE - psQ) * i / nfl;
-            p.push_back(i == nfl && c <= 0.0 ? PT { 0.0, -D } : PT { rho * std::cos(ps), zc + rho * std::sin(ps) });
-         }
-      }
-      else
-         p.insert(p.end(), (size_t)nfl, Q);
-      const PT e = p.back();
-      p.push_back(c > 0.0 ? PT { e.t, -kThickM } : e);
-   }
-
-   // The cross-sections past one end of the straight part (u from 0 to L, then the band's end): the outline's chord within kTolM of it
-   std::vector<double> EndStations(const SlotShape &sh)
-   {
-      std::vector<double> u { 0.0 };
-      const double th1 = std::asin(sh.U1 / sh.a);
-      const int nr = std::max(1, (int)std::ceil(th1 * sh.a / std::sqrt(8.0 * kTolM * sh.a)));
-      for (int k = 1; k <= nr; k++)
-         u.push_back(k == nr ? sh.U1 : sh.a * std::sin(th1 * k / nr));
-      for (double w = sh.wJ; w > 0.0;)   // the ramp, stepped in half-width: its curvature rises to 1 / U1 at the tip
-      {
-         const double q = w / sh.U1, kap = (1.0 / sh.U1) / std::pow(1.0 + q * q, 1.5);
-         const double dw = std::min(std::sqrt(8.0 * kTolM / kap) / std::sqrt(1.0 + q * q), kMaxStepU * sh.U1 / w);
-         w = std::max(0.0, w - dw);
-         u.push_back(w > 0.0 ? sh.UofW(w) : sh.L);
-      }
-      u.push_back(sh.a);                                            // the hole closes
-      u.push_back(sh.L - kEdgeRhoM * (sh.L - sh.a) / kRampDepthM);  // the rounding starts to follow the depth
-      std::sort(u.begin(), u.end());
-      u.erase(std::unique(u.begin(), u.end(), [](const double x, const double y) { return std::abs(x - y) < 1e-9; }), u.end());
-      u.push_back(sh.L + kBandMarginM);
-      return u;
-   }
 
    void Notice(const std::string &msg)   // rule 8: on screen and in the log, once per table start (Setup runs once per start)
    {
@@ -339,6 +215,7 @@ namespace
    };
 
    std::vector<Rim> g_rims;   // this table's cuts, rebuilt at every table load (Setup)
+   const PinTable *g_rimsTable = nullptr;   // the table they were read for (the drawn playfield of another table is not cut)
    bool g_warnedMany = false; // three or more rim contacts pressing on one cut: logged once per table start
 
    // the ball's centre in cut m's frame: along, across, height over the centre line
@@ -575,85 +452,12 @@ namespace
    }
 }
 
-namespace PlayfieldCutMesh
-{
-   void BuildSlot(const Slot &s, std::vector<SurfaceTri> &out, Stats &st)
-   {
-      out.clear();
-      st = Stats();
-      const SlotShape sh(s.halfWidth, s.halfStraight);
-      const std::vector<double> us = EndStations(sh);
-      std::vector<double> ss, uu;   // the cross-sections along the slot
-      for (size_t k = us.size(); k-- > 0;)
-      {
-         ss.push_back(-(sh.hs + us[k]));
-         uu.push_back(us[k]);
-      }
-      for (const double u : us)
-      {
-         if (sh.hs + u - ss.back() < 1e-12)   // no straight part: the two ends share the middle section
-            continue;
-         ss.push_back(sh.hs + u);
-         uu.push_back(u);
-      }
-      const double T = sh.a + kBandMarginM;
-      st.sBand = sh.hs + sh.L + kBandMarginM;
-      st.tBand = T;
-      st.stations = (int)ss.size();
-      const double px = -s.ly, py = s.lx;   // across
-      const auto world = [&](const double sv, const double t, const double z) { return V3(s.cx + s.lx * sv + px * t, s.cy + s.ly * sv + py * t, s.z + z); };
-      const auto strip = [&](const double s0, const std::vector<PT> &p0, const double s1, const std::vector<PT> &p1, const int side, std::vector<SurfaceTri> &o) {
-         const auto add = [&](const V3 &a, const V3 &b, const V3 &c) {
-            if ((b - a).Cross(c - a).Length() > 1e-18)   // a part of the section that is missing here gives zero-area faces: left out
-               o.push_back(RubberContact::MakeSurfaceTri(a, b, c));
-         };
-         for (size_t j = 0; j + 1 < p0.size(); j++)
-         {
-            const V3 A = world(s0, side * p0[j].t, p0[j].z), B = world(s0, side * p0[j + 1].t, p0[j + 1].z);
-            const V3 C = world(s1, side * p1[j + 1].t, p1[j + 1].z), D = world(s1, side * p1[j].t, p1[j].z);
-            add(A, B, C);
-            add(A, C, D);
-         }
-      };
-      std::vector<std::vector<PT>> prof(ss.size());
-      for (size_t i = 0; i < ss.size(); i++)
-         Profile(sh, uu[i], T, kFilletSeg, kFloorSeg, prof[i]);
-      for (size_t i = 0; i + 1 < ss.size(); i++)
-         for (int side = 1; side >= -1; side -= 2)
-            strip(ss[i], prof[i], ss[i + 1], prof[i + 1], side, out);
-      st.faces = (int)out.size();
-      // check: the true shape midway between sections, against the faces of that strip (one side; the other is its mirror)
-      std::vector<PT> dense;
-      std::vector<SurfaceTri> one;
-      constexpr int nfD = 128, nflD = 64;
-      for (size_t i = 0; i + 1 < ss.size(); i++)
-      {
-         const double sm = 0.5 * (ss[i] + ss[i + 1]);
-         Profile(sh, std::abs(sm) - sh.hs, T, nfD, nflD, dense);
-         one.clear();
-         strip(ss[i], prof[i], ss[i + 1], prof[i + 1], 1, one);
-         for (size_t q = 0; q + 1 < dense.size(); q++)   // (not the wall's foot)
-         {
-            const V3 P = world(sm, dense[q].t, dense[q].z);
-            double best = 1e30;
-            for (const SurfaceTri &t : one)
-            {
-               int kind;
-               best = std::min(best, (P - RubberContact::ClosestOnTriangle(t, P, kind)).Length());
-            }
-            double &dev = q <= (size_t)(1 + nfD) ? st.devRim : st.devFloor;
-            dev = std::max(dev, best);
-         }
-      }
-   }
-
-}
-
 namespace PlayfieldCuts
 {
    void Setup(PhysicsEngine *, PinTable *const table)
    {
       g_rims.clear();
+      g_rimsTable = table;
       g_warnedMany = false;
       const std::filesystem::path file = PhysicsIni::FindUnified(table->m_filename);
       if (file.empty())
@@ -918,5 +722,56 @@ namespace PlayfieldCuts
          }
       }
       return h;
+   }
+
+   std::vector<DrawnSlot> Drawn(const PinTable *const table)
+   {
+      std::vector<DrawnSlot> out;
+      if (table != g_rimsTable)
+         return out;
+      for (const Rim &m : g_rims)
+      {
+         DrawnSlot d;
+         d.name = m.name;
+         d.unit = U;
+         d.cx = m.cx;
+         d.cy = m.cy;
+         d.z0 = m.z0;
+         d.lx = m.lx;
+         d.ly = m.ly;
+         d.px = m.px;
+         d.py = m.py;
+         d.a = m.a;
+         d.hs = m.hs;
+         d.L = m.L;
+         d.U1 = m.U1;
+         d.wJ = m.wJ;
+         d.c = m.c;
+         d.tauJ = m.tauJ;
+         d.th1 = m.th1;
+         d.thick = kThickM;
+         out.push_back(d);
+      }
+      return out;
+   }
+
+   double DrawnSlot::W(const double u) const
+   {
+      if (u <= 0.0)
+         return a;
+      if (u <= U1)
+         return std::sqrt(std::max(0.0, a * a - u * u));
+      if (u < L)
+         return std::sqrt(std::max(0.0, wJ * wJ - 2.0 * U1 * (u - U1)));
+      return 0.0;
+   }
+
+   double DrawnSlot::C(const double u) const { return u <= 0.0 ? a : u < a ? std::sqrt(a * a - u * u) : 0.0; }
+
+   void DrawnSlot::FloorArc(const double u, double &rho, double &zc) const
+   {
+      const double D = kRampDepthM * (L - u) / (L - a), w = W(u);
+      rho = (w * w + D * D) / (2.0 * D);
+      zc = rho - D;
    }
 }
