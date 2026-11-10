@@ -212,9 +212,11 @@ namespace
    // 11-10 after build v4). Straight part: t = a + rho. Round end: the concentric circle of radius a + rho, to the angle where the outline's round end meets the ramp (U1). Ramp: the outline
    // point plus rho along its outward normal; the parameter tau = sqrt(L - u) (outline u = L - tau^2, w = sqrt(2 U1) tau) runs smoothly through the tip, where the line reaches u = L + rho.
    // The outline is tangent-continuous and convex, so the line has no corner (its curvature steps at the straight part's end and at U1).
-   constexpr int kRampSamples = 200;    // intervals of each ramp's centre line for the minima search, uniform in tau (about 20 um apart at the tip, 70 um near U1)
-   constexpr int kRoundSamples = 8;     // intervals of each round end's arc (about 10 deg at 5.03 mm; a circle: g = (c - A).T changes sign at most once on it)
-   constexpr double kRootTolM = 1e-12;  // a minimum is refined until it is known to this along the centre line (brief: 1e-12 m)
+   constexpr int kPieces = 8;           // the centre line's pieces (Rim::Eval); a place on the loop is piece + its fraction of the piece, 0 .. kPieces
+   constexpr int kRampSamples = 200;    // the inside test's table of the ramp's centre line, uniform in tau (Rim::rampU)
+   constexpr double kRootTolM = 1e-12;  // the inside test's ramp point is found to this along the centre line (brief: 1e-12 m)
+   constexpr double kReachPadM = 1e-9;  // added to every reach: a point is passed over only when it is surely beyond it (rounding is ~1e-17 m)
+   constexpr double kNoLimitM = 1e30;   // a reach that passes over nothing
 
    struct Rim
    {
@@ -225,13 +227,8 @@ namespace
       double c = 0, tauJ = 0;                                            // outline w = c tau, tau at U1
       double rho = kEdgeRhoM, r = 0, th1 = 0, uRound = 0, uTip = 0;      // rim radius; centre line: the round end's radius a + rho, its end angle, its end u, the tip's u (L + rho)
       double lo[3] = {}, hi[3] = {};                                     // the centre line's world box
-      struct Seg   // one interval of the centre line: piece, its parameter range, the sample at p0 (slot frame) and the unit tangent there, the arc length from the loop's start
-      {
-         int piece;
-         double p0, p1, s, t, Ts, Tt, arc;
-      };
-      std::vector<Seg> seg;
-      double total = 0.0;
+      double js[kPieces] = {}, jt[kPieces] = {}, jTs[kPieces] = {}, jTt[kPieces] = {};   // the junctions: the start of each piece (slot frame) and the unit tangent there
+      double total = 0.0;          // logged: the centre line's length
       std::vector<double> rampU;   // the + end's ramp centre line at tau_j = tauJ j / kRampSamples: its u (decreasing in j), for the inside test
       double kapTip = 0.0, kapRound = 0.0;   // logged: the curvature (1/m, toward the hole) at the tip and on the round end
 
@@ -245,9 +242,14 @@ namespace
          du = -2.0 * tau + rho * dnu;
          dt = c + rho * dnt;
       }
+      // the ramp's centre line's curvature toward the hole at tau (1/m): the outline's radius of curvature (c^2 + 4 tau^2)^1.5 / (2 c) plus rho (the offset shares its centres of curvature)
+      double RampCurvature(const double tau) const
+      {
+         const double m = std::sqrt(c * c + 4.0 * tau * tau);
+         return 1.0 / (m * m * m / (2.0 * c) + rho);
+      }
       // the closed centre line, piece by piece in loop order (the hole on the right): 0 side +, 1 + end round (side +), 2 + end ramp, 3 + end round (side -), 4 side -, 5 - end round (side -),
-      // 6 - end ramp, 7 - end round (side +). Point (s, t) and its derivative in p.
-      double PieceEnd(const int piece) const { return piece == 0 || piece == 4 ? 2.0 * hs : piece == 2 || piece == 6 ? 2.0 * tauJ : th1; }
+      // 6 - end ramp, 7 - end round (side +); p runs from 0 to 2 hs on a side, 2 tauJ on a ramp, th1 on a round end. Point (s, t) and its derivative in p.
       void Eval(const int piece, const double p, double &s, double &t, double &ds, double &dt) const
       {
          double u, w, du, dw;
@@ -320,105 +322,82 @@ namespace
          }
          return std::sqrt(d2);
       }
-      // g(p) = (c - A(p)).T(p): > 0 while the distance falls along the loop, a minimum where it turns <= 0
-      double G(const int piece, const double p, const double cs, const double ct) const
-      {
-         double s, t, ds, dt;
-         Eval(piece, p, s, t, ds, dt);
-         return ((cs - s) * ds + (ct - t) * dt) / std::sqrt(ds * ds + dt * dt);
-      }
-      // the signed curvature toward the hole at p (1/m): the unit tangent's turn over the parameter's neighbourhood within [pa, pb] (the piece's own side of a curvature step)
-      double Curvature(const int piece, const double p, const double pa, const double pb) const
-      {
-         const double h = 1e-4 * (pb - pa), q0 = std::max(pa, p - h), q1 = std::min(pb, p + h);
-         double s, t, ds0, dt0, ds1, dt1, ds, dt;
-         Eval(piece, q0, s, t, ds0, dt0);
-         Eval(piece, q1, s, t, ds1, dt1);
-         Eval(piece, p, s, t, ds, dt);
-         const double l0 = std::hypot(ds0, dt0), l1 = std::hypot(ds1, dt1), l = std::hypot(ds, dt);
-         const double dTs = ds1 / l1 - ds0 / l0, dTt = dt1 / l1 - dt0 / l0;
-         return (dTs * (dt / l) - dTt * (ds / l)) / (l * (q1 - q0));   // . n_in = (Tt, -Ts)
-      }
    };
 
    // A rim contact: one true local minimum of the distance from the ball's centre to a cut's centre line, the rim's surface facing the ball (its upper inner part)
    struct RimHit
    {
       int cut;
-      double delta, dist, reff, arc;   // depth R + rho - dist, the tube law's effective radius, the place on the loop (arc length)
+      double delta, dist, reff, loop;   // depth R + rho - dist, the tube law's effective radius, the place on the loop (piece + fraction, 0 .. kPieces)
       V3 point, normal;
    };
    // A local maximum of the same distance (the hump between two minima along the line): the place on the loop and the distance
    struct RimHump
    {
       int cut;
-      double arc, dist;
+      double loop, dist;
    };
 
    std::vector<Rim> g_rims;   // this table's cuts, rebuilt at every table load (Setup)
    bool g_warnedMany = false; // three or more rim contacts pressing on one cut: logged once per table start
 
-   // The root of g in [lo, hi] (g(lo) = glo and g(hi) = ghi of opposite signs, g > 0 counted with lo's side when glo > 0), by false position (Illinois) to kRootTolM along the line
-   double Refine(const Rim &m, const int piece, double lo, double hi, double glo, double ghi, const double cs, const double ct)
+   // the ball's centre in cut m's frame: along, across, height over the centre line
+   void SlotFrame(const Rim &m, const V3 &c, double &cs, double &ct, double &dz)
    {
-      if (ghi == 0.0)
-         return hi;
-      double sx, tx, dsx, dtx;
-      m.Eval(piece, 0.5 * (lo + hi), sx, tx, dsx, dtx);
-      const double speed = std::hypot(dsx, dtx) * 2.0;   // m per unit of p (an upper bound for the bracket's length)
-      const bool loPos = glo > 0.0;
-      double p = hi;
-      int side = 0;
-      for (int it = 0; it < 100; it++)
-      {
-         p = hi - ghi * (hi - lo) / (ghi - glo);
-         if (!(p > lo && p < hi))
-            p = 0.5 * (lo + hi);
-         const double gp = m.G(piece, p, cs, ct);
-         if ((gp > 0.0) == loPos)
-         {
-            lo = p;
-            glo = gp;
-            if (side == 1)
-               ghi *= 0.5;
-            side = 1;
-         }
-         else
-         {
-            hi = p;
-            ghi = gp;
-            if (side == -1)
-               glo *= 0.5;
-            side = -1;
-         }
-         if (gp == 0.0 || (hi - lo) * speed < kRootTolM)
-            break;
-      }
-      return p;
+      const double dx = c.x - m.cx, dy = c.y - m.cy;
+      cs = dx * m.lx + dy * m.ly;
+      ct = dx * m.px + dy * m.py;
+      dz = c.z - (m.z0 - m.rho);
    }
 
-   // Every rim contact (true local minimum of the distance, facing the ball) of cut ci for a ball (radius R) at c, and every local maximum of the distance (humps): a sign change of
-   // g = (c - A).T between an interval's two samples, refined inside it (the line is smooth, so g is continuous along it).
-   void RimExtrema(const int ci, const double R, const V3 &c, std::vector<RimHit> &out, std::vector<RimHump> *humps)
+   // The real roots of x^3 + P x + Q = 0, ascending, and how many: three (D < 0) by Viete's trigonometric form, one by Cardano's formula on its branch with no cancellation
+   int CubicRoots(const double P, const double Q, double x[3])
+   {
+      const double D = 0.25 * Q * Q + P * P * P / 27.0;
+      if (D < 0.0)   // (so P < 0)
+      {
+         const double m = 2.0 * std::sqrt(-P / 3.0), th = std::acos(std::clamp(1.5 * Q / P * std::sqrt(-3.0 / P), -1.0, 1.0)) / 3.0;
+         x[0] = m * std::cos(th - 4.0 * M_PI / 3.0);
+         x[1] = m * std::cos(th - 2.0 * M_PI / 3.0);
+         x[2] = m * std::cos(th);
+         return 3;
+      }
+      const double t1 = -std::copysign(std::cbrt(0.5 * std::abs(Q) + std::sqrt(D)), Q);
+      x[0] = t1 != 0.0 ? t1 - P / (3.0 * t1) : 0.0;
+      return 1;
+   }
+
+   // Every rim contact (true local minimum of the distance, facing the ball, within reachMin of the centre) of cut ci for a ball (radius R) at c, and every local maximum of the distance
+   // (humps, when humps is given), in loop order. The distance's extrema along the line are its normal foot points: where the line's normal passes through the ball's centre (the line is
+   // level, so the 3D distance's extrema are the plane's). g = (c - A).T > 0 while the distance falls along the loop: a minimum where g turns from > 0 to <= 0, a hump from <= 0 to > 0.
+   // The line is tangent-continuous, so g is continuous along it: its sign at the junctions, shared by the two pieces that meet there, says whether a piece holds a root (minima and humps
+   // alternate round the loop), and each root is placed in closed form:
+   //   side        the foot of the normal (s = the ball's s); a line has no maximum
+   //   round end   a circle (at most one root on an arc shorter than pi): the nearest point O + r e (a minimum) or the farthest O - r e (a hump), e the unit vector from its centre O
+   //               to the ball's; the ball's centre on O (every point equally far): the arc's start
+   //   ramp        the rim line is the outline offset along its normals, so they share their normal lines: the outline's foot points. In the end's frame (u along, w across; outline
+   //               u = L - tau^2, w = c tau) with the ball's centre at (u0, w0), d/dtau of half the squared distance is F(tau) = 2 tau^3 + q tau - c w0, q = c^2 - 2 (L - u0), times a
+   //               positive factor (g has the sign of F on the + end, of -F on the - end). F' = 6 tau^2 + q splits the ramp at tau = +-sqrt(-q / 6) (q < 0) into monotone pieces,
+   //               each holding one root where the signs at its ends differ: the cubic's root in it.
+   void RimExtrema(const int ci, const double R, const V3 &c, std::vector<RimHit> &out, std::vector<RimHump> *humps, const double reachMin)
    {
       const Rim &m = g_rims[ci];
-      const double dx = c.x - m.cx, dy = c.y - m.cy, cs = dx * m.lx + dy * m.ly, ct = dx * m.px + dy * m.py, dz = c.z - (m.z0 - m.rho);
-      const size_t n = m.seg.size();
-      const auto arcOf = [&](const size_t i, const double p) {
-         const Rim::Seg &q = m.seg[i];
-         return q.arc + ((i + 1 < n ? m.seg[i + 1].arc : m.total) - q.arc) * (p - q.p0) / (q.p1 - q.p0);
-      };
-      const auto addHump = [&](const double arc, const double s, const double t) {
-         if (humps != nullptr)
-            humps->push_back({ ci, arc, std::sqrt((cs - s) * (cs - s) + (ct - t) * (ct - t) + dz * dz) });
-      };
-      const auto addMin = [&](const size_t i, const double p, const double s, const double t, const double Ts, const double Tt, const double kin) {
+      double cs, ct, dz;
+      SlotFrame(m, c, cs, ct, dz);
+      // one extremum: the point (s, t), the unit tangent along the loop, the curvature toward the hole (1/m)
+      const auto add = [&](const bool isMin, const double loop, const double s, const double t, const double Ts, const double Tt, const double kin) {
+         if (!isMin)
+         {
+            if (humps != nullptr)
+               humps->push_back({ ci, loop, std::sqrt((cs - s) * (cs - s) + (ct - t) * (ct - t) + dz * dz) });
+            return;
+         }
          if ((cs - s) * Tt - (ct - t) * Ts <= 0.0)   // the horizontal direction to the ball does not point into the hole: the rim's lower or outer side, not surface
             return;
          const V3 A(m.cx + m.lx * s + m.px * t, m.cy + m.ly * s + m.py * t, m.z0 - m.rho);
          const V3 dv = c - A;
          const double dist = dv.Length();
-         if (dist <= 1e-12)
+         if (dist <= 1e-12 || dist > reachMin)   // (beyond the caller's reach: it cannot change the caller's answer)
             return;
          RimHit h;
          h.cut = ci;
@@ -426,7 +405,7 @@ namespace
          h.dist = dist;
          h.normal = dv / dist;
          h.delta = R + m.rho - dist;
-         h.arc = arcOf(i, p);
+         h.loop = loop;
          // the tube law (rubbercontact.h ProbeTube): across the rim 1/R1 = 1/R + 1/rho; along it the centre line's curvature (TubeAlongCurvature), concave bends held within 20 ball radii
          double kLong = 0.0;
          const double nh = std::hypot(h.normal.x, h.normal.y);
@@ -440,22 +419,85 @@ namespace
          h.reff = std::sqrt(R1 * R2);
          out.push_back(h);
       };
-      for (size_t i = 0; i < n; i++)
+      bool pos[kPieces];   // g > 0 at each junction
+      for (int k = 0; k < kPieces; k++)
+         pos[k] = (cs - m.js[k]) * m.jTs[k] + (ct - m.jt[k]) * m.jTt[k] > 0.0;
+      for (int k = 0; k < kPieces; k++)
       {
-         const Rim::Seg &q = m.seg[i], &nx = m.seg[i + 1 < n ? i + 1 : 0];
-         const double gA = (cs - q.s) * q.Ts + (ct - q.t) * q.Tt, gB = (cs - nx.s) * nx.Ts + (ct - nx.t) * nx.Tt;
-         if ((gA > 0.0) != (gB > 0.0))   // a minimum (g from > 0 to <= 0) or a hump inside the interval
+         const int k1 = (k + 1) % kPieces;
+         const bool pa = pos[k], pb = pos[k1];   // a root in the piece: a minimum if g > 0 at its start
+         if (k == 0 || k == 4)   // a side, t = +-r along +-s
          {
-            const double p = Refine(m, q.piece, q.p0, q.p1, gA, gB, cs, ct);
-            double s, t, ds, dt;
-            m.Eval(q.piece, p, s, t, ds, dt);
-            if (gA > 0.0)
+            if (pa == pb)
+               continue;
+            const double sg = k == 0 ? 1.0 : -1.0, len = 2.0 * m.hs, p = std::clamp(m.hs + sg * cs, 0.0, len);
+            add(pa, k + (len > 0.0 ? p / len : 0.0), sg * (p - m.hs), sg * m.r, sg, 0.0, 0.0);
+         }
+         else if (k & 1)   // a round end: the circle of radius r about O = (+-hs, 0), clockwise from junction k to junction k1
+         {
+            if (pa == pb)
+               continue;
+            const double O = k < 4 ? m.hs : -m.hs, as = m.js[k] - O, at = m.jt[k], bs = m.js[k1] - O, bt = m.jt[k1];   // the arc's ends seen from O
+            double es = cs - O, et = ct;
+            const double n = std::hypot(es, et);
+            if (n > 0.0)
             {
-               const double l = std::hypot(ds, dt);
-               addMin(i, p, s, t, ds / l, dt / l, m.Curvature(q.piece, p, q.p0, q.p1));
+               es *= (pa ? m.r : -m.r) / n;   // r e: the nearest point (a minimum) or the farthest (a hump), from O
+               et *= (pa ? m.r : -m.r) / n;
             }
-            else
-               addHump(arcOf(i, p), s, t);
+            if (n == 0.0 || as * et - at * es > 0.0)   // the ball's centre on O, or the point before the arc's start (rounding at the junction): the start
+               add(pa, k, m.js[k], m.jt[k], m.jTs[k], m.jTt[k], 1.0 / m.r);
+            else if (es * bt - et * bs > 0.0)          // past its end
+               add(pa, k + 1, m.js[k1], m.jt[k1], m.jTs[k1], m.jTt[k1], 1.0 / m.r);
+            else   // (the place on the loop: sin of the angle from the start over sin th1, which orders the same way as the angle)
+               add(pa, k + (as * et - at * es) / (as * bt - at * bs), O + es, et, et / m.r, -es / m.r, 1.0 / m.r);
+         }
+         else   // a ramp: k 2 the + end (tau from tauJ down to -tauJ along the loop), k 6 the - end (tau from -tauJ up to tauJ)
+         {
+            const double sg = k == 2 ? 1.0 : -1.0, q = m.c * m.c - 2.0 * (m.L - (sg * cs - m.hs)), r0 = m.c * ct;
+            const auto F = [&](const double x) { return 2.0 * x * x * x + q * x - r0; };
+            double tau[4], x[3];   // the monotone pieces' ends in loop order; the cubic's roots
+            bool gp[4];            // g > 0 there
+            int nb = 0, nr = 0;
+            tau[nb] = sg * m.tauJ;
+            gp[nb++] = pa;
+            const double tc = q < 0.0 ? std::sqrt(-q / 6.0) : m.tauJ;   // F's turning points
+            if (tc < m.tauJ)
+               for (const double xc : { sg * tc, -sg * tc })
+               {
+                  tau[nb] = xc;
+                  gp[nb++] = sg * F(xc) > 0.0;
+               }
+            tau[nb] = -sg * m.tauJ;
+            gp[nb++] = pb;
+            for (int i = 0; i + 1 < nb; i++)
+            {
+               if (gp[i] == gp[i + 1])
+                  continue;
+               if (nr == 0)
+                  nr = CubicRoots(0.5 * q, -0.5 * r0, x);
+               // the root in this piece (of rounding's several there, the one nearest F = 0; with none there, the nearest, at the piece's end)
+               const double lo = std::min(tau[i], tau[i + 1]), hi = std::max(tau[i], tau[i + 1]);
+               int j = -1;
+               for (int jj = 0; jj < nr; jj++)
+                  if (x[jj] >= lo && x[jj] <= hi && (j < 0 || std::abs(F(x[jj])) < std::abs(F(x[j]))))
+                     j = jj;
+               double xr;
+               if (j >= 0)
+                  xr = x[j];
+               else
+               {
+                  j = 0;
+                  for (int jj = 1; jj < nr; jj++)
+                     if (std::min(std::abs(x[jj] - lo), std::abs(x[jj] - hi)) < std::min(std::abs(x[j] - lo), std::abs(x[j] - hi)))
+                        j = jj;
+                  xr = std::clamp(x[j], lo, hi);
+               }
+               double u, w, du, dw;
+               m.Ramp(xr, u, w, du, dw);
+               const double l = std::hypot(du, dw);
+               add(gp[i], k + (m.tauJ - sg * xr) / (2.0 * m.tauJ), sg * (m.hs + u), w, -du / l, -sg * dw / l, m.RampCurvature(xr));
+            }
          }
       }
    }
@@ -482,7 +524,7 @@ namespace
       }
    }
 
-   // build cut m's centre line samples and log numbers (slot frame set, a, hs, rho)
+   // build cut m's centre line: its numbers, junctions, world box and the inside test's table (slot frame set, a, hs, rho)
    void BuildRim(Rim &m)
    {
       m.U1 = m.L - std::sqrt(m.L * m.L - m.a * m.a);
@@ -501,56 +543,34 @@ namespace
          m.Ramp(m.tauJ * j / K, u, t, du, dt);
          m.rampU[j] = u;
       }
-      m.seg.clear();
-      for (int piece = 0; piece < 8; piece++)
+      for (int k = 0; k < kPieces; k++)
       {
-         const double P = m.PieceEnd(piece);
-         if (P <= 0.0)
-            continue;
-         std::vector<double> ps;
-         const int nI = piece == 0 || piece == 4 ? 1 : piece == 2 || piece == 6 ? 2 * K : kRoundSamples;
-         for (int i = 0; i <= nI; i++)
-            ps.push_back(P * i / nI);
-         for (size_t i = 0; i + 1 < ps.size(); i++)
-         {
-            Rim::Seg q;
-            q.piece = piece;
-            q.p0 = ps[i];
-            q.p1 = ps[i + 1];
-            double ds, dt;
-            m.Eval(piece, q.p0, q.s, q.t, ds, dt);
-            const double l = std::hypot(ds, dt);
-            q.Ts = ds / l;
-            q.Tt = dt / l;
-            q.arc = m.total;
-            double s0 = q.s, t0 = q.t;
-            for (int j = 1; j <= 16; j++)   // arc length by chords
-            {
-               double s1, t1;
-               m.Eval(piece, q.p0 + (q.p1 - q.p0) * j / 16, s1, t1, ds, dt);
-               m.total += std::hypot(s1 - s0, t1 - t0);
-               s0 = s1;
-               t0 = t1;
-            }
-            m.seg.push_back(q);
-         }
+         double ds, dt;
+         m.Eval(k, 0.0, m.js[k], m.jt[k], ds, dt);
+         const double l = std::hypot(ds, dt);
+         m.jTs[k] = ds / l;
+         m.jTt[k] = dt / l;
       }
+      // the world box: the line lies within |s| <= hs + L + rho (the tip), |t| <= r
       for (int i = 0; i < 3; i++)
       {
          m.lo[i] = 1e30;
          m.hi[i] = -1e30;
       }
-      for (const Rim::Seg &q : m.seg)
+      for (int corner = 0; corner < 4; corner++)
       {
-         const double v[3] = { m.cx + m.lx * q.s + m.px * q.t, m.cy + m.ly * q.s + m.py * q.t, m.z0 - m.rho };
+         const double s = (corner & 1 ? 1.0 : -1.0) * (m.hs + m.uTip), t = (corner & 2 ? 1.0 : -1.0) * m.r;
+         const double v[3] = { m.cx + m.lx * s + m.px * t, m.cy + m.ly * s + m.py * t, m.z0 - m.rho };
          for (int i = 0; i < 3; i++)
          {
             m.lo[i] = std::min(m.lo[i], v[i]);
             m.hi[i] = std::max(m.hi[i], v[i]);
          }
       }
-      // logged: the curvature at the tip and on the round end
-      m.kapTip = m.Curvature(2, m.tauJ, m.tauJ - 1e-3 * m.tauJ, m.tauJ + 1e-3 * m.tauJ);
+      // logged: the length (the outline's, the ramps' by the parabola's arc length, plus rho times the loop's whole turn 2 pi) and the curvature at the tip and on the round end
+      const double mJ = std::sqrt(m.c * m.c + 4.0 * m.tauJ * m.tauJ);
+      m.total = 4.0 * m.hs + 4.0 * m.a * m.th1 + 2.0 * (m.tauJ * mJ + 0.5 * m.c * m.c * std::asinh(2.0 * m.tauJ / m.c)) + 2.0 * M_PI * m.rho;
+      m.kapTip = m.RampCurvature(0.0);
       m.kapRound = 1.0 / m.r;
    }
 }
@@ -731,8 +751,8 @@ namespace PlayfieldCuts
          std::ostringstream o;
          o << "Playfield cut " << k.name << ": slot in the playfield " << host->Name() << " (exact rim), centre " << k.x << ", " << k.y << " (playfield z " << zU << "), angle " << k.angle
            << " deg (along " << m.lx << ", " << m.ly << "), straight part " << k.lengthMm << " mm, width " << widthMm << " mm; round end to u " << m.U1 * 1e3 << " mm, ramp to " << m.L * 1e3
-           << " mm, rim radius " << m.rho * 1e3 << " mm (assumed). Rim centre line (outline + rho): " << m.seg.size() << " intervals, " << m.total * 1e3
-           << " mm round; curvature toward the hole " << m.kapRound << " /m on the round end, " << m.kapTip << " /m at the tip. Paper, 27 mm ball: sinks " << (R - hc) * 1e3
+           << " mm, rim radius " << m.rho * 1e3 << " mm (assumed). Rim centre line (outline + rho): " << m.total * 1e3
+           << " mm round, extrema in closed form; curvature toward the hole " << m.kapRound << " /m on the round end, " << m.kapTip << " /m at the tip. Paper, 27 mm ball: sinks " << (R - hc) * 1e3
            << " mm, rim normals " << std::asin(ar / (R + m.rho)) * 180.0 / M_PI << " deg from vertical";
          PLOGI << o.str();
          g_rims.push_back(std::move(m));
@@ -760,10 +780,15 @@ namespace PlayfieldCuts
       }
       FacesLeft(tris, faces, cuts, c, left);
       RubberContact::TubeProbe pr = RubberContact::ProbeTriangles(bs, tris, left, edgeRho, c, holes, nHoles);
+      // The reach (beyond S = R + rho): a rim minimum matters here only if it is deeper than the faces' nearest (it becomes the probe) or presses (d = delta - zero > 0 within S - zero,
+      // the patch sum), so with a face left the rim is searched to S + max(the faces' gap, -zero (patch), 0). With no face the deepest minimum is the probe wherever it is: no limit.
+      // Every extremum is in closed form, so one search costs the same whatever its reach. Every hump is kept at its distance (one beyond the top gives s = 0).
+      const bool face = pr.seg >= 0;
+      const double extra = face ? std::max(std::max(-pr.delta, patch ? -zero : 0.0), 0.0) : kNoLimitM;
       hits.clear();
       humps.clear();
       for (const int ci : cuts)
-         RimExtrema(ci, bs.R, c, hits, patch ? &humps : nullptr);
+         RimExtrema(ci, bs.R, c, hits, patch ? &humps : nullptr, bs.R + g_rims[ci].rho + extra + kReachPadM);
       int best = -1;   // the deepest: a face (-1) or a rim contact
       double bestDelta = pr.seg >= 0 ? pr.delta : -1e30;
       for (size_t j = 0; j < hits.size(); j++)
@@ -818,7 +843,7 @@ namespace PlayfieldCuts
             PLOGW << "Playfield cut " << g_rims[ci].name << ": " << nCut << " rim contacts on one cut at ball x " << c.x / U << " y " << c.y / U << " z " << c.z / U
                   << " (VPX units; once per table start): weighted pair by pair";
          }
-         const double tot = g_rims[ci].total, top = bs.R + g_rims[ci].rho - zero;
+         const double tot = kPieces, top = bs.R + g_rims[ci].rho - zero;
          for (size_t i = 0; i < hits.size(); i++)
             for (size_t j = i + 1; j < hits.size(); j++)
             {
@@ -826,14 +851,13 @@ namespace PlayfieldCuts
                if (h1.cut != ci || h2.cut != ci || h1.delta - zero <= 0.0 || h2.delta - zero <= 0.0)
                   continue;
                // the largest distance on each arc between them (forward from h1 to h2, and the rest); the hump is the lower of the two
-               const double fwd = std::fmod(h2.arc - h1.arc + 2.0 * tot, tot);
+               const double fwd = std::fmod(h2.loop - h1.loop + 2.0 * tot, tot);
                double m1 = -1.0, m2 = -1.0;
                for (const RimHump &q : humps)
                {
                   if (q.cut != ci)
                      continue;
-                  const double x = std::fmod(q.arc - h1.arc + 2.0 * tot, tot);
-                  double &mm = x < fwd ? m1 : m2;
+                  double &mm = std::fmod(q.loop - h1.loop + 2.0 * tot, tot) < fwd ? m1 : m2;
                   mm = std::max(mm, q.dist);
                }
                const double d1 = h1.delta - zero, d2 = h2.delta - zero;
@@ -872,10 +896,12 @@ namespace PlayfieldCuts
       const int nT = (int)tris.size();
       FacesLeft(tris, faces, cuts, c, left);
       double h = RubberContact::ArrivalTriangles(bs, tris, left, nearestSeg < nT ? nearestSeg : -1, c, v, a, hMax, touchM, arriveM);
+      // the reach: a minimum farther than this leaves h as it is (ArrivalStep: d > vc h + a h^2, with vc <= |v| and h only falling from here)
+      const double h0 = h, beyondM = v.Length() * h0 + std::max(a, 0.0) * h0 * h0 + arriveM;
       for (const int ci : cuts)
       {
          hits.clear();
-         RimExtrema(ci, bs.R, c, hits, nullptr);
+         RimExtrema(ci, bs.R, c, hits, nullptr, bs.R + g_rims[ci].rho + beyondM + kReachPadM);
          int skip = -1;   // the probe's nearest on this cut: its deepest (the probe takes the first of equals)
          if (nearestSeg == nT + ci)
             for (size_t j = 0; j < hits.size(); j++)
