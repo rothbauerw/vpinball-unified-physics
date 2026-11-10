@@ -1623,10 +1623,17 @@ namespace GroupStep
             const bool terms = set.termArrival && hp.nt > 0 && nq > 0;
             const double qRate = terms ? part[shape[it.s]->part]->Coord(hp.c[0].coord).rate : 0.0;
             const auto termDot = [&](const HitTerm &ht) { return -A.v.Dot(ht.n) + ht.slope * qRate; };
+            // the reach over the longest step along normal n: distance under a steady acceleration, s = v h + a h^2 / 2, a the closing part of the net acceleration
+            // now (fNet: gravity with the nudge, external, fields, touching contacts; a surface's own acceleration is not in it). Only a closing a widens the reach,
+            // an opening one is not taken off: the test only decides whether the item is probed; probing one more costs one probe, dropping one that arrives is a fault
+            V3 aRelNow = fNet[it.a] * (1.0 / A.m);
+            if (it.b >= 0)
+               aRelNow = aRelNow - fNet[it.b] * (1.0 / ball[it.b].m);
+            const auto reach = [&](const double v, const V3 &n) { return v * set.hMax + 0.5 * std::max(-aRelNow.Dot(n), 0.0) * set.hMax * set.hMax; };
             bool termNear = false;   // a term the longest step can reach though the union's depth cannot be
             for (int t = 0; terms && !termNear && t < hp.nt; t++)
-               termNear = hp.t[t].d > 0.0 || -hp.t[t].d < std::max(termDot(hp.t[t]), set.vFloor) * set.hMax + 1e-9;
-            if (hp.delta <= 0.0 && -hp.delta >= vc * set.hMax + 1e-9 && !termNear)
+               termNear = hp.t[t].d > 0.0 || -hp.t[t].d < reach(std::max(termDot(hp.t[t]), set.vFloor), hp.t[t].n) + 1e-9;
+            if (hp.delta <= 0.0 && -hp.delta >= reach(vc, hp.n) + 1e-9 && !termNear)
                continue;   // cannot be reached within the longest step
             Item L = it;
             if (!it.touching)
