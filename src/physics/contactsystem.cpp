@@ -759,7 +759,8 @@ struct ContactSystemImpl
       const double dt = cy.dt;
       const std::vector<std::pair<int, int>> &cpairs = isl.edges;
       constexpr double kRestSpeedFree = 0.02;   // m/s: closing speed above which a pair is stepped for the accuracy of its impact, not only for stability
-      constexpr double kImpactOmegaH = 0.2, kRestOmegaH = 0.8, kMaxPairStepS = 1e-4;   // omega * h limits: an impact resolved with about 30 steps, a resting contact only stable
+      const double kImpactOmegaH = 0.2 * GroupStep::GroupStepScale(), kRestOmegaH = 0.8 * GroupStep::GroupStepScale();   // omega * h limits: an impact resolved with about 30 steps, a resting contact only stable (VPX_STEP_SCALE)
+      constexpr double kMaxPairStepS = 1e-4;
       constexpr double kApproachMarginM = 100e-6;   // m: gap beyond the closing distance under which a not-yet-touching pair still gets its contact step
 
       // the shear state of each pair: found or made (two passes, because making one can move the vector)
@@ -1196,8 +1197,7 @@ struct ContactSystemImpl
       constexpr double kTouchM = 1.0e-6;          // within this gap a surface counts as touching
       constexpr double kArriveM = 0.5e-6;         // an arrival step ends this far above the surface
       constexpr double kMinStepS = 0.2e-6, kMaxContactStepS = 100e-6;
-      const double kImpactOmegaH = 0.2 * ContactOmegaHScale();
-      constexpr double kRestOmegaH = 0.8;
+      const double kImpactOmegaH = 0.2 * GroupStep::GroupStepScale(), kRestOmegaH = 0.8 * GroupStep::GroupStepScale();   // (VPX_STEP_SCALE)
       constexpr double kRestSpeed = 0.02;   // as the ball pairs' rule
       // resting = slow AND the forces on the ball balance: what is left over (m times its acceleration over the last substep) is at most this share of the contact's own force.
       // At rest the contact carries everything that presses the ball into it (weight, magnets, balls on top); at the deepest point of an impact it far exceeds the rest.

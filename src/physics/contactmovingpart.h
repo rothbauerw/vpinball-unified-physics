@@ -28,13 +28,6 @@
 #include "physics/groupstep.h"
 #include "physics/partrecords.h"
 
-// Scale on the impact rule of the contact step (omega * h <= 0.2 in the contact system, 0.1 in a part's BallStep): VPX_OMEGAH_SCALE, default 1. A diagnostic knob for the step-size study of 2026-10-27.
-inline double ContactOmegaHScale()
-{
-   static const double s = []() { const char *const e = getenv("VPX_OMEGAH_SCALE"); return e != nullptr && *e ? atof(e) : 1.0; }();
-   return s;
-}
-
 // What the engine keeps of every moving part between its calls (PartRecords: part of its state)
 struct MovingPartState
 {

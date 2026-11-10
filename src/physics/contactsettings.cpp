@@ -250,6 +250,28 @@ void ContactSettings::ToStep(GroupStep::Settings& s) const
    s.partGuessAccel = partGuessAccel;
    s.epsRest = epsRestUm * 1e-6;   // (0.1 um gives 1e-7 m exactly, the Settings default)
    s.hMin = GroupStep::GroupFixedStepS() > 0.0 ? 1e-9 : 2e-6;
+   // VPX_STEP_SCALE (GroupStep::GroupStepScale): every accuracy limit of the step k times its own, epsRest by k^2 (k on its step). From the Settings defaults, not s: s is set again at every
+   // island use and ini reload. k = 1 leaves s as it is.
+   const double k = GroupStep::GroupStepScale();
+   if (k != 1.0)
+   {
+      static const GroupStep::Settings d;
+      s.omegaH = d.omegaH * k;
+      s.omegaHRest = d.omegaHRest * k;
+      s.arrivalShare = d.arrivalShare * k;
+      s.turnMaxRad = d.turnMaxRad * k;
+      s.tauShare = d.tauShare * k;
+      s.fieldShare = d.fieldShare * k;
+      s.epsRest *= k * k;
+   }
+   static bool logged = false;   // once a run, so its log shows what ran
+   if (!logged)
+   {
+      logged = true;
+      PLOGI << "Step scale " << k << " (VPX_STEP_SCALE): omegaH " << s.omegaH << ", omegaHRest " << s.omegaHRest << ", epsRest " << s.epsRest * 1e6 << " um, arrivalShare " << s.arrivalShare
+            << ", turnMaxRad " << s.turnMaxRad << ", tauShare " << s.tauShare << ", fieldShare " << s.fieldShare << ", old loop omega * h " << 0.2 * k << " / " << 0.8 * k
+            << (GroupStep::GroupFixedStepS() > 0.0 ? "; VPX_GROUP_HFIX is set: the fixed step wins, the scale has no effect" : "");
+   }
 }
 
 const ContactSettings& ContactSettings::Get()

@@ -389,6 +389,7 @@ namespace GroupStep
       // partGuessAccel ([Contact] part_guess_accel): a part's first guess of its coordinate's move carries its last step's acceleration, (rate + a h / 2) h, a the force of the
       // move taken over its mass, as a ball's guess does. Newton's start only: the law and the solved step are unchanged. false (default) = rate h.
       bool partGuessAccel = false;
+      double arrivalShare = 0.5;               // a contact or a term closing at a steady rate is reached in about two steps, not overshot: a step is at most this share of the time to get there (rule 3; StepFactList::Arrival)
       double turnMaxRad = 2.0 * kPi / 180.0;   // a ball rolling round a post or another ball turns at most this per step
       double tauShare = 0.25, fieldShare = 0.25;   // a part's own time constant is resolved to this share of it; a body moves at most this share of a distance over which its force changes (StepFactList; no part uses them yet; the bat's values)
       double vFloor = 0.01;                    // m/s: the closing speed below which a contact's expected depth is taken at this speed
@@ -430,6 +431,16 @@ namespace GroupStep
    {
       static const double s = []() { const char *const e = getenv("VPX_GROUP_HFIX"); return e != nullptr && *e ? atof(e) * 1e-6 : 0.0; }();
       return s;
+   }
+
+   // VPX_STEP_SCALE=<k> (a diagnostic, read once; runs/2026-11-10-step-scale/design.md): every limit that sets a step for accuracy is k times its own (k < 1 = shorter steps, the accuracy bench's
+   // convergence runs): omegaH, omegaHRest, arrivalShare, turnMaxRad, tauShare and fieldShare, and the at-rest phase budget epsRest by k^2 (its step goes as sqrt(epsRest)), set in
+   // ContactSettings::ToStep; the old island loop's omega * h limits (contactsystem.cpp SetupIsland, NextStep) likewise. Not scaled: exact event times, the 1 ms cycle, the step floor, vSteady.
+   // Unset, empty or <= 0 = 1 (nothing changes). Use k >= 0.25: the cost grows about 1/k and a cycle may pass the step guard's 3000 steps. With VPX_GROUP_HFIX set the fixed step wins.
+   inline double GroupStepScale()
+   {
+      static const double k = []() { const char *const e = getenv("VPX_STEP_SCALE"); const double v = e != nullptr && *e ? atof(e) : 0.0; return v > 0.0 ? v : 1.0; }();
+      return k;
    }
 
    // The engine's step settings ([Contact] keys and the step floor, ContactSettings::ToStep, set when the ini is read): one copy, taken whole by every group the engine steps,
@@ -570,7 +581,7 @@ namespace GroupStep
             Lim((steady ? set.omegaHRest : set.omegaH) / omega, why);
       }
       void Approach(const double gap, const double rate, const double omega, const int why) { Arrival(gap, rate, set.omegaH / omega, why); }   // closing on a stiffness of this frequency: reached in about two steps, not overshot
-      void Arrival(const double gap, const double rate, const double shortest, const int why) { Lim(std::max(0.5 * gap / rate, shortest), why); }   // closing on something at this rate; no shorter than this
+      void Arrival(const double gap, const double rate, const double shortest, const int why) { Lim(std::max(set.arrivalShare * gap / rate, shortest), why); }   // closing on something at this rate; no shorter than this
       void Turn(const double radius, const double speed, const int why) { Lim(set.turnMaxRad * radius / speed, why); }   // turning round a centre this far away at this speed
       void TimeLeft(const double t, const int why) { Lim(t, why); }   // something happens in this time
       void TimeConstant(const double tau, const int why) { Lim(set.tauShare * tau, why); }   // a state of its own relaxes with this time constant
@@ -1736,7 +1747,7 @@ namespace GroupStep
             };
             if (hp.delta < 0.0 && dDot > 0.0)   // reached in about two steps, not overshot
             {
-               const double ha = 0.5 * -hp.delta / dDot;
+               const double ha = set.arrivalShare * -hp.delta / dDot;
                lim(std::max(ha, hs), ha > hs ? 3 : 1);
             }
             else
@@ -1749,7 +1760,7 @@ namespace GroupStep
                const double dDotT = termDot(ht);
                if (ht.d >= 0.0 || dDotT <= 0.0)
                   continue;
-               const double ha = 0.5 * -ht.d / dDotT;
+               const double ha = set.arrivalShare * -ht.d / dDotT;
                if (ha >= h)
                   continue;   // (max(ha, hsT) >= h: no limit; the clock is not needed)
                double omNT = 0.0;

@@ -27,7 +27,7 @@ No dates, no "learned", no superseded text. What a test is for, its cap and hand
   A changed header: list every .cpp that includes it, then compare the compiled count with `grep -l` of the includers. A missed includer gives a mixed exe with no error; the lead checks the count before any result counts.
   After main is built, `python bench_snapshot.py` refreshes `src\`, `obj_*\` and `main_exe\` (check no session is building from them).
 - **Accuracy bench**: `runs\2026-11-01-roll-smooth` (report.md run 1). 750 real hits (stress p1-p3, Gorgar), each replayed alone: `run_replay.py <tag> <exe> <mode>`; the reference is the same with `-env VPX_GROUP_HFIX=1` (1 us steps);
-  runs with `-env VPX_TEST_IMPULSES=1`; `judge_hit.py <ref> <ref 0.5 us> <build> <build 0.3> <build 0.2>` judges each hit by the impulse its surface gave
+  runs with `-env VPX_TEST_IMPULSES=1`; `judge_hit.py <ref> <ref 0.5 us> <build> <build k 0.5> <build k 0.25>` (VPX_STEP_SCALE) judges each hit by the impulse its surface gave
   (bounce, slide, spin; runs\2026-11-10-hit-judge\design.md): noise floor from the 0.5 us twin, step error or fault by convergence, and pass = the exit
   direction error moves the ball under 1 mm by its next contact. `check_imp.py <run out folder>` checks the log adds up to each ball's momentum change.
 - **Not covered by the bench** (use a VPX run): cost against the frame limit, drawing, real input, table restart and teardown, magnets on, scripts that act on the game, script and frame timers,
@@ -122,7 +122,7 @@ VPX_SNAPSHOT_TEST=1        after each contact step: restore the snapshot, step a
 VPX_GROUP_HFIX=<us>        every group step this long; 1 = the accuracy bench's reference. A step may halve to 1 ns and a cycle may pass 3000 steps.
 VPX_GROUP_JAC_MODE=2       solves with the difference Jacobian instead of the analytic one.
 VPX_SNAPSHOT_TEST=2        negative control of the snapshot test: the parts are not put back, so a difference must show wherever a part moved.
-VPX_OMEGAH_SCALE=<x>       scales the impact step rule omega*h <= 0.2 (default 1); to-do N6.
+VPX_STEP_SCALE=<k>         every accuracy step limit times k (epsRest k^2; old loop too); bench convergence k 0.5 / 0.25. k >= 0.25; HFIX wins.
 VPX_ARRIVAL_NOSPLIT=1      no arrival split: every contact starts late and the rewind must catch it.
 VPX_HINGES=0               gates and spinners back to the stock kick.        VPX_VISCOELASTIC=0   hard-surface damping by the old alpha law.
 VPX_OVERLAP_REPLAY=0       no overlap replay.        VPX_PREVENT=0   no overlap prevention (overlap standard point 1).
