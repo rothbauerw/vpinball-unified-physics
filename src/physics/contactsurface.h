@@ -85,11 +85,8 @@ public:
    virtual double SurfaceSpeedBoundMS(double /*cycleS*/) const { return 0.0; }
    // The part object whose script hit event, threshold and duplicate filter a first touch of this surface fires (null = none)
    virtual HitObject *HitEventObject() const { return nullptr; }
-   // A part whose motion the contact system integrates (contactmovingpart.h: a gate, a spinner, a jet bumper). It evaluates its own contact with a ball (EvaluateOwn: the series bend,
-   // the tilt force, its Hit event, the reaction on its body) and fires its own events.
+   // A part whose motion the contact system integrates (contactmovingpart.h: a gate, a spinner, a jet bumper). It fires its own events.
    virtual ContactMovingPart *MovingPart() const { return nullptr; }
-   virtual RubberContact::ContactResult EvaluateOwn(SurfaceContact & /*it*/, const RubberContact::BallSI & /*bs*/, const RubberContact::V3 & /*c*/, const RubberContact::V3 & /*v*/,
-                                                    const RubberContact::V3 & /*w*/, double /*h*/) const { return RubberContact::ContactResult(); }
    virtual bool HitEventWanted(const RubberContact::V3 & /*normalToBall*/) const { return true; }
    // A surface that moves: its velocity and angular velocity at a probed contact point (default: at rest), and the reaction of one substep's contact on it
    virtual void VelocityAt(const RubberContact::TubeProbe &, RubberContact::V3 &, RubberContact::V3 &) const {}

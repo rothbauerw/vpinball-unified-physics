@@ -122,8 +122,7 @@ VPX_SNAPSHOT_TEST=1        after each contact step: restore the snapshot, step a
 VPX_GROUP_HFIX=<us>        every group step this long; 1 = the accuracy bench's reference. A step may halve to 1 ns and a cycle may pass 3000 steps.
 VPX_GROUP_JAC_MODE=2       solves with the difference Jacobian instead of the analytic one.
 VPX_SNAPSHOT_TEST=2        negative control of the snapshot test: the parts are not put back, so a difference must show wherever a part moved.
-VPX_STEP_SCALE=<k>         every accuracy step limit times k (epsRest k^2; old loop too); bench convergence k 0.5 / 0.25. k >= 0.25; HFIX wins.
-VPX_ARRIVAL_NOSPLIT=1      no arrival split: every contact starts late and the rewind must catch it.
+VPX_STEP_SCALE=<k>         every accuracy step limit times k (epsRest k^2); bench convergence k 0.5 / 0.25. k >= 0.25; HFIX wins.
 VPX_HINGES=0               gates and spinners back to the stock kick.        VPX_VISCOELASTIC=0   hard-surface damping by the old alpha law.
 VPX_OVERLAP_REPLAY=0       no overlap replay.        VPX_PREVENT=0   no overlap prevention (overlap standard point 1).
 VPX_PROXIMITY=0|1          proximity engagement off / on, over [Features] proximity_engage.

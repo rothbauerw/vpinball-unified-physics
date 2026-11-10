@@ -7,9 +7,6 @@
 // What the engine does with a part, in the order of a physics cycle:
 //   SetGravity       the gravity the part feels (gravity minus the cabinet acceleration, so a nudge acts on it), once per cycle
 //   Probe            where is the nearest surface of the part to a ball (distance, normal, curvature): engagement, release, the arrival-time rule
-//   BallStep         the longest substep this ball's contact with the part allows (reduced mass of ball and part, contact stiffness, arrival time)
-//   ContactItem      one substep of one ball's contact: the force and torque on the ball; the reaction is kept by the part and acts in StepInIsland
-//   StepInIsland     one island substep: the part moves with the reactions of all the balls summed, in its own finer steps if it needs them
 //   AdvanceAlone     a cycle with no ball near: the part moves by itself (a part at rest sleeps)
 //   events           what happened (Hit, switch closed / opened, stops, spins), in order; the host fires them on the table part after the step
 // Pure SI maths with no VPX types: the same code runs in the offline tests.
@@ -71,10 +68,7 @@ public:
    virtual double Reach() const = 0;                           // the swept reach about it (m)
    virtual double MotionRange() const { return 2.0 * Reach(); }   // the farthest any point of its surface can move from where it is, over its whole range of motion (m); every moving point is within Reach of Origin
    virtual RubberContact::TubeProbe Probe(const V3 &c) const = 0;
-   virtual RubberContact::ContactResult ContactItem(int ballIndex, SurfaceContact &it, const V3 &c, const V3 &v, const V3 &w, double h) = 0;
    virtual void SurfaceVelocity(const V3 &point, V3 &v, V3 &w) const = 0;
-   virtual double BallStep(const V3 &c, const V3 &v, double hMax) const = 0;
-   virtual void StepInIsland(double h) = 0;
    virtual int AdvanceAlone(double dt) = 0;
    // Save the dynamic state / put it back exactly: its records and its group part's, copied whole (one shared code for every part). Restoring cuts each event queue back to what it held at the save
    // (the replay makes the later ones again) and rebuilds what is derived from the state.

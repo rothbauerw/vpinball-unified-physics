@@ -127,9 +127,6 @@ namespace HingeModel
          v = w.Cross(point - gp.A);
       }
       // The old loop's calls: an island with this part never goes there (GroupPart)
-      RubberContact::ContactResult ContactItem(int, SurfaceContact &, const V3 &, const V3 &, const V3 &, double) override { assert(false); return RubberContact::ContactResult(); }
-      double BallStep(const V3 &, const V3 &, double hMax) const override { assert(false); return hMax; }
-      void StepInIsland(double) override { assert(false); }
 
       // ---- the group's calls ----
       GroupStep::Part *GroupPart() override { return &gp; }

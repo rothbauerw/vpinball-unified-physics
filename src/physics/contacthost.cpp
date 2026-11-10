@@ -15,6 +15,7 @@
 #include "physics/contactpartsini.h"
 #include "physics/hitball.h"
 #include "physics/hitflipper.h"
+#include "ui/live/LiveUI.h"
 #include "physics/hitrubber.h"
 #include "physics/physicsini.h"
 #include "physics/PhysicsEngine.h"
@@ -29,14 +30,14 @@ namespace
    struct BoolKey { const char *name; bool RubberObjectSettings::*field; };
    const NumKey NUM_KEYS[] = {
       { "sling_gap_mm", &RubberObjectSettings::slingGapMm },
-      { "band_ring_in", &RubberObjectSettings::bandRingIn }, { "band_section_mm", &RubberObjectSettings::bandSectionMm }, { "ring_model", &RubberObjectSettings::ringModel },
+      { "band_ring_in", &RubberObjectSettings::bandRingIn }, { "band_section_mm", &RubberObjectSettings::bandSectionMm },
       { "band_stretch_alpha_s_per_m", &RubberObjectSettings::bandStretchAlpha }, { "band_twist_scale", &RubberObjectSettings::bandTwistScale },
       { "surface_layer_mm", &RubberObjectSettings::surfaceLayerMm }, { "edge_radius_mm", &RubberObjectSettings::edgeRadiusMm },
       { "e_mpa", &RubberObjectSettings::eMpa }, { "layer_mm", &RubberObjectSettings::layerMm },
       { "alpha_s_per_m", &RubberObjectSettings::alphaSPerM }, { "restitution", &RubberObjectSettings::restitution }, { "plate_areal_density_kg_m2", &RubberObjectSettings::plateArealKgM2 }, { "plate_mass_g", &RubberObjectSettings::plateMassG }, { "plate_clearance_u", &RubberObjectSettings::plateClearanceU }, { "restitution_ref_speed_ms", &RubberObjectSettings::restitutionRefMs }, { "beta_layer", &RubberObjectSettings::betaLayer },
       { "mu", &RubberObjectSettings::mu }, { "sideways_stiffness", &RubberObjectSettings::shearScale },
       { "tan_delta", &RubberObjectSettings::tanDelta },
-      { "substep_us", &RubberObjectSettings::substepUs }, { "rest_substep_us", &RubberObjectSettings::restSubstepUs }, { "rest_omega_h", &RubberObjectSettings::restOmegaH }, { "rest_speed_mm_s", &RubberObjectSettings::restSpeedMmS }, { "roll_travel_um", &RubberObjectSettings::rollTravelUm }, { "max_ms", &RubberObjectSettings::maxMs }, { "release_gap_mm", &RubberObjectSettings::releaseGapMm },
+      { "max_ms",&RubberObjectSettings::maxMs }, { "release_gap_mm", &RubberObjectSettings::releaseGapMm },
       { "band_curve_radius_mm", &RubberObjectSettings::bandCurveRadiusMm }, { "band_min_span_mm", &RubberObjectSettings::bandMinSpanMm },
       { "band_ref_hz", &RubberObjectSettings::bandRefHz },
    };
@@ -93,6 +94,36 @@ namespace
                PLOGW << "Rubber settings: " << key << " no longer acts (the fixed-height cord is the only band; a rubber with a straight span is one by itself)";
             return true;
          }
+      // keys taken out with the old island loop (2026-11-10, runs/2026-11-10-old-loop/design.md): every ball is stepped by the group step's own rule. Old files still load; each key is said
+      // once per table start, in the log and on screen (rule 8), not once per section
+      static const char *const OLD_LOOP_KEYS[] = { "substep_us", "rest_substep_us", "rest_omega_h", "rest_speed_mm_s", "roll_travel_um" };
+      for (const char *const old : OLD_LOOP_KEYS)
+         if (key == old)
+         {
+            static const void *owner = nullptr;
+            static std::set<std::string> told;
+            if (owner != g_pplayer)
+            {
+               owner = g_pplayer;
+               told.clear();
+            }
+            if (told.insert(key).second)
+            {
+               const std::string msg = "Rubber settings: " + key + " no longer acts (the old island loop is gone: the group step sets every step). Remove it from the physics ini";
+               PLOGW << msg;
+               if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+                  g_pplayer->m_liveUI->PushNotification(msg, 6000);
+            }
+            return true;
+         }
+      if (key == "ring_model")   // removed 2026-11-10 (the old island loop is gone: every rubber and hard surface is on the group step; runs/2026-11-10-old-loop/design.md): read and ignored, said once
+      {
+         static bool said = false;
+         if (!said)
+            PLOGI << "Rubber settings: ring_model is no longer used (2026-11-10): ignored";
+         said = true;
+         return true;
+      }
       if (key == "shear_zeta" || key == "shear_scale")   // keys that no longer act (2026-10-31): the damping comes from tan_delta, the stiffness from sideways_stiffness. Old files still load
       {
          static bool told = false;
@@ -195,11 +226,6 @@ namespace
       clampKey("mu", s.mu, 0.0, 3.0);
       clampKey("sideways_stiffness", s.shearScale, 0.01, 100.0);
       clampKey("tan_delta", s.tanDelta, 0.0, 2.0);
-      clampKey("substep_us", s.substepUs, 1.0, 100.0);
-      clampKey("rest_substep_us", s.restSubstepUs, 0.0, 500.0);
-      clampKey("rest_omega_h", s.restOmegaH, 0.05, 1.5);
-      clampKey("rest_speed_mm_s", s.restSpeedMmS, 0.0, 500.0);
-      clampKey("roll_travel_um", s.rollTravelUm, 0.0, 1000.0);
       clampKey("max_ms", s.maxMs, 1.0, 200.0);
       clampKey("release_gap_mm", s.releaseGapMm, 0.0, 5.0);
       clampKey("band_curve_radius_mm", s.bandCurveRadiusMm, 2.0, 500.0);
@@ -311,8 +337,6 @@ bool ContactHost::LoadHardSurfaceSettings(RubberObjectSettings &s, const std::fi
    s.normalLoss = true;   // (the rubber default is off; the right law for hard materials is not measured, to-do 1.21)
    s.mu = friction;
    s.rollingMu = ContactSettings::Get().enable ? ContactSettings::Get().rollingResistance : 0.0;
-   s.restSubstepUs = 250.0;
-   s.restOmegaH = 0.8;
    s.surfaceRubber = true;
    ApplySection(s, file, "surfaces", name);
    ApplySection(s, file, std::string(kind) + ":" + name, name);
@@ -355,8 +379,6 @@ bool ContactHost::LoadPlayfieldSettings(RubberObjectSettings &s, const std::file
    s.normalLoss = true;   // (the rubber default is off; wood is not measured, to-do 1.21)
    s.mu = tableMu;
    s.rollingMu = ContactSettings::Get().enable ? ContactSettings::Get().rollingResistance : 0.0;   // a ball rolling on hard wood: the measured coefficient of [Contact], not the rubber hysteresis law
-   s.restSubstepUs = 250.0;   // a hard contact's own frequency (about 1 kHz) is what limits the step of a resting ball
-   s.restOmegaH = 0.8;
    ApplySection(s, file, "playfield", "playfield");
    Clamp(s, "playfield", 1.0e6);
    s.surfaceRubber = true;
@@ -376,8 +398,6 @@ RubberObjectSettings ContactHost::TurntableSettings(const double mu, const doubl
    s.normalLoss = true;   // (as the playfield)
    s.mu = mu;
    s.rollingMu = rollingResistance >= 0.0 ? rollingResistance : (ContactSettings::Get().enable ? ContactSettings::Get().rollingResistance : 0.0);
-   s.restSubstepUs = 250.0;
-   s.restOmegaH = 0.8;
    s.surfaceRubber = true;
    s.contact = true;
    return s;
@@ -482,9 +502,7 @@ void ContactHost::ReloadIfChanged() const
 
 bool ContactHost::GroupModel() const
 {
-   if (m_set.band || MovingPart() != nullptr)
-      return false;
-   return ContactSettings::Get().staticModel || (m_set.ringModel != 0.0 && !m_hardSurface && !IsFloor());
+   return !m_set.band && MovingPart() == nullptr;
 }
 
 double ContactHost::LayerM() const

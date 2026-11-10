@@ -238,7 +238,7 @@ void Bumper::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       const float r = (float)(m_bumperModel->Reach() / U);
       const float lo[3] = { m_d.m_vCenter.x - r, m_d.m_vCenter.y - r, height };
       const float hi[3] = { m_d.m_vCenter.x + r, m_d.m_vCenter.y + r, height + (float)(0.06 / U) };
-      RubberObjectSettings hs;   // (the host's own step and rest settings are not used: a moving part sets its own step, ContactMovingPart::BallStep)
+      RubberObjectSettings hs;   // (a moving part's contact law and step are its own, on the group step)
       hs.surfaceRubber = true;
       hs.contact = true;
       m_partHost = new ContactPartHost(this, m_bumperModel, std::make_unique<BumperPartAdapter>(this, m_bumperModel.get(), GetName(), ignored), hs, ini, GetName(), "bumper", lo, hi);

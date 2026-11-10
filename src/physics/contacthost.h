@@ -23,7 +23,6 @@ struct RubberObjectSettings
    bool contact = false;          // use the force model for this rubber (else the stock triangle/edge/point colliders are built)
    // Walls and primitives flagged as rubber ([Wall:<name>] / [Primitive:<name>] rubber = 1): the same model on the object's faces. Never set by [Rubbers].
    bool surfaceRubber = false;
-   double ringModel = 1.0;        // 1 = an island with a ball on this rubber surface (ring, wall or primitive with rubber = 1) goes through the group step, the band's solve (groupstep.h, GroupStepDesign 14); 0 = the old loop, which gains energy (14.11; default 1 on the user's word, 2026-10-30, before a stress table)
    double surfaceLayerMm = 5.4;   // layer thickness of a flat rubber face when layer_mm is 0: a typical ring's diameter (5.4 mm on the Gorgar rings)
    double edgeRadiusMm = 1.0;     // convex edges and corners of a rubber face are treated as rounded to this radius (Hertz effective radius)
    double eMpa = 12.0;            // effective Young's modulus
@@ -44,11 +43,6 @@ struct RubberObjectSettings
    double tanDelta = 0.05;        // loss tangent for the rolling resistance, 0 = off
    double rollingMu = 0.0;        // floor of the rolling-resistance coefficient (the playfield: [Contact] rolling_resistance, because the hysteresis law below gives almost nothing on hard wood); 0 = none
    bool normalLoss = false;       // the same tan_delta also damps the normal force (a dashpot at the contact's own natural frequency); off for rubbers (2026-10-29: it caps a gentle bounce near 0.78), on for the hard surfaces, playfield and turntable (their loaders)
-   double substepUs = 5.0;        // local integration step inside Collide()
-   double restOmegaH = 0.2;       // a resting ball steps at most restOmegaH / omega (omega = the contact's natural frequency); symplectic Euler is stable below 2, 0.2 is accurate for an impact
-   double restSubstepUs = 50.0;   // largest step for a ball at rest on the rubber (the stiffness sets the real limit); 0 = always substep_us
-   double restSpeedMmS = 30.0;    // a ball slower than this (start and end of the cycle) counts as at rest
-   double rollTravelUm = 50.0;    // a ball rolling or sliding along a surface (normal speed below rest_speed_mm_s) steps at most this far per substep, micrometres; 0 = always substep_us
    double maxMs = 30.0;           // give up after this much simulated contact time
    double releaseGapMm = 0.2;     // an engaged ball is released only once it is farther than this from every rubber (and receding): a resting ball must not engage and release over and over
 

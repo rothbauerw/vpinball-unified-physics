@@ -105,13 +105,6 @@ void ContactPartHost::VelocityAt(const RubberContact::TubeProbe &pr, RubberConta
    m_part->SurfaceVelocity(pr.point, v, w);
 }
 
-RubberContact::ContactResult ContactPartHost::EvaluateOwn(SurfaceContact &it, const RubberContact::BallSI &bs, const RubberContact::V3 &c, const RubberContact::V3 &v, const RubberContact::V3 &w,
-                                                          const double h) const
-{
-   m_part->SetBall(bs);
-   return m_part->ContactItem(0, it, c, v, w, h);
-}
-
 double ContactPartHost::SurfaceSpeedBoundMS(const double cycleS) const
 {
    return m_part->SurfaceSpeedBound(cycleS);

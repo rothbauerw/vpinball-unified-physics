@@ -40,11 +40,10 @@ public:
 
    // ContactSurface: the part is the surface
    ContactMovingPart *MovingPart() const override { return m_part.get(); }
-   const RubberObjectSettings *Settings() const override { return nullptr; }   // a moving part sets its own step (BallStep), not substep_us
+   const RubberObjectSettings *Settings() const override { return nullptr; }   // a moving part has no rubber settings of its own
    void Refresh(SurfaceContact &it, double ballR, double reachM, const RubberContact::V3 &c) const override;
    RubberContact::TubeProbe Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const override;
    void VelocityAt(const RubberContact::TubeProbe &pr, RubberContact::V3 &v, RubberContact::V3 &w) const override;
-   RubberContact::ContactResult EvaluateOwn(SurfaceContact &it, const RubberContact::BallSI &bs, const RubberContact::V3 &c, const RubberContact::V3 &v, const RubberContact::V3 &w, double h) const override;
    double SurfaceSpeedBoundMS(double cycleS) const override;
    bool HitEventWanted(const RubberContact::V3 &) const override { return false; }   // the part fires its own Hit (its events)
 

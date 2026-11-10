@@ -85,14 +85,13 @@ namespace
             s.ballRollingResistance = d;
          else if (key == "ball_mu" && num)
             s.ballMu = d;
-         else if (key == "ball_substep_us" && num)
-            s.ballSubstepUs = d;
-         else if (key == "ball_rest_substep_us" && num)
-            s.ballRestSubstepUs = d;
-         else if (key == "arrival_step")
-            s.arrivalStep = on;
-         else if (key == "static_model")
-            s.staticModel = on;
+         else if (key == "static_model")   // removed 2026-11-10 (the old island loop is gone: every static surface is on the group step; runs/2026-11-10-old-loop/design.md): read and ignored, said once
+         {
+            static bool said = false;
+            if (!said)
+               PLOGI << "Contact settings: static_model is no longer used (2026-11-10): ignored";
+            said = true;
+         }
          else if (key == "roll_smooth_rad_s" && num)
             s.rollSmoothRadS = d;
          else if (key == "roll_model" && num)
@@ -175,8 +174,6 @@ namespace
       ClampKey("ball_tan_delta", s.ballTanDelta, 0.0, 0.5);
       ClampKey("ball_mu", s.ballMu, 0.0, 1.5);
       ClampKey("ball_rolling_resistance", s.ballRollingResistance, 0.0, 0.1);
-      ClampKey("ball_substep_us", s.ballSubstepUs, 0.2, 50.0);
-      ClampKey("ball_rest_substep_us", s.ballRestSubstepUs, 0.5, 100.0);
       ClampKey("ball_reach_mm", s.ballReachMm, 0.0, 20.0);
       ClampKey("arrival_depth_um", s.arrivalDepthUm, 0.1, 100.0);
       ClampKey("roll_smooth_rad_s", s.rollSmoothRadS, 0.001, 100.0);

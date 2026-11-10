@@ -79,7 +79,7 @@ namespace TestDriver
          uint32_t t;
          float cycle, script;   // us; cycle = the whole loop pass without the script time inside it
          float part[kParts];    // us, each without the script inside it
-         ContactCost cc;        // the contact system's split (ticks) and its slowest island
+         ContactCost cc;        // the contact system's split (ticks)
       };
 
       struct FrameTime
@@ -474,8 +474,6 @@ namespace TestDriver
          "    flippers", "    bands and slings", "    gates, spinners, bumpers", "    shared (islands, step choice, integration, write-back)", "  stock hit search",
          "  movers' displacement", "  rest of the step (stock collisions, events)", "magnets", "turntable", "input", "script timers (without the script)",
          "test driver", "nudge and plunger", "movers' velocities", "fast-ball watchdog", "magnet guide tubes", "ball trails", "other (loop overhead)", "script" };
-      const char *const kWhyName[ContactCost::kWhys] = { "end of the cycle", "impact arriving", "surface stiffness", "ball-ball stiffness", "moving part's step", "ini substep_us",
-         "flipper step", "band step", "smallest step allowed", "taken again (rewind)" };
 
       double s_ticksPerUs = 1.0;
 
@@ -521,7 +519,7 @@ namespace TestDriver
             fputs("t_ms", f);
             for (int i = 0; i < cCols; i++)
                fprintf(f, ",%s_us", kColName[i]);
-            fputs(",islands,top_steps,top_us,top_min_step_us,why_end,why_arrival,why_surface_stiffness,why_pair_stiffness,why_part_step,why_setting,why_bat,why_band,why_minimum,why_retake,top_members\n", f);
+            fputs("\n", f);
             double v[cCols];
             for (const CycleTime &c : s.cycleTimes)
             {
@@ -529,10 +527,7 @@ namespace TestDriver
                fprintf(f, "%u", c.t);
                for (int i = 0; i < cCols; i++)
                   fprintf(f, ",%.2f", v[i]);
-               fprintf(f, ",%d,%d,%.2f,%.3f", c.cc.islands, c.cc.topSteps, c.cc.topTicks / s_ticksPerUs, c.cc.topMinStepUs);
-               for (int i = 0; i < ContactCost::kWhys; i++)
-                  fprintf(f, ",%d", c.cc.topWhy[i]);
-               fprintf(f, ",\"%s\"\n", c.cc.topMembers.c_str());
+               fputs("\n", f);
             }
             fclose(f);
          }
@@ -545,35 +540,19 @@ namespace TestDriver
          }
       }
 
-      // The split of a run of cycles (a window, or one cycle) and its slowest island
+      // The split of a run of cycles (a window, or one cycle)
       void Split(std::ostream &o, const vector<const CycleTime *> &c, size_t first, size_t n)
       {
          double sum[cCols] = {}, v[cCols];
-         int why[ContactCost::kWhys] = {};
-         const CycleTime *top = c[first];
          for (size_t k = first; k < first + n; k++)
          {
             Cols(*c[k], v);
             for (int i = 0; i < cCols; i++)
                sum[i] += v[i];
-            for (int i = 0; i < ContactCost::kWhys; i++)
-               why[i] += c[k]->cc.topWhy[i];
-            if (c[k]->cc.topSteps > top->cc.topSteps)
-               top = c[k];
          }
          for (int i = 0; i < cCols; i++)
             if (i == cCycle || std::fabs(sum[i]) >= 0.5)
                o << "         " << kColLabel[i] << ": " << sum[i] << '\n';
-         if (top->cc.topSteps > 0)
-         {
-            o << "         slowest island (t=" << top->t << " ms): " << top->cc.topSteps << " substeps, " << top->cc.topTicks / s_ticksPerUs << " us, smallest step "
-              << top->cc.topMinStepUs << " us; " << top->cc.topMembers << '\n';
-            o << "         what set the substeps of each cycle's slowest island:";
-            for (int i = 0; i < ContactCost::kWhys; i++)
-               if (why[i] != 0)
-                  o << ' ' << kWhyName[i] << ' ' << why[i] << ';';
-            o << '\n';
-         }
       }
 
       // Cost part of the report. Returns false only when a focused run is over limit 6.

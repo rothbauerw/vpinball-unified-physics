@@ -26,18 +26,12 @@ struct ContactSettings
    double ballTanDelta = 0.0;        // ball_tan_delta: loss tangent of the steel pair (0 = elastic; a damping ratio tan_delta / 2 at the contact's own frequency, so a slow bounce loses energy too)
    double ballRollingResistance = 0.003; // ball_rolling_resistance: one ball rolling on another, torque = coefficient * reff * N (steel on steel, same class as rolling_resistance)
    double ballMu = 0.15;             // ball_mu: steel on steel friction
-   double ballSubstepUs = 2.0;       // ball_substep_us: the smallest substep a pair may need (its step is omega_H / omega of the contact, see SetupIsland)
-   double ballRestSubstepUs = 6.0;   // ball_rest_substep_us: no longer used, still read
    double ballReachMm = 1.0;         // ball_reach_mm: balls closer than this (surface gap) are stepped as one cluster
    bool islandReach = true;          // island_reach (default 1 since 2026-11-05): 1 = a ball and a moving part share an island only if the ball can reach the part's surface within the cycle (runs/2026-11-05-island-reach/design.md); 0 = any part in the ball's near list
    bool ballPairReach = true;        // ball_pair_reach (default 1 since 2026-11-05; needs island_reach): 1 = two balls share an island when the gap can close within the cycle at their speed bounds (the island_reach closure, energy bound, BallsMayMeet); 0 = the pairwise ball_reach_mm + 2|vi-vj|T rule only
    bool sleep = false;               // sleep: 1 = a group of touching balls at rest sleeps (not stepped) until something can change it (runs/2026-11-03-pile-sleep/design.md)
    double sleepSpeedMmS = 0.1;       // sleep_speed_mm_s: every ball of the group under this speed and surface speed of spin (requirement 4.1, 'still')
    double sleepHoldMs = 100.0;       // sleep_hold_ms: for this long without a break (a ball only passing through zero speed does not sleep)
-   // Arrival-time substeps for islands of static surfaces and balls: a step never carries a ball into a surface (it ends at a small gap when an approach is predicted within it), a contact
-   // is stepped by its own stiffness at the depth the impact will reach, and a ball far from every surface takes the rest of the cycle as one step.
-   bool arrivalStep = true;          // arrival_step
-   bool staticModel = true;          // static_model (default 1 since 2026-11-03): 1 = every static surface (walls, primitives, ramps, playfield) takes a ball to the group step as a rubber does (ring_model, GroupStepDesign 14); 0 = only rubbers
    int rollModel = 1;                // roll_model (default 1): 0 = the rolling and twist torques smoothed through zero spin (roll_smooth_rad_s); 1 = rolling and twist stick springs at the contact (group step)
    double epsRestUm = 0.1;           // eps_rest_um (default 0.1 since 2026-11-05): the position error a steady contact's step may carry (step_model 1, step_swing_cap), um
    bool stepSwingCap = true;         // step_swing_cap (default 1 since 2026-11-05; with step_model 1): 1 = a steady contact whose whole swing (2 x its mode's amplitude) is within the step's error allowance sets no step limit

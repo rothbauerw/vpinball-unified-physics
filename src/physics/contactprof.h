@@ -10,15 +10,12 @@ namespace ContactProf
 {
    enum Id
    {
-      StepBalls, GatherBalls, Regather, RefreshCycle, ApproachSpeed, GatherFree, FindIslands, SetupIsland, Substeps,
-      SurfaceForces, SurfProbe, SurfEval, SurfReact, BatForces, BandForces, PairForces, Integrate,
-      WriteBack, ReleaseTest, Finish, EngageNear, EngageImpl, ProbeBody, NextStep, Sources, PartStep, PartWorld, PartSwitch, Count
+      StepBalls, GatherBalls, Regather, RefreshCycle, GatherFree, FindIslands, BatForces, BandForces, WriteBack, ReleaseTest,
+      Finish, EngageNear, EngageImpl, PartWorld, PartSwitch, Count
    };
    inline const char *Name(int i)
    {
-      static const char *const n[Count] = { "StepBalls", "GatherBalls", "  Regather", "  RefreshCycle", "  ApproachSpeed", "GatherFree", "FindIslands", "SetupIsland", "Substeps",
-                                            "  SurfaceForces", "    Probe", "    EvaluateTube", "    ApplyReaction", "  BatForces", "  BandForces", "  PairForces", "  Integrate",
-                                            "WriteBack", "  ReleaseTest", "Finish", "EngageNear", "EngageImpl", "  ProbeBody", "  NextStep", "    Sources (gravity, magnet pull, eddy)", "  PartStep (the moving parts' own stepping inside the island substeps)", "    PartWorld (a gate / spinner's geometry update, once per island substep)", "    PartSwitch (a gate / spinner's switch update, once per own substep)" };
+      static const char *const n[Count] = { "StepBalls", "GatherBalls", "  Regather", "  RefreshCycle", "GatherFree", "FindIslands", "  BatForces", "  BandForces", "WriteBack", "  ReleaseTest", "Finish", "EngageNear", "EngageImpl", "    PartWorld (a gate / spinner's geometry update, once per island substep)", "    PartSwitch (a gate / spinner's switch update, once per own substep)" };
       return n[i];
    }
    inline bool On()

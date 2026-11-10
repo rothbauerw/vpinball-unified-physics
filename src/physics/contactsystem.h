@@ -71,11 +71,8 @@ void NotePlaced(const HitBall *ball);   // a script or the driver put this ball 
    // What the last Step did (for the cost log, VPX_CONTACT_TIMING): bodies stepped, islands, substeps summed over the islands, bats stepped
    struct CycleStats
    {
-      int bodies = 0, islands = 0, substeps = 0, bats = 0, bandBodies = 0, restBodies = 0, maxSteps = 0;
-      int rewinds = 0;                  // substeps taken again because a contact started deeper than it should (arrival-time loop)
-      int items = 0;                    // surfaces summed over the bodies of the cycle
-      long long probes = 0;             // surface probes of the cycle: items x substeps summed over the bodies
-      int gatherUs = 0, setupUs = 0, substepUs = 0, writeUs = 0;
+      int bodies = 0, islands = 0, substeps = 0, bats = 0, maxSteps = 0;
+      int gatherUs = 0, substepUs = 0, writeUs = 0;
    };
    const CycleStats &LastCycle();
 

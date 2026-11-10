@@ -39,15 +39,7 @@ namespace TestDriver
    struct ContactCost
    {
       enum Kind { kSurfaces, kPairs, kBats, kBands, kMovingParts, kKinds };   // the rest of the contact time is "shared" (islands, step choice, integration, write-back)
-      enum Why { kEnd, kArrival, kSurfaceStiffness, kPairStiffness, kPartStep, kSetting, kBat, kBand, kMinimum, kRetake, kWhys };   // what set a substep's length
       uint64_t kindTicks[kKinds] = {};
-      int islands = 0;
-      // the island with the most substeps in this cycle
-      int topSteps = 0;
-      uint64_t topTicks = 0;
-      double topMinStepUs = 0.0;
-      int topWhy[kWhys] = {};
-      std::string topMembers;
    };
    ContactCost *Contact();   // null unless this cycle is timed in detail
    const char *BallName(const void *hitBall);   // the driver's name of a ball (its HitBall), null for a ball the driver did not make

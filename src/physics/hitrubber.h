@@ -93,9 +93,6 @@ struct BallContact
    class HitRubber *band = nullptr;       // a band that holds this ball (its BandBall is in band->m_engaged); null = none
    HitBall *ball = nullptr;
    std::vector<SurfaceContact> items;
-   double omega = 0.0;                   // natural frequency of the contact in the last cycle, rad/s (sets the largest stable step); 0 = unknown / no contact
-   double lastSpeed = 1e9;               // speed at the end of the last cycle, m/s
-   double lastVn = 1e9;                  // fastest approach speed along a contact normal at the end of the last cycle, m/s (1e9 = not in contact)
    RubberContact::V3 vin, win;           // velocity (m/s) and spin (rad/s) at engagement
    double dwellS = 0.0;                  // time engaged
    double peakFn = 0.0;                  // largest normal force, N
@@ -126,9 +123,6 @@ struct BallPairState
    RubberContact::RubberState st;
    bool inContact = false;
    bool used = false;
-   double maxDelta = 0.0, maxFn = 0.0;   // this cycle (trace)
-   double lastDelta = 0.0;               // the compression of the last cycle: the stiffness the next cycle's step is chosen on
-   double lastSpeed = 0.0;               // the normal speed at the last cycle's start, either way: the step rule's "slow"
    double zero = 0.0;                    // the depth the squash counts from: a pair found inside with no work done has stored nothing (only ever down, as a surface's gs.zero)
    double endDepth = -1.0, endHeld = 0.0;   // at the last cycle's end: how far inside (zero not taken off), and what the pair held
 };

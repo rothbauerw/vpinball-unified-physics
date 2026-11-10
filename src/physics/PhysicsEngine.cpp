@@ -960,7 +960,7 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
    const double sPerDtime = cycleS / (double)dtime;
    double doneS = 0.0;
 
-   static FILE *const ctLog = []() -> FILE * { const char *const p = getenv("VPX_CONTACT_TIMING"); FILE *const f = (p != nullptr && *p) ? fopen(p, "w") : nullptr; if (f != nullptr) fputs("t_ms,step_us,pre_us,near_us,bodies,islands,substeps,bats,band_bodies,rest_bodies,max_steps,items,probes,gather_us,setup_us,substep_us,write_us,rewinds,mag_us,snap_us,replays,replay_us\n", f); return f; }();   // cost log: one row per call that did work
+   static FILE *const ctLog = []() -> FILE * { const char *const p = getenv("VPX_CONTACT_TIMING"); FILE *const f = (p != nullptr && *p) ? fopen(p, "w") : nullptr; if (f != nullptr) fputs("t_ms,step_us,pre_us,near_us,bodies,islands,substeps,bats,max_steps,gather_us,substep_us,write_us,mag_us,snap_us,replays,replay_us\n", f); return f; }();   // cost log: one row per call that did work
    uint64_t ctNear = 0;
    if (ContactSystem::Unified())
    {
@@ -1128,7 +1128,7 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
          if (cs.bodies > 0 || ctT2 - ctT1 >= 3 || ctNear >= 3 || ContactSystem::LastSaveUs() >= 3)
          {
             static int rows = 0;
-            fprintf(ctLog, "%u,%llu,%llu,%llu,%d,%d,%d,%d,%d,%d,%d,%d,%lld,%d,%d,%d,%d,%d,%llu,%u,%u,%u\n", g_pplayer->m_time_msec, (unsigned long long)(ctT1 - ctT0), (unsigned long long)(ctT2 - ctT1), (unsigned long long)ctNear, cs.bodies, cs.islands, cs.substeps, cs.bats, cs.bandBodies, cs.restBodies, cs.maxSteps, cs.items, cs.probes, cs.gatherUs, cs.setupUs, cs.substepUs, cs.writeUs, cs.rewinds, (unsigned long long)s_ctMagUs, ContactSystem::LastSaveUs(), s_ctReplays, s_ctReplayUs);
+            fprintf(ctLog, "%u,%llu,%llu,%llu,%d,%d,%d,%d,%d,%d,%d,%d,%llu,%u,%u,%u\n", g_pplayer->m_time_msec, (unsigned long long)(ctT1 - ctT0), (unsigned long long)(ctT2 - ctT1), (unsigned long long)ctNear, cs.bodies, cs.islands, cs.substeps, cs.bats, cs.maxSteps, cs.gatherUs, cs.substepUs, cs.writeUs, (unsigned long long)s_ctMagUs, ContactSystem::LastSaveUs(), s_ctReplays, s_ctReplayUs);
             s_ctReplays = s_ctReplayUs = 0;
             s_ctMagUs = 0;
             if ((++rows & 255) == 0)
