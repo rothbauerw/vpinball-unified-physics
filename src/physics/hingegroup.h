@@ -61,7 +61,7 @@ namespace HingeGroup
          return oop > 1e-6 ? BendKb(std::max(std::fabs(pb.y), 1e-4)) / (oop * oop) : 0.0;
       }
       // the bend in series with a touch at pb on wire piece w (-1: a face): along the normal (kb) and across it (ktb, in series with the shear spring; 0 = none).
-      // Here: out of the plane only (BendAlongNormal); a wire switch with [Triggers] wire_bend has the whole wire's
+      // Here: out of the plane only (BendAlongNormal); a wire switch has the whole wire's
       virtual void Bend(const V3 &nb, const V3 &pb, int, double &kb, double &ktb) const
       {
          kb = BendAlongNormal(nb, pb);

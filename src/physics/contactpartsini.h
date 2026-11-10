@@ -195,7 +195,6 @@ namespace PartsIni
          else if (k == "spring_n") s.springN = v;
          else if (k == "spring_full_n") s.springFullN = v;
          else if (k == "wire_d_mm") s.wireDMm = v;
-         else if (k == "wire_bend") s.wireBend = v != 0.0 ? 1 : 0;   // (WireSwitchGroup::Settings: the wire's bend in every direction, 0 = out of its plane only)
          else if (k == "bend_step_deg") s.bendStepDeg = v;   // (WireSwitchGroup::Settings: the 1.3 mm bends' largest piece, deg; 5 = the shapes before 2026-11-09)
          else if (k == "arch_step_deg") s.archStepDeg = v;   // (WireSwitchGroup::Settings: D's arch's largest piece, deg; 5 = the shape before 2026-11-09)
          else if (k == "wire_model" || k == "wire_sum")   // removed 2026-11-05 (the wire has its mass; hinge_piece_sum is the union): read and ignored, said once
@@ -203,6 +202,13 @@ namespace PartsIni
             static bool said = false;
             if (!said)
                PLOGI << "[Triggers] " << k << " is no longer used (2026-11-05): ignored";
+            said = true;
+         }
+         else if (k == "wire_bend")   // removed 2026-11-10 (the wire always bends in every direction; runs/2026-11-09-wire-bend/design.md): read and ignored, said once
+         {
+            static bool said = false;
+            if (!said)
+               PLOGI << "[Triggers] wire_bend is no longer used (2026-11-10): ignored";
             said = true;
          }
          else

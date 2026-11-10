@@ -204,7 +204,7 @@ namespace GroupStep
       double curvDist = 0.0;   // > 0: the ball turns round a centre this far away while it rolls along the surface (a post, a tube): the step's turning rule
       double grad = 1.0;       // the depth's gradient is n x grad (below 1 where the contact patch spans a fold of the surface)
       double kb = 0.0;         // > 0: the surface bends in series with the contact here (N/m along the normal): a massless spring, taken with the law when a touch starts and held while it lasts
-      double ktb = 0.0;        // > 0: the surface bends across the normal too, in series with the shear spring (N/m, the stiffer tangential direction; a wire switch's wire_bend): held as kb
+      double ktb = 0.0;        // > 0: the surface bends across the normal too, in series with the shear spring (N/m, the stiffer tangential direction; a wire switch's bent wire): held as kb
       int nc = 0;              // the columns in use; 0 = a fixed surface
       Column c[7];             // one rigid body's 6 coordinates and 1 given motion of its frame: a physical size, not a table limit
       int nt = 0;              // > 0: the union's terms (hinge_piece_sum), the same list in the same order at every place of the ball; delta, n, c are the union's
@@ -2892,7 +2892,7 @@ namespace GroupStep
             const double ktU = pp ? L.ktPerA * std::sqrt(L.reff) : 0.0, ctU = pp ? L.shearTan * std::sqrt(ktU * L.mt) : 0.0;   // Kt and its damper per u^0.5, u^0.25
             const double k0 = L.Kt(d0), k1 = L.Kt(d1);
             double kS = pp ? ktU * pM.p05 : k1, kSp = pp ? ktU * pS.p05 : 0.0, ctSp = pp ? ctU * pS.p025 : 0.0;
-            // a bend across in series (Item::ktb, a wire switch's wire_bend): Kt is no power of u, so its mean over the path is by the quadrature or its integral (Item::MeanOver,
+            // a bend across in series (Item::ktb, a wire switch's bent wire): Kt is no power of u, so its mean over the path is by the quadrature or its integral (Item::MeanOver,
             // KtIntegral) and its slope by MeanSlope; the damper shearTan sqrt(kS mt) on that mean
             const bool bendT = pp && L.ktb > 0.0;
             if (bendT)

@@ -40,9 +40,6 @@ namespace WireSwitchGroup
       double bendStepDeg = 30.0;      // bend_step_deg: each 1.3 mm bend drawn and touched as straight pieces of at most this angle (runs/2026-11-09-bend-steps/design.md; user 2026-11-09: the
                                       // bends need only look right at play distance). 30: a 90 deg bend in 3 pieces of 0.68 mm, 0.044 mm off the true arc. 5 = the shapes before 2026-11-09
       double archStepDeg = 10.0;      // arch_step_deg: D's 14.7 mm arch the same way. 10: pieces of 2.6 mm, 0.056 mm off the true arc. 5 = the shape before 2026-11-09
-      int wireBend = 1;               // wire_bend (default 1, on while tested; runs/2026-11-09-wire-bend/design.md): 1 = the wire bends in every direction as a round steel wire clamped at the lever end
-                                      // (bending E I about both section axes, torsion G J, G = E / 2.6, J = 2 I; unit-load method over the wire from the touch to the clamp): along the normal in series with
-                                      // the contact (kb) and across it in series with the shear spring (the stiffer tangential direction); 0 = out of the wire's plane only, a straight cantilever (in its plane rigid)
       double stopArmMm = 5.0, stopEdgeMm = 0.4;   // the lever on the switch body's stops, as the gate's
       double stopE = 0.2;             // both stops' restitution, ESTIMATE (unmeasured): the thin spring-steel wire loses most of an impact in its own bending (user 2026-11-04; 0.5 rebounded past the close point at 3 m/s)
       double muPivot = 0.3;
@@ -134,28 +131,19 @@ namespace WireSwitchGroup
             swLog.push_back(0);
          }
       }
-      // bend out of the wire's plane at the distance y from where it is held: one wire, a cantilever, k = 3 E I / y^3, I = pi d^4 / 64
+      // bend out of the wire's plane at the distance y from where it is held: one wire, a cantilever, k = 3 E I / y^3, I = pi d^4 / 64 (HingeGroup's; the wire's own Bend
+      // below has the whole wire's compliance)
       double BendKb(const double y) const override
       {
          const double d = 2.0 * rho, I = GroupStep::kPi * d * d * d * d / 64.0;
          return 3.0 * set.steelEGpa * 1e9 * I / (y * y * y);
       }
-      // the wire's plane holds N, out of it is the axis (x); held at the lever end
-      double BendAlongNormal(const V3 &nb, const V3 &pb) const override
-      {
-         const double oop = std::fabs(nb.x);
-         return oop > 1e-6 ? BendKb(std::max((pb - tipBody).Length(), 1e-4)) / (oop * oop) : 0.0;
-      }
-      // [Triggers] wire_bend: the bend in series with a touch at pb (body coordinates) along nb on wire piece w. Along the normal kb = 1 / (n^T C n); across it the stiffer
+      // The wire bends in every direction as a round steel wire clamped at the lever end (bending E I about both section axes, torsion G J, G = E / 2.6, J = 2 I; unit-load
+      // method over the wire from the touch to the clamp; runs/2026-11-09-wire-bend/design.md): the bend in series with a touch at pb (body coordinates) along nb on wire piece w. Along the normal kb = 1 / (n^T C n); across it the stiffer
       // tangential direction, kt_b = 1 / (the smaller eigenvalue of C's block in the contact plane). The coupling between the directions is left out (design section 3).
-      // A touch on the lever (before the clamp) or on no wire piece is rigid (0). wire_bend 0: out of the plane only (BendAlongNormal), no shear bend
+      // A touch on the lever (before the clamp) or on no wire piece is rigid (0)
       void Bend(const V3 &nb, const V3 &pb, const int w, double &kb, double &ktb) const override
       {
-         if (set.wireBend == 0)
-         {
-            HingeGroup::Part::Bend(nb, pb, w, kb, ktb);
-            return;
-         }
          kb = ktb = 0.0;
          M3 C;
          if (!Compliance(w, pb, C))
@@ -208,7 +196,7 @@ namespace WireSwitchGroup
       V3 tip, tipBody;   // the lever end (where the wire leaves the lever): world, body coordinates
       int stopRest = -1, stopFull = -1;
 
-      // [Triggers] wire_bend: one wire piece from the clamp's side, coordinates from the clamp: its start a, direction t, length L, its W and the products of the closed form,
+      // The bend: one wire piece from the clamp's side, coordinates from the clamp: its start a, direction t, length L, its W and the products of the closed form,
       // and the sums s0, s1, s2 (M0, M1, M2) over the whole pieces between the clamp and its start
       static constexpr double kRigidC = 1e-12;   // m/N: a compliance below this is a rigid wire (kb, kt_b above 1e12 N/m: the contact alone)
       static M3 Add(const M3 &x, const M3 &y) { M3 m; for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) m.a[i][j] = x.a[i][j] + y.a[i][j]; return m; }

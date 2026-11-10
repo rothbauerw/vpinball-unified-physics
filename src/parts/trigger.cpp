@@ -445,7 +445,7 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          const WireSwitchGroup::Part &w = m_partModel->part;
          PLOGI << "Trigger " << GetName() << ": wire switch part on the group step (shape Wire" << "ABCDE"[(int)shape] << ", " << wm.caps.size() << " capsules, at most " << cl.sagittaMm * 1e3 << " um off the true bends, wire " << 2e3 * wm.r << " mm: hinge body with its mass)";
          PLOGI << "Trigger " << GetName() << ": surface '" << m_d.m_szSurface << "' at z " << floorZ << " VPU (playfield z " << playfieldZ << "), heightoffset " << s.heightOffsetMm << " mm; spring " << s.springN
-               << " N at first touch, " << s.springFullN << " N at full travel; close " << s.closeMm << " mm, release " << s.releaseMm << " mm, full travel " << s.stopBelowMm << " mm under the playfield; wire_d_mm " << s.wireDMm << ", wire_bend " << s.wireBend << ", bend_step_deg " << s.bendStepDeg << ", arch_step_deg " << s.archStepDeg << "; mass "
+               << " N at first touch, " << s.springFullN << " N at full travel; close " << s.closeMm << " mm, release " << s.releaseMm << " mm, full travel " << s.stopBelowMm << " mm under the playfield; wire_d_mm " << s.wireDMm << ", bend_step_deg " << s.bendStepDeg << ", arch_step_deg " << s.archStepDeg << "; mass "
                << w.mp.m * 1e3 << " g, I " << w.mp.I << " kg m^2, reach " << reach * 1e3 << " mm)";
          return;
       }
