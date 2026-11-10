@@ -27,7 +27,8 @@ No dates, no "learned", no superseded text. What a test is for, its cap and hand
   A changed header: list every .cpp that includes it, then compare the compiled count with `grep -l` of the includers. A missed includer gives a mixed exe with no error; the lead checks the count before any result counts.
   After main is built, `python bench_snapshot.py` refreshes `src\`, `obj_*\` and `main_exe\` (check no session is building from them).
 - **Accuracy bench**: `runs\2026-11-01-roll-smooth` (report.md run 1). 750 real hits (stress p1-p3, Gorgar), each replayed alone: `run_replay.py <tag> <exe> <mode>`; the reference is the same with `-env VPX_GROUP_HFIX=1` (1 us steps);
-  `cmp_replay.py <ref tag> <tag>` judges each hit 20 ms after it: exit speed 5 %, direction 2 deg (not judged under 0.05 m/s).
+  `cmp_replay.py <ref tag> <tag> q20` judges each hit at the first quiet ms after 20 ms (not mid-bounce): exit speed 5 %, direction 2 deg
+  (not judged under 0.05 m/s). Reference: SHREF (1 us).
 - **Not covered by the bench** (use a VPX run): cost against the frame limit, drawing, real input, table restart and teardown, magnets on, scripts that act on the game, script and frame timers,
   drop targets (they fall per frame), ROM tables. A pile with address-order splits (Gorgar pile) does not repeat on the bench, nor in VPX.
 
@@ -104,10 +105,10 @@ VPX_STEP_RULE=<csv>        one row per group step: what set the step, h, solve r
 VPX_GROUP_CLAMP_TRACE=<file>  every Newton round of steps with a wire contact.
 VPX_GROUP_CONTACT_TRACE=1  per-round contact depth, force and friction, printed for the first 3 energy steps.
 VPX_GROUP_HISTORY_TRACE=1  the last 50 accepted steps, printed with the first energy-step warning.
-VPX_GROUP_ROUND_TRACE=1    per-round Newton trace with probe notes (group and hinge solves).
+VPX_GROUP_ROUND_TRACE=1    per-round Newton trace with probe notes (group and hinge solves), printed only with an energy-step warning.
 VPX_GROUP_SEARCH_TRACE=1   the failing stop-search solve, round by round, to stderr.
 VPX_GROUP_STOP_TRACE=1     the first 12 stop checks of a cycle.
-VPX_GROUP_JAC_MODE=1       also forms the Jacobian by central differences and logs both (=2 changes the result: see below).
+VPX_GROUP_JAC_MODE=1       also forms the Jacobian by central differences and logs both; changes the result in the last digits.
 VPX_GROUP_JAC_WINDOW=t0-t1 with JAC_MODE=1: Jacobian and round data of solves converging in that ms window.
 VPX_PROBE_CHECK=1          compares the short face list with the full list and counts mismatches.
 VPX_HINGE_NEAR_ALL=1       every near-piece list takes all pieces (A/B check of the short list; meant to give the same result, not proven).
