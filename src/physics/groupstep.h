@@ -300,6 +300,7 @@ namespace GroupStep
       bool ballPairs = true;
       // the step (ChooseStep): accuracy only
       double omegaH = 0.6;                     // h <= omegaH / omega of the stiffest contact (normal, and shear when shearInStep)
+      bool gonzalezMass = true;                // each stored energy's correction (Gonzalez) split by mass, the kinetic-energy metric (ContactSettings gonzalez_mass)
       bool shearInStep = true;                 // the shear spring's stiffness counts in the step choice (false: the normal stiffness only; the solve is stable either way)
       bool slideFree = true;                   // a slide at the friction limit counts as steady (docs/unified-physics/GroupStepDesign.txt 16: its force is mu N, the spring's stiffness is not in the motion)
       // The step rule by motion (docs/unified-physics/GroupStepDesign.txt 9, 16, 17): a contact that is steady only needs its normal stiffness resolved to omegaHRest; an impact, a slip the spring can still catch or a fast
@@ -2525,18 +2526,22 @@ namespace GroupStep
          return true;
       }
 
-      // Gonzalez: gm + (df - gm . dq) / (dq^T W dq) W dq, so that the result . dq = df exactly; a mismatch within the rounding of f is left out
-      static void Gonzalez(const double *gm, double df, double dfNoise, const double *dq, const double *W, int n, double *out, bool *cfZero = nullptr)
+      // Gonzalez: gm + (df - gm . dq) / (dq^T W dq) W dq, so that the result . dq = df exactly; a mismatch within the rounding of f is left out. iM: each coordinate's
+      // inverse mass or inertia (0: it takes no correction). byMass: W = M / M_0, the kinetic-energy metric (one unit for metres and radians, so each body's speed changes
+      // by its own move; M_0 the first coordinate's, so the weights are mass ratios: runs/2026-11-10-gonzalez-metric/design.md). Else W = iM: a light part took a heavy
+      // body's mismatch as a false force (the 15441 ms halvings on a wire switch)
+      static void Gonzalez(const double *gm, double df, double dfNoise, const double *dq, const double *iM, int n, bool byMass, double *out, bool *cfZero = nullptr)
       {
+         const auto W = [&](int a) { return !byMass ? iM[a] : iM[a] > 0.0 ? iM[0] / iM[a] : 0.0; };
          double gdq = 0.0, qq = 0.0;
          for (int a = 0; a < n; a++)
          {
             gdq += gm[a] * dq[a];
-            qq += dq[a] * W[a] * dq[a];
+            qq += dq[a] * W(a) * dq[a];
          }
          const double cf = qq > 1e-300 && std::fabs(df - gdq) > dfNoise ? (df - gdq) / qq : 0.0;
          for (int a = 0; a < n; a++)
-            out[a] = gm[a] + cf * W[a] * dq[a];
+            out[a] = gm[a] + cf * W(a) * dq[a];
          if (cfZero != nullptr)   // (VPX_GROUP_CLAMP_TRACE: the correction left out)
             *cfZero = cf == 0.0;
       }
@@ -2661,9 +2666,9 @@ namespace GroupStep
                M3 hf;
                const double e1 = FieldEnergy(b1[i]);
                FieldEnergy(bm[i], &gf, J ? &hf : nullptr);
-               const double gm[3] = { gf.x, gf.y, gf.z }, dq[3] = { dc[i].x, dc[i].y, dc[i].z }, W[3] = { 1.0, 1.0, 1.0 };
+               const double gm[3] = { gf.x, gf.y, gf.z }, dq[3] = { dc[i].x, dc[i].y, dc[i].z }, iM[3] = { 1.0 / ball[i].m, 1.0 / ball[i].m, 1.0 / ball[i].m };
                double gd[3];
-               Gonzalez(gm, e1 - fieldE0[i], 16.0 * 2.220446049250313e-16 * std::fabs(e1) + gf.Length() * noiseD, dq, W, 3, gd);
+               Gonzalez(gm, e1 - fieldE0[i], 16.0 * 2.220446049250313e-16 * std::fabs(e1) + gf.Length() * noiseD, dq, iM, 3, set.gonzalezMass, gd);
                F[i] = F[i] - V3(gd[0], gd[1], gd[2]);
                if (J)
                   AddBlock(J, 6 * i, 6 * i, hf, 0.5 * h);   // (the midpoint moves half as far as the end)
@@ -2686,9 +2691,9 @@ namespace GroupStep
             const double q0 = PairForm::Q(T, c0a, two ? c0b : nullptr), q1 = PairForm::Q(T, c1a, two ? c1b : nullptr);
             PairForm::Q(T, cma, two ? cmb : nullptr, gm, gm + 3);
             const double dq[6] = { dc[T.a].x, dc[T.a].y, dc[T.a].z, two ? dc[T.b].x : 0.0, two ? dc[T.b].y : 0.0, two ? dc[T.b].z : 0.0 };
-            const double W[6] = { 1.0 / ball[T.a].m, 1.0 / ball[T.a].m, 1.0 / ball[T.a].m, two ? 1.0 / ball[T.b].m : 0.0, two ? 1.0 / ball[T.b].m : 0.0, two ? 1.0 / ball[T.b].m : 0.0 };
+            const double iM[6] = { 1.0 / ball[T.a].m, 1.0 / ball[T.a].m, 1.0 / ball[T.a].m, two ? 1.0 / ball[T.b].m : 0.0, two ? 1.0 / ball[T.b].m : 0.0, two ? 1.0 / ball[T.b].m : 0.0 };
             double gd[6];
-            Gonzalez(gm, q1 - q0, 16.0 * 2.220446049250313e-16 * std::fabs(q1) + noiseD, dq, W, two ? 6 : 3, gd);
+            Gonzalez(gm, q1 - q0, 16.0 * 2.220446049250313e-16 * std::fabs(q1) + noiseD, dq, iM, two ? 6 : 3, set.gonzalezMass, gd);
             F[T.a] = F[T.a] + V3(gd[0], gd[1], gd[2]) * T.g;
             if (two)
                F[T.b] = F[T.b] + V3(gd[3], gd[4], gd[5]) * T.g;
@@ -2739,25 +2744,25 @@ namespace GroupStep
             const int qc0 = nq > 0 ? coordOff[shape[it.s]->part] : 0;
             const V3 &nm = hm.n;
             // the compression's discrete gradient over the move (ball a's centre, then ball b's, or the columns' coordinates)
-            double gm[kGradMax] = { -nm.x * hm.grad, -nm.y * hm.grad, -nm.z * hm.grad, nm.x, nm.y, nm.z }, dq[kGradMax], W[kGradMax], gd[kGradMax];
+            double gm[kGradMax] = { -nm.x * hm.grad, -nm.y * hm.grad, -nm.z * hm.grad, nm.x, nm.y, nm.z }, dq[kGradMax], iM[kGradMax], gd[kGradMax];
             const Ball &A = ball[it.a];
             dq[0] = dc[it.a].x; dq[1] = dc[it.a].y; dq[2] = dc[it.a].z;
-            W[0] = W[1] = W[2] = 1.0 / A.m;
+            iM[0] = iM[1] = iM[2] = 1.0 / A.m;
             if (pr)
             {
                dq[3] = dc[it.b].x; dq[4] = dc[it.b].y; dq[5] = dc[it.b].z;
-               W[3] = W[4] = W[5] = 1.0 / ball[it.b].m;
+               iM[3] = iM[4] = iM[5] = 1.0 / ball[it.b].m;
             }
             for (int j = 0; j < nq; j++)
             {
                const int cj = qc0 + hm.c[j].coord;
                gm[3 + j] = hm.c[j].slope * hm.grad;
                dq[3 + j] = qEnd[cj];
-               W[3 + j] = cUnk[cj] >= 0 ? ci[cj].invM : 0.0;   // (a move given to it takes none of the correction: only the unknowns do)
+               iM[3 + j] = cUnk[cj] >= 0 ? ci[cj].invM : 0.0;   // (a move given to it takes none of the correction: only the unknowns do)
             }
             bool cf0U = false;
             uint64_t tCf0 = 0;   // (VPX_GROUP_CLAMP_TRACE: the terms whose correction was left out)
-            Gonzalez(gm, d1 - d0, noiseD, dq, W, na + nq, gd, clampDump ? &cf0U : nullptr);
+            Gonzalez(gm, d1 - d0, noiseD, dq, iM, na + nq, set.gonzalezMass, gd, clampDump ? &cf0U : nullptr);
             // [Contact] hinge_piece_sum: every term of the union by its own chord and its own exact gradient (each term's depth is smooth, so its midpoint gradient
             // misses by the third order only); the elastic force sum_t s_t fe_t gd_t does sum_t s_t dU_t = dU exactly. The contact's normal force N_el and its
             // direction G (the ball's part a unit normal) are that sum's; the damping acts along G on the rate G . dq / h: its loss cD (G . dq)^2 / h is exact for
@@ -2798,7 +2803,7 @@ namespace GroupStep
                      tgE[t] = tg[t];
                   double gdT[kGradMax];
                   bool cf0T = false;
-                  Gonzalez(tg[t].data(), a1 - a0, noiseD, dq, W, 4, gdT, clampDump ? &cf0T : nullptr);
+                  Gonzalez(tg[t].data(), a1 - a0, noiseD, dq, iM, 4, set.gonzalezMass, gdT, clampDump ? &cf0T : nullptr);
                   if (cf0T && t < 64)
                      tCf0 |= 1ull << t;
                   for (int j = 0; j < 4; j++)   // the slope's row side: the direction this term's force acts along (termForceRows), or its mid gradient
@@ -3188,11 +3193,11 @@ namespace GroupStep
                   on += tOn[t] ? '1' : '0';
                   cf += t < 64 && (tCf0 >> t & 1u) ? '1' : '0';
                }
-               // meff: the mass along the contact's normal, 1 / sum_j W_j gd_j^2 (Newton's own W and gd), g (-1: no unknown takes the correction); ks: the law's
+               // meff: the mass along the contact's normal, 1 / sum_j iM_j gd_j^2 (the inverse masses and Newton's gd), g (-1: no unknown takes the correction); ks: the law's
                // dF/dd at d1, N/m; cD: this round's damper, N s/m; vn0: the closing rate at the step's start, the mid gradient gm on the start's speeds and rates, m/s
                double wSum = 0.0, vn0 = 0.0;
                for (int j = 0; j < na + nq; j++)
-                  wSum += W[j] * gd[j] * gd[j];
+                  wSum += iM[j] * gd[j] * gd[j];
                vn0 += gm[0] * A.v.x + gm[1] * A.v.y + gm[2] * A.v.z;
                if (pr)
                   vn0 += gm[3] * ball[it.b].v.x + gm[4] * ball[it.b].v.y + gm[5] * ball[it.b].v.z;
