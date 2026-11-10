@@ -1649,10 +1649,18 @@ namespace GroupStep
                return lo;
             };
             const double lo = reachDepth(vc);
-            // an unsteady contact's clock at the expected depth dE: its normal spring's (the bounce)
+            // the bounce's fastest rate at depth dE: m x'' + c x' + k x = 0 (c the law's own damping) decays at most at (c + sqrt(c^2 - 4 m k)) / 2m when overdamped,
+            // else swings at omN. The mid-step damping takes a rate v to v (1 - z/2) / (1 + z/2), z = c h / m: on the spring's clock alone a damper past 2.56 times
+            // critical reverses the rate in one step, a rebound the law has not (runs/2026-11-10-damped-clock/design.md)
+            const auto fastRate = [&](const double dE, const double omN) {
+               const double m = L.mRed, k = L.K(dE), c = L.DampC(dE, L.F(dE));
+               return c * c > 4.0 * m * k ? (c + std::sqrt(c * c - 4.0 * m * k)) / (2.0 * m) : omN;
+            };
+            // an unsteady contact's clock at the expected depth dE: the bounce's fastest rate
             const auto unsteadyClock = [&](const double dE, double &omN) {
                omN = std::sqrt(L.K(dE) / L.mRed);
-               return omN > 0.0 ? set.omegaH / omN : set.hMax;
+               const double r = fastRate(dE, omN);
+               return r > 0.0 ? set.omegaH / r : set.hMax;
             };
             const double dE = std::max(hp.delta, lo);
             const double ktE = L.Kt(dE);
@@ -1695,7 +1703,8 @@ namespace GroupStep
                      why = 1, whyVal = dDot, whyLim = set.vSteady;
                }
             }
-            double hs = omN > 0.0 ? (steady ? set.omegaHRest : set.omegaH) / omN : set.hMax;
+            const double om = steady ? omN : fastRate(dE, omN);   // (a resting contact's rate is near 0 and the damping factor's size stays under 1: its spring's clock)
+            double hs = om > 0.0 ? (steady ? set.omegaHRest : set.omegaH) / om : set.hMax;
             if (set.stepModel == 1 && steady && hp.delta > 0.0)   // by the motion in its mode (Settings::stepModel)
             {
                const double omR = std::sqrt(L.K(hp.delta) / L.mRed);
