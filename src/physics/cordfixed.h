@@ -811,15 +811,6 @@ public:
       }
       if (pl.on)
       {
-         bool sw = false;
-         for (int i = 0; i < nb && swGapM > 0.0; i++)
-         {
-            Out o;
-            Length(span[pl.span], tch[(size_t)i * ns + pl.span], g.ball[i].c, g.ball[i].R, false, o);
-            sw = sw || o.Deff >= swGapM;
-         }
-         if (swGapM > 0.0 && enabled)
-            driver.Update(sw);
          if (fireAtS >= 0.0 && tNow >= fireAtS)
          {
             driver.Trigger();
@@ -874,7 +865,6 @@ public:
    std::vector<Circle> circles;   // posts and stops, the Items a ball meets at the cord's height
    double zc = 0.0;               // the cord's height, world
    RubberParams ringRp;           // the table's rubber: the ring's law
-   bool enabled = true;           // the sling is on (script): no coil from the switch otherwise
    double switchGapM = 0.0;
    long energySteps = 0;          // counted by the contact system: none expected
    void AttachGroup(const Ball *b, const int n)

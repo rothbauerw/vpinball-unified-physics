@@ -1447,7 +1447,6 @@ double HitRubber::CordRing(const double loopM, const double rcM, const double EA
 void HitRubber::CordBegin()
 {
    CordFixed::Part &p = *m_cord->fixed;
-   p.enabled = m_slingEnabled;
    if (!m_slingEnabled)
       p.driver.Cancel();
    if (p.geo.hasPlate)
