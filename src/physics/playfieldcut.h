@@ -17,6 +17,23 @@
 //   length_mm           plunger end to tip; typical and limit 304.8 .. 508 (12 .. 20 in, the range the paper checked); outside: the nearest limit, with a notice and a WARN
 // Its contacts are exact: the floor (a tilted cylinder), the rim (a 0.25 mm tube about a level ellipse) and the playfield's own faces outside the rim (playfieldcut.cpp GrooveShape).
 //
+// A generic rectangle hole through the playfield (brief runs/2026-11-10-rect-cut; physics only, not drawn yet):
+//   [PlayfieldCut:<name>]
+//   shape = rectangle
+//   x, y                its centre, VPX units
+//   angle               direction of its length, degrees, the slot's convention: along (-sin angle, cos angle)
+//   length_mm, width_mm the side lengths (above 0)
+//   corner_mm           the corners' radius, 0 (sharp) .. half the shorter side (default 0); outside: the nearest limit, with a notice and a WARN
+// Through the playfield's thickness (12.7 mm). Its contacts are exact, one Hertz law (playfieldcut.cpp RectExtrema): the top rim and the underside rim (0.25 mm tubes about the outline offset
+// outward by their radius: 4 lines and 4 quarter circles of radius corner + 0.25 mm, so a sharp corner's tube closes round the corner point), and the 4 vertical walls with (corner > 0)
+// 4 concave quarter cylinders between them. A hole narrower than the ball holds it on the rims; a wider one lets it fall through, the walls and underside rim in contact on the way.
+//
+// Cuts that meet (design runs/2026-11-10-cut-junction sections 1 - 2; found once at load, playfieldcut.cpp Meets): the wood is the slab minus the union of the cuts, and the ball meets
+// only its boundary. One rule for every pair: each cut's rims, walls and floor count only where they bound wood (not within 0.25 mm of another cut's removed volume, Gone); where two
+// through cuts' outlines cross, a rounded vertical edge; where a groove's floor meets any through cut's wall (straight or curved, or a slot inside the groove), a 0.25 mm tube about
+// the wall's centre line lifted onto the floor's offset cylinder; a 0.25 mm sphere wherever three surfaces meet (Join). Two grooves meeting is not described (a notice). A cut that
+// meets no other is unchanged.
+//
 // Shape, in the slot's frame (s along the slot, t across, z up from the playfield top; a = width / 2, u = |s| - length / 2 past each end of the straight part):
 //   outline (where the top ends)  straight sides t = +-a; the drilled round end w^2 = a^2 - u^2 up to U1 = L - sqrt(L^2 - a^2); then the drill tip's ramp w^2 = a^2 - U1^2 - 2 U1 (u - U1),
 //                                 tangent at U1, to a point at u = L (7.5 mm).
