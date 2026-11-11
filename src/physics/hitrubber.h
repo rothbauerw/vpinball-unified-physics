@@ -245,6 +245,8 @@ private:
    std::set<std::string> m_stopWarned;   // names already reported as not found (once each)
 
    std::shared_ptr<RubberSurface> m_surface;   // a wall / primitive host: its faces (m_pts is then empty)
+   int m_linkOver = 0;                         // multi_contact: edges on more than two faces, counted when the faces' shared edges are built at load (Link)
+   mutable bool m_linkNoticed = false;         // that count reported (log and screen) at the first ball near the surface, once
    HitObject *m_eventCarrier = nullptr;        // see SetEventCarrier
    std::vector<Vertex3Ds> m_pts; // closed loop, last = first
    RubberContact::TubePre m_tubePre;       // what ProbeTube precomputes from m_ptsSI

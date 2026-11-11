@@ -185,6 +185,10 @@ HitRubber::HitRubber(IEditable *editable, std::shared_ptr<RubberSurface> surface
                      const char *kind)
    : ContactHost(editable, settings, iniPath, name, kind), m_surface(std::move(surface)), m_radius(0.f)
 {
+   // multi_contact: the faces' shared edges, built here at load (every face is added before the host is made), not at the first ball near the surface, where a large
+   // mesh cost a cycle of milliseconds; built whatever the key, since nothing reads them with multi_contact 0
+   if (m_surface != nullptr && m_surface->nb.size() != m_surface->tris.size())
+      m_linkOver = m_surface->Link();
 }
 
 HitRubber::~HitRubber()
@@ -998,16 +1002,13 @@ void HitRubber::Refresh(SurfaceContact &it, const double ballR, const double rea
 {
    if (m_surface == nullptr)
       return;
-   if (ContactSettings::Get().multiContact && m_surface->nb.size() != m_surface->tris.size())   // multi_contact: the faces' shared edges, once, at the first ball near the surface
+   if (ContactSettings::Get().multiContact && m_linkOver > 0 && !m_linkNoticed)   // multi_contact: the load's count of edges on more than two faces, reported once
    {
-      const int over = m_surface->Link();
-      if (over > 0)
-      {
-         const std::string msg = "Rubber surface " + m_name + ": " + std::to_string(over) + " edges are on more than two faces; each joins its first two faces only (multi_contact)";
-         PLOGW << msg;
-         if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
-            g_pplayer->m_liveUI->PushNotification(msg, 5000);
-      }
+      m_linkNoticed = true;
+      const std::string msg = "Rubber surface " + m_name + ": " + std::to_string(m_linkOver) + " edges are on more than two faces; each joins its first two faces only (multi_contact)";
+      PLOGW << msg;
+      if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+         g_pplayer->m_liveUI->PushNotification(msg, 5000);
    }
    // A list built with some margin stays good until the ball has moved farther than the margin allows: scanning every face of a playfield mesh for every ball on every
    // call was the main cost of a table with several balls on it.
