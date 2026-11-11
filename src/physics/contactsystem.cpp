@@ -1622,6 +1622,15 @@ struct ContactSystemImpl
          const std::vector<std::string> names = groupParts();
          for (const std::string &n : names)
             g_partEnergy[n]++;
+         // rule 8: a tripped net shows on the playfield; every energy step, not once per table start (user, 2026-11-11: a break, to be seen each time it happens, for now)
+         if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+         {
+            std::string note = "Energy step (a fault): parts [";
+            for (size_t a = 0; a < names.size(); a++)
+               note += (a > 0 ? ", " : "") + names[a];
+            note += "] at " + std::to_string(g_pplayer->m_time_msec) + " ms: " + how + " (see vpinball.log, 'Group step: energy step')";
+            g_pplayer->m_liveUI->PushNotification(note, 6000);
+         }
          if (g_partEnergyLines >= kPartEnergyLines)
             return;
          g_partEnergyLines++;
