@@ -758,6 +758,29 @@ namespace GroupStep
          }
          return d > 0.0 ? 0.4 * kH * d * d * std::sqrt(d) + (cL > 0.0 ? cL * W(d) : 0.0) : 0.0;
       }
+      // [Contact] the elastic seam (multi-contact piece 1): the contact's stored energy at a place of the ball, V of its depth. The energy books read it here.
+      double Energy(const Hit &h) const { return V(h.delta); }
+      // the stiffness slot k: the held kH (dk/dc = 0), read through here so a later piece can give it a law of its own. No reader yet. (An accessor, not a field:
+      // kH is also written outside this file, contactsystem.cpp and cordfixed.h, and a second copy could drift from it.)
+      double Stiff() const { return kH; }
+      // what the elastic seam hands the step for one contact over one move
+      struct ElasticEnd
+      {
+         bool terms = false;       // a union of hinge terms (hinge_piece_sum): the force is the terms' sum
+         double fe = 0.0;          // the elastic normal force over the move, N: the chord (V(d1) - V(d0)) / (d1 - d0), or the terms' sum |Fel|
+         double feT = 0.0;         // the terms' sum |Fel| (0 when not terms)
+         double dd = 0.0;          // the depth change along gd: d1 - d0, or gd . dq for a terms contact
+         double kc = 0.0;          // the chord's slope d fe / d d1 (K / 2 for a vanishing change): Newton's stiffness (only when asked for)
+         double dE = 0.0;          // the elastic energy the move stores, fe dd (no reader yet)
+         double Fel[4] = { 0.0, 0.0, 0.0, 0.0 };   // a terms contact's summed force s fe_t gd_t on the centre and the column
+         bool cf0U = false;        // (VPX_GROUP_CLAMP_TRACE: the union's correction was left out)
+         uint64_t tCf0 = 0;        // (VPX_GROUP_CLAMP_TRACE: the terms whose correction was left out)
+      };
+      // the elastic force of one contact over the move h0 -> hm -> h1 (depths d0, dm, d1): its mid gradient Gm, its discrete gradient gd over the move (Gonzalez on dq, iM),
+      // the force fe along gd and, asked for, its slope kc. Defined after Group (it takes Group's Gonzalez). Scratch: the hinge terms' rows (Group's tgS ...).
+      ElasticEnd Elastic(const Hit &h0, const Hit &h1, const Hit &hm, double d0, const double *dq, const double *iM, int na, int nq, double noiseD, const Settings &set, bool trace, bool wantKc,
+                         double *gm, double *gd, std::vector<std::array<double, 4>> &tg, std::vector<double> &tk, std::vector<char> &tOn, std::vector<std::array<double, 4>> &tgE,
+                         std::vector<std::array<double, 4>> &tgF) const;
       double F(double d) const
       {
          if (d <= 0.0)
@@ -1088,6 +1111,7 @@ namespace GroupStep
 
    class Group : public PartRecords, public GroupUseWork
    {
+      friend struct Item;   // the elastic seam (Item::Elastic) takes Gonzalez and kGradMax
    public:
       // Its work by lifetime (PartRecords): every buffer and value a use writes is wiped at the start of the next (BeginUse). Kept: the settings; the stamps (a counter:
       // Configure moves it on, so no kept probe is taken as now); the books and diagnostics (the owner reads them after the use; reset where they start); the step history
@@ -1383,7 +1407,7 @@ namespace GroupStep
             const Item &it = item[k];
             Hit hp;
             Probe(it, ball, hp);
-            const double vn = it.touching ? it.V(hp.delta) : 0.0, vs = it.touching ? 0.5 * it.Kt(hp.delta) * it.xi.Dot(it.xi) : 0.0;
+            const double vn = it.touching ? it.Energy(hp) : 0.0, vs = it.touching ? 0.5 * it.Kt(hp.delta) * it.xi.Dot(it.xi) : 0.0;
             const double vr = it.touching && set.rollModel == 1 ? 0.5 * it.Kr(hp.delta) * it.ra.th.Dot(it.ra.th) + 0.5 * it.Ktw(hp.delta) * it.ra.tw * it.ra.tw : 0.0;
             snprintf(t, sizeof(t), "|i%d a%d b%d s%d t%d d=%.6g z=%.6g Vn=%.6g Vs=%.6g Vr=%.6g", k, it.a, it.b, it.s, it.touching ? 1 : 0, hp.delta * 1e6, it.dZero * 1e6, vn * 1e6, vs * 1e6, vr * 1e6);
             o += t;
@@ -1411,7 +1435,7 @@ namespace GroupStep
             {
                Hit hp;
                Probe(item[k], ball, hp);
-               e += item[k].V(hp.delta) + 0.5 * item[k].Kt(hp.delta) * item[k].xi.Dot(item[k].xi);
+               e += item[k].Energy(hp) + 0.5 * item[k].Kt(hp.delta) * item[k].xi.Dot(item[k].xi);
                if (set.rollModel == 1)
                   e += 0.5 * item[k].Kr(hp.delta) * item[k].ra.th.Dot(item[k].ra.th) + 0.5 * item[k].Ktw(hp.delta) * item[k].ra.tw * item[k].ra.tw;
             }
@@ -2058,7 +2082,7 @@ namespace GroupStep
             {
                Hit hp;
                Probe(item[k], ball, hp);
-               s.con += item[k].V(hp.delta) + 0.5 * item[k].Kt(hp.delta) * item[k].xi.Dot(item[k].xi);
+               s.con += item[k].Energy(hp) + 0.5 * item[k].Kt(hp.delta) * item[k].xi.Dot(item[k].xi);
                if (set.rollModel == 1)
                   s.con += 0.5 * item[k].Kr(hp.delta) * item[k].ra.th.Dot(item[k].ra.th) + 0.5 * item[k].Ktw(hp.delta) * item[k].ra.tw * item[k].ra.tw;
                s.touching++;
@@ -2142,7 +2166,7 @@ namespace GroupStep
                continue;
             Hit hp;
             Probe(it, ball, hp);
-            const double vn = it.touching ? it.V(hp.delta) : 0.0, vs = it.touching ? 0.5 * it.Kt(hp.delta) * it.xi.Dot(it.xi) : 0.0;
+            const double vn = it.touching ? it.Energy(hp) : 0.0, vs = it.touching ? 0.5 * it.Kt(hp.delta) * it.xi.Dot(it.xi) : 0.0;
             const double vr = it.touching && set.rollModel == 1 ? 0.5 * it.Kr(hp.delta) * it.ra.th.Dot(it.ra.th) + 0.5 * it.Ktw(hp.delta) * it.ra.tw * it.ra.tw : 0.0;
             const bool cd = e.active && (int)cDiag.size() >= ni;
             snprintf(t, sizeof t, " | c%d b%d %s%d t%d d %.5g um (solve d1 %.5g zero %.4g) n_z %.4f N %.5g Ft %.4g muN %.4g %s V %.5g Vs %.4g Vr %.4g uJ", k, it.a, it.b >= 0 ? "ball b" : "s", it.b >= 0 ? it.b : it.s,
@@ -2901,8 +2925,9 @@ namespace GroupStep
             const int nq = pr ? 0 : hm.nc;   // a carried surface's columns
             const int qc0 = nq > 0 ? coordOff[shape[it.s]->part] : 0;
             const V3 &nm = hm.n;
-            // the compression's discrete gradient over the move (ball a's centre, then ball b's, or the columns' coordinates)
-            double gm[kGradMax] = { -nm.x * hm.grad, -nm.y * hm.grad, -nm.z * hm.grad, nm.x, nm.y, nm.z }, dq[kGradMax], iM[kGradMax], gd[kGradMax];
+            // [Contact] the elastic seam (multi-contact piece 1): the elastic force, its gradients and its slope come from the law's Item::Elastic; here only the move's
+            // coordinates (ball a's centre, then ball b's, or the columns' coordinates) and their inverse masses
+            double gm[kGradMax], dq[kGradMax], iM[kGradMax], gd[kGradMax];
             const Ball &A = ball[it.a];
             dq[0] = dc[it.a].x; dq[1] = dc[it.a].y; dq[2] = dc[it.a].z;
             iM[0] = iM[1] = iM[2] = 1.0 / A.m;
@@ -2914,76 +2939,19 @@ namespace GroupStep
             for (int j = 0; j < nq; j++)
             {
                const int cj = qc0 + hm.c[j].coord;
-               gm[3 + j] = hm.c[j].slope * hm.grad;
                dq[3 + j] = qEnd[cj];
                iM[3 + j] = cUnk[cj] >= 0 ? ci[cj].invM : 0.0;   // (a move given to it takes none of the correction: only the unknowns do)
             }
-            bool cf0U = false;
-            uint64_t tCf0 = 0;   // (VPX_GROUP_CLAMP_TRACE: the terms whose correction was left out)
-            Gonzalez(gm, d1 - d0, noiseD, dq, iM, na + nq, set.gonzalezMass, gd, clampDump ? &cf0U : nullptr);
-            // [Contact] hinge_piece_sum: every term of the union by its own chord and its own exact gradient (each term's depth is smooth, so its midpoint gradient
-            // misses by the third order only); the elastic force sum_t s_t fe_t gd_t does sum_t s_t dU_t = dU exactly. The contact's normal force N_el and its
-            // direction G (the ball's part a unit normal) are that sum's; the damping acts along G on the rate G . dq / h: its loss cD (G . dq)^2 / h is exact for
-            // any G, so no misfit reaches the part through it. (A massless part's spring is in its U*: not here.)
             const Hit &h0 = h0s[k];
-            const bool terms = hm.nt > 0 && h1.nt == hm.nt && h0.nt == hm.nt && nq == 1;
             std::vector<std::array<double, 4>> &tg = tgS;
             std::vector<double> &tk = tkS;
             std::vector<char> &tOn = tOnS;
             std::vector<std::array<double, 4>> &tgE = tgES;   // each term's end gradient (endGradSlope; else = tg): the column side of its slope
             std::vector<std::array<double, 4>> &tgF = tgFS;   // each term's force direction gdT (termForceRows; else = tg): the row side of its slope
-            double dd = d1 - d0, feT = 0.0;
-            if (terms)
-            {
-               if (tk.size() < (size_t)hm.nt)
-               {
-                  tg.resize((size_t)hm.nt);
-                  tgE.resize((size_t)hm.nt);
-                  tgF.resize((size_t)hm.nt);
-                  tk.resize((size_t)hm.nt);
-                  tOn.resize((size_t)hm.nt);
-               }
-               double Fel[4] = { 0.0, 0.0, 0.0, 0.0 };
-               for (int t = 0; t < hm.nt; t++)
-               {
-                  const double a0 = h0.t[t].d, a1 = h1.t[t].d, am = hm.t[t].d, s = hm.t[t].s;
-                  tOn[t] = a0 > 0.0 || a1 > 0.0;
-                  if (!tOn[t])
-                     continue;
-                  const V3 &tn = hm.t[t].n;
-                  tg[t][0] = -tn.x; tg[t][1] = -tn.y; tg[t][2] = -tn.z; tg[t][3] = hm.t[t].slope;
-                  if (set.endGradSlope)   // d a1/du: the end place's own gradient
-                  {
-                     const V3 &en = h1.t[t].n;
-                     tgE[t][0] = -en.x; tgE[t][1] = -en.y; tgE[t][2] = -en.z; tgE[t][3] = h1.t[t].slope;
-                  }
-                  else
-                     tgE[t] = tg[t];
-                  double gdT[kGradMax];
-                  bool cf0T = false;
-                  Gonzalez(tg[t].data(), a1 - a0, noiseD, dq, iM, 4, set.gonzalezMass, gdT, clampDump ? &cf0T : nullptr);
-                  if (cf0T && t < 64)
-                     tCf0 |= 1ull << t;
-                  for (int j = 0; j < 4; j++)   // the slope's row side: the direction this term's force acts along (termForceRows), or its mid gradient
-                     tgF[t][j] = set.termForceRows ? gdT[j] : tg[t][j];
-                  const double fT = L.Chord(a0, a1);
-                  for (int j = 0; j < 4; j++)
-                     Fel[j] += s * fT * gdT[j];
-                  tk[t] = s * (std::fabs(a1 - a0) > 1e-13 ? (L.F(a1) - fT) / (a1 - a0) : 0.5 * L.K(std::max(std::max(am, a1), 0.0)));
-               }
-               const double nEl = std::sqrt(Fel[0] * Fel[0] + Fel[1] * Fel[1] + Fel[2] * Fel[2]);
-               if (nEl > 1e-300)
-               {
-                  feT = nEl;
-                  for (int j = 0; j < 4; j++)
-                     gd[j] = Fel[j] / nEl;
-               }
-               else
-                  for (int j = 0; j < 4; j++)   // (no elastic force: the union's own mid gradient carries the damping)
-                     gd[j] = gm[j];
-               dd = gd[0] * dq[0] + gd[1] * dq[1] + gd[2] * dq[2] + gd[3] * dq[3];
-            }
-            const double fe = terms ? feT : L.Chord(d0, d1);
+            const Item::ElasticEnd el = L.Elastic(h0, h1, hm, d0, dq, iM, na, nq, noiseD, set, clampDump, J ? true : false, gm, gd, tg, tk, tOn, tgE, tgF);
+            const bool terms = el.terms, cf0U = el.cf0U;
+            const uint64_t tCf0 = el.tCf0;
+            const double dd = el.dd, feT = el.feT, fe = el.fe;
             // [Contact] damping_integral (di): each damping by its integrated form over the step; cDs its exact slope d(c (d1 - d0))/d d1 (Hunt-Crossley without a bend: its
             // chord's, 1.5 alpha (fe + kc dd), taken in the slope below: hcChord). 0: the committed forms (KK by KKStepMid, the loss tangent and the bend factor at dm)
             const bool di = set.dampingIntegral;
@@ -3371,11 +3339,7 @@ namespace GroupStep
             {
                // normal: h dfN/dd1 g g^T on the centres; the chord's exact slope (F(d1) - chord) / (d1 - d0) (K / 2 for a vanishing change), the damping's
                // c / h and its change with the end depth (Hunt-Crossley 1.5 alpha x the chord's slope; Kuwabara-Kono gamma a' at dm, which moves half as far as d1)
-               double kc;
-               if (std::fabs(d1 - d0) > 1e-13)
-                  kc = (L.F(d1) - fe) / (d1 - d0);
-               else
-                  kc = 0.5 * L.K(std::max(std::max(dm, d1), 0.0));
+               const double kc = el.kc;   // (the elastic seam's)
                const double cDp = L.gammaKK > 0.0 ? (dm > 0.0 ? 0.5 * L.gammaKK * 0.5 * std::sqrt(L.reff / dm) : 0.0) : 1.5 * L.alpha * kc;
                const double dSl = cDs + (hcChord ? 1.5 * L.alpha * (fe + kc * dd) : 0.0);   // damping_integral: the damping's exact slope (all its laws)
                const double kn = fe + fd <= 0.0 ? 0.0 : di ? h * kc + dSl : L.gammaKK > 0.0 ? h * kc + kkJac : h * kc + cD + cDp * (d1 - d0);
@@ -4709,6 +4673,91 @@ namespace GroupStep
             histClock += h;
       }
    };
+
+   // [Contact] the elastic seam (multi-contact piece 1): today's elastic force, moved here unchanged (same operations, same order). The compression's discrete gradient
+   // over the move (ball a's centre, then ball b's, or the columns' coordinates); a union of hinge terms: each term by its own chord and its own exact gradient (hinge_piece_sum).
+   inline Item::ElasticEnd Item::Elastic(const Hit &h0, const Hit &h1, const Hit &hm, const double d0, const double *dq, const double *iM, const int na, const int nq, const double noiseD,
+                                         const Settings &set, const bool trace, const bool wantKc, double *gm, double *gd, std::vector<std::array<double, 4>> &tg, std::vector<double> &tk,
+                                         std::vector<char> &tOn, std::vector<std::array<double, 4>> &tgE, std::vector<std::array<double, 4>> &tgF) const
+   {
+      ElasticEnd o;
+      const double d1 = h1.delta, dm = hm.delta;
+      const V3 &nm = hm.n;
+      gm[0] = -nm.x * hm.grad; gm[1] = -nm.y * hm.grad; gm[2] = -nm.z * hm.grad; gm[3] = nm.x; gm[4] = nm.y; gm[5] = nm.z;
+      for (int j = 6; j < Group::kGradMax; j++)
+         gm[j] = 0.0;
+      for (int j = 0; j < nq; j++)
+         gm[3 + j] = hm.c[j].slope * hm.grad;
+      Group::Gonzalez(gm, d1 - d0, noiseD, dq, iM, na + nq, set.gonzalezMass, gd, trace ? &o.cf0U : nullptr);
+      // the elastic force sum_t s_t fe_t gd_t does sum_t s_t dU_t = dU exactly. The contact's normal force N_el and its direction G (the ball's part a unit normal) are that
+      // sum's; the damping acts along G on the rate G . dq / h: its loss cD (G . dq)^2 / h is exact for any G, so no misfit reaches the part through it. (A massless part's
+      // spring is in its U*: not here.)
+      o.terms = hm.nt > 0 && h1.nt == hm.nt && h0.nt == hm.nt && nq == 1;
+      double dd = d1 - d0, feT = 0.0;
+      if (o.terms)
+      {
+         if (tk.size() < (size_t)hm.nt)
+         {
+            tg.resize((size_t)hm.nt);
+            tgE.resize((size_t)hm.nt);
+            tgF.resize((size_t)hm.nt);
+            tk.resize((size_t)hm.nt);
+            tOn.resize((size_t)hm.nt);
+         }
+         double *Fel = o.Fel;
+         for (int t = 0; t < hm.nt; t++)
+         {
+            const double a0 = h0.t[t].d, a1 = h1.t[t].d, am = hm.t[t].d, s = hm.t[t].s;
+            tOn[t] = a0 > 0.0 || a1 > 0.0;
+            if (!tOn[t])
+               continue;
+            const V3 &tn = hm.t[t].n;
+            tg[t][0] = -tn.x; tg[t][1] = -tn.y; tg[t][2] = -tn.z; tg[t][3] = hm.t[t].slope;
+            if (set.endGradSlope)   // d a1/du: the end place's own gradient
+            {
+               const V3 &en = h1.t[t].n;
+               tgE[t][0] = -en.x; tgE[t][1] = -en.y; tgE[t][2] = -en.z; tgE[t][3] = h1.t[t].slope;
+            }
+            else
+               tgE[t] = tg[t];
+            double gdT[Group::kGradMax];
+            bool cf0T = false;
+            Group::Gonzalez(tg[t].data(), a1 - a0, noiseD, dq, iM, 4, set.gonzalezMass, gdT, trace ? &cf0T : nullptr);
+            if (cf0T && t < 64)
+               o.tCf0 |= 1ull << t;
+            for (int j = 0; j < 4; j++)   // the slope's row side: the direction this term's force acts along (termForceRows), or its mid gradient
+               tgF[t][j] = set.termForceRows ? gdT[j] : tg[t][j];
+            const double fT = Chord(a0, a1);
+            for (int j = 0; j < 4; j++)
+               Fel[j] += s * fT * gdT[j];
+            tk[t] = s * (std::fabs(a1 - a0) > 1e-13 ? (F(a1) - fT) / (a1 - a0) : 0.5 * K(std::max(std::max(am, a1), 0.0)));
+         }
+         const double nEl = std::sqrt(Fel[0] * Fel[0] + Fel[1] * Fel[1] + Fel[2] * Fel[2]);
+         if (nEl > 1e-300)
+         {
+            feT = nEl;
+            for (int j = 0; j < 4; j++)
+               gd[j] = Fel[j] / nEl;
+         }
+         else
+            for (int j = 0; j < 4; j++)   // (no elastic force: the union's own mid gradient carries the damping)
+               gd[j] = gm[j];
+         dd = gd[0] * dq[0] + gd[1] * dq[1] + gd[2] * dq[2] + gd[3] * dq[3];
+      }
+      o.fe = o.terms ? feT : Chord(d0, d1);
+      o.feT = feT;
+      o.dd = dd;
+      o.dE = o.fe * dd;
+      // the chord's exact slope (F(d1) - chord) / (d1 - d0) (K / 2 for a vanishing change)
+      if (wantKc)
+      {
+         if (std::fabs(d1 - d0) > 1e-13)
+            o.kc = (F(d1) - o.fe) / (d1 - d0);
+         else
+            o.kc = 0.5 * K(std::max(std::max(dm, d1), 0.0));
+      }
+      return o;
+   }
 
    // The one energy book of every group, with or without balls (a diagnostic, read once). VPX_GROUP_BOOK=<file>: one row per cycle: its books, and how much the energy rose over them.
    // VPX_GROUP_BOOK_STEPS=1: the rises per step too (an energy sum per step). A part's own split stays the part's.
