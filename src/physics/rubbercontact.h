@@ -938,7 +938,12 @@ namespace RubberContact
    inline int MergeBars(const std::vector<BarNode> &nodes, const std::vector<std::pair<int, int>> &adj, FoldSum &sum)
    {
       const int m = (int)nodes.size();
-      std::vector<int> ord(m), parent(m), peak(m), first(m + 1, 0), nbr(adj.size() * 2);
+      thread_local std::vector<int> ord, parent, peak, first, nbr, fill;   // scratch kept per thread: capacity reused, no heap use per call
+      ord.resize(m);
+      parent.resize(m);
+      peak.resize(m);
+      first.assign(m + 1, 0);
+      nbr.resize(adj.size() * 2);
       for (int i = 0; i < m; i++)
          ord[i] = parent[i] = peak[i] = i;
       std::sort(ord.begin(), ord.end(), [&](const int a, const int b) {
@@ -954,18 +959,21 @@ namespace RubberContact
       for (int i = 0; i < m; i++)
          first[i + 1] += first[i];
       {
-         std::vector<int> fill(first.begin(), first.end() - 1);
+         fill.assign(first.begin(), first.end() - 1);
          for (const auto &e : adj)
          {
             nbr[fill[e.first]++] = e.second;
             nbr[fill[e.second]++] = e.first;
          }
       }
-      std::vector<char> on(m, 0);
+      thread_local std::vector<char> on, passed;
+      on.assign(m, 0);
+      passed.assign(m, 0);
       const auto find = [&](int x) { while (parent[x] != x) x = parent[x] = parent[parent[x]]; return x; };
-      std::vector<double> pass(m, 0.0);
-      std::vector<V3> passN(m);
-      std::vector<char> passed(m, 0);
+      thread_local std::vector<double> pass;
+      thread_local std::vector<V3> passN;
+      pass.assign(m, 0.0);
+      passN.assign(m, V3());
       const auto deeper = [&](const int pa, const int pb) { return nodes[pa].d != nodes[pb].d ? nodes[pa].d > nodes[pb].d : pa < pb; };
       for (const int x : ord)
       {
@@ -1030,9 +1038,12 @@ namespace RubberContact
       const double S = ball.R + rho;
       const bool ring = pts[0].x == pts[n - 1].x && pts[0].y == pts[n - 1].y && pts[0].z == pts[n - 1].z;
       const int nv = ring ? n - 1 : n;   // joints: point n-1 of a ring is joint 0
-      std::vector<BarNode> nodes;
-      std::vector<std::pair<int, int>> adj;
-      std::vector<int> jointNode(nv, -2);   // -2 not looked at, -1 not pressed
+      thread_local std::vector<BarNode> nodes;   // scratch kept per thread
+      thread_local std::vector<std::pair<int, int>> adj;
+      thread_local std::vector<int> jointNode;
+      nodes.clear();
+      adj.clear();
+      jointNode.assign(nv, -2);   // -2 not looked at, -1 not pressed
       const auto joint = [&](int j) {
          if (j >= nv)
             j = 0;
@@ -1105,12 +1116,20 @@ namespace RubberContact
          nOut = dist > 1e-12 ? dv / dist : V3();
          return dist > 1e-12 ? ball.R - dist - zero : -1.0;
       };
-      std::vector<BarNode> nodes;
-      std::vector<std::pair<int, int>> adj;
-      std::vector<std::pair<int, int>> triNode;   // (triangle, node)
+      thread_local std::vector<BarNode> nodes;   // scratch kept per thread
+      thread_local std::vector<std::pair<int, int>> adj;
+      thread_local std::vector<std::pair<int, int>> triNode;   // (triangle, node)
+      thread_local std::vector<int> triIdx;   // triangle -> its node, -1 none; every entry set here is put back to -1 before return
+      nodes.clear();
+      adj.clear();
+      triNode.clear();
+      if (triIdx.size() < tris.size())
+         triIdx.resize(tris.size(), -1);
       for (const int i : cand)
       {
          const SurfaceTri &T = tris[i];
+         if (std::abs((c - T.a).Dot(T.n)) >= ball.R - zero)
+            continue;   // every point of the face and its edges is at least the plane distance away: depth <= 0
          if ((T.b - T.a).Cross(T.c - T.a).Length() <= 0.0)
             continue;   // zero area: no face (as MakeSurfaceTri)
          int kind = 0;
@@ -1142,17 +1161,18 @@ namespace RubberContact
          }
          if (d <= 0.0)
             continue;
+         if (triIdx[i] < 0)
+            triIdx[i] = (int)nodes.size();   // the first node of a triangle (as the search it replaces)
          triNode.emplace_back(i, (int)nodes.size());
          nodes.push_back({ d, nn, 0 });
       }
       if (nodes.size() < 2)
-         return pr;
-      const auto nodeOf = [&](const int t) {
+      {
          for (const auto &tn : triNode)
-            if (tn.first == t)
-               return tn.second;
-         return -1;
-      };
+            triIdx[tn.first] = -1;
+         return pr;
+      }
+      const auto nodeOf = [&](const int t) { return triIdx[t]; };
       for (const auto &tn : triNode)
          for (int e = 0; e < 3; e++)
          {
@@ -1171,6 +1191,8 @@ namespace RubberContact
             adj.emplace_back(k, tn.second);
             adj.emplace_back(k, on);
          }
+      for (const auto &tn : triNode)
+         triIdx[tn.first] = -1;
       FoldSum sum;
       if (MergeBars(nodes, adj, sum) <= 1)
          return pr;
