@@ -3306,6 +3306,8 @@ void ContactSystem::Dispatch()
 void ContactSystem::NotePlaced(const HitBall *const ball)
 {
    g_placed.push_back(ball);
+   if (g_pplayer != nullptr && g_pplayer->m_physics != nullptr)
+      g_pplayer->m_physics->m_noneZones.Placed(ball);   // the None triggers judge it where it is (placement rule)
 }
 
 void ContactSystem::SleepCycleStart()

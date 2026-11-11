@@ -1656,6 +1656,7 @@ void Player::DestroyBall(Ball *pBall)
    for (IEditable *const part : m_ptable->GetParts())
       if (part->GetItemType() == eItemKicker)
          static_cast<Kicker *>(part)->BallGone(&pBall->m_hitBall);
+   m_physics->m_noneZones.BallGone(&pBall->m_hitBall);   // None triggers: no Unhit for a destroyed ball
    RemoveFromVectorSingle(m_vball, pBall);
    m_vballDelete.push_back(pBall);
    pBall->PhysicRelease(m_physics, false);

@@ -7,6 +7,7 @@
 #include "physics/AsyncDynamicQuadTree.h"
 #include "physics/collideex.h"
 #include "physics/cabinet/PlumbHandler.h"
+#include "physics/nonezones.h"
 
 class BallControl;
 class InputAction;
@@ -148,6 +149,7 @@ public:
    float HitSpeedMin() const { return m_hitSpeedMin; }
    const std::string &LeftoverHosts() const { return m_leftoverHosts; } // surface hosts the previous table left registered (empty = none); the player shows it as a notification
    void OnBallWallHit(const class HitBall& ball, const Vertex3Ds& hitNormal, const float impactSpeed); // a ball hitting static geometry, offered to the plungers (shooter lane end)
+   ContactSystem::NoneZones m_noneZones; // the None triggers' sensing zones on the unified engine (runs/2026-11-10-none-trigger/design.md)
 
 private:
    HitPlane m_hitPlayfield; // HitPlanes cannot be part of octree (infinite size)

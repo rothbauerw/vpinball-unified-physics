@@ -22,6 +22,7 @@
 #include "physics/contactwireswitch.h"
 #include "physics/hitrubber.h"
 #include "physics/physicsini.h"
+#include "physics/testdriver.h"
 #include "core/player.h"
 #include "ui/live/LiveUI.h"
 #include "physics/PhysicsEngine.h"
@@ -320,6 +321,255 @@ namespace
    };
 }
 
+// None trigger on the unified engine (to-do 11.2, runs/2026-11-10-none-trigger/design.md): an invisible sensing zone (an opto beam, a proximity sensor, a script zone). It only reads the ball:
+// no force, no position change. Zone: the ball centre inside the polygon (even-odd, half-open on the faces) and height <= z <= height + HitHeight (read live). The ball's volume list
+// (m_vpVolObjs) is the state, as stock: BallCntOver, DestroyBall and the kickers read it. The zone list is the engine's (PhysicsEngine::m_noneZones, contactsystem.h).
+namespace
+{
+   const bool g_noneTimed = getenv("VPX_CONTACT_TIMING") != nullptr && *getenv("VPX_CONTACT_TIMING") != 0;   // VPX_CONTACT_TIMING: the zones' cost, logged when the table ends
+
+   int64_t NoneNs() { return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+
+   // a ball other than this one still listed in the trigger's zone
+   bool OtherBallListed(const Trigger *const trigger, const HitBall *const except)
+   {
+      for (const Ball *const ball : g_pplayer->m_vball)
+      {
+         const HitBall *const b = &ball->m_hitBall;
+         if (b != except && b->m_d.m_vpVolObjs != nullptr && FindIndexOf(*b->m_d.m_vpVolObjs, (IFireEvents *)trigger) >= 0)
+            return true;
+      }
+      return false;
+   }
+}
+
+bool ContactSystem::NoneZones::Inside(const Zone &z, const double x, const double y, const double zc)
+{
+   if (zc < z.zlow || zc > (double)z.zlow + z.trigger->m_d.m_hit_height || x < z.x0 || x > z.x1 || y < z.y0 || y > z.y1)
+      return false;
+   bool in = false;   // even-odd crossing count, half-open: a point on a face belongs to one side only
+   for (size_t i = 0, j = z.poly.size() - 1; i < z.poly.size(); j = i++)
+   {
+      const Vertex2D &a = z.poly[i], &b = z.poly[j];
+      if ((a.y > y) != (b.y > y) && x < (double)(b.x - a.x) * (y - a.y) / (double)(b.y - a.y) + a.x)
+         in = !in;
+   }
+   return in;
+}
+
+// the ball's list against where its centre now is: Hit for a centre inside and not listed, Unhit for one outside and listed
+void ContactSystem::NoneZones::Judge(const Zone &z, HitBall *const b, const bool in, const double t)
+{
+   vector<IFireEvents *> &vol = *b->m_d.m_vpVolObjs;
+   const int i = FindIndexOf(vol, (IFireEvents *)z.trigger);
+   if (in && i < 0)
+   {
+      vol.push_back((IFireEvents *)z.trigger);
+      m_events.push_back({ t, z.trigger, b, true });
+   }
+   else if (!in && i >= 0)
+   {
+      vol.erase(vol.begin() + i);
+      m_events.push_back({ t, z.trigger, b, false });
+   }
+}
+
+// the placement rule (design 3, 4a, 4d, 4e): a ball created or moved by the script or the driver, and every ball for a zone enabled again or given a new HitHeight, judged where it is
+void ContactSystem::NoneZones::ApplyPlacements(const double t)
+{
+   bool any = !m_placed.empty();
+   for (const Zone &z : m_zones)
+      any |= z.recheck;
+   if (!any)
+      return;
+   for (Ball *const ball : g_pplayer->m_vball)
+   {
+      HitBall *const b = &ball->m_hitBall;
+      if (b->m_d.m_vpVolObjs == nullptr)
+         continue;
+      const bool placed = std::find(m_placed.begin(), m_placed.end(), b) != m_placed.end();
+      for (const Zone &z : m_zones)
+         if (z.trigger->m_d.m_enabled && (placed || z.recheck))
+            Judge(z, b, Inside(z, b->m_d.m_pos.x, b->m_d.m_pos.y, b->m_d.m_pos.z), t);
+   }
+   m_placed.clear();
+   for (Zone &z : m_zones)
+      z.recheck = false;
+}
+
+// the chord s -> e against one zone: the inside state along it changes only where the chord crosses a face or a z limit; each change is judged at its time
+void ContactSystem::NoneZones::Chord(const Zone &z, HitBall *const b, const Vertex3Ds &s, const Vertex3Ds &e, const double startS, const double hS)
+{
+   const double zhigh = (double)z.zlow + z.trigger->m_d.m_hit_height;
+   if (max(s.x, e.x) < z.x0 || min(s.x, e.x) > z.x1 || max(s.y, e.y) < z.y0 || min(s.y, e.y) > z.y1 || max(s.z, e.z) < z.zlow || min(s.z, e.z) > zhigh)
+      return;   // the chord never meets the zone's box: outside all along, nothing changes
+   const double dx = (double)e.x - s.x, dy = (double)e.y - s.y, dz = (double)e.z - s.z;
+   vector<double> &cut = m_cut;
+   cut.clear();
+   for (size_t i = 0, j = z.poly.size() - 1; i < z.poly.size(); j = i++)
+   {
+      const double ax = z.poly[j].x, ay = z.poly[j].y, rx = z.poly[i].x - ax, ry = z.poly[i].y - ay;
+      const double den = dx * ry - dy * rx;
+      if (den == 0.0)
+         continue;   // parallel to the face: no crossing point (the z cuts and the end states cover the rest)
+      const double qx = ax - s.x, qy = ay - s.y;
+      const double t = (qx * ry - qy * rx) / den, u = (qx * dy - qy * dx) / den;
+      if (t > 0.0 && t < 1.0 && u >= 0.0 && u <= 1.0)
+         cut.push_back(t);
+   }
+   if (dz != 0.0)
+   {
+      const double t0 = ((double)z.zlow - s.z) / dz, t1 = (zhigh - s.z) / dz;
+      if (t0 > 0.0 && t0 < 1.0)
+         cut.push_back(t0);
+      if (t1 > 0.0 && t1 < 1.0)
+         cut.push_back(t1);
+   }
+   std::sort(cut.begin(), cut.end());
+   const int n = (int)cut.size();
+   // the state at the start, on each piece between cuts (its middle), at the end; a change between neighbours is judged at the cut between them
+   bool was = Inside(z, s.x, s.y, s.z);
+   double tPrev = 0.0;
+   for (int k = 0; k <= n; k++)
+   {
+      const double tNext = k < n ? cut[k] : 1.0, tm = 0.5 * (tPrev + tNext);
+      const bool in = Inside(z, s.x + tm * dx, s.y + tm * dy, s.z + tm * dz);
+      if (in != was)
+         Judge(z, b, in, startS + tPrev * hS);
+      was = in;
+      tPrev = tNext;
+   }
+   const bool in = Inside(z, e.x, e.y, e.z);
+   if (in != was)
+      Judge(z, b, in, startS + hS);
+}
+
+void ContactSystem::NoneZones::SubStart(const double startS)
+{
+   if (m_zones.empty())
+      return;
+   const int64_t t0 = g_noneTimed ? NoneNs() : 0;
+   ApplyPlacements(startS);
+   const auto &vb = g_pplayer->m_vball;
+   m_start.resize(vb.size());
+   for (size_t i = 0; i < vb.size(); i++)
+      m_start[i] = { &vb[i]->m_hitBall, vb[i]->m_hitBall.m_d.m_pos };
+   if (g_noneTimed)
+      m_ns += NoneNs() - t0;
+}
+
+void ContactSystem::NoneZones::SubTest(const double startS, const double hS)
+{
+   if (m_zones.empty())
+      return;
+   const int64_t t0 = g_noneTimed ? NoneNs() : 0;
+   const auto &vb = g_pplayer->m_vball;
+   for (size_t i = 0; i < vb.size() && i < m_start.size(); i++)
+   {
+      HitBall *const b = &vb[i]->m_hitBall;
+      if (m_start[i].first != b || b->m_d.m_vpVolObjs == nullptr)
+         continue;   // (no ball is made or destroyed between SubStart and here)
+      for (const Zone &z : m_zones)
+         if (z.trigger->m_d.m_enabled)
+            Chord(z, b, m_start[i].second, b->m_d.m_pos, startS, hS);
+   }
+   if (g_noneTimed)
+      m_ns += NoneNs() - t0;
+}
+
+void ContactSystem::NoneZones::CycleEnd(const double cycleS)
+{
+   if (m_zones.empty())
+      return;
+   const int64_t t0 = g_noneTimed ? NoneNs() : 0;
+   ApplyPlacements(cycleS);   // a ball the script moved after the last test
+   m_cycles++;
+   m_ballCycles += g_pplayer->m_vball.size();
+   if (g_noneTimed && m_cycles % 1000 == 0)   // (also every 1000 cycles: the bench ends without a table teardown)
+      PLOGI << "None triggers: zone test cost " << m_ns * 1e-3 / (double)m_cycles << " us per cycle, " << (m_ballCycles > 0 ? m_ns * 1e-3 / (double)m_ballCycles : 0.0) << " us per ball per cycle (" << m_cycles << " cycles, " << m_ballCycles << " ball cycles)";
+   if (m_events.empty())
+   {
+      if (g_noneTimed)
+         m_ns += NoneNs() - t0;
+      return;
+   }
+   m_firing.swap(m_events);
+   m_events.clear();
+   std::stable_sort(m_firing.begin(), m_firing.end(), [](const Event &a, const Event &b) { return a.t < b.t; });   // crossing order; one ball's Hit before its Unhit at the same time stays first
+   if (g_noneTimed)
+      m_ns += NoneNs() - t0;
+   for (size_t i = 0; i < m_firing.size(); i++)   // (a script may destroy a ball: BallGone clears its entries here)
+   {
+      const Event ev = m_firing[i];
+      if (ev.ball == nullptr)
+         continue;
+      g_pplayer->m_pactiveball = ev.ball->m_pBall;   // the ball for the script's ActiveBall
+      if (ev.hit)
+         ev.trigger->TriggerAnimationHit();
+      else
+         ev.trigger->TriggerAnimationUnhit();
+      ev.trigger->OnHit(ev.hit);
+   }
+   m_firing.clear();
+}
+
+void ContactSystem::NoneZones::Placed(const HitBall *const ball)
+{
+   if (!m_zones.empty())
+      m_placed.push_back(ball);
+}
+
+void ContactSystem::NoneZones::BallGone(const HitBall *const ball)
+{
+   if (m_zones.empty())
+      return;
+   std::erase(m_placed, ball);
+   for (Event &ev : m_events)
+      if (ev.ball == ball)
+         ev.ball = nullptr;
+   for (Event &ev : m_firing)
+      if (ev.ball == ball)
+         ev.ball = nullptr;
+   if (ball->m_d.m_vpVolObjs != nullptr)
+      for (const Zone &z : m_zones)
+         if (FindIndexOf(*ball->m_d.m_vpVolObjs, (IFireEvents *)z.trigger) >= 0 && !z.trigger->m_d.m_stateSrcLink.empty() && !OtherBallListed(z.trigger, ball))
+            g_pplayer->m_resURIResolver.SetBoolState(z.trigger->m_d.m_stateSrcLink, false);   // no Unhit (design 4b): the switch opens when no other ball is still in the zone, no script call
+}
+
+void ContactSystem::NoneZones::Add(Trigger *const trigger, vector<Vertex2D> &&poly, const float zlow)
+{
+   Zone z { trigger, std::move(poly), FLT_MAX, -FLT_MAX, FLT_MAX, -FLT_MAX, zlow, false };
+   for (const Vertex2D &v : z.poly)
+   {
+      z.x0 = min(z.x0, v.x);
+      z.x1 = max(z.x1, v.x);
+      z.y0 = min(z.y0, v.y);
+      z.y1 = max(z.y1, v.y);
+   }
+   m_zones.push_back(std::move(z));
+}
+
+void ContactSystem::NoneZones::Remove(const Trigger *const trigger)
+{
+   std::erase_if(m_zones, [trigger](const Zone &z) { return z.trigger == trigger; });
+   if (!m_zones.empty())
+      return;
+   if (g_noneTimed && m_cycles > 0)
+      PLOGI << "None triggers: zone test cost " << m_ns * 1e-3 / (double)m_cycles << " us per cycle, " << (m_ballCycles > 0 ? m_ns * 1e-3 / (double)m_ballCycles : 0.0) << " us per ball per cycle (" << m_cycles << " cycles, " << m_ballCycles << " ball cycles)";
+   m_start.clear();
+   m_placed.clear();
+   m_events.clear();
+   m_firing.clear();
+   m_ns = m_cycles = m_ballCycles = 0;
+}
+
+void ContactSystem::NoneZones::Recheck(const Trigger *const trigger)
+{
+   for (Zone &z : m_zones)
+      if (z.trigger == trigger)
+         z.recheck = true;
+}
+
 void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 {
    m_hitEvent = false;
@@ -337,7 +587,7 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       if (s_noted != g_pplayer)
       {
          s_noted = g_pplayer;
-         PLOGI << "Triggers: [Features] triggers = " << (on ? 1 : 0) << (on ? ": WireA-E are rollover switches of the contact system (group step); None, Star, Button and Inder stay stock sensors (not converted)" : ": every trigger is a stock sensor");
+         PLOGI << "Triggers: [Features] triggers = " << (on ? 1 : 0) << (on ? ": WireA-E are rollover switches of the contact system (group step); None is a sensing zone of the unified engine; Star, Button and Inder stay stock sensors (not converted)" : ": None is a sensing zone of the unified engine; every other trigger is a stock sensor");
       }
       if (on && wire)
       {
@@ -450,6 +700,18 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          return;
       }
    }
+   if (!isUI && ContactSystem::Unified() && m_d.m_shape == TriggerNone)
+   {
+      // the sensing zone (design.md 1, 3): no stock hit objects, no ball move; tested on the unified engine's chords
+      vector<RenderVertex> vvertex;
+      m_curve.GetRgVertex(vvertex);
+      vector<Vertex2D> poly(vvertex.size());
+      for (size_t i = 0; i < vvertex.size(); i++)
+         poly[i] = Vertex2D(vvertex[i].x, vvertex[i].y);
+      PLOGI << "Trigger " << GetName() << ": None sensing zone on the unified engine, " << poly.size() << " corners, z " << height << " to " << height << " + HitHeight (" << m_d.m_hit_height << ") VPU, centre test, enabled " << m_d.m_enabled;
+      physics->m_noneZones.Add(this, std::move(poly), height);
+      return;
+   }
    if (m_d.m_shape == TriggerStar || m_d.m_shape == TriggerButton)
    {
       TriggerHitCircle* hitcircle = new TriggerHitCircle(this, m_d.m_vCenter, m_d.m_radius, height, height + m_d.m_hit_height);
@@ -509,6 +771,7 @@ void Trigger::PhysicRelease(PhysicsEngine* physics, const bool isUI)
 {
    if (!isUI)
    {
+      physics->m_noneZones.Remove(this);
       m_ptriggerhitcircle = nullptr;
       m_ptriggerhitpoly = nullptr;
       m_partModel = nullptr;   // (the host is owned by the physics engine)
@@ -532,6 +795,7 @@ void Trigger::TriggerAnimationUnhit()
 
 void Trigger::OnHit(const bool hit)
 {
+   TestDriver::TriggerEvent(GetName(), hit);   // (test driver: events.csv, every trigger type, both engines)
    if (!m_d.m_stateSrcLink.empty() && g_pplayer != nullptr)
       g_pplayer->m_resURIResolver.SetBoolState(m_d.m_stateSrcLink, hit);
    FireGroupEvent(hit ? DISPID_HitEvents_Hit : DISPID_HitEvents_Unhit);
@@ -1028,7 +1292,10 @@ STDMETHODIMP Trigger::get_Enabled(VARIANT_BOOL *pVal)
 
 STDMETHODIMP Trigger::put_Enabled(VARIANT_BOOL newVal)
 {
+   const bool was = m_d.m_enabled;
    m_d.m_enabled = VBTOb(newVal);
+   if (m_d.m_enabled && !was && g_pplayer != nullptr && g_pplayer->m_physics != nullptr)
+      g_pplayer->m_physics->m_noneZones.Recheck(this);   // a None zone enabled again: every ball judged where it is (design 4d)
    if (m_ptriggerhitcircle)
       m_ptriggerhitcircle->m_enabled = m_d.m_enabled;
    if (m_ptriggerhitpoly)
@@ -1089,6 +1356,7 @@ STDMETHODIMP Trigger::DestroyBall(int *pVal)
          {
             if (pVal)
                (*pVal) = (*pVal) + 1;
+            g_pplayer->m_physics->m_noneZones.BallGone(&ball->m_hitBall);   // (a None zone: the state link opens while the list still names it)
             ball->m_hitBall.m_d.m_vpVolObjs->erase(it);
             g_pplayer->DestroyBall(ball); // inside trigger volume?
          }
@@ -1106,7 +1374,10 @@ STDMETHODIMP Trigger::get_HitHeight(float *pVal)
 
 STDMETHODIMP Trigger::put_HitHeight(float newVal)
 {
+   const float was = m_d.m_hit_height;
    m_d.m_hit_height = newVal;
+   if (newVal != was && g_pplayer != nullptr && g_pplayer->m_physics != nullptr)
+      g_pplayer->m_physics->m_noneZones.Recheck(this);   // a None zone grown or shrunk round a ball: every ball judged where it is (design 4e)
    return S_OK;
 }
 

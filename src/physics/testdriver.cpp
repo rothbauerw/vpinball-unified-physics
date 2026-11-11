@@ -11,7 +11,9 @@
 #include "physics/testdriver.h"
 #include "parts/ball.h"
 #include "parts/flipper.h"
+#include "parts/kicker.h"
 #include "parts/rubber.h"
+#include "parts/trigger.h"
 #include "parts/pintable.h"
 #include "core/player.h"
 #include "ui/live/LiveUI.h"
@@ -26,7 +28,8 @@
 //    ball NAME x y z vx vy vz [radius mass]   create a ball: x, y in VPX units, z = height of the ball's bottom above the playfield (U), velocity in m/s
 //    destroy NAME                             remove the ball
 //    flip PART 1|0                            flipper solenoid on / off (as the script's RotateToEnd / RotateToStart)
-//    enabled PART 1|0                         a flipper's Enabled (as the script's Flipper.Enabled)
+//    enabled PART 1|0                         a flipper's or a trigger's Enabled (as the script's Flipper.Enabled, Trigger.Enabled)
+//    kick NAME angle speed                    a kicker kicks its ball out (as the script's Kicker.Kick angle, speed)
 //    sling PART                               fire the sling coil of a rubber band (as Rubber.SlingTrigger)
 //    magnet NAME V                            supply voltage of a [Magnet:NAME] in the physics ini (as the script's Magnet NAME, V; 0 = off)
 //    turntable NAME V                         motor voltage of a [Turntable:NAME] in the physics ini (as the script's Turntable NAME, V; 0 = off)
@@ -105,6 +108,7 @@ namespace TestDriver
          Count fast, below, outside, gone;
          vector<string> errors;
          FILE *csv = nullptr;
+         FILE *events = nullptr;   // events.csv: every trigger's Hit / Unhit (TriggerEvent)
          // VPX_TEST_IMPULSES=1 (test tooling): impulses.csv, the impulse each source gave each ball (AddImpulse), cumulative from the start, SI: J (N s), L (N m s, about the ball's centre)
          FILE *imp = nullptr;
          std::map<std::pair<string, string>, std::array<double, 6>> impSum;   // (ball, source) -> Jx, Jy, Jz, Lx, Ly, Lz
@@ -236,6 +240,11 @@ namespace TestDriver
             fputs("t_ms,ball,x,y,z,vx,vy,vz,wx,wy,wz\n", s.csv);   // VPX units: position U, velocity U per 10 ms, angular momentum as stored
          else
             Warn("cannot write " + OutPath("balls.csv"));
+         if (s.events != nullptr)
+            fclose(s.events);
+         s.events = fopen(OutPath("events.csv").c_str(), "w");
+         if (s.events != nullptr)
+            fputs("t_ms,trigger,ball,event\n", s.events);
          if (s.imp != nullptr)
             fclose(s.imp);
          s.imp = nullptr;
@@ -393,10 +402,22 @@ namespace TestDriver
          else if (a.verb == "enabled")
          {
             Flipper *const f = a.args.size() == 2 ? static_cast<Flipper *>(FindPart(a.args[0], eItemFlipper)) : nullptr;
-            if (f == nullptr || (a.args[1] != "1" && a.args[1] != "0"))
-               Warn(at + "expected a flipper name and 1 or 0");
-            else
+            Trigger *const tr = a.args.size() == 2 && f == nullptr ? static_cast<Trigger *>(FindPart(a.args[0], eItemTrigger)) : nullptr;
+            if ((f == nullptr && tr == nullptr) || (a.args[1] != "1" && a.args[1] != "0"))
+               Warn(at + "expected a flipper or trigger name and 1 or 0");
+            else if (f != nullptr)
                f->put_Enabled(a.args[1] == "1" ? VARIANT_TRUE : VARIANT_FALSE);
+            else
+               tr->put_Enabled(a.args[1] == "1" ? VARIANT_TRUE : VARIANT_FALSE);
+         }
+         else if (a.verb == "kick")
+         {
+            Kicker *const k = a.args.size() == 3 ? static_cast<Kicker *>(FindPart(a.args[0], eItemKicker)) : nullptr;
+            float angle, speed;
+            if (k == nullptr || !Num(a, 1, angle) || !Num(a, 2, speed))
+               Warn(at + "expected a kicker name, an angle and a speed");
+            else
+               k->Kick(angle, speed, 0.f);
          }
          else if (a.verb == "sling")
          {
@@ -666,6 +687,11 @@ namespace TestDriver
             fclose(s.imp);
             s.imp = nullptr;
          }
+         if (s.events != nullptr)
+         {
+            fclose(s.events);
+            s.events = nullptr;
+         }
          std::ostringstream cost;
          const bool costPass = Cost(cost);   // (sets the tick rate the csv uses)
          WriteTimes();
@@ -869,6 +895,14 @@ namespace TestDriver
    ContactCost *Contact() { return s.loopOpen && s.detail ? &s.cc : nullptr; }
 
    uint32_t ReportT() { return s.on ? s.lastT : (g_pplayer != nullptr ? g_pplayer->m_time_msec : 0); }
+
+   void TriggerEvent(const std::string &trigger, const bool hit)
+   {
+      if (s.events == nullptr || !s.started || s.ended)
+         return;
+      const char *const n = g_pplayer->m_pactiveball != nullptr ? BallName(&g_pplayer->m_pactiveball->m_hitBall) : nullptr;
+      fprintf(s.events, "%u,%s,%s,%s\n", s.lastT, trigger.c_str(), n != nullptr ? n : "?", hit ? "Hit" : "Unhit");
+   }
 
    const char *BallName(const void *hitBall)
    {

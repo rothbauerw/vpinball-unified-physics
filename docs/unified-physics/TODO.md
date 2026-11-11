@@ -12,11 +12,10 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-In flight: nothing running. Old loop deleted (1cd57d8f8); owed: linked branch build + Gorgar load once playfieldcut.cpp compiles, snapshot hashes refresh. Lead log runs/2026-11-10-lead.
-Next decision: user picks the next item.
-N1. Wire switch promoted (user: regardless of cost); misses the performance target: worst crossing cycle 110-315 us against 30 us per object (runs/2026-11-09-bend-steps/results_cost.txt; switch B 130 us with one clock). Open: the cost; no wire stress set yet.
+In flight: nothing running. Old loop deleted (1cd57d8f8); owed: linked branch build + Gorgar load (playfieldcut.cpp = HEAD bbdee9278, not yet built on 1cd57d8f8), snapshot hashes refresh. Lead log runs/2026-11-10-lead.
+Next decision: commit the None trigger (in the branch, built, uncommitted); then Star / Button need part data (11.2).
 N12. Gorgar load: 0 halvings (cord grip 1cec677ab, rolling patch 87ec36642, stick-zone trial 49155d9e2: Drain-kicker 2-cycle gone, rounds per step -10 %); ~60 depth warnings < 20 um in the bottom pile and at the Drain kicker (stock kicker).
-N3. Playfield cuts, stand-alone ([PlayfieldCut:<name>]): slot done and drawn (21bcfc480). Now: plunger groove (open at the plunger). Later: rectangle (cuts the plunger end), triangle, big hole, small round hole, slot in the groove, turntable hole.
+N3. Playfield cuts: slot (drawn), groove, rectangle, cuts that meet in bbdee9278. Open: slot-in-groove 256 us/cycle (ramp edge search); normal jump at slot tips in the groove, b8 unchecked (runs/2026-11-10-cut-junction/results_ramp.txt). Later: draw new shapes, triangle, holes.
 N5. One reach rule from physics (speed plus force) for grouping and step length. Grouping: Gate001's 81 mm swing as one-cycle travel joins two lanes. Step length: speed only, no force. Check all parts; ball pairs of unequal mass and resting-ball wake (read only).
 N7. Stress v2 bench: ball travel energy +2 % at 57 ms; spin not counted. Check total energy in the saved run (no new run).
 N8. Test driver must refuse a ball placed inside any object, unless the file declares the overlap (rule 10b: then judged on recovery, no energy gained).
@@ -77,7 +76,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 ## 9. Still stock (ask before converting)
 1. Stand-up and drop targets.
 2. Kickers.
-3. Switches and triggers: wire switch work in progress (N1-N3). Inder, Star, Button and None triggers stay stock (Inder blade model deleted 11-09: no part data).
+3. Switches and triggers: see section 11.
 4. Plunger: other tables, auto plunger, mechanical input.
 5. Ramps: wire-ramp types, rebound, cost.
 6. Playfield material values unverified: compare with the user's video of a ball rolling on a playfield.
@@ -89,3 +88,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 7. Old keys in 14 inis, then the unknown-key notice.
 10. Review ReleasePlan with the user, then PR to the official repo after 3-5.
 13. Old-law switches to delete once accepted (CLAUDE.md): roll/pivot/step_model 0, island_reach 0, ball_pair_reach 0.
+
+## 11. Switches and triggers
+1. Wire switch cost: worst crossing cycle 54-181 us against 30 us per object, median 15-23 us (bench, not focused; runs/2026-11-10-one-clock/analysis_sw.txt). Parked until the stress and performance tests (N10).
+2. Convert the remaining trigger types: Star, Button, Inder (Inder blade model deleted 11-09: no part data). None done (runs/2026-11-10-none-trigger), uncommitted.

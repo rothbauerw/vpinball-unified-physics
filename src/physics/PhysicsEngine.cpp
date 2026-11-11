@@ -1097,7 +1097,10 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
 
       std::optional<TestDriver::Timed> tdContact(std::in_place, TestDriver::kContact);   // the contact system's step, to the snapshot test below
       if (ContactSystem::Unified())
+      {
          ContactSystem::SaveStart();   // the state of the start of this sub-interval, for a replay (docs/unified-physics/archive/UnifiedContactDesign.txt 11, point 2)
+         m_noneZones.SubStart(doneS - hS);   // None triggers: every ball's centre at the start of the sub-interval
+      }
       const uint64_t ctT0 = ctLog != nullptr ? usec() : 0;
       if (hittime < hittimeStart && ContactProf::On())
       {
@@ -1149,6 +1152,7 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
          ContactSystem::TakeReplayStats(nRep, usRep);
          s_ctReplays += nRep;
          s_ctReplayUs += usRep;
+         m_noneZones.SubTest(doneS - hS, hS);   // None triggers: each ball's chord of this sub-interval, final after any replay (design.md 3)
       }
 
       // the events the contact step and the parts queued in this sub-interval: after the free balls have moved, as stock fires its collision events (docs/unified-physics/archive/UnifiedContactDesign.txt 11, point 2)
@@ -1331,6 +1335,9 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
       m_swap_ball_collision_handling = !m_swap_ball_collision_handling; // swap order of ball-ball collisions
 
    } // end physics loop
+
+   if (ContactSystem::Unified())
+      m_noneZones.CycleEnd(cycleS);   // None triggers: the cycle's Hit / Unhit events, in crossing order (design.md 1)
 }
 
 string PhysicsEngine::GetPerfInfo(bool resetMax)

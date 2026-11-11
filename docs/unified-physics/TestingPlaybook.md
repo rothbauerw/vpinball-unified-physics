@@ -47,9 +47,10 @@ No dates, no "learned", no superseded text. What a test is for, its cap and hand
 ## 5. Test driver input (VPX_TEST_INPUT)
 - File of actions by physics millisecond, `<t_ms> <action> <args>`, `#` comment, same-time actions in file order, applied at the start of the cycle (same result at any frame rate). Code: src/physics/testdriver.cpp; design TestMatrixDesign section 2.
 - Actions: `ball NAME x y z vx vy vz [radius mass [wx wy wz]]` (x, y in U; z = height of the ball's bottom above the playfield in U; velocity m/s; default radius 25 U, mass 1), `destroy NAME`, `flip FLIPPER 1|0`,
-  `enabled FLIPPER 1|0`, `sling RUBBER`, `magnet NAME V`, `turntable NAME V`, `respawn Y`, `respawn_z Z`, `speed_limit V` (default 8 m/s), `floor Z` (default -200 U), `record N`, `timing detail|total`, `end`.
+  `enabled FLIPPER|TRIGGER 1|0`, `kick KICKER angle speed`, `sling RUBBER`, `magnet NAME V`, `turntable NAME V`, `respawn Y`, `respawn_z Z`, `speed_limit V` (default 8 m/s), `floor Z` (default -200 U), `record N`, `timing detail|total`, `end`.
 - Checks every cycle: over the speed limit, below the floor, outside the table, removed by the table, skipped cycles. Unknown actions are a WARN and a notification. It resets the random seed at table start.
-- Writes into VPX_TEST_OUT: balls.csv (t_ms, ball, position U, velocity U per 10 ms, angular momentum), cycles.csv (cost split per cycle, us), frames.csv, report.txt (pass/fail, cost from t = 1 s: mean, p99, worst cycle, worst 7 cycles, 5 worst windows by part), done.txt.
+- Writes into VPX_TEST_OUT: balls.csv (t_ms, ball, position U, velocity U/10 ms, angular momentum), events.csv (t_ms, trigger, ball, Hit/Unhit), cycles.csv (cost split, us), frames.csv,
+  report.txt (pass/fail, cost from 1 s: mean, p99, worst cycle, worst 7 cycles, 5 worst windows by part), done.txt.
   Time 0 is the first cycle after start-up (first frame under 100 ms). A restarted table writes balls_2.csv, ...
 - A start spot inside or touching an object is a broken test (DevelopmentRules 4): check start spots against the table layout and the first 5 ms of each shot.
 - A gate or spinner plate swings 3-8 s: space shots 5 s (gate) / 8 s (spinner).
@@ -67,6 +68,7 @@ No dates, no "learned", no superseded text. What a test is for, its cap and hand
 - PowerShell: a function named `R` is shadowed by the alias `r`; an array of arrays is built with `@(,@(...))` and `+= ,@(...)`; pass table and ini to run.ps1 by hashtable splat, not array.
 - Offline C++ benches from Bash: `timeout 250 cmd //c '<full path>\b3.bat <name>'`; PowerShell Start-Process -Wait can hang on the compiler's child processes. Hinge benches need `/FIcassert`.
 - `dumpvpx.py` (olefile, runs\2026-10-31-parts-check) reads object positions and rotations from a .vpx.
+- Bench group book t_ms = balls.csv t_ms + 4004 ms (pre-roll).
 
 ## 8. Environment switches
 Every switch the engine reads, one line each. A switch added, changed or removed in the code is changed here in the same commit. Settings that are ini keys are described beside the key in the code.
