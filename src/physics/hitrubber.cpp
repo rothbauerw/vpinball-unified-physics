@@ -142,6 +142,43 @@ void RubberSurface::Add(const Vertex3Ds &a, const Vertex3Ds &b, const Vertex3Ds 
       }
    tris.push_back(RubberContact::MakeSurfaceTri(V3((double)a.x * U, (double)a.y * U, (double)a.z * U), V3((double)b.x * U, (double)b.y * U, (double)b.z * U),
                                                 V3((double)c.x * U, (double)c.y * U, (double)c.z * U)));
+   std::array<int, 3> ids;
+   for (int k = 0; k < 3; k++)
+   {
+      std::array<uint32_t, 3> key;
+      std::memcpy(key.data(), &p[k]->x, sizeof(float));
+      std::memcpy(key.data() + 1, &p[k]->y, sizeof(float));
+      std::memcpy(key.data() + 2, &p[k]->z, sizeof(float));
+      ids[k] = weld.emplace(key, (int)weld.size()).first->second;
+   }
+   vid.push_back(ids);
+   nb.clear();
+}
+
+int RubberSurface::Link()
+{
+   nb.assign(tris.size(), { -1, -1, -1 });
+   std::map<std::pair<int, int>, std::pair<int, int>> edges;   // (lower id, higher id) -> (face, edge) of the first face on it
+   int over = 0;
+   for (int t = 0; t < (int)tris.size(); t++)
+      for (int e = 0; e < 3; e++)
+      {
+         const int a = vid[t][e], b = vid[t][(e + 1) % 3];
+         if (a == b)
+            continue;
+         const auto key = std::make_pair(std::min(a, b), std::max(a, b));
+         const auto it = edges.find(key);
+         if (it == edges.end())
+            edges.emplace(key, std::make_pair(t, e));
+         else if (it->second.first >= 0 && nb[it->second.first][it->second.second] < 0 && it->second.first != t)
+         {
+            nb[it->second.first][it->second.second] = t;
+            nb[t][e] = it->second.first;
+         }
+         else
+            over++;   // a third face on the edge (or one face twice): left unlinked
+      }
+   return over;
 }
 
 HitRubber::HitRubber(IEditable *editable, std::shared_ptr<RubberSurface> surface, const RubberObjectSettings &settings, const std::filesystem::path &iniPath, const std::string &name,
@@ -961,6 +998,17 @@ void HitRubber::Refresh(SurfaceContact &it, const double ballR, const double rea
 {
    if (m_surface == nullptr)
       return;
+   if (ContactSettings::Get().multiContact && m_surface->nb.size() != m_surface->tris.size())   // multi_contact: the faces' shared edges, once, at the first ball near the surface
+   {
+      const int over = m_surface->Link();
+      if (over > 0)
+      {
+         const std::string msg = "Rubber surface " + m_name + ": " + std::to_string(over) + " edges are on more than two faces; each joins its first two faces only (multi_contact)";
+         PLOGW << msg;
+         if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+            g_pplayer->m_liveUI->PushNotification(msg, 5000);
+      }
+   }
    // A list built with some margin stays good until the ball has moved farther than the margin allows: scanning every face of a playfield mesh for every ball on every
    // call was the main cost of a table with several balls on it.
    const double need = ballR + reachM;
@@ -1021,6 +1069,12 @@ RubberContact::TubeProbe HitRubber::ProbePatch(const RubberContact::BallSI &bs, 
       int nHoles = 0;
       Turntables::Holes(holes, nHoles);
       return PlayfieldCuts::Probe(this, bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, it.candR >= 0.0 ? it.candR : 1e30, holes, nHoles, true, it.gs.zero);
+   }
+   if (ContactSettings::Get().multiContact && !(m_surface != nullptr && m_surfaceKind == "playfield"))   // every pressed part its own Hertz bar (rubbercontact.h BarsTube / BarsTriangles); the playfield (turntable holes) keeps the patch sum
+   {
+      if (m_surface != nullptr)
+         return RubberContact::BarsTriangles(bs, m_surface->tris, m_surface->vid, m_surface->nb, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, it.gs.zero);
+      return RubberContact::BarsTube(bs, m_ptsSI.data(), (int)m_ptsSI.size(), m_radiusSI, c, m_tubePre, it.gs.zero);
    }
    RubberContact::TubeProbe pr = Probe(bs, it, c);
    if (m_surface != nullptr)

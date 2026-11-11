@@ -36,6 +36,8 @@
 #include <cmath>
 #include <algorithm>
 #include <vector>
+#include <array>
+#include <utility>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -916,6 +918,264 @@ namespace RubberContact
       }
       if (any)
          sum.Finish(pr, zero);
+   }
+
+   // ---- multi_contact 1: every part of one surface that presses the ball is its own Hertz bar (to-do 1.33, piece 2) ----
+   // The depth over the surface, d(x) = R + rho - dist(c, x) - zero, has a peak on each part pressing the ball. Two peaks joined over the surface by a path that stays pressed are one
+   // contact up to the lowest point of the best such path (the hump, a shared edge or a joint): the stored energy is the level form E = sum over peaks of V(d) - V(pass), pass the
+   // hump where the peak joins a deeper one (0 if it never does), V the Hertz potential ~ d^2.5. For Hertz it is one depth with the same energy, the generalised fold sum
+   // s25 = sum (d^2.5 - pass^2.5), g = sum (d^1.5 n - pass^1.5 n'), delta = s25^0.4 + zero, n = g / |g|, grad = |g| / s25^0.6 (FoldSum::Finish), n' the hump's normal.
+   // The peaks and humps come from a union-find over the pieces taken deepest first (a merge tree): a piece with no pressed neighbour starts a peak; a piece that touches two
+   // groups joins them at its own depth, the shallower group's peak passing there. A piece that joins a deeper group passes at its own depth: d = pass, it adds exactly nothing.
+   struct BarNode
+   {
+      double d;      // depth above the found-inside zero, m
+      V3 n;          // the depth's gradient direction at the piece (surface -> ball centre)
+      int order;     // on equal depths: pieces (0) before the humps that join them (1)
+   };
+
+   // nodes: the pieces pressing the ball (d > 0); adj: pairs of nodes that touch on the surface. Returns the number of peaks; sum holds their s25 and g.
+   inline int MergeBars(const std::vector<BarNode> &nodes, const std::vector<std::pair<int, int>> &adj, FoldSum &sum)
+   {
+      const int m = (int)nodes.size();
+      std::vector<int> ord(m), parent(m), peak(m), first(m + 1, 0), nbr(adj.size() * 2);
+      for (int i = 0; i < m; i++)
+         ord[i] = parent[i] = peak[i] = i;
+      std::sort(ord.begin(), ord.end(), [&](const int a, const int b) {
+         if (nodes[a].d != nodes[b].d)
+            return nodes[a].d > nodes[b].d;
+         return nodes[a].order != nodes[b].order ? nodes[a].order < nodes[b].order : a < b;
+      });
+      for (const auto &e : adj)
+      {
+         first[e.first + 1]++;
+         first[e.second + 1]++;
+      }
+      for (int i = 0; i < m; i++)
+         first[i + 1] += first[i];
+      {
+         std::vector<int> fill(first.begin(), first.end() - 1);
+         for (const auto &e : adj)
+         {
+            nbr[fill[e.first]++] = e.second;
+            nbr[fill[e.second]++] = e.first;
+         }
+      }
+      std::vector<char> on(m, 0);
+      const auto find = [&](int x) { while (parent[x] != x) x = parent[x] = parent[parent[x]]; return x; };
+      std::vector<double> pass(m, 0.0);
+      std::vector<V3> passN(m);
+      std::vector<char> passed(m, 0);
+      const auto deeper = [&](const int pa, const int pb) { return nodes[pa].d != nodes[pb].d ? nodes[pa].d > nodes[pb].d : pa < pb; };
+      for (const int x : ord)
+      {
+         on[x] = 1;
+         for (int k = first[x]; k < first[x + 1]; k++)
+         {
+            const int y = nbr[k];
+            if (!on[y])
+               continue;
+            const int rx = find(x), ry = find(y);
+            if (rx == ry)
+               continue;
+            int keep = rx, lose = ry;   // the group whose peak is shallower passes at x
+            if (deeper(peak[ry], peak[rx]))
+               std::swap(keep, lose);
+            const int pl = peak[lose];
+            pass[pl] = nodes[x].d;
+            passN[pl] = nodes[x].n;
+            passed[pl] = 1;
+            parent[lose] = keep;
+         }
+      }
+      int peaks = 0;
+      for (int i = 0; i < m; i++)
+      {
+         if (peak[i] != i || (passed[i] && pass[i] == nodes[i].d))
+            continue;   // not a peak (every node starts as its own peak; one that joins at its own depth adds nothing)
+         if (!passed[i] && find(i) != i)
+            continue;
+         const double d = nodes[i].d, d15 = d * std::sqrt(d);
+         sum.s25 += d * d15;
+         sum.g = sum.g + nodes[i].n * d15;
+         if (passed[i] && pass[i] > 0.0)
+         {
+            const double p = pass[i], p15 = p * std::sqrt(p);
+            sum.s25 -= p * p15;
+            sum.g = sum.g - passN[i] * p15;
+         }
+         peaks++;
+      }
+      return peaks;
+   }
+
+   // The nearest point of segment p0 -> p1 (the ends exactly at a clamp, so two pieces that meet at a corner report the same bits there)
+   inline V3 SegNearest(const V3 &p0, const V3 &p1, const V3 &c)
+   {
+      const V3 t = p1 - p0;
+      const double L2 = t.Dot(t);
+      if (L2 <= 0.0)
+         return p0;
+      const double s = (c - p0).Dot(t) / L2;
+      return s <= 0.0 ? p0 : s >= 1.0 ? p1 : p0 + t * s;
+   }
+
+   // A tube (centreline pts, n points; a closed ring repeats its first point at the end, the two are one joint): the pieces are the segments' inside nearest points and the joints.
+   // One peak: ProbeTube's result unchanged. More: the level form above, reff and the nearest point kept from the deepest (held reff, piece 2).
+   inline TubeProbe BarsTube(const BallSI &ball, const V3 *pts, const int n, const double rho, const V3 &c, const TubePre &pre, const double zero)
+   {
+      TubeProbe pr = ProbeTube(ball, pts, n, rho, c, &pre);
+      if (!pr.overlap || pr.seg < 0 || pr.reff <= 0.0 || pr.delta <= zero || n < 3)
+         return pr;
+      const double S = ball.R + rho;
+      const bool ring = pts[0].x == pts[n - 1].x && pts[0].y == pts[n - 1].y && pts[0].z == pts[n - 1].z;
+      const int nv = ring ? n - 1 : n;   // joints: point n-1 of a ring is joint 0
+      std::vector<BarNode> nodes;
+      std::vector<std::pair<int, int>> adj;
+      std::vector<int> jointNode(nv, -2);   // -2 not looked at, -1 not pressed
+      const auto joint = [&](int j) {
+         if (j >= nv)
+            j = 0;
+         if (jointNode[j] == -2)
+         {
+            const V3 dv = c - pts[j];
+            const double dist = dv.Length();
+            const double d = S - dist - zero;
+            jointNode[j] = -1;
+            if (d > 0.0 && dist > 1e-12)
+            {
+               jointNode[j] = (int)nodes.size();
+               nodes.push_back({ d, dv / dist, 1 });
+            }
+         }
+         return jointNode[j];
+      };
+      for (int i = 0; i + 1 < n; i++)
+      {
+         const V3 dm = c - pre.mid[i];
+         const double lim = S - zero + pre.rad[i];
+         if (dm.Dot(dm) > lim * lim)
+            continue;
+         const int j0 = joint(i), j1 = joint(i + 1);
+         const double s = pre.L2[i] > 0.0 ? (c - pts[i]).Dot(pre.t[i]) / pre.L2[i] : 0.0;
+         if (s > 0.0 && s < 1.0)
+         {
+            const V3 dv = c - (pts[i] + pre.t[i] * s);
+            const double dist = dv.Length();
+            const double d = S - dist - zero;
+            if (d > 0.0 && dist > 1e-12)
+            {
+               const int k = (int)nodes.size();
+               nodes.push_back({ d, dv / dist, 0 });
+               if (j0 >= 0)
+                  adj.emplace_back(k, j0);
+               if (j1 >= 0)
+                  adj.emplace_back(k, j1);
+               continue;
+            }
+         }
+         if (j0 >= 0 && j1 >= 0)   // the segment's depth runs from one joint to the other without a peak inside: the joints touch along it
+            adj.emplace_back(j0, j1);
+      }
+      FoldSum sum;
+      if (MergeBars(nodes, adj, sum) <= 1)
+         return pr;
+      sum.Finish(pr, zero);
+      return pr;
+   }
+
+   // A triangle mesh with shared-edge neighbours (nb[t][e] the triangle across edge e = (v e, v e+1), -1 none; vid the welded vertex ids): the pieces are the pressed triangles
+   // (a face's inside nearest point, or the deepest of its edges where the nearest point is on the rim) and the shared edges between two of them (the humps).
+   // One peak: ProbeTriangles' result unchanged. More: the level form, reff and the nearest point kept from the deepest.
+   inline TubeProbe BarsTriangles(const BallSI &ball, const std::vector<SurfaceTri> &tris, const std::vector<std::array<int, 3>> &vid, const std::vector<std::array<int, 3>> &nb,
+                                  const std::vector<int> &cand, const double edgeRho, const V3 &c, const double zero)
+   {
+      TubeProbe pr = ProbeTriangles(ball, tris, cand, edgeRho, c);
+      if (!pr.overlap || pr.seg < 0 || pr.reff <= 0.0 || pr.delta <= zero || cand.size() < 2 || nb.size() != tris.size())
+         return pr;
+      // an edge's nearest point from its lower-id end, so both triangles on it get the same bits
+      const auto edgeDepth = [&](const int t, const int e, V3 &nOut) {
+         const SurfaceTri &T = tris[t];
+         const V3 *v[3] = { &T.a, &T.b, &T.c };
+         const int a = e, b = (e + 1) % 3;
+         const bool fwd = vid[t][a] < vid[t][b];
+         const V3 q = fwd ? SegNearest(*v[a], *v[b], c) : SegNearest(*v[b], *v[a], c);
+         const V3 dv = c - q;
+         const double dist = dv.Length();
+         nOut = dist > 1e-12 ? dv / dist : V3();
+         return dist > 1e-12 ? ball.R - dist - zero : -1.0;
+      };
+      std::vector<BarNode> nodes;
+      std::vector<std::pair<int, int>> adj;
+      std::vector<std::pair<int, int>> triNode;   // (triangle, node)
+      for (const int i : cand)
+      {
+         const SurfaceTri &T = tris[i];
+         if ((T.b - T.a).Cross(T.c - T.a).Length() <= 0.0)
+            continue;   // zero area: no face (as MakeSurfaceTri)
+         int kind = 0;
+         const V3 p = ClosestOnTriangle(T, c, kind);
+         double d;
+         V3 nn;
+         if (kind == 0)
+         {
+            const V3 dv = c - p;
+            const double dist = dv.Length();
+            if (dist <= 1e-12)
+               continue;
+            d = ball.R - dist - zero;
+            nn = dv.Dot(T.n) < 0.0 ? T.n * -1.0 : T.n;
+         }
+         else
+         {
+            d = -1.0;   // the nearest point is on the rim: the deepest of the three edges
+            for (int e = 0; e < 3; e++)
+            {
+               V3 ne;
+               const double de = edgeDepth(i, e, ne);
+               if (de > d)
+               {
+                  d = de;
+                  nn = ne;
+               }
+            }
+         }
+         if (d <= 0.0)
+            continue;
+         triNode.emplace_back(i, (int)nodes.size());
+         nodes.push_back({ d, nn, 0 });
+      }
+      if (nodes.size() < 2)
+         return pr;
+      const auto nodeOf = [&](const int t) {
+         for (const auto &tn : triNode)
+            if (tn.first == t)
+               return tn.second;
+         return -1;
+      };
+      for (const auto &tn : triNode)
+         for (int e = 0; e < 3; e++)
+         {
+            const int o = nb[tn.first][e];
+            if (o <= tn.first)   // each shared edge once (from its lower triangle)
+               continue;
+            const int on = nodeOf(o);
+            if (on < 0)
+               continue;
+            V3 ne;
+            const double de = edgeDepth(tn.first, e, ne);
+            if (de <= 0.0)
+               continue;   // the edge between them is not pressed: two separate contacts
+            const int k = (int)nodes.size();
+            nodes.push_back({ de, ne, 1 });
+            adj.emplace_back(k, tn.second);
+            adj.emplace_back(k, on);
+         }
+      FoldSum sum;
+      if (MergeBars(nodes, adj, sum) <= 1)
+         return pr;
+      sum.Finish(pr, zero);
+      return pr;
    }
 
    // A probe reports the surface's nearest point only, so a part of the surface that is not the nearest (a ramp's wall while the ball flies just over its floor) has no say in the step and the

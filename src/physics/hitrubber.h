@@ -9,6 +9,9 @@
 #include <functional>
 #include <set>
 #include <memory>
+#include <map>
+#include <array>
+#include <cstdint>
 
 #include "physics/collide.h"
 #include "physics/rubbercontact.h"
@@ -82,6 +85,11 @@ struct RubberSurface
    std::vector<RubberContact::SurfaceTri> tris;
    float lo[3] = { 0.f, 0.f, 0.f }, hi[3] = { 0.f, 0.f, 0.f };   // bounding box, VPX units
    void Add(const Vertex3Ds &a, const Vertex3Ds &b, const Vertex3Ds &c);   // one face (VPX units)
+   // multi_contact 1: which faces share an edge (the ball's contacts on two faces joined by a pressed edge are one contact; RubberContact::BarsTriangles)
+   std::vector<std::array<int, 3>> vid;   // per face: its welded vertices (vertices equal in all three float bits are one)
+   std::vector<std::array<int, 3>> nb;    // per face: the face across edge e = (vertex e, vertex e+1), -1 none; empty until Link
+   std::map<std::array<uint32_t, 3>, int> weld;   // vertex bits -> id, while faces are added
+   int Link();   // builds nb from vid (once, after the last Add); returns the number of edges on more than two faces (each links its first pair only)
 };
 
 // One ball in an engine-stepped contact with a static rubber (post ring, wall rubber): the rubbers it touches and the bookkeeping for the log and the release.
