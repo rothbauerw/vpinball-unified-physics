@@ -12,8 +12,8 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-In flight: 1.34 first (shared finder; P1 committed, P2 next). 1.33: pieces 1-2 committed, piece 3 dropped (cost); keep/revert of piece 2 waits on 1.34; one-pass probe uncommitted in rubbercontact.h. Owed: snapshot hashes refresh. Lead log runs/2026-11-10-lead.
-Next decision: shared finder (1.34) P2: the per-cycle query for static meshes with the re-query and the speed-plus-force reach (design.md sections 3, 6). Owed: VPX_FINDER_CHECK line in TestingPlaybook (file at its size cap).
+In flight: 1.34 first (shared finder; P1, P2a, P2b, P9 static meshes committed; P3 next). 1.33: pieces 1-2 committed, piece 3 dropped (cost); keep/revert of piece 2 waits on 1.34. Owed: snapshot hashes refresh. Lead log runs/2026-11-10-lead.
+Next decision: shared finder (1.34) P9 for static meshes: read what stock's copy of converted meshes still does (collide.cpp:23-35), then take it out of the physics path (stock code stays for unified = 0); then P3. Owed: VPX_FINDER_CHECK line in TestingPlaybook (file at its size cap).
 Parked with playfield holes (Button and Star committed): a ball on a flush Button lands on the wood through the cap (no hole), bounce e 0.86; user expects much more loss on a Button.
 N12. Gorgar load: 0 halvings (cord grip 1cec677ab, rolling patch 87ec36642, stick-zone trial 49155d9e2: Drain-kicker 2-cycle gone, rounds per step -10 %); ~60 depth warnings < 20 um in the bottom pile and at the Drain kicker (stock kicker).
 N3. Playfield cuts: slot (drawn), groove, rectangle, cuts that meet in bbdee9278. Open: slot-in-groove 256 us/cycle (ramp edge search); normal jump at slot tips in the groove, b8 unchecked (runs/2026-11-10-cut-junction/results_ramp.txt). Later: draw new shapes, triangle, holes.
@@ -25,6 +25,8 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 
 ## 1. Contact system (tasks)
 34. One shared finder for every contact (static, moving, tubes, ball pairs): complete, short, local, one index; replaces the per-part finders. Requirements accepted: runs/2026-11-11-finder/requirements.md. Design accepted: runs/2026-11-11-finder/design.md (build P1-P9).
+36. Release check's fixed 2 mm hold for a closing ball (contactsystem.cpp:707, from the port): no physics behind it; release at the ball's reach instead (mesh hosts already do with shared_finder).
+37. A no-op stock hit that splits a cycle moved S00's bounce spin 3.5 % (stress v2, 2894 ms; finder-P2b S00 trace): step-split sensitivity; check against the 1 us reference. Parked.
 35. Stress v2 diverter: both diverter walls collide (the script's switch is not run), S09 jams between them and climbs ~3x what its velocity gives (cy 49168; finder/gap/cy49168.py). Check energy (rule 10b).
 10. Sleep (default off): a ball on a flipper never sleeps (bats have no rest check). Whether sleep becomes default: user.
 13. Moving script/animated primitives: details from the user.
@@ -78,8 +80,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 
 ## 9. Still stock (ask before converting)
 1. Stand-up and drop targets.
-2. Kickers.
-3. Switches and triggers: see section 11.
+2. Kickers: next (user 11-12); requirements first.
 4. Plunger: other tables, auto plunger, mechanical input.
 5. Ramps: wire-ramp types, rebound, cost.
 6. Playfield material values unverified: compare with the user's video of a ball rolling on a playfield.
@@ -94,4 +95,3 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 
 ## 11. Switches and triggers
 1. Light-part contact cost (ball on a part of a few grams): worst cycle wire switch 54-181 us, Button 271 us (runs/2026-11-10-rollover/S1); limit 30 us. Midpoint solver must follow the ball-on-part contact clock: needs another solver class (rigid contact + impact law, or L-stable). Parked to N10.
-2. Convert the remaining trigger type: Inder (Inder blade model deleted 11-09: no part data).
