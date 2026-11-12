@@ -12,8 +12,8 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-In flight: nothing running. Old loop deleted (1cd57d8f8); owed: linked branch build + Gorgar load (playfieldcut.cpp = HEAD bbdee9278, not yet built on 1cd57d8f8), snapshot hashes refresh. Lead log runs/2026-11-10-lead.
-Next decision: commit the None trigger (in the branch, built, uncommitted); then Star / Button need part data (11.2).
+In flight: 1.34 first (shared finder; step 3 next). 1.33: pieces 1-2 committed, piece 3 dropped (cost); keep/revert of piece 2 waits on 1.34; one-pass probe uncommitted in rubbercontact.h. Owed: snapshot hashes refresh. Lead log runs/2026-11-10-lead.
+Next decision: Button committed (design 2S). Open: wall-Button ball hops on the flush cap ~0.4 s (drive W1; cause unknown; to-do placement: user).
 N12. Gorgar load: 0 halvings (cord grip 1cec677ab, rolling patch 87ec36642, stick-zone trial 49155d9e2: Drain-kicker 2-cycle gone, rounds per step -10 %); ~60 depth warnings < 20 um in the bottom pile and at the Drain kicker (stock kicker).
 N3. Playfield cuts: slot (drawn), groove, rectangle, cuts that meet in bbdee9278. Open: slot-in-groove 256 us/cycle (ramp edge search); normal jump at slot tips in the groove, b8 unchecked (runs/2026-11-10-cut-junction/results_ramp.txt). Later: draw new shapes, triangle, holes.
 N5. One reach rule from physics (speed plus force) for grouping and step length. Grouping: Gate001's 81 mm swing as one-cycle travel joins two lanes. Step length: speed only, no force. Check all parts; ball pairs of unequal mass and resting-ball wake (read only).
@@ -23,13 +23,14 @@ N9. Branch pushed: every commit is on the fork. Engine work (part_guess_accel, c
 N10. Performance tests: not built; review TestMatrixDesign with the user when building them. Includes the stress table driver clock after start-up and the 144 Hz frame budget. Any safety-net trip (e.g. the cord's hold and let-go) fails the run.
 
 ## 1. Contact system (tasks)
+34. One shared finder for every contact (static, moving, tubes, ball pairs): complete, short, local, one index; replaces the per-part finders. Requirements accepted: runs/2026-11-11-finder/requirements.md. Next: step 3, options counted offline.
 10. Sleep (default off): a ball on a flipper never sleeps (bats have no rest check). Whether sleep becomes default: user.
 13. Moving script/animated primitives: details from the user.
-17. Shared-loop cost per cycle (waits until models work).
+17. Shared-loop cost per cycle (waits until models work). Measured: evaluations per object per cycle median 4, p90 16, worst 598 over 144 steps (750 bench, Hgo2_19; time3/results.txt); cause unknown.
 26. Ball started inside: the solve must never keep a runaway answer. May be handled already: check.
 27. Shared stop piece (gate, spinner, disc, ring, bat, plunger).
 32. Env switches that change behaviour (rule: diagnostics only): VPX_HINGES (=0 gives the stock kick), VPX_PREVENT, VPX_PROXIMITY, VPX_VISCOELASTIC, VPX_OVERLAP_REPLAY; VPX_BUMPERS only warns. Remove each or make it an ini key.
-33. Several contacts on one object: each true local minimum of the ball-surface distance (cut rims, tube folds, mesh edges) its own contact with its own friction, merged only where patches overlap. Replaces the fold-sum fade; closes the mesh gap (edges unsummed). Design, paper (2-4 merging) first.
+33. Several contacts on one object (mesh faces and edges, tube folds, cut rims): each true local minimum of the ball-surface distance its own contact and friction, merged only where patches overlap; replaces the fold-sum fade. Also: sling post cos (cordfixed.h:949). Check: 750-bench rubber hits.
 31. After G1: check every converted part (flipper, gates, spinners, bumper, disc, rubbers, cord) against the ModelStandards definition of done (top of the file).
 30. part_guess_accel (default off): design evaluation for all moving parts, then a test plan if kept. After the shared-engine items, unless one of them needs it.
 
@@ -90,5 +91,5 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 13. Old-law switches to delete once accepted (CLAUDE.md): roll/pivot/step_model 0, island_reach 0, ball_pair_reach 0.
 
 ## 11. Switches and triggers
-1. Wire switch cost: worst crossing cycle 54-181 us against 30 us per object, median 15-23 us (bench, not focused; runs/2026-11-10-one-clock/analysis_sw.txt). Parked until the stress and performance tests (N10).
-2. Convert the remaining trigger types: Star, Button, Inder (Inder blade model deleted 11-09: no part data). None done (runs/2026-11-10-none-trigger), uncommitted.
+1. Light-part contact cost (ball on a part of a few grams): worst cycle wire switch 54-181 us, Button 271 us (runs/2026-11-10-rollover/S1); limit 30 us. Midpoint solver must follow the ball-on-part contact clock: needs another solver class (rigid contact + impact law, or L-stable). Parked to N10.
+2. Convert the remaining trigger types: Star, Inder (Inder blade model deleted 11-09: no part data). None done (runs/2026-11-10-none-trigger), uncommitted.

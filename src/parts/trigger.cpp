@@ -319,6 +319,115 @@ namespace
       const ContactHost *m_host = nullptr;   // (the gap log)
       std::vector<std::string> m_notices;    // the load-time detectors' messages, shown at the first cycle
    };
+
+   // The table side of a Button trigger's cap (buttoncap.h, runs/2026-11-10-rollover/design.md): the switch's close is the trigger's Hit, its open the Unhit, as the wire switch;
+   // ActiveBall is the ball nearest the cap's axis. A disabled trigger: no events, its cap still moves (design 4e). The ball that closed it destroyed: no script Unhit, the
+   // state link opens (the None rule, design 4d). It publishes the drawn cap's height offset (VPU) in m_partAngle: the stock mesh follows the cap (UpdateAnimation)
+   class ButtonCapAdapter final : public PartAdapter
+   {
+   public:
+      ButtonCapAdapter(Trigger *trigger, std::shared_ptr<ButtonCap::Cap> model, const double drawRestVpu)
+         : m_trigger(trigger), m_model(std::move(model)), m_name(trigger->GetName()), m_drawRest(drawRestVpu)
+      {
+      }
+      void Publish() override
+      {
+         m_model->Collect();
+         m_model->bookMs = (int)g_pplayer->m_time_msec;
+         m_trigger->m_partAngle = (float)(m_drawRest - m_model->part.Sink() / ContactSystem::kMetresPerUnit);   // (the axial sink; the tilt is not drawn)
+         if (!m_notices.empty() && g_pplayer->m_liveUI != nullptr)   // the load-time detectors, on screen once the player runs
+         {
+            for (const std::string &msg : m_notices)
+               g_pplayer->m_liveUI->PushNotification(msg, 10000);
+            m_notices.clear();
+         }
+         if (m_model->energySteps > m_esSeen)   // detector (rule 8)
+         {
+            m_esSeen = m_model->energySteps;
+            if (m_esLines < 5)
+            {
+               m_esLines++;
+               PLOGW << "Group step: energy step alone, part " << m_name << ", balls 0, t=" << g_pplayer->m_time_msec << " ms, " << m_esSeen << " so far; " << m_model->StateNote() << ". A net, not expected to fire: keep vpinball.log and report it";
+            }
+         }
+         if (m_model->failedSteps > 0 && !m_failShown)
+         {
+            m_failShown = true;
+            const std::string msg = m_name + ": a step of the button cap alone could not be solved: the rest of that cycle was lost";
+            PLOGW << msg;
+            if (g_pplayer->m_liveUI != nullptr)
+               g_pplayer->m_liveUI->PushNotification(msg, 6000);
+         }
+      }
+      void Fire(const std::vector<ContactMovingPart::Event> &events) override
+      {
+         for (const ContactMovingPart::Event &e : events)
+         {
+            if (e.kind != ContactMovingPart::Event::SwitchClosed && e.kind != ContactMovingPart::Event::SwitchOpened)
+               continue;
+            const bool closed = e.kind == ContactMovingPart::Event::SwitchClosed;
+            if (closed)
+            {
+               if (!m_trigger->m_d.m_enabled)
+                  continue;
+               HitBall *best = nullptr;
+               double bestD = INFINITY;
+               for (Ball *b : g_pplayer->m_vball)
+               {
+                  const Vertex3Ds &p = b->m_hitBall.m_d.m_pos;
+                  const double dx = p.x - m_trigger->m_d.m_vCenter.x, dy = p.y - m_trigger->m_d.m_vCenter.y, d = dx * dx + dy * dy;
+                  if (d < bestD)
+                  {
+                     bestD = d;
+                     best = &b->m_hitBall;
+                  }
+               }
+               if (best == nullptr)
+                  continue;
+               m_holder = best;
+               g_pplayer->m_pactiveball = best->m_pBall;
+               if (best->m_d.m_vpVolObjs != nullptr)
+                  best->m_d.m_vpVolObjs->push_back(m_trigger);
+               m_trigger->TriggerAnimationHit();
+            }
+            else
+            {
+               if (m_holder == nullptr)
+                  continue;   // (closed while disabled)
+               const auto &vb = g_pplayer->m_vball;
+               HitBall *const holder = m_holder;
+               m_holder = nullptr;
+               m_trigger->TriggerAnimationUnhit();
+               if (!std::any_of(vb.begin(), vb.end(), [&](const Ball *b) { return &b->m_hitBall == holder; }))
+               {
+                  if (!m_trigger->m_d.m_stateSrcLink.empty())
+                     g_pplayer->m_resURIResolver.SetBoolState(m_trigger->m_d.m_stateSrcLink, false);
+                  PLOGI << "Trigger " << m_name << ": button opened after its ball was destroyed: no Unhit, state link off, t=" << g_pplayer->m_time_msec << " ms";
+                  continue;
+               }
+               g_pplayer->m_pactiveball = holder->m_pBall;
+               if (holder->m_d.m_vpVolObjs != nullptr)
+                  std::erase(*holder->m_d.m_vpVolObjs, (IFireEvents *)m_trigger);
+            }
+            (closed ? m_hits : m_unhits)++;
+            if (m_hits + m_unhits <= 40)
+               PLOGI << "Trigger " << m_name << ": button switch " << (closed ? "closed: Hit" : "opened: Unhit") << " t=" << g_pplayer->m_time_msec << " ms (" << m_hits << " Hit, " << m_unhits << " Unhit so far)";
+            m_trigger->OnHit(closed);
+         }
+      }
+
+   private:
+      Trigger *m_trigger;
+      std::shared_ptr<ButtonCap::Cap> m_model;
+      std::string m_name;
+      double m_drawRest;             // the drawn mesh's height offset at rest (VPU): its top at the cap's physical top (looks only)
+      HitBall *m_holder = nullptr;   // the ball that closed the switch
+      long m_esSeen = 0;
+      int m_esLines = 0, m_hits = 0, m_unhits = 0;
+      bool m_failShown = false;
+   public:
+      std::vector<std::string> m_notices;    // the load-time detectors' messages, shown at the first cycle
+   };
 }
 
 // None trigger on the unified engine (to-do 11.2, runs/2026-11-10-none-trigger/design.md): an invisible sensing zone (an opto beam, a proximity sensor, a script zone). It only reads the ball:
@@ -587,7 +696,7 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       if (s_noted != g_pplayer)
       {
          s_noted = g_pplayer;
-         PLOGI << "Triggers: [Features] triggers = " << (on ? 1 : 0) << (on ? ": WireA-E are rollover switches of the contact system (group step); None is a sensing zone of the unified engine; Star, Button and Inder stay stock sensors (not converted)" : ": None is a sensing zone of the unified engine; every other trigger is a stock sensor");
+         PLOGI << "Triggers: [Features] triggers = " << (on ? 1 : 0) << (on ? ": WireA-E are rollover switches of the contact system (group step); None is a sensing zone of the unified engine; Button is a rollover cap of the group step; Star and Inder stay stock sensors (not converted)" : ": None is a sensing zone of the unified engine; Button is a rollover cap of the group step; every other trigger is a stock sensor");
       }
       if (on && wire)
       {
@@ -699,6 +808,63 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
                << w.mp.m * 1e3 << " g, I " << w.mp.I << " kg m^2, reach " << reach * 1e3 << " mm)";
          return;
       }
+   }
+   if (!isUI && ContactSystem::Unified() && m_d.m_shape == TriggerButton)
+   {
+      // the rollover button (runs/2026-11-10-rollover/design.md): a plastic cap on its leaf switch, a part of the group step; no stock sensor (every Button on a unified table)
+      constexpr double U = ContactSystem::kMetresPerUnit;
+      const std::filesystem::path ini = ContactHost::IniPathFor(m_ptable->m_filename);
+      ButtonCap::Settings s;
+      std::string ignoredKeys;
+      PartsIni::LoadButtonCap(s, ini, GetName(), &ignoredKeys);
+      std::vector<std::string> notices;   // load-time detectors (rule 8): on screen at the first cycle and in the log as WARN
+      if (!ignoredKeys.empty())
+         notices.push_back("Button trigger " + GetName() + ": ini key(s) " + ignoredKeys + " not used (removed or unknown); remove them from the table's physics ini");
+      const double radiusMm = m_d.m_radius * U * 1e3, fitMm = std::min(radiusMm, s.restMm);   // design 4f: the corner fits under the cap's radius and its height above the wood
+      if (s.cornerMm > fitMm)
+      {
+         notices.push_back("Button trigger " + GetName() + ": corner_mm " + std::to_string(s.cornerMm) + " does not fit the cap (radius " + std::to_string(radiusMm) + " mm, rest_mm " + std::to_string(s.restMm) + "); " + std::to_string(fitMm) + " is used");
+         s.cornerMm = fitMm;
+      }
+      if (s.capHMm <= s.restMm)
+      {
+         notices.push_back("Button trigger " + GetName() + ": cap_h_mm " + std::to_string(s.capHMm) + " does not reach into the hole at rest (it must exceed rest_mm); the default 3.97 mm is used");
+         s.capHMm = ButtonCap::Settings().capHMm;
+      }
+      if (s.springN <= s.massG * 1e-3 * 9.81 || s.springFullN < s.springN)
+      {
+         notices.push_back("Button trigger " + GetName() + ": spring_n " + std::to_string(s.springN) + " / spring_full_n " + std::to_string(s.springFullN) + " do not hold the cap up (the preload must exceed its weight, the full force the preload); the defaults 0.34 / 0.69 N are used");
+         s.springN = ButtonCap::Settings().springN;
+         s.springFullN = ButtonCap::Settings().springFullN;
+      }
+      const GroupStep::V3 axis((double)m_d.m_vCenter.x * U, (double)m_d.m_vCenter.y * U, (double)height * U);
+      auto model = std::make_shared<ButtonCap::Cap>();
+      model->Build(s, axis, m_d.m_radius * U, RubberContact::BallSI());
+      // the drawn cap: the stock mesh (taller than the real cap), its top put at the physical top at rest, moved by the travel (looks only)
+      float meshTop = -FLT_MAX;
+      for (const Vertex3D_NoTex2 &v : SetupMeshData(TriggerButton).vertices)
+         meshTop = max(meshTop, v.z * m_d.m_radius + 5.0f);   // (GenerateMesh's zoffset for a Button)
+      const double drawRest = s.restMm * 1e-3 / U - meshTop;
+      RubberObjectSettings hs;
+      const JetBumper::Params pp;
+      ContactHost::LoadHardSurfaceSettings(hs, ini, "trigger", GetName(), pp.plasticE, pp.plasticMu);
+      const double reach = model->Reach();
+      const float lo[3] = { (float)((axis.x - reach) / U), (float)((axis.y - reach) / U), (float)((axis.z - reach) / U) };
+      const float hi[3] = { (float)((axis.x + reach) / U), (float)((axis.y + reach) / U), (float)((axis.z + reach) / U) };
+      auto adapter = std::make_unique<ButtonCapAdapter>(this, model, drawRest);
+      ButtonCapAdapter *const adapterRaw = adapter.get();
+      m_partHost = new ContactPartHost(this, model, std::move(adapter), hs, ini, GetName(), "trigger", lo, hi);
+      for (const std::string &n : notices)
+         PLOGW << n;
+      adapterRaw->m_notices = std::move(notices);
+      m_partHost->SetHardSurface(pp.plasticE, pp.plasticMu);
+      physics->AddCollider(m_partHost, isUI);
+      m_partAngle = (float)drawRest;
+      const ButtonCap::Part &c = model->part;
+      PLOGI << "Trigger " << GetName() << ": button cap on the group step at (" << m_d.m_vCenter.x << ", " << m_d.m_vCenter.y << ") VPU, surface z " << height << " VPU; radius " << c.R * 1e3 << " mm, rest " << s.restMm
+            << " mm, corner " << s.cornerMm << " mm, close " << s.closeMm << " mm; spring " << s.springN << " N at rest, " << s.springFullN << " N flush; mass " << s.massG << " g; stops e " << s.stopE << " (sink only, one coordinate; stop k " << c.stops[c.stopUp].k << " N/m^1.5); cap " << s.capHMm << " mm tall; plastic E " << c.rp.eMpa
+            << " MPa, mu " << c.rp.mu << "; enabled " << m_d.m_enabled << "; drawn offset at rest " << drawRest << " VPU";
+      return;
    }
    if (!isUI && ContactSystem::Unified() && m_d.m_shape == TriggerNone)
    {
@@ -875,6 +1041,12 @@ void Trigger::UpdateAnimation(const float diff_time_msec)
    {
       m_hitEvent = m_unhitEvent = m_doAnimation = false;
       m_animHeightOffset = 0.0f;
+      return;
+   }
+   if (m_partHost != nullptr && m_d.m_shape == TriggerButton)   // a button cap: the stock mesh at the cap's travel (its adapter publishes the drawn offset in m_partAngle), not the timed slide
+   {
+      m_hitEvent = m_unhitEvent = m_doAnimation = false;
+      m_animHeightOffset = m_partAngle;
       return;
    }
 

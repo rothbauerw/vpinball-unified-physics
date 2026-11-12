@@ -14,6 +14,7 @@
 #include "physics/contactspinner.h"
 #include "physics/contactbumper.h"
 #include "physics/wireswitchgroup.h"
+#include "physics/buttoncap.h"
 
 namespace PartsIni
 {
@@ -211,6 +212,30 @@ namespace PartsIni
                PLOGI << "[Triggers] wire_bend is no longer used (2026-11-10): ignored";
             said = true;
          }
+         else
+         {
+            PLOGW << "Trigger " << name << ": unknown key '" << k << "' ignored";
+            if (ignored != nullptr)
+               *ignored += (ignored->empty() ? "" : ", ") + k;
+         }
+      });
+   }
+
+   // Button trigger settings over `s` (runs/2026-11-10-rollover/design.md section 2S; the comment beside each in ButtonCap::Settings): [Triggers] for all, then [Trigger:<name>].
+   // Lengths in mm, forces in N, mass in g. [Triggers] is shared with the wire triggers: their keys are theirs, not reported here. Every other key read and not used is named in *ignored
+   inline void LoadButtonCap(ButtonCap::Settings &s, const std::filesystem::path &file, const std::string &name, std::string *ignored = nullptr)
+   {
+      ReadSections(file, "triggers", "trigger:" + name, [&](const std::string &k, double v, const std::string &) {
+         if (k == "rest_mm") s.restMm = v;
+         else if (k == "close_mm") s.closeMm = v;
+         else if (k == "spring_n") s.springN = v;
+         else if (k == "spring_full_n") s.springFullN = v;
+         else if (k == "corner_mm") s.cornerMm = v;
+         else if (k == "mass_g") s.massG = v;
+         else if (k == "stop_e") s.stopE = v;
+         else if (k == "cap_h_mm") s.capHMm = v;
+         else if (k == "heightoffset_mm" || k == "stop_below_mm" || k == "release_mm" || k == "wire_d_mm" || k == "bend_step_deg" || k == "arch_step_deg" || k == "wire_model" || k == "wire_sum" || k == "wire_bend") {}   // (the wire triggers')
+         else if (k == "release_gap_mm") {}   // the part host reads it (ContactHost::LoadHardSurfaceSettings)
          else
          {
             PLOGW << "Trigger " << name << ": unknown key '" << k << "' ignored";

@@ -111,7 +111,7 @@ public:
    // unified engine: a wire trigger (WireA-E) is a rollover wire switch of the contact system, no stock sensor (trigger.cpp, design-wire.md)
    bool OnWirePart() const { return m_partHost != nullptr; }
    // the switch part's angle about its hinge, rad, published by the physics each cycle (trigger.cpp WireSwitchAdapter::Publish); the renderer turns the drawn switch by it
-   float m_partAngle = 0.f;
+   float m_partAngle = 0.f;   // a converted part's pose as drawn: a wire switch's angle (rad), a button cap's drawn height offset (VPU)
 
    // Fills 'outline' with the 2D outline of wire-shaped triggers for editor display (empty for other shapes)
    void GetWireOutline(vector<Vertex2D> &outline) const;
