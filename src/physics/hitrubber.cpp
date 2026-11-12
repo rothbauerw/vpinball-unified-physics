@@ -2630,7 +2630,7 @@ RubberContact::FaceTable *HitRubber::FinderTable(const SurfaceContact &it, const
       const uint64_t m0 = t.walkMiss, b0 = t.walkBox, v0 = t.walkVisit, f0 = t.fills;
       const uint32_t w0 = t.walkGen;
       const uint64_t tw0 = t.count ? __rdtsc() : 0;
-      t.Walk(m_surface->tris, m_surface->nb, m_surface->piece, q->per[k], c, q->R * q->R);
+      t.Walk(m_surface->tris, m_surface->nb, q->per[k], c, q->R * q->R);
       if (t.count && t.walkGen != w0)   // the walk's counters: check or profile mode only
       {
          const uint64_t tw1 = __rdtsc();

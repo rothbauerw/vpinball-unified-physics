@@ -831,7 +831,6 @@ namespace RubberContact
          double d2;
          int kind;
          uint32_t gen;
-         uint32_t wgen;   // P3b: the walk's mark (visited at this table generation)
       };
       std::vector<Slot> s;
       uint32_t gen = 0;   // the table's generation: a slot is filled when its gen equals it
@@ -845,22 +844,18 @@ namespace RubberContact
       bool count = false;    // P3a's per-read counters (fills, reads): check or profile mode only
       bool direct = false;   // VPX_FINDER_TABLE=0 (diagnostics only, results equal): the loops measure every face directly (the walk still keeps its own measurements here)
       int tag = -1;          // the counters: 1 = a rubber corner timed apart (design.md section 7), 0 = not, -1 = not yet known
-      // shared_finder P3b (design.md section 4): the shared-edge walk, made once per table (ball position). inJ / inI: the faces within R of c, in load order (query-list positions,
-      // face indices); seed: the faces within R at this ball's previous evaluation on this object (empty: none, the list with the box drop); useWalk: the loops read the walk (false: the
-      // whole query list, check mode's comparison).
+      // shared_finder P3b (design.md section 4; list pass runs/2026-11-12-listpass/brief.md): the faces within R, found once per table (ball position) by one pass over the query list.
+      // inJ / inI: the faces within R of c, in load order (query-list positions, face indices); useWalk: the loops read them (false: the whole query list, check mode's comparison).
       uint32_t walkGen = 0;
       bool useWalk = false;
-      std::vector<int> inJ, inI, seed, stack;
-      // P3b2: the query list's index, rebuilt once per query version (one pass over the list, as the query's own gather): idx by face id gives the face's list position and its mesh
-      // piece's local number (stamped, never cleared); the list's pieces with their faces' positions (pcJ from pcStart[lp]), so the walk's unreached check visits only pieces it did not reach.
+      std::vector<int> inJ, inI;
+      // the query list's index for the edge slots (EdgeSlot), rebuilt once per query version: idx by face id gives the face's list position (stamped, never cleared)
       struct Idx
       {
          uint32_t stamp;
-         int j, lp;
+         int j;
       };
       std::vector<Idx> idx;
-      std::vector<int> pcLoc, pcStart, pcJ;
-      std::vector<uint32_t> pcLocStamp, pcReached;
       uint32_t idxStamp = 0;
       bool idxOk = false;
       // P3c: the faces' edge measurements (BarsTriangles), slot 3 j + e for edge e of the face at list position j, filled on first request at this ball position. A shared edge has one slot,
@@ -875,7 +870,7 @@ namespace RubberContact
       std::vector<ESlot> es;
       uint64_t efills = 0, ereads = 0, emism = 0;   // edges measured, edge reads (every request), check-mode mismatches (counted in check or profile mode)
       uint64_t cbMism = 0;   // cut B check mode: calls the rule would skip whose full law ended with more than one peak (summed by the owner)
-      int ListPos(const int i) const   // a face's query-list position from the walk's index (-1: no index for this query list, or not in it)
+      int ListPos(const int i) const   // a face's query-list position from the index (-1: no index for this query list, or not in it)
       {
          return idxOk && i >= 0 && i < (int)idx.size() && idx[i].stamp == idxStamp ? idx[i].j : -1;
       }
@@ -896,7 +891,7 @@ namespace RubberContact
          return &es[3 * (size_t)j + e];
       }
       void *objStats = nullptr;   // P3b2 counters (check or profile mode): the owner's per-object entry, looked up once
-      uint64_t walkMiss = 0, walkBox = 0, walkVisit = 0;   // check mode: faces within R the walk did not hand over; box tests of unreached pieces and faces visited by the walk (counted with fills)
+      uint64_t walkMiss = 0, walkBox = 0, walkVisit = 0;   // check mode: faces within R the pass did not hand over; box tests and faces past the box (measured through the table) (counted with fills)
       int lastMissJ = -1;
       static double BoxD2(const SurfaceTri &t, const V3 &c)   // squared distance from c to the face's box: a lower bound of its distance
       {
@@ -918,119 +913,45 @@ namespace RubberContact
          }
          return x;
       }
-      // the walk: the seed measured, then across shared edges (nb) to each neighbour while it is within R; then every face of the list in a mesh piece the walk did not reach, dropped when
-      // its box is farther than R, else measured. list: the object's query list (face indices, ascending).
-      void Walk(const std::vector<SurfaceTri> &tris, const std::vector<std::array<int, 3>> &nb, const std::vector<int> &piece, const std::vector<int> &list, const V3 &c, const double R2)
+      // the faces within R: one pass over the query list in list order (load order); a face is dropped when its box is farther than R (an exact lower bound of its distance), else
+      // measured through the table. list: the object's query list (face indices, ascending). nb: only for the edge slots' index (built when the faces are linked).
+      void Walk(const std::vector<SurfaceTri> &tris, const std::vector<std::array<int, 3>> &nb, const std::vector<int> &list, const V3 &c, const double R2)
       {
          if (walkGen == gen)
             return;
          walkGen = gen;
          inJ.clear();
-         stack.clear();
-         const bool linked = nb.size() == tris.size() && piece.size() == tris.size();
-         const auto unreachedFace = [&](const int j) {   // a face of a piece the walk did not reach: dropped when its box is farther than R, else measured
-            if (s[j].wgen == gen)
-               return;
+         if (!idxOk && nb.size() == tris.size())   // a new query list: index it (once per query version)
+         {
+            idxOk = true;
+            if (++idxStamp == 0)
+            {
+               for (Idx &x : idx)
+                  x.stamp = 0;
+               idxStamp = 1;
+            }
+            if (idx.size() < tris.size())
+               idx.resize(tris.size(), Idx { 0, -1 });
+            for (size_t j = 0; j < list.size(); j++)
+               idx[list[j]] = Idx { idxStamp, (int)j };
+         }
+         const double boxR2 = R2 * (1.0 + kBoxSlack);
+         for (size_t j = 0; j < list.size(); j++)
+         {
             const int i = list[j];
             if (count)
                walkBox++;
-            if (BoxD2(tris[i], c) > R2 * (1.0 + kBoxSlack))
-               return;
-            s[j].wgen = gen;
-            if (Get(j, tris[i], c).d2 < R2)
-               inJ.push_back(j);
-         };
-         if (!linked)
-         {
-            for (size_t j = 0; j < list.size(); j++)
-               unreachedFace((int)j);
+            if (BoxD2(tris[i], c) > boxR2)
+               continue;
+            if (count)
+               walkVisit++;
+            if (Get((int)j, tris[i], c).d2 < R2)
+               inJ.push_back((int)j);
          }
-         else
-         {
-            if (!idxOk)   // a new query list: index it (once per query version)
-            {
-               idxOk = true;
-               if (++idxStamp == 0)
-               {
-                  for (Idx &x : idx)
-                     x.stamp = 0;
-                  std::fill(pcLocStamp.begin(), pcLocStamp.end(), 0u);
-                  idxStamp = 1;
-               }
-               if (idx.size() < tris.size())
-                  idx.resize(tris.size(), Idx { 0, -1, -1 });
-               pcStart.clear();
-               for (size_t j = 0; j < list.size(); j++)
-               {
-                  const int i = list[j], pc = piece[i];
-                  if (pc >= (int)pcLoc.size())
-                  {
-                     pcLoc.resize(pc + 1, -1);
-                     pcLocStamp.resize(pc + 1, 0u);
-                  }
-                  if (pcLocStamp[pc] != idxStamp)
-                  {
-                     pcLocStamp[pc] = idxStamp;
-                     pcLoc[pc] = (int)pcStart.size();
-                     pcStart.push_back(0);
-                  }
-                  idx[i] = Idx { idxStamp, (int)j, pcLoc[pc] };
-                  pcStart[pcLoc[pc]]++;
-               }
-               const size_t np = pcStart.size();   // counts to starts, then the positions grouped by piece (ascending within a piece)
-               int sum = 0;
-               for (size_t p = 0; p < np; p++)
-               {
-                  const int n = pcStart[p];
-                  pcStart[p] = sum;
-                  sum += n;
-               }
-               pcStart.push_back(sum);
-               pcJ.resize(list.size());
-               stack.assign(pcStart.begin(), pcStart.end() - 1);   // fill cursors (stack is empty again before the walk)
-               for (size_t j = 0; j < list.size(); j++)
-                  pcJ[stack[idx[list[j]].lp]++] = (int)j;
-               stack.clear();
-               pcReached.assign(np, 0u);
-            }
-            const auto visit = [&](const int i) {
-               if (count)
-                  walkVisit++;
-               const Idx &x = idx[i];
-               if (x.stamp != idxStamp)   // not in the query list
-                  return;
-               const int j = x.j;
-               if (s[j].wgen == gen)
-                  return;
-               s[j].wgen = gen;
-               if (Get(j, tris[i], c).d2 < R2)
-               {
-                  inJ.push_back(j);
-                  stack.push_back(i);
-                  pcReached[x.lp] = gen;
-               }
-            };
-            for (const int i : seed)
-               visit(i);
-            while (!stack.empty())
-            {
-               const int i = stack.back();
-               stack.pop_back();
-               for (int e = 0; e < 3; e++)
-                  if (nb[i][e] >= 0)
-                     visit(nb[i][e]);
-            }
-            for (size_t p = 0; p + 1 < pcStart.size(); p++)   // only the pieces the walk did not reach: a reached piece costs nothing per face
-               if (pcReached[p] != gen)
-                  for (int k = pcStart[p]; k < pcStart[p + 1]; k++)
-                     unreachedFace(pcJ[k]);
-         }
-         std::sort(inJ.begin(), inJ.end());   // load order (R9): the loops' tie rules see the faces in today's order
          inI.resize(inJ.size());
          for (size_t k = 0; k < inJ.size(); k++)
             inI[k] = list[inJ[k]];
-         seed = inI;
-         if (check)   // every face of the list measured fresh: one within R that the walk did not hand over is a miss
+         if (check)   // every face of the list measured fresh: one within R that the pass did not hand over is a miss
             for (size_t j = 0; j < list.size(); j++)
             {
                int k = 0;
@@ -1049,10 +970,9 @@ namespace RubberContact
             if (++gen == 0)   // wrapped: every slot empty again
             {
                for (Slot &x : s)
-                  x.gen = x.wgen = 0;
+                  x.gen = 0;
                for (ESlot &x : es)
                   x.gen = 0;
-               std::fill(pcReached.begin(), pcReached.end(), 0u);
                gen = 1;
             }
             if (v != ver)
@@ -1063,7 +983,7 @@ namespace RubberContact
             cz = c.z;
          }
          if (s.size() < n)
-            s.resize(n, Slot { V3(), 0.0, 0, 0, 0 });
+            s.resize(n, Slot { V3(), 0.0, 0, 0 });
          if (es.size() < 3 * n)
             es.resize(3 * n, ESlot { V3(), 0.0, 0 });
       }

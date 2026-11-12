@@ -13,7 +13,7 @@ G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
 In flight: 1.34 first (shared finder; P1, P2a, P2b, P9, P3 static meshes committed). 1.33: piece 2 kept with cut B (stress v2 cost 52 to 1.7 us per cycle), piece 3 dropped (cost). Owed: snapshot hashes refresh. Lead log runs/2026-11-10-lead.
-Next decision: 1.34 checks with no seed (ball near a mesh, not touching, scans the whole query list): a tree search within R as the seed; tested with shots at GenieP (stress v2) and later a dense mesh. Then P4.
+Next decision: 1.34 a cheaper exact pre-test in the list pass (skip a face whose plane is farther than R; the list pass measures ~10.8 faces per check, the walk measured 4.3); then P4. Owed: rename the walk's leftover names (Walk, useWalk, walk counters).
 Parked with playfield holes (Button and Star committed): a ball on a flush Button lands on the wood through the cap (no hole), bounce e 0.86; user expects much more loss on a Button.
 N12. Gorgar load: 0 halvings (cord grip 1cec677ab, rolling patch 87ec36642, stick-zone trial 49155d9e2: Drain-kicker 2-cycle gone, rounds per step -10 %); ~60 depth warnings < 20 um in the bottom pile and at the Drain kicker (stock kicker).
 N3. Playfield cuts: slot (drawn), groove, rectangle, cuts that meet in bbdee9278. Open: slot-in-groove 256 us/cycle (ramp edge search); normal jump at slot tips in the groove, b8 unchecked (runs/2026-11-10-cut-junction/results_ramp.txt). Later: draw new shapes, triangle, holes.
