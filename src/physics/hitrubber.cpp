@@ -12,6 +12,7 @@
 #include <map>
 #include <mutex>
 #include <unordered_map>
+#include <intrin.h>
 
 #include "imgui/imgui.h"
 #include "parts/ball.h"
@@ -130,6 +131,9 @@ namespace
       int reqThis = 0;           // re-queries in the current cycle
       double reqNs = 0.0;        // time spent in re-queries, ns (summed at the totals)
       uint64_t reqNew = 0;       // P2b: objects a re-query found that were not among the ball's surfaces (summed at the totals)
+      uint64_t ver = 0;          // P3a: the query's version: each query, re-query and bind starts every table of the ball anew
+      std::vector<RubberContact::FaceTable> tab;   // P3a: per finder object, the ball's measurement table of its faces in per[k] (one per ball position)
+      const HitBall *ball = nullptr;   // P3a: the ball (check mode's log)
    };
 
    // the timing counters' histogram: 10 ns bins up to 200 us
@@ -198,6 +202,80 @@ namespace
    };
    FinderIndex g_finder;
 
+   // shared_finder P3a counters: one contact check = one outermost Probe, ProbePatch or ArrivalS of a static mesh host with a measurement table (key on)
+   struct FinderTabStats
+   {
+      uint64_t checks = 0, fills = 0, reads = 0, mism = 0;          // the whole run
+      uint64_t rowChecks = 0, rowFills = 0, rowReads = 0;           // since the cost log's last row (FinderTabTake)
+      std::vector<uint64_t> perCyc = std::vector<uint64_t>(4097, 0);   // contact checks per ball, object and cycle (last bin: 4096 and more)
+      uint64_t perCycWorst = 0;
+      std::vector<uint64_t> ticks = std::vector<uint64_t>(65537, 0);   // time per contact check, 16-tick bins (TSC)
+      uint64_t tickSum = 0, tickWorst = 0;
+      uint64_t tsc0 = 0;
+      std::chrono::steady_clock::time_point t0;
+      int logged = 0;
+      uint64_t walks = 0, walkVisit = 0, walkFills = 0, walkIn = 0, walkList = 0;   // P3b counters (check or profile mode): walks made, faces visited and measured by them, faces handed over, query-list length
+      uint64_t efills = 0, ereads = 0, emism = 0;   // P3c (check or profile mode): edges measured, edge reads, check-mode edge mismatches
+      uint64_t cbMism = 0;   // cut B check mode: skippable calls whose full law ended with more than one peak
+      uint64_t walkMiss = 0, probeDiff = 0, walkBox = 0;   // P3b check mode: faces within R the walk did not hand over; probe answers that differ from the whole list's; box tests (counters)
+      int loggedWalk = 0;
+      std::vector<uint64_t> cornerTicks = std::vector<uint64_t>(65537, 0);   // P3b: time per contact check on the rubber corners (design.md section 7), 16-tick bins
+      uint64_t cornerSum = 0, cornerN = 0;
+      struct ObjWalk   // P3b2 (check or profile mode): per object, walks made, query-list faces, faces visited, the walk's ticks
+      {
+         uint64_t walks = 0, list = 0, visit = 0, ticks = 0;
+         ContactProf::ObjBars bars;   // mc-cost profile (diagnostics only)
+      };
+      std::map<std::string, ObjWalk> perObj;
+   };
+   FinderTabStats g_tab;
+   thread_local int g_tabDepth = 0;
+   thread_local bool g_walkOff = false;   // P3b check mode: the comparison's pass over the whole query list
+   thread_local bool g_walkCmp = false;   // P3b check mode: inside one comparison (ProbePatch calls Probe)
+   bool FinderTableOn()   // P3a's table on; VPX_FINDER_TABLE=0 (diagnostics only, results equal): the face loops measure every face directly
+   {
+      static const bool on = [] { const char *e = std::getenv("VPX_FINDER_TABLE"); return e == nullptr || e[0] != '0'; }();
+      return on;
+   }
+   bool SameProbe(const RubberContact::TubeProbe &a, const RubberContact::TubeProbe &b)   // P3b check mode: the same bits
+   {
+      const auto eq = [](const double x, const double y) { return std::memcmp(&x, &y, sizeof(double)) == 0; };
+      return a.overlap == b.overlap && a.seg == b.seg && eq(a.point.x, b.point.x) && eq(a.point.y, b.point.y) && eq(a.point.z, b.point.z) && eq(a.normal.x, b.normal.x) && eq(a.normal.y, b.normal.y)
+         && eq(a.normal.z, b.normal.z) && eq(a.dist, b.dist) && eq(a.delta, b.delta) && eq(a.reff, b.reff) && eq(a.rho, b.rho) && eq(a.grad, b.grad);
+   }
+   // P3b: the faces a loop reads. in: the walk's faces within R (load order, with their query-list positions); probe: the same, or with none within R the whole query list with the box bound
+   // (the probe's nearest wherever it is, as today). No walk (key off, check mode's whole-list pass): both the query list as P3a.
+   void WalkLists(RubberContact::FaceTable *const ft, const std::vector<int> &all, const bool walk, const std::vector<int> *&inL, RubberContact::FaceRead &inR, const std::vector<int> *&prL,
+                  RubberContact::FaceRead &prR)
+   {
+      inR.t = prR.t = ft;
+      inL = prL = &all;
+      if (!walk || ft == nullptr || !ft->useWalk)
+         return;
+      inL = &ft->inI;
+      inR.pos = ft->inJ.data();
+      if (!ft->inI.empty())
+      {
+         prL = inL;
+         prR.pos = inR.pos;
+      }
+      else
+         prR.prune = true;
+   }
+
+   uint64_t HistP(const std::vector<uint64_t> &h, const double q)   // the bin holding quantile q
+   {
+      uint64_t n = 0;
+      for (const uint64_t b : h)
+         n += b;
+      const uint64_t need = std::max<uint64_t>((uint64_t)std::ceil(q * (double)n), 1);
+      uint64_t acc = 0;
+      for (size_t i = 0; i < h.size(); i++)
+         if ((acc += h[i]) >= need)
+            return i;
+      return h.size() - 1;
+   }
+
    thread_local int g_finderDepth = 0;   // check mode: one check per evaluation (ProbePatch calls Probe)
    struct FinderGuard
    {
@@ -213,6 +291,163 @@ namespace
    }
 
    inline double Comp(const RubberContact::V3 &v, const int a) { return a == 0 ? v.x : a == 1 ? v.y : v.z; }
+
+   struct CheckProfScope   // P3a profile (diagnostics only, VPX_CHECK_PROFILE=1): one contact check's time, split in contactprof.h CheckData
+   {
+      const bool on;
+      const int kind;
+      bool outer = false;
+      uint64_t t0 = 0, l0 = 0, f0 = 0, r0 = 0;
+      const RubberContact::FaceTable *ft = nullptr;
+      explicit CheckProfScope(const int k) : on(ContactProf::CheckOn()), kind(k)
+      {
+         if (!on)
+            return;
+         ContactProf::CheckData &d = ContactProf::CD();
+         outer = d.depth++ == 0;
+         if (outer)
+         {
+            l0 = d.loop;
+            t0 = __rdtsc();
+         }
+      }
+      void Tab(const RubberContact::FaceTable *t)
+      {
+         if (on && outer && t != nullptr)
+         {
+            ft = t;
+            f0 = t->fills;
+            r0 = t->reads;
+         }
+      }
+      ~CheckProfScope()
+      {
+         if (!on)
+            return;
+         ContactProf::CheckData &d = ContactProf::CD();
+         d.depth--;
+         if (!outer)
+            return;
+         const uint64_t dt = __rdtsc() - t0;
+         const int st = ContactProf::StageCur();
+         d.st[st][kind]++;
+         d.stT[st][kind] += dt;
+         if (ft == nullptr)
+         {
+            d.nNoTab++;
+            d.wholeNoTab += dt;
+            return;
+         }
+         const double T = (double)dt, L = (double)(d.loop - l0), F = (double)(ft->fills - f0), R = (double)(ft->reads - r0);
+         d.n++;
+         d.whole += dt;
+         d.fills += ft->fills - f0;
+         d.reads += ft->reads - r0;
+         d.sT += T; d.sL += L; d.sF += F; d.sR += R; d.sFF += F * F; d.sRR += R * R; d.sFR += F * R; d.sTF += T * F; d.sTR += T * R; d.sLF += L * F; d.sLR += L * R;
+      }
+   };
+
+   struct TabCheck   // P3a: one contact check's counters (the outermost of nested calls: ProbePatch calls Probe)
+   {
+      RubberContact::FaceTable *const ft;
+      const HitRubber *const host;
+      const SurfaceContact &it;
+      const RubberContact::V3 c;
+      bool outer = false;
+      uint64_t tk = 0, f0 = 0, r0 = 0, m0 = 0, ef0 = 0, er0 = 0, em0 = 0, cb0 = 0;
+      TabCheck(RubberContact::FaceTable *t, const HitRubber *h, const SurfaceContact &i, const RubberContact::V3 &cc) : ft(t), host(h), it(i), c(cc)
+      {
+         if (ft == nullptr)
+            return;
+         outer = g_tabDepth++ == 0;
+         if (!outer)
+            return;
+         f0 = ft->fills;
+         r0 = ft->reads;
+         m0 = ft->mism;
+         ef0 = ft->efills;
+         er0 = ft->ereads;
+         em0 = ft->emism;
+         cb0 = ft->cbMism;
+         if (g_tab.tsc0 == 0)
+         {
+            ContactProf::CD().cyc0 = g_finder.cycle;   // P3a profile: the cycles the totals cover
+            g_tab.tsc0 = __rdtsc();
+            g_tab.t0 = std::chrono::steady_clock::now();
+         }
+         tk = __rdtsc();
+      }
+      ~TabCheck()
+      {
+         if (ft == nullptr)
+            return;
+         g_tabDepth--;
+         if (!outer)
+            return;
+         const uint64_t dt = __rdtsc() - tk;
+         if (ft->tag == 1)   // P3b: the rubber corners apart
+         {
+            g_tab.cornerTicks[std::min<size_t>((size_t)(dt / 16), g_tab.cornerTicks.size() - 1)]++;
+            g_tab.cornerSum += dt;
+            g_tab.cornerN++;
+         }
+         g_tab.ticks[std::min<size_t>((size_t)(dt / 16), g_tab.ticks.size() - 1)]++;
+         g_tab.tickSum += dt;
+         g_tab.tickWorst = std::max(g_tab.tickWorst, dt);
+         const uint64_t df = ft->fills - f0, dr = ft->reads - r0;
+         g_tab.checks++;
+         g_tab.fills += df;
+         g_tab.reads += dr;
+         g_tab.rowChecks++;
+         g_tab.rowFills += df;
+         g_tab.rowReads += dr;
+         if (ft->cyc != g_finder.cycle)
+         {
+            if (ft->nCyc > 0)
+            {
+               g_tab.perCyc[std::min<size_t>(ft->nCyc, g_tab.perCyc.size() - 1)]++;
+               g_tab.perCycWorst = std::max<uint64_t>(g_tab.perCycWorst, ft->nCyc);
+            }
+            ft->cyc = g_finder.cycle;
+            ft->nCyc = 0;
+         }
+         ft->nCyc++;
+         g_tab.efills += ft->efills - ef0;   // P3c
+         g_tab.ereads += ft->ereads - er0;
+         if (ft->emism != em0)
+         {
+            g_tab.emism += ft->emism - em0;
+            if (g_tab.logged < 50)
+            {
+               g_tab.logged++;
+               PLOGW << "Finder edge slot mismatch: object " << host->Name() << ", cycle " << g_finder.cycle << ", c " << c.x << " " << c.y << " " << c.z;
+            }
+         }
+         if (ft->cbMism != cb0)   // cut B check mode: a call the rule would skip whose full law gave more than one peak
+         {
+            g_tab.cbMism += ft->cbMism - cb0;
+            if (g_tab.logged < 50)
+            {
+               g_tab.logged++;
+               const FinderBallQ *const q = static_cast<const FinderBallQ *>(it.finderQ);
+               PLOGW << "Cut B mismatch: object " << host->Name() << ", ball " << (const void *)(q != nullptr ? q->ball : nullptr) << ", cycle " << g_finder.cycle << ", c " << c.x << " " << c.y << " " << c.z;
+            }
+         }
+         if (ft->mism != m0)   // check mode: a table read whose fresh measurement differs (bits of point, kind or d2)
+         {
+            g_tab.mism += ft->mism - m0;
+            if (g_tab.logged < 50)
+            {
+               g_tab.logged++;
+               const FinderBallQ *const q = static_cast<const FinderBallQ *>(it.finderQ);
+               const int k = host->FinderObjIndex();
+               const int face = (q != nullptr && k >= 0 && k < (int)q->per.size() && ft->lastMismJ >= 0 && ft->lastMismJ < (int)q->per[k].size()) ? q->per[k][ft->lastMismJ] : -1;
+               PLOGW << "Finder table mismatch: object " << host->Name() << ", face " << face << ", ball " << (const void *)(q != nullptr ? q->ball : nullptr) << ", cycle " << g_finder.cycle << ", c "
+                     << c.x << " " << c.y << " " << c.z;
+            }
+         }
+      }
+   };
 
    inline double BoxD2(const RubberContact::V3 &lo, const RubberContact::V3 &hi, const RubberContact::V3 &c)
    {
@@ -427,6 +662,48 @@ int RubberSurface::Link()
          }
          else
             over++;   // a third face on the edge (or one face twice): left unlinked
+      }
+   // cut B: each shared edge's fold, from both faces. Flat band (derived, not tuned): every stored coordinate is a float32, rounded by at most 2^-24 of its size, so each vertex is off by
+   // at most dv = sqrt(3) 2^-24 M (M the largest coordinate size of the four vertices; the SI scale adds 2^-53, neglected); the height of a point above a plane through three such vertices
+   // is then off by at most dv (1 + |l0| + |l1| + |l2|), l the point's barycentric coordinates in the face. A fold whose two heights are both inside their bounds is flat.
+   using RubberContact::V3;
+   fold.assign(tris.size(), { 0, 0, 0 });
+   const auto height = [](const RubberContact::SurfaceTri &A, const V3 &p, double &band) {
+      double M = 0.0;
+      for (const V3 *q : { &A.a, &A.b, &A.c, &p })
+         M = std::max({ M, std::abs(q->x), std::abs(q->y), std::abs(q->z) });
+      const V3 v0 = A.b - A.a, v1 = A.c - A.a, v2 = p - A.a;
+      const double d00 = v0.Dot(v0), d01 = v0.Dot(v1), d11 = v1.Dot(v1), d20 = v2.Dot(v0), d21 = v2.Dot(v1), den = d00 * d11 - d01 * d01;
+      const double l1 = den != 0.0 ? (d11 * d20 - d01 * d21) / den : INFINITY, l2 = den != 0.0 ? (d00 * d21 - d01 * d20) / den : INFINITY, l0 = 1.0 - l1 - l2;
+      band = std::sqrt(3.0) * std::ldexp(M, -24) * (1.0 + std::abs(l0) + std::abs(l1) + std::abs(l2));
+      return (p - A.a).Dot(A.n);
+   };
+   for (int t = 0; t < (int)tris.size(); t++)
+      for (int e = 0; e < 3; e++)
+      {
+         const int o = nb[t][e];
+         if (o < t)   // each shared edge once, from its lower face
+            continue;
+         int f = -1;
+         for (int k = 0; k < 3; k++)
+            if (nb[o][k] == t)
+               f = k;
+         if (f < 0)
+            continue;
+         const RubberContact::SurfaceTri &A = tris[t], &B = tris[o];
+         if (!A.area || !B.area)
+         {
+            fold[t][e] = fold[o][f] = 2;
+            continue;
+         }
+         const V3 *va[3] = { &A.a, &A.b, &A.c }, *vb[3] = { &B.a, &B.b, &B.c };
+         double bandA, bandB;
+         const double hB = height(A, *vb[(f + 2) % 3], bandB);   // B's third vertex above A's plane
+         const double hA = height(B, *va[(e + 2) % 3], bandA);   // A's third vertex above B's plane
+         if (std::abs(hB) <= bandB && std::abs(hA) <= bandA)
+            continue;   // flat
+         fold[t][e] = hB > 0.0 ? 1 : hB < 0.0 ? -1 : 2;
+         fold[o][f] = hA > 0.0 ? 1 : hA < 0.0 ? -1 : 2;
       }
    return over;
 }
@@ -1299,47 +1576,102 @@ void HitRubber::Refresh(SurfaceContact &it, const double ballR, const double rea
 
 RubberContact::TubeProbe HitRubber::Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const
 {
+   if (m_surface != nullptr && !g_walkCmp && it.qFaces != nullptr && FinderCheckOn())   // P3b check mode: the walk's answer against the whole query list's (diagnostics only)
+   {
+      g_walkCmp = true;
+      g_walkOff = true;
+      const RubberContact::TubeProbe r0 = Probe(bs, it, c);
+      g_walkOff = false;
+      const RubberContact::TubeProbe r1 = Probe(bs, it, c);
+      g_walkCmp = false;
+      if (!SameProbe(r0, r1))
+      {
+         g_tab.probeDiff++;
+         if (g_tab.loggedWalk++ < 50)
+            PLOGW << "Finder walk probe differs: object " << Name() << ", seg " << r1.seg << " vs " << r0.seg << ", dist " << r1.dist << " vs " << r0.dist << ", cycle " << g_finder.cycle;
+      }
+      return r1;
+   }
+   CheckProfScope checkProf(0);   // P3a profile (diagnostics only)
    const bool finderCheck = m_surface != nullptr && g_finderDepth == 0 && FinderCheckOn();   // check mode (VPX_FINDER_CHECK=1): diagnostics only
    if (m_surface != nullptr)
       FinderInside(it, c);   // shared_finder P2a: the inside check of the ball's query volume (re-query counted; nothing reads the query yet)
    if (finderCheck)
       FinderCheck(it, c, bs.R, 0);
    const FinderGuard finderGuard(finderCheck);
+   RubberContact::FaceTable *const ft = FinderTable(it, c);   // P3a (key on): the ball's measurement table of this object at c (after the inside check, which may re-query)
+   const RubberContact::FaceRead frd { ft, nullptr };
+   const RubberContact::FaceRead *const fr = ft != nullptr ? &frd : nullptr;
+   checkProf.Tab(ft);
+   const TabCheck tabCheck(ft, this, it, c);
    if (m_surface != nullptr)
    {
+      const std::vector<int> *inL, *prL;   // P3b: the walk's faces (the probe: the whole list with the box bound when none is within R)
+      RubberContact::FaceRead frIn, frPr;
+      WalkLists(ft, it.Faces(c), true, inL, frIn, prL, frPr);
+      const RubberContact::FaceRead *const pPr = ft != nullptr ? &frPr : nullptr;
       if (m_surfaceKind == "playfield")
       {
          const RubberContact::CarvedHole *holes = nullptr;
          int nHoles = 0;
          Turntables::Holes(holes, nHoles);   // the playfield has a round hole under every turntable disc
          if (PlayfieldCuts::Any(this))   // holes cut in the playfield (playfieldcut.h): the faces inside a cut left out, its exact rim's contacts added. The cuts within the face list's reach are tested
-            return PlayfieldCuts::Probe(this, bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, it.candR >= 0.0 ? it.candR : 1e30, holes, nHoles, false, 0.0);
-         return RubberContact::ProbeTriangles(bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, holes, nHoles);
+            return PlayfieldCuts::Probe(this, bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, it.candR >= 0.0 ? it.candR : 1e30, holes, nHoles, false, 0.0, ft);
+         if (nHoles > 0)   // P3b: a turntable's hole moves a face's nearest point to its rim, so the walk's distances are not the probe's: the whole list as P3a
+            return RubberContact::ProbeTriangles(bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, holes, nHoles, 0.0, nullptr, fr);
+         return RubberContact::ProbeTriangles(bs, m_surface->tris, *prL, m_set.edgeRadiusMm * 1e-3, c, holes, nHoles, 0.0, nullptr, pPr);
       }
-      return RubberContact::ProbeTriangles(bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c);   // (no carved hole: a ball inside a non-legacy kicker's circle is handed to the stock contact instead, see InPlayfieldHole; a carved hole let balls fall through a plane playfield)
+      return RubberContact::ProbeTriangles(bs, m_surface->tris, *prL, m_set.edgeRadiusMm * 1e-3, c, nullptr, 0, 0.0, nullptr, pPr);   // (no carved hole: a ball inside a non-legacy kicker's circle is handed to the stock contact instead, see InPlayfieldHole; a carved hole let balls fall through a plane playfield)
    }
    return RubberContact::ProbeTube(bs, m_ptsSI.data(), (int)m_ptsSI.size(), m_radiusSI, c, &m_tubePre);
 }
 
 RubberContact::TubeProbe HitRubber::ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const
 {
+   if (m_surface != nullptr && !g_walkCmp && it.qFaces != nullptr && FinderCheckOn())   // P3b check mode: as Probe
+   {
+      g_walkCmp = true;
+      g_walkOff = true;
+      const RubberContact::TubeProbe r0 = ProbePatch(bs, it, c);
+      g_walkOff = false;
+      const RubberContact::TubeProbe r1 = ProbePatch(bs, it, c);
+      g_walkCmp = false;
+      if (!SameProbe(r0, r1))
+      {
+         g_tab.probeDiff++;
+         if (g_tab.loggedWalk++ < 50)
+            PLOGW << "Finder walk patch differs: object " << Name() << ", seg " << r1.seg << " vs " << r0.seg << ", delta " << r1.delta << " vs " << r0.delta << ", cycle " << g_finder.cycle;
+      }
+      return r1;
+   }
+   CheckProfScope checkProf(1);   // P3a profile (diagnostics only)
    const bool finderCheck = m_surface != nullptr && g_finderDepth == 0 && FinderCheckOn();   // check mode (as Probe; the Probe inside is not checked again)
    if (m_surface != nullptr)
       FinderInside(it, c);   // shared_finder P2a: the inside check of the ball's query volume (re-query counted; nothing reads the query yet)
    if (finderCheck)
       FinderCheck(it, c, bs.R, 1);
    const FinderGuard finderGuard(finderCheck);
+   RubberContact::FaceTable *const ft = FinderTable(it, c);   // P3a (key on): the ball's measurement table of this object at c (after the inside check, which may re-query)
+   const RubberContact::FaceRead frd { ft, nullptr };
+   const RubberContact::FaceRead *const fr = ft != nullptr ? &frd : nullptr;
+   checkProf.Tab(ft);
+   const TabCheck tabCheck(ft, this, it, c);
+   const std::vector<int> *inL = nullptr, *prL = nullptr;   // P3b: the walk's faces (as Probe); the patch reads only faces within R (kind 0 and plane distance below R - zero)
+   RubberContact::FaceRead frIn, frPr;
+   if (m_surface != nullptr)
+      WalkLists(ft, it.Faces(c), true, inL, frIn, prL, frPr);
+   const RubberContact::FaceRead *const pIn = ft != nullptr ? &frIn : nullptr, *const pPr = ft != nullptr ? &frPr : nullptr;
    if (m_surface != nullptr && m_surfaceKind == "playfield" && PlayfieldCuts::Any(this))   // (as Probe, with the patch sum of the faces' folds or of the cut's rim contacts)
    {
       const RubberContact::CarvedHole *holes = nullptr;
       int nHoles = 0;
       Turntables::Holes(holes, nHoles);
-      return PlayfieldCuts::Probe(this, bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, it.candR >= 0.0 ? it.candR : 1e30, holes, nHoles, true, it.gs.zero);
+      return PlayfieldCuts::Probe(this, bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, it.candR >= 0.0 ? it.candR : 1e30, holes, nHoles, true, it.gs.zero, ft);
    }
    if (ContactSettings::Get().multiContact && !(m_surface != nullptr && m_surfaceKind == "playfield"))   // every pressed part its own Hertz bar (rubbercontact.h BarsTube / BarsTriangles); the playfield (turntable holes) keeps the patch sum
    {
       if (m_surface != nullptr)
-         return RubberContact::BarsTriangles(bs, m_surface->tris, m_surface->vid, m_surface->nb, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, it.gs.zero);
+         return RubberContact::BarsTriangles(bs, m_surface->tris, m_surface->vid, m_surface->nb, *prL, m_set.edgeRadiusMm * 1e-3, c, it.gs.zero, pPr, &m_surface->fold);   // P3b: the walked faces (bars only use faces within R)
       return RubberContact::BarsTube(bs, m_ptsSI.data(), (int)m_ptsSI.size(), m_radiusSI, c, m_tubePre, it.gs.zero);
    }
    RubberContact::TubeProbe pr = Probe(bs, it, c);
@@ -1349,7 +1681,10 @@ RubberContact::TubeProbe HitRubber::ProbePatch(const RubberContact::BallSI &bs, 
       int nHoles = 0;
       if (m_surfaceKind == "playfield")
          Turntables::Holes(holes, nHoles);   // (as Probe)
-      RubberContact::PatchTriangles(bs, m_surface->tris, it.Faces(c), c, it.gs.zero, pr, holes, nHoles);
+      if (nHoles > 0)   // P3b: a turntable's hole: the whole list as P3a (as Probe)
+         RubberContact::PatchTriangles(bs, m_surface->tris, it.Faces(c), c, it.gs.zero, pr, holes, nHoles, fr);
+      else
+         RubberContact::PatchTriangles(bs, m_surface->tris, *inL, c, it.gs.zero, pr, holes, nHoles, pIn);
    }
    else
       RubberContact::PatchTube(bs, m_ptsSI.data(), (int)m_ptsSI.size(), m_radiusSI, c, m_tubePre, it.gs.zero, pr);
@@ -1358,16 +1693,22 @@ RubberContact::TubeProbe HitRubber::ProbePatch(const RubberContact::BallSI &bs, 
 
 double HitRubber::ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, const int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, const double a, const double hMax, const double touchM, const double arriveM) const
 {
+   CheckProfScope checkProf(2);   // P3a profile (diagnostics only)
    const bool finderCheck = m_surface != nullptr && g_finderDepth == 0 && FinderCheckOn();   // check mode (as Probe)
    if (m_surface != nullptr)
       FinderInside(it, c);   // shared_finder P2a: the inside check of the ball's query volume (re-query counted; nothing reads the query yet)
    if (finderCheck)
       FinderCheck(it, c, bs.R, 2);
    const FinderGuard finderGuard(finderCheck);
+   RubberContact::FaceTable *const ft = FinderTable(it, c);   // P3a (key on): the ball's measurement table of this object at c (after the inside check, which may re-query)
+   const RubberContact::FaceRead frd { ft, nullptr };
+   const RubberContact::FaceRead *const fr = ft != nullptr ? &frd : nullptr;
+   checkProf.Tab(ft);
+   const TabCheck tabCheck(ft, this, it, c);
    if (m_surface != nullptr && m_surfaceKind == "playfield" && PlayfieldCuts::Any(this))   // (as Probe: the faces not inside a cut, and the cut's rim contacts other than the probe's nearest)
-      return PlayfieldCuts::ArrivalS(this, bs, m_surface->tris, it.Faces(c), nearestSeg, c, v, a, hMax, touchM, arriveM, it.candR >= 0.0 ? it.candR : 1e30);
+      return PlayfieldCuts::ArrivalS(this, bs, m_surface->tris, it.Faces(c), nearestSeg, c, v, a, hMax, touchM, arriveM, it.candR >= 0.0 ? it.candR : 1e30, ft);
    if (m_surface != nullptr)
-      return RubberContact::ArrivalTriangles(bs, m_surface->tris, it.Faces(c), nearestSeg, c, v, a, hMax, touchM, arriveM);
+      return RubberContact::ArrivalTriangles(bs, m_surface->tris, it.Faces(c), nearestSeg, c, v, a, hMax, touchM, arriveM, fr);
    return RubberContact::ArrivalTube(bs, m_ptsSI.data(), (int)m_ptsSI.size(), m_radiusSI, m_tubePre, nearestSeg, c, v, a, hMax, touchM, arriveM);
 }
 
@@ -2179,6 +2520,7 @@ void HitRubber::FinderRun(void *const qv, const double r)
       q.per.assign(g.objs.size(), std::vector<int>());
    for (const int k : q.objs)
       q.per[k].clear();   // the last result's
+   q.ver++;   // P3a: the lists change: every table of the ball starts anew
    q.objs.clear();
    q.first.clear();
    q.faces.clear();
@@ -2246,6 +2588,7 @@ void HitRubber::FinderQuery(const HitBall *const ball, const RubberContact::V3 &
 
 void HitRubber::FinderInside(const SurfaceContact &it, const RubberContact::V3 &c) const
 {
+   const ContactProf::Ticks profInside(ContactProf::CD().inside);   // P3a profile (diagnostics only)
    FinderBallQ *const q = static_cast<FinderBallQ *>(it.finderQ);
    if (q == nullptr || !g_finder.on)
       return;
@@ -2261,6 +2604,71 @@ void HitRubber::FinderInside(const SurfaceContact &it, const RubberContact::V3 &
          if (std::none_of(q->items->begin(), q->items->end(), [k](const SurfaceContact &o) { return o.r->FinderObjIndex() == k; }))
             q->reqNew++;
    q->reqNs += std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count();
+}
+
+RubberContact::FaceTable *HitRubber::FinderTable(const SurfaceContact &it, const RubberContact::V3 &c) const
+{
+   const ContactProf::Ticks profBegin(ContactProf::CD().begin);   // P3a profile (diagnostics only)
+   FinderBallQ *const q = static_cast<FinderBallQ *>(it.finderQ);
+   if (q == nullptr || !g_finder.on || it.qFaces == nullptr || m_surface == nullptr)
+      return nullptr;
+   const int k = FinderObjIndex();
+   if (k < 0 || k >= (int)q->per.size() || it.qFaces != &q->per[k])
+      return nullptr;
+   if (q->tab.size() != q->per.size())
+      q->tab.resize(q->per.size());
+   RubberContact::FaceTable &t = q->tab[k];
+   t.check = FinderCheckOn();
+   t.count = t.check || ContactProf::CheckOn();   // P3a's per-read counters: check or profile mode only
+   t.direct = !FinderTableOn();
+   if (t.tag < 0)
+      t.tag = Name() == "zCol_Rubber_Corner_15" || Name() == "zCol_Rubber_Corner_16" || Name() == "zCol_Rubber_Corner_21" ? 1 : 0;
+   t.Begin(c, q->ver, q->per[k].size());
+   t.useWalk = !g_walkOff;   // P3b: the walk, once per ball position (check mode's whole-list pass reads the list as P3a)
+   if (t.useWalk)
+   {
+      const uint64_t m0 = t.walkMiss, b0 = t.walkBox, v0 = t.walkVisit, f0 = t.fills;
+      const uint32_t w0 = t.walkGen;
+      const uint64_t tw0 = t.count ? __rdtsc() : 0;
+      t.Walk(m_surface->tris, m_surface->nb, m_surface->piece, q->per[k], c, q->R * q->R);
+      if (t.count && t.walkGen != w0)   // the walk's counters: check or profile mode only
+      {
+         const uint64_t tw1 = __rdtsc();
+         if (t.objStats == nullptr)
+            t.objStats = &g_tab.perObj[Name()];   // std::map: the entry's address stays valid
+         FinderTabStats::ObjWalk &o = *static_cast<FinderTabStats::ObjWalk *>(t.objStats);
+         o.ticks += tw1 - tw0;
+         o.walks++;
+         o.list += q->per[k].size();
+         o.visit += t.walkVisit - v0;
+         g_tab.walkBox += t.walkBox - b0;
+         g_tab.walkVisit += t.walkVisit - v0;
+         g_tab.walkFills += t.fills - f0;
+         g_tab.walks++;
+         g_tab.walkIn += t.inI.size();
+         g_tab.walkList += q->per[k].size();
+      }
+      if (t.walkMiss != m0)
+      {
+         g_tab.walkMiss += t.walkMiss - m0;
+         if (g_tab.loggedWalk < 50)
+         {
+            g_tab.loggedWalk++;
+            const int face = t.lastMissJ >= 0 && t.lastMissJ < (int)q->per[k].size() ? q->per[k][t.lastMissJ] : -1;
+            PLOGW << "Finder walk miss: object " << Name() << ", face " << face << ", piece " << (face >= 0 && face < (int)m_surface->piece.size() ? m_surface->piece[face] : -1) << ", ball "
+                  << (const void *)q->ball << ", cycle " << g_finder.cycle << ", c " << c.x << " " << c.y << " " << c.z;
+         }
+      }
+   }
+   return &t;
+}
+
+void HitRubber::FinderTabTake(uint64_t &checks, uint64_t &fills, uint64_t &reads)
+{
+   checks = g_tab.rowChecks;
+   fills = g_tab.rowFills;
+   reads = g_tab.rowReads;
+   g_tab.rowChecks = g_tab.rowFills = g_tab.rowReads = 0;
 }
 
 void HitRubber::FinderTotals(const bool force)
@@ -2288,6 +2696,38 @@ void HitRubber::FinderTotals(const bool force)
          << "; per query and object found mean " << (g.qObjNs.n > 0 ? g.qObjNs.sum / (double)g.qObjNs.n : 0.0) << " ns, p99 " << g.qObjNs.P(0.99) << ", worst " << g.qObjNs.worst << "; re-queries "
          << g.reqTotal << " in " << g.reqCycles << " of " << g.qCycles << " ball-cycles (" << (g.qCycles > 0 ? 100.0 * (double)g.reqCycles / (double)g.qCycles : 0.0) << " %), worst " << g.reqWorst
          << " in one ball-cycle, time " << reqNs << " ns in all; P2b: queries at engagement " << g.queriesAt << ", objects a re-query found that were not among the ball's surfaces " << g.reqNewObj;
+   if (g_tab.checks > 0)   // P3a: the measurement tables
+   {
+      const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - g_tab.t0).count();
+      const double nsPerTick = s > 0.0 ? s * 1e9 / (double)(__rdtsc() - g_tab.tsc0) : 0.0;
+      PLOGI << "Finder table totals: " << g_tab.checks << " contact checks; faces measured " << (double)g_tab.fills / (double)g_tab.checks << " and table reads " << (double)g_tab.reads / (double)g_tab.checks
+            << " per check (" << g_tab.fills << ", " << g_tab.reads << "); checks per ball, object and cycle median " << HistP(g_tab.perCyc, 0.5) << ", p90 " << HistP(g_tab.perCyc, 0.9) << ", worst "
+            << g_tab.perCycWorst << "; time per check mean " << nsPerTick * (double)g_tab.tickSum / (double)g_tab.checks << " ns, p99 " << nsPerTick * 16.0 * (double)(HistP(g_tab.ticks, 0.99) + 1)
+            << ", worst " << nsPerTick * (double)g_tab.tickWorst << " (" << nsPerTick << " ns per tick); check-mode table mismatches " << g_tab.mism << "; P3b walk misses " << g_tab.walkMiss
+            << ", probe answers differing " << g_tab.probeDiff << ", box tests " << g_tab.walkBox << "; walks " << g_tab.walks << ", per walk: faces visited "
+            << (g_tab.walks > 0 ? (double)g_tab.walkVisit / (double)g_tab.walks : 0.0) << ", measured " << (g_tab.walks > 0 ? (double)g_tab.walkFills / (double)g_tab.walks : 0.0) << ", box tests "
+            << (g_tab.walks > 0 ? (double)g_tab.walkBox / (double)g_tab.walks : 0.0) << ", handed over " << (g_tab.walks > 0 ? (double)g_tab.walkIn / (double)g_tab.walks : 0.0) << ", query list "
+            << (g_tab.walks > 0 ? (double)g_tab.walkList / (double)g_tab.walks : 0.0) << "; rubber corners " << g_tab.cornerN << " checks, mean "
+            << (g_tab.cornerN > 0 ? nsPerTick * (double)g_tab.cornerSum / (double)g_tab.cornerN : 0.0) << " ns, p99 " << nsPerTick * 16.0 * (double)(HistP(g_tab.cornerTicks, 0.99) + 1)
+            << ", time " << nsPerTick * (double)g_tab.cornerSum * 1e-3 << " us in all; P3c edge slots: measured " << g_tab.efills << ", reads " << g_tab.ereads << ", check-mode edge mismatches " << g_tab.emism << "; cut B check-mode mismatches " << g_tab.cbMism;
+      if (ContactProf::CheckOn())   // P3a profile (diagnostics only)
+         ContactProf::CheckDump(g.cycle - ContactProf::CD().cyc0, nsPerTick);
+      if (!g_tab.perObj.empty())   // P3b2: the 5 objects with the longest query list per walk (check or profile mode)
+      {
+         std::vector<std::pair<double, std::string>> v;
+         for (const auto &e : g_tab.perObj)
+            v.emplace_back(-(double)e.second.list / (double)e.second.walks, e.first);
+         std::sort(v.begin(), v.end());
+         std::ostringstream os;
+         for (size_t i = 0; i < v.size() && i < 5; i++)
+         {
+            const FinderTabStats::ObjWalk &o = g_tab.perObj[v[i].second];
+            os << "; " << v[i].second << " walks " << o.walks << ", list " << (double)o.list / (double)o.walks << ", visited " << (double)o.visit / (double)o.walks << ", ns per walk "
+               << nsPerTick * (double)o.ticks / (double)o.walks;
+         }
+         PLOGI << "Finder walk densest (" << g_tab.perObj.size() << " objects)" << os.str();
+      }
+   }
 }
 
 // ---- The shared finder, piece P2b: the query finds every static mesh contact ([Features] shared_finder = 1) ----
@@ -2318,6 +2758,8 @@ void HitRubber::FinderBindOne(const HitBall *const ball, SurfaceContact &it)
       return;
    FinderBallQ &q = g.balls[ball];
    it.finderQ = &q;
+   q.ball = ball;
+   q.ver++;   // P3a: a rebind starts the ball's tables anew
    const int k = it.r->FinderObjIndex();
    if (k < 0)
       return;
@@ -2345,4 +2787,75 @@ void HitRubber::FinderHosts(const HitBall *const ball, std::vector<ContactHost *
    const FinderBallQ &q = g.balls[ball];
    for (const int k : q.objs)
       out.push_back(const_cast<HitRubber *>(g.objs[k].host));
+}
+
+// P3a profile (diagnostics only, VPX_CHECK_PROFILE=1): one log line "Check profile" with the split of a contact check's time and the fit time = a + b fills + c reads
+void ContactProf::CheckDump(const uint64_t cycles, const double nsPerTick)
+{
+   const CheckData &d = CD();
+   if (d.n == 0 || cycles == 0)
+      return;
+   const double cyc = (double)cycles, k = nsPerTick;
+   const auto fit = [&](const double sY, const double sYF, const double sYR, double &a, double &b, double &c) {   // least squares y = a + b F + c R (normal equations, Cramer)
+      const double n = (double)d.n;
+      const double m[3][3] = { { n, d.sF, d.sR }, { d.sF, d.sFF, d.sFR }, { d.sR, d.sFR, d.sRR } }, y[3] = { sY, sYF, sYR };
+      const auto det = [](const double q[3][3]) { return q[0][0] * (q[1][1] * q[2][2] - q[1][2] * q[2][1]) - q[0][1] * (q[1][0] * q[2][2] - q[1][2] * q[2][0]) + q[0][2] * (q[1][0] * q[2][1] - q[1][1] * q[2][0]); };
+      const double D = det(m);
+      double r[3];
+      for (int col = 0; col < 3; col++)
+      {
+         double q[3][3];
+         for (int i = 0; i < 3; i++)
+            for (int j = 0; j < 3; j++)
+               q[i][j] = j == col ? y[i] : m[i][j];
+         r[col] = D != 0.0 ? det(q) / D : 0.0;
+      }
+      a = r[0] * k; b = r[1] * k; c = r[2] * k;
+   };
+   double ta, tb, tc, la, lb, lc;
+   fit(d.sT, d.sTF, d.sTR, ta, tb, tc);
+   fit(d.sL, d.sLF, d.sLR, la, lb, lc);
+   std::ostringstream o;
+   o << "Check profile: " << cycles << " cycles; table checks " << (double)d.n / cyc << " per cycle, whole " << (double)d.whole * k / cyc * 1e-3 << " us/cycle (" << (double)d.whole * k / (double)d.n
+     << " ns/check); no-table checks " << (double)d.nNoTab / cyc << " per cycle, " << (double)d.wholeNoTab * k / cyc * 1e-3 << " us/cycle; split us/cycle: inside " << (double)d.inside * k / cyc * 1e-3
+     << ", table begin " << (double)d.begin * k / cyc * 1e-3 << ", face loops in checks " << (double)d.loop * k / cyc * 1e-3 << " (" << (double)d.loops / cyc << " loops, " << (double)d.loopFaces / cyc
+     << " faces looped per cycle), loops outside checks " << (double)d.loopOut * k / cyc * 1e-3 << " (" << (double)d.loopFacesOut / cyc << " faces); fills " << (double)d.fills / cyc << ", reads "
+     << (double)d.reads / cyc << " per cycle; fit whole ns = " << ta << " + " << tb << " fills + " << tc << " reads; fit loops ns = " << la << " + " << lb << " fills + " << lc << " reads; by stage (probe/patch/arrival checks per cycle, us/cycle):";
+   static const char *const nm[StCount] = { "other", "ContactHolds", "GroupShape", "RingHandIn", "RingCap", "LoadState", "CordNear", "EngageNear", "SeatAtTouch", "EngageImpl", "WriteBack", "ReleaseTest" };
+   for (int st = 0; st < StCount; st++)
+      if (d.st[st][0] + d.st[st][1] + d.st[st][2] > 0)
+         o << " " << nm[st] << " " << (double)d.st[st][0] / cyc << "/" << (double)d.st[st][1] / cyc << "/" << (double)d.st[st][2] / cyc << " "
+           << (double)(d.stT[st][0] + d.stT[st][1] + d.stT[st][2]) * k / cyc * 1e-3;
+   o << "; P3c BarsTriangles " << (double)d.barsN / cyc << " calls, " << (double)(d.bars + d.barsCorner) * k / cyc * 1e-3 << " us/cycle (rubber corners " << (double)d.barsCorner * k / cyc * 1e-3
+     << "), edges measured " << (double)d.eFills / cyc << " of " << (double)d.eReads / cyc << " requested per cycle";
+   PLOGI << o.str();
+   // mc-cost profile (diagnostics only): BarsTriangles split and per object
+   const auto us = [&](const uint64_t t) { return (double)t * k / cyc * 1e-3; };
+   std::ostringstream b;
+   b << "Bars split us/cycle: probe " << us(d.bProbe) << ", face pass " << us(d.bFace) << ", edge pass " << us(d.bEdge) << ", MergeBars " << us(d.bMerge) << ", Finish " << us(d.bFinish)
+     << ", whole " << us(d.bars + d.barsCorner) << "; calls per cycle " << (double)d.barsN / cyc << ": end after probe " << (double)d.bRetProbe / cyc << ", fewer than 2 nodes " << (double)d.bRetNodes / cyc
+     << ", one peak " << (double)d.bOnePeak / cyc << ", more peaks " << (double)d.bMulti / cyc << "; per call past the probe: candidates "
+     << (double)d.bCand / (double)std::max<uint64_t>(1, d.barsN - d.bRetProbe) << ", face nodes " << (double)d.bFaceNodes / (double)std::max<uint64_t>(1, d.barsN - d.bRetProbe)
+     << ", nodes at merge " << (double)d.bNodes / (double)std::max<uint64_t>(1, d.bOnePeak + d.bMulti) << "; cut B per cycle: skipped " << (double)d.cbSkip / cyc << ", full law " << (double)d.cbFull / cyc;
+   std::vector<std::pair<uint64_t, std::string>> v;
+   uint64_t tObj = 0;
+   for (const auto &e : g_tab.perObj)
+   {
+      v.emplace_back(e.second.bars.t, e.first);
+      tObj += e.second.bars.t;
+   }
+   std::sort(v.rbegin(), v.rend());
+   b << "; objects named " << us(tObj) << " us/cycle of it; top:";
+   for (size_t i = 0; i < v.size() && i < 10; i++)
+   {
+      const ObjBars &ob = g_tab.perObj[v[i].second].bars;
+      b << " " << v[i].second << " " << us(ob.t) << " us/cycle, " << (double)ob.n / cyc << " calls, " << (double)ob.cand / (double)std::max<uint64_t>(1, ob.n) << " cand/call, "
+        << (double)ob.nodes / (double)std::max<uint64_t>(1, ob.n) << " face nodes/call, " << (double)ob.full / cyc << " full-law calls;";
+   }
+   PLOGI << b.str();
+}
+
+ContactProf::ObjBars *ContactProf::ObjBarsOf(void *objStats)   // mc-cost profile (diagnostics only)
+{
+   return objStats != nullptr ? &static_cast<FinderTabStats::ObjWalk *>(objStats)->bars : nullptr;
 }

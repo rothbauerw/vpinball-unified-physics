@@ -92,7 +92,7 @@ VPX_CONTACT_TRACE=1|2      contact engage / release / hit lines (1); also per-cy
 VPX_CONTACT_LOG=<csv>      every collision and resting contact of the first ball: object type and name.
 VPX_CONTACT_NEAR=x,y,r     rubber faces within r of (x, y), U, when the surface is built. Old name VPX_RING_NEAR.
 VPX_CONTACT_TIMING=<csv>   per-cycle cost of the contact system by stage. One file per process (every Play of an editor session).
-VPX_CONTACT_PROFILE=<n>    scoped timers of the contact system, a table in the log every n step calls (default 5000).
+VPX_CONTACT_PROFILE=<n>    scoped timers of the contact system, a log table every n step calls (default 5000).     VPX_CHECK_PROFILE=1   one check's time split ("Check profile").
 VPX_PHYS_TIMING=<csv>      frame and iteration timing rows, written when a frame, gap or iteration passes its threshold (us):
                            VPX_PHYS_TIMING_FRAME_US, VPX_PHYS_TIMING_GAP_US, VPX_PHYS_TIMING_ITER_US.
 VPX_RUBBERS_LOG=1          a RubberSolve line when a rubber contact ends: in / out velocity, spin, dwell, peak force.
@@ -103,19 +103,16 @@ VPX_WIRE_GAP=1             probe gap and hold state of balls near a wire switch 
 VPX_TRACE_BALL=<name>      the driver ball's position, velocity, contact items and every stock Collide / Contact, per stage of the cycle.
 VPX_GROUP_BOOK=<csv>       one row per group per cycle: steps, rounds, halvings, stop steps, energy steps, failures, energy books, cost.
 VPX_GROUP_BOOK_STEPS=1|2   with GROUP_BOOK: energy rise per step (1); also every stored energy term at cycle start and end (2, slow).
-VPX_GROUP_STATS=<file>     run totals (cycles, us per cycle, steps, rounds, halvings, energy steps, failures), rewritten every 200 ms of table time; second line: steps alone per part kind (bumper, gate/spinner/wire, disc, flipper, sling plate) and how often each fell asleep.
+VPX_GROUP_STATS=<file>     run totals (cycles, us/cycle, steps, rounds, halvings, energy steps, failures) every 200 ms of table time; line 2: steps alone and sleeps per part kind.
 VPX_GROUP_PHASE_TIMING=<csv>  per-step phase timing and counts (attempts, evals, linear solves, halvings, capsules, terms).
 VPX_STEP_RULE=<csv>        one row per group step: what set the step, h, solve rounds.
 VPX_GROUP_CLAMP_TRACE=<file>  every Newton round of steps with a wire contact.
-VPX_GROUP_CONTACT_TRACE=1  per-round contact depth, force and friction, printed for the first 3 energy steps.
-VPX_GROUP_HISTORY_TRACE=1  the last 50 accepted steps, printed with the first energy-step warning.
+VPX_GROUP_CONTACT_TRACE=1  per-round depth, force, friction (first 3 energy steps).     VPX_GROUP_HISTORY_TRACE=1   last 50 steps, at the first energy-step warning.
 VPX_GROUP_ROUND_TRACE=1    per-round Newton trace with probe notes (group and hinge solves), printed only with an energy-step warning.
-VPX_GROUP_SEARCH_TRACE=1   the failing stop-search solve, round by round, to stderr.
-VPX_GROUP_STOP_TRACE=1     the first 12 stop checks of a cycle.
-VPX_GROUP_JAC_MODE=1       also forms the Jacobian by central differences and logs both; changes the result in the last digits.
-VPX_GROUP_JAC_WINDOW=t0-t1 with JAC_MODE=1: Jacobian and round data of solves converging in that ms window.
-VPX_PROBE_CHECK=1          compares the short face list with the full list and counts mismatches.
-VPX_HINGE_NEAR_ALL=1       every near-piece list takes all pieces (A/B check of the short list; meant to give the same result, not proven).
+VPX_GROUP_SEARCH_TRACE=1   the failing stop-search solve, per round, to stderr.     VPX_GROUP_STOP_TRACE=1   the first 12 stop checks of a cycle.
+VPX_GROUP_JAC_MODE=1       also a central-difference Jacobian, both logged; changes the last digits.     VPX_GROUP_JAC_WINDOW=t0-t1   its solves in that ms window.
+VPX_FINDER_CHECK=1         finder check: missed pieces within reach, face-table mismatches (log, screen).     VPX_FINDER_TABLE=0   no face table (A/B, same result).
+VPX_HINGE_NEAR_ALL=1       every near-piece list takes all pieces (A/B of the short list, same result expected).
 VPX_SNAPSHOT_TEST=1        after each contact step: restore the snapshot, step again, log any difference (=2 changes the result: see below).
 ```
 

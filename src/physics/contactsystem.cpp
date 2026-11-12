@@ -655,6 +655,7 @@ struct ContactSystemImpl
    static void WriteBack(Cycle &cy, const ContactSystem::Islands::Island &isl)
    {
       CPROF(WriteBack);
+      const ContactProf::Stage profStage(ContactProf::StWriteBack);   // P3a profile: the calling stage of the checks here (diagnostics only)
       const double dt = cy.dt;
       for (const int i : isl.members)
       {
@@ -709,6 +710,7 @@ struct ContactSystemImpl
          }
          bool free = true, touching = false, closeBy = false;
          CPROF(ReleaseTest);
+         const ContactProf::Stage profStage(ContactProf::StReleaseTest);   // P3a profile: the calling stage of the checks here (diagnostics only)
          for (const SurfaceContact &it : e.items)
          {
             const TubeProbe pr = it.r->Probe(w.bs, it, w.c);
@@ -764,6 +766,7 @@ struct ContactSystemImpl
    // what one contact holds, by the law its loop uses; depth: the depth it counts
    static double ContactHolds(const SurfaceContact &it, const BallSI &bs, const V3 &c, const bool group, double &depth)
    {
+      const ContactProf::Stage profStage(ContactProf::StHolds);   // P3a profile: the calling stage of the checks here (diagnostics only)
       depth = 0.0;
       if (it.r->MovingPart() != nullptr || it.NoFaces(c))
          return 0.0;
@@ -982,6 +985,7 @@ struct ContactSystemImpl
       bool NearHolds(const V3 &c, const double R, const double dq, const std::vector<int> &list) const override { return mp == nullptr || mp->GroupNearHolds(surface, c, R, dq, list); }
       void Probe(const V3 &c, double R, GroupStep::Hit &h) const override
       {
+         const ContactProf::Stage profStage(ContactProf::StGroupShape);   // P3a profile: the calling stage of the checks here (diagnostics only)
          if (mp != nullptr)
          {
             mp->GroupProbe(surface, c, R, trial, h);
@@ -1075,6 +1079,7 @@ struct ContactSystemImpl
    // A ball coming from the old loop: the same touch, the same stretch, so the same energy; a surface it is found inside has no history and counts from zero (14.4). Goes with the old loop.
    static void RingHandIn(BallContact &e, const BallSI &bs, const V3 &c)
    {
+      const ContactProf::Stage profStage(ContactProf::StRingHandIn);   // P3a profile: the calling stage of the checks here (diagnostics only)
       if (e.groupLoop)
          return;
       for (SurfaceContact &it : e.items)
@@ -1599,6 +1604,7 @@ struct ContactSystemImpl
       // The group's step rule sees a surface's nearest face only, as a probe does: the other faces a ball can reach bound the step too (NextStep's rule). Not for energy, which the solve keeps
       // at any step: so that a hit on a hidden face is resolved, not one long step into it.
       const auto ringCap = [&](double h) {
+         const ContactProf::Stage profStage(ContactProf::StRingCap);   // P3a profile: the calling stage of the checks here (diagnostics only)
          if (!ring)
             return h;
          const double a = g.set.g.Length();
@@ -2513,6 +2519,7 @@ struct ContactSystemImpl
          if (s.pb->m_contact != nullptr)
             for (const SurfaceContact &it : s.pb->m_contact->items)
             {
+               const ContactProf::Stage profStage(ContactProf::StLoadState);   // P3a profile: the calling stage of the checks here (diagnostics only)
                const TubeProbe pr = it.r->Probe(s.bs, it, s.c);
                if (pr.overlap)
                   deep = std::max(deep, pr.delta);
@@ -2668,6 +2675,7 @@ void ContactSystemImpl::StepBalls(const double dt)
 // Every ball, one already held for the playfield included: its contact is handed over to the band. dt: the cycle in seconds (CordNear and EngageNear).
 void ContactSystemImpl::CordNear(const double dt)
 {
+   const ContactProf::Stage profStage(ContactProf::StCordNear);   // P3a profile: the calling stage of the checks here (diagnostics only)
    for (auto *const ball : g_pplayer->m_vball)
    {
       HitBall *const pb = &ball->m_hitBall;
@@ -2712,6 +2720,7 @@ void ContactSystemImpl::EngageNear(const double dt)
 {
    CordNear(dt);
    CPROF(EngageNear);
+   const ContactProf::Stage profStage(ContactProf::StEngageNear);   // P3a profile: the calling stage of the checks here (diagnostics only)
    ContactProf::Cycle();
    if (!ContactSystem::s_proximity)   // (read at the table load, SetTable)
       return;
@@ -2848,6 +2857,7 @@ void ContactSystemImpl::EngageNear(const double dt)
 // Go back to the instant the ball first touched: along its own velocity, by depth / closing speed, at most one physics step; if it is not closing, to touching distance along the normal.
 void ContactSystemImpl::SeatAtTouch(const std::vector<SurfaceContact> &items, const BallSI &bs, V3 &c, const V3 &v, double &delta0, double &rewound)
 {
+   const ContactProf::Stage profStage(ContactProf::StSeatAtTouch);   // P3a profile: the calling stage of the checks here (diagnostics only)
    constexpr double kMaxRewindS = PHYSICS_STEPTIME_S;
    const V3 c0 = c;
    for (int pass = 0; pass < 3; pass++)
@@ -2917,6 +2927,7 @@ void ContactSystem::SeatKeepsOthers(const HitBall *const pb, const ContactSurfac
 bool ContactSystemImpl::EngageImpl(ContactHost *const host, HitBall *const pb, const char *how)
 {
    CPROF(EngageImpl);
+   const ContactProf::Stage profStage(ContactProf::StEngageImpl);   // P3a profile: the calling stage of the checks here (diagnostics only)
    using namespace RubberContact;
    if ((host != nullptr && !host->m_set.contact) || pb->m_bandOwner != nullptr || pb->m_contact != nullptr || pb->m_d.m_lockedInKicker)
       return false;   // (a ball held in a kicker belongs to the kicker)

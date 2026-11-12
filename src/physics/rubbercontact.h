@@ -38,6 +38,9 @@
 #include <vector>
 #include <array>
 #include <utility>
+#include <cstring>
+#include <cstdint>
+#include "contactprof.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -816,20 +819,324 @@ namespace RubberContact
       double d2;
    };
 
+   // shared_finder P3a (to-do 1.34; runs/2026-11-11-finder/design.md section 4, R6): one measurement per face per ball position. One table per ball and static mesh object, keyed by the
+   // ball centre (exact bits) and the ball's query version (a re-query or a rebind starts a new table). A slot per position in the object's query list holds the face's closest point,
+   // its kind and the squared distance, filled on first request, so no face loop measures a face it did not measure before. check: every read of a filled slot also measures fresh and
+   // counts any bit difference (diagnostics only, VPX_FINDER_CHECK=1).
+   struct FaceTable
+   {
+      struct Slot
+      {
+         V3 p;
+         double d2;
+         int kind;
+         uint32_t gen;
+         uint32_t wgen;   // P3b: the walk's mark (visited at this table generation)
+      };
+      std::vector<Slot> s;
+      uint32_t gen = 0;   // the table's generation: a slot is filled when its gen equals it
+      uint64_t ver = ~0ull;
+      double cx = 0.0, cy = 0.0, cz = 0.0;
+      bool check = false;
+      uint64_t fills = 0, reads = 0, mism = 0;   // faces measured, table reads, check-mode mismatches (summed by the owner)
+      int lastMismJ = -1;
+      uint64_t cyc = ~0ull;   // the counters: the cycle of the last contact check and the checks in it (hitrubber.cpp TabCheck)
+      uint32_t nCyc = 0;
+      bool count = false;    // P3a's per-read counters (fills, reads): check or profile mode only
+      bool direct = false;   // VPX_FINDER_TABLE=0 (diagnostics only, results equal): the loops measure every face directly (the walk still keeps its own measurements here)
+      int tag = -1;          // the counters: 1 = a rubber corner timed apart (design.md section 7), 0 = not, -1 = not yet known
+      // shared_finder P3b (design.md section 4): the shared-edge walk, made once per table (ball position). inJ / inI: the faces within R of c, in load order (query-list positions,
+      // face indices); seed: the faces within R at this ball's previous evaluation on this object (empty: none, the list with the box drop); useWalk: the loops read the walk (false: the
+      // whole query list, check mode's comparison).
+      uint32_t walkGen = 0;
+      bool useWalk = false;
+      std::vector<int> inJ, inI, seed, stack;
+      // P3b2: the query list's index, rebuilt once per query version (one pass over the list, as the query's own gather): idx by face id gives the face's list position and its mesh
+      // piece's local number (stamped, never cleared); the list's pieces with their faces' positions (pcJ from pcStart[lp]), so the walk's unreached check visits only pieces it did not reach.
+      struct Idx
+      {
+         uint32_t stamp;
+         int j, lp;
+      };
+      std::vector<Idx> idx;
+      std::vector<int> pcLoc, pcStart, pcJ;
+      std::vector<uint32_t> pcLocStamp, pcReached;
+      uint32_t idxStamp = 0;
+      bool idxOk = false;
+      // P3c: the faces' edge measurements (BarsTriangles), slot 3 j + e for edge e of the face at list position j, filled on first request at this ball position. A shared edge has one slot,
+      // its lower face id's (when that face is in the query list): both faces measure it from its lower welded-vertex end, and welded vertices are the same floats, so the bits are the same.
+      // check: every read of a filled slot also measures fresh and counts any bit difference (emism).
+      struct ESlot
+      {
+         V3 n;          // unit direction from the edge's nearest point to the ball centre (0 when the centre lies on the edge)
+         double dist;   // the centre's distance to the edge
+         uint32_t gen;
+      };
+      std::vector<ESlot> es;
+      uint64_t efills = 0, ereads = 0, emism = 0;   // edges measured, edge reads (every request), check-mode mismatches (counted in check or profile mode)
+      uint64_t cbMism = 0;   // cut B check mode: calls the rule would skip whose full law ended with more than one peak (summed by the owner)
+      int ListPos(const int i) const   // a face's query-list position from the walk's index (-1: no index for this query list, or not in it)
+      {
+         return idxOk && i >= 0 && i < (int)idx.size() && idx[i].stamp == idxStamp ? idx[i].j : -1;
+      }
+      ESlot *EdgeSlot(const int t, const int e, const std::vector<std::array<int, 3>> &nb)   // null: no slot (measure directly)
+      {
+         const int j = ListPos(t);
+         if (j < 0 || 3 * (size_t)j + 2 >= es.size())
+            return nullptr;
+         const int o = nb[t][e];
+         if (o >= 0 && o < t)   // shared with a lower face: its slot
+         {
+            const int jo = ListPos(o);
+            if (jo >= 0)
+               for (int f = 0; f < 3; f++)
+                  if (nb[o][f] == t)
+                     return &es[3 * (size_t)jo + f];
+         }
+         return &es[3 * (size_t)j + e];
+      }
+      void *objStats = nullptr;   // P3b2 counters (check or profile mode): the owner's per-object entry, looked up once
+      uint64_t walkMiss = 0, walkBox = 0, walkVisit = 0;   // check mode: faces within R the walk did not hand over; box tests of unreached pieces and faces visited by the walk (counted with fills)
+      int lastMissJ = -1;
+      static double BoxD2(const SurfaceTri &t, const V3 &c)   // squared distance from c to the face's box: a lower bound of its distance
+      {
+         const double dx = std::max(std::max(t.lo.x - c.x, c.x - t.hi.x), 0.0), dy = std::max(std::max(t.lo.y - c.y, c.y - t.hi.y), 0.0), dz = std::max(std::max(t.lo.z - c.z, c.z - t.hi.z), 0.0);
+         return dx * dx + dy * dy + dz * dz;
+      }
+      static constexpr double kBoxSlack = 1e-9;   // relative: the box bound and a measured d2 are each rounded, so a face is dropped only when clearly farther (a rounding guard, never a cutoff)
+      Slot &Get(const int j, const SurfaceTri &t, const V3 &c)   // the slot, measured on first request
+      {
+         Slot &x = s[j];
+         if (x.gen != gen)
+         {
+            x.p = ClosestOnTriangle(t, c, x.kind);
+            const V3 dv = c - x.p;
+            x.d2 = dv.Dot(dv);
+            x.gen = gen;
+            if (count)
+               fills++;
+         }
+         return x;
+      }
+      // the walk: the seed measured, then across shared edges (nb) to each neighbour while it is within R; then every face of the list in a mesh piece the walk did not reach, dropped when
+      // its box is farther than R, else measured. list: the object's query list (face indices, ascending).
+      void Walk(const std::vector<SurfaceTri> &tris, const std::vector<std::array<int, 3>> &nb, const std::vector<int> &piece, const std::vector<int> &list, const V3 &c, const double R2)
+      {
+         if (walkGen == gen)
+            return;
+         walkGen = gen;
+         inJ.clear();
+         stack.clear();
+         const bool linked = nb.size() == tris.size() && piece.size() == tris.size();
+         const auto unreachedFace = [&](const int j) {   // a face of a piece the walk did not reach: dropped when its box is farther than R, else measured
+            if (s[j].wgen == gen)
+               return;
+            const int i = list[j];
+            if (count)
+               walkBox++;
+            if (BoxD2(tris[i], c) > R2 * (1.0 + kBoxSlack))
+               return;
+            s[j].wgen = gen;
+            if (Get(j, tris[i], c).d2 < R2)
+               inJ.push_back(j);
+         };
+         if (!linked)
+         {
+            for (size_t j = 0; j < list.size(); j++)
+               unreachedFace((int)j);
+         }
+         else
+         {
+            if (!idxOk)   // a new query list: index it (once per query version)
+            {
+               idxOk = true;
+               if (++idxStamp == 0)
+               {
+                  for (Idx &x : idx)
+                     x.stamp = 0;
+                  std::fill(pcLocStamp.begin(), pcLocStamp.end(), 0u);
+                  idxStamp = 1;
+               }
+               if (idx.size() < tris.size())
+                  idx.resize(tris.size(), Idx { 0, -1, -1 });
+               pcStart.clear();
+               for (size_t j = 0; j < list.size(); j++)
+               {
+                  const int i = list[j], pc = piece[i];
+                  if (pc >= (int)pcLoc.size())
+                  {
+                     pcLoc.resize(pc + 1, -1);
+                     pcLocStamp.resize(pc + 1, 0u);
+                  }
+                  if (pcLocStamp[pc] != idxStamp)
+                  {
+                     pcLocStamp[pc] = idxStamp;
+                     pcLoc[pc] = (int)pcStart.size();
+                     pcStart.push_back(0);
+                  }
+                  idx[i] = Idx { idxStamp, (int)j, pcLoc[pc] };
+                  pcStart[pcLoc[pc]]++;
+               }
+               const size_t np = pcStart.size();   // counts to starts, then the positions grouped by piece (ascending within a piece)
+               int sum = 0;
+               for (size_t p = 0; p < np; p++)
+               {
+                  const int n = pcStart[p];
+                  pcStart[p] = sum;
+                  sum += n;
+               }
+               pcStart.push_back(sum);
+               pcJ.resize(list.size());
+               stack.assign(pcStart.begin(), pcStart.end() - 1);   // fill cursors (stack is empty again before the walk)
+               for (size_t j = 0; j < list.size(); j++)
+                  pcJ[stack[idx[list[j]].lp]++] = (int)j;
+               stack.clear();
+               pcReached.assign(np, 0u);
+            }
+            const auto visit = [&](const int i) {
+               if (count)
+                  walkVisit++;
+               const Idx &x = idx[i];
+               if (x.stamp != idxStamp)   // not in the query list
+                  return;
+               const int j = x.j;
+               if (s[j].wgen == gen)
+                  return;
+               s[j].wgen = gen;
+               if (Get(j, tris[i], c).d2 < R2)
+               {
+                  inJ.push_back(j);
+                  stack.push_back(i);
+                  pcReached[x.lp] = gen;
+               }
+            };
+            for (const int i : seed)
+               visit(i);
+            while (!stack.empty())
+            {
+               const int i = stack.back();
+               stack.pop_back();
+               for (int e = 0; e < 3; e++)
+                  if (nb[i][e] >= 0)
+                     visit(nb[i][e]);
+            }
+            for (size_t p = 0; p + 1 < pcStart.size(); p++)   // only the pieces the walk did not reach: a reached piece costs nothing per face
+               if (pcReached[p] != gen)
+                  for (int k = pcStart[p]; k < pcStart[p + 1]; k++)
+                     unreachedFace(pcJ[k]);
+         }
+         std::sort(inJ.begin(), inJ.end());   // load order (R9): the loops' tie rules see the faces in today's order
+         inI.resize(inJ.size());
+         for (size_t k = 0; k < inJ.size(); k++)
+            inI[k] = list[inJ[k]];
+         seed = inI;
+         if (check)   // every face of the list measured fresh: one within R that the walk did not hand over is a miss
+            for (size_t j = 0; j < list.size(); j++)
+            {
+               int k = 0;
+               const V3 dv = c - ClosestOnTriangle(tris[list[j]], c, k);
+               if (dv.Dot(dv) < R2 && !std::binary_search(inJ.begin(), inJ.end(), (int)j))
+               {
+                  walkMiss++;
+                  lastMissJ = (int)j;
+               }
+            }
+      }
+      void Begin(const V3 &c, const uint64_t v, const size_t n)
+      {
+         if (gen == 0 || v != ver || std::memcmp(&c.x, &cx, sizeof(double)) != 0 || std::memcmp(&c.y, &cy, sizeof(double)) != 0 || std::memcmp(&c.z, &cz, sizeof(double)) != 0)
+         {
+            if (++gen == 0)   // wrapped: every slot empty again
+            {
+               for (Slot &x : s)
+                  x.gen = x.wgen = 0;
+               for (ESlot &x : es)
+                  x.gen = 0;
+               std::fill(pcReached.begin(), pcReached.end(), 0u);
+               gen = 1;
+            }
+            if (v != ver)
+               idxOk = false;   // P3b2: a new query list
+            ver = v;
+            cx = c.x;
+            cy = c.y;
+            cz = c.z;
+         }
+         if (s.size() < n)
+            s.resize(n, Slot { V3(), 0.0, 0, 0, 0 });
+         if (es.size() < 3 * n)
+            es.resize(3 * n, ESlot { V3(), 0.0, 0 });
+      }
+      const Slot &At(const int j, const SurfaceTri &t, const V3 &c)
+      {
+         Slot &x = s[j];
+         if (count)
+            reads++;
+         if (x.gen != gen)
+            Get(j, t, c);
+         else if (check)
+         {
+            int k = 0;
+            const V3 p = ClosestOnTriangle(t, c, k);
+            const V3 dv = c - p;
+            const double d2 = dv.Dot(dv);
+            if (std::memcmp(&p.x, &x.p.x, sizeof(double)) != 0 || std::memcmp(&p.y, &x.p.y, sizeof(double)) != 0 || std::memcmp(&p.z, &x.p.z, sizeof(double)) != 0 || k != x.kind
+                || std::memcmp(&d2, &x.d2, sizeof(double)) != 0)
+            {
+               mism++;
+               lastMismJ = j;
+            }
+         }
+         return x;
+      }
+   };
+   // What a face loop reads: the table (null: measure as before) and the query-list positions of the loop's faces (null: the loop's own index, the loop runs over the query list itself)
+   struct FaceRead
+   {
+      FaceTable *t = nullptr;
+      const int *pos = nullptr;
+      bool prune = false;   // P3b: the probe with no face within R: the nearest of the whole list, a face skipped when its box is strictly farther than the best so far (exact lower bound)
+      mutable FaceTable::Slot tmp {};
+      const FaceTable::Slot &At(const size_t j, const SurfaceTri &tri, const V3 &c) const
+      {
+         if (t == nullptr || t->direct)   // VPX_FINDER_TABLE=0: measured directly, as with no table
+         {
+            tmp.p = ClosestOnTriangle(tri, c, tmp.kind);
+            const V3 dv = c - tmp.p;
+            tmp.d2 = dv.Dot(dv);
+            return tmp;
+         }
+         return t->At(pos != nullptr ? pos[j] : (int)j, tri, c);
+      }
+   };
+
    // halfThick > 0: the faces are the mid-surface of a sheet of thickness 2 halfThick (a gate plate): the surface is everything within halfThick of the faces
    // (flat on both sides, edges rounded to radius halfThick), so the depth is R + halfThick - distance. Pass edgeRho = halfThick for such a sheet.
    // hits (optional): every candidate's measurement, in candidate order, for a caller that needs the other faces too (BarsTriangles), so each face is measured once.
    inline TubeProbe ProbeTriangles(const BallSI &ball, const std::vector<SurfaceTri> &tris, const std::vector<int> &cand, double edgeRho, const V3 &c,
-                                   const CarvedHole *holes = nullptr, int nHoles = 0, double halfThick = 0.0, std::vector<FaceHit> *hits = nullptr)
+                                   const CarvedHole *holes = nullptr, int nHoles = 0, double halfThick = 0.0, std::vector<FaceHit> *hits = nullptr, const FaceRead *fr = nullptr)
    {
       TubeProbe pr;
       double bestD2 = INFINITY;
       V3 bestP;
       int bestI = -1, bestKind = 0;
-      for (const int i : cand)
+      { const ContactProf::LoopTicks profLoop(cand.size());   // P3a profile (diagnostics only)
+      for (size_t j = 0; j < cand.size(); j++)
       {
+         const int i = cand[j];
+         if (fr != nullptr && fr->prune && nHoles == 0 && bestI >= 0 && FaceTable::BoxD2(tris[i], c) > (bestD2 + 1e-18) * (1.0 + FaceTable::kBoxSlack))
+            continue;   // P3b: cannot be nearer than the best so far nor tie with it (exact lower bound; the 1e-18 tie band kept)
          int kind = 0;
-         V3 p = ClosestOnTriangle(tris[i], c, kind);
+         V3 p;
+         const FaceTable::Slot *sl = nullptr;
+         if (fr != nullptr)   // shared_finder P3a: the table's measurement (raw; the carved hole below is applied to it as before)
+         {
+            sl = &fr->At(j, tris[i], c);
+            p = sl->p;
+            kind = sl->kind;
+         }
+         else
+            p = ClosestOnTriangle(tris[i], c, kind);
          for (int k = 0; k < nHoles; k++)
          {
             const CarvedHole &h = holes[k];
@@ -840,10 +1147,11 @@ namespace RubberContact
                if (ul > 1e-9) { ux /= ul; uy /= ul; } else { ux = 1.0; uy = 0.0; }
                p = V3(h.x + ux * h.r, h.y + uy * h.r, p.z);   // the nearest point of the surface that is left: on the rim of the hole
                kind = 1;
+               sl = nullptr;   // the point moved: its distance is measured from it
             }
          }
          const V3 dv = c - p;
-         const double d2 = dv.Dot(dv);
+         const double d2 = sl != nullptr ? sl->d2 : dv.Dot(dv);
          if (hits != nullptr)
             hits->push_back({ i, kind, p, d2 });
          // on a tie prefer the face over an edge or a corner (the diagonal of a flat face is an "edge" of both its triangles)
@@ -854,6 +1162,7 @@ namespace RubberContact
             bestI = i;
             bestKind = kind;
          }
+      }
       }
       if (bestI < 0)
          return pr;
@@ -883,7 +1192,8 @@ namespace RubberContact
    }
 
    // ProbeTriangles' result with the other faces pressing the ball: the nearest point inside a face of another plane (a concave corner of the mesh). A face in a plane already counted adds nothing.
-   inline void PatchTriangles(const BallSI &ball, const std::vector<SurfaceTri> &tris, const std::vector<int> &cand, const V3 &c, const double zero, TubeProbe &pr, const CarvedHole *holes = nullptr, int nHoles = 0)
+   inline void PatchTriangles(const BallSI &ball, const std::vector<SurfaceTri> &tris, const std::vector<int> &cand, const V3 &c, const double zero, TubeProbe &pr, const CarvedHole *holes = nullptr, int nHoles = 0,
+                              const FaceRead *fr = nullptr)
    {
       if (!pr.overlap || pr.seg < 0 || pr.reff <= 0.0 || pr.delta <= zero)
          return;
@@ -897,8 +1207,10 @@ namespace RubberContact
       FoldSum sum;
       bool any = false;
       double fitBest = -1.0;
-      for (const int i : cand)
+      { const ContactProf::LoopTicks profLoop(cand.size());   // P3a profile (diagnostics only)
+      for (size_t j = 0; j < cand.size(); j++)
       {
+         const int i = cand[j];
          if (i == pr.seg)
             continue;
          const SurfaceTri &t = tris[i];
@@ -913,7 +1225,15 @@ namespace RubberContact
          if (same)
             continue;
          int kind = 0;
-         const V3 p = ClosestOnTriangle(t, c, kind);
+         V3 p;
+         if (fr != nullptr)   // shared_finder P3a: the table's measurement (the Holds test below applied to it as before)
+         {
+            const FaceTable::Slot &sl = fr->At(j, t, c);
+            p = sl.p;
+            kind = sl.kind;
+         }
+         else
+            p = ClosestOnTriangle(t, c, kind);
          if (kind != 0 || std::any_of(holes, holes + nHoles, [&](const CarvedHole &h) { return h.Holds(p); }))
             continue;
          if (fitBest < 0.0)
@@ -929,6 +1249,7 @@ namespace RubberContact
             any = true;
          }
          sum.Add(ball.R - ah - zero, fit, ni);
+      }
       }
       if (any)
          sum.Finish(pr, zero);
@@ -1113,15 +1434,144 @@ namespace RubberContact
    // (a face's inside nearest point, or the deepest of its edges where the nearest point is on the rim) and the shared edges between two of them (the humps).
    // One peak: ProbeTriangles' result unchanged. More: the level form, reff and the nearest point kept from the deepest.
    inline TubeProbe BarsTriangles(const BallSI &ball, const std::vector<SurfaceTri> &tris, const std::vector<std::array<int, 3>> &vid, const std::vector<std::array<int, 3>> &nb,
-                                  const std::vector<int> &cand, const double edgeRho, const V3 &c, const double zero)
+                                  const std::vector<int> &cand, const double edgeRho, const V3 &c, const double zero, const FaceRead *fr = nullptr,
+                                  const std::vector<std::array<int8_t, 3>> *fold = nullptr)
    {
+      const ContactProf::Ticks profBars(fr != nullptr && fr->t != nullptr && fr->t->tag == 1 ? ContactProf::CD().barsCorner : ContactProf::CD().bars);   // P3c profile (diagnostics only): the whole call, the probe inside included; the rubber corners apart
+      if (ContactProf::CheckOn())
+         ContactProf::CD().barsN++;
+      // mc-cost profile (diagnostics only): stamps between the parts; the object's entry (named once its table has walked)
+      const bool profS = ContactProf::CheckOn();
+      ContactProf::ObjBars *const profObj = profS && fr != nullptr && fr->t != nullptr ? ContactProf::ObjBarsOf(fr->t->objStats) : nullptr;
+      struct ProfEnd
+      {
+         const bool on;
+         ContactProf::ObjBars *const obj;
+         const uint64_t t0;
+         uint64_t cand = 0, nodes = 0;
+         ~ProfEnd()
+         {
+            if (!on)
+               return;
+            const uint64_t dt = __rdtsc() - t0;
+            ContactProf::CD().rowBarsN++;
+            ContactProf::CD().rowBars += dt;
+            if (obj != nullptr)
+            {
+               obj->t += dt;
+               obj->n++;
+               obj->cand += cand;
+               obj->nodes += nodes;
+            }
+         }
+      } profEnd { profS, profObj, profS ? __rdtsc() : 0 };
+      profEnd.cand = cand.size();
       thread_local std::vector<FaceHit> hits;   // each candidate measured once, by the probe (scratch kept per thread)
       hits.clear();
-      TubeProbe pr = ProbeTriangles(ball, tris, cand, edgeRho, c, nullptr, 0, 0.0, &hits);
+      TubeProbe pr = ProbeTriangles(ball, tris, cand, edgeRho, c, nullptr, 0, 0.0, &hits, fr);
+      uint64_t profT = profS ? __rdtsc() : 0;
+      if (profS)
+         ContactProf::CD().bProbe += profT - profEnd.t0;
+      const auto profStamp = [&](uint64_t &to) {
+         if (!profS)
+            return;
+         const uint64_t t = __rdtsc();
+         to += t - profT;
+         profT = t;
+      };
       if (!pr.overlap || pr.seg < 0 || pr.reff <= 0.0 || pr.delta <= zero || cand.size() < 2 || nb.size() != tris.size())
+      {
+         if (profS)
+            ContactProf::CD().bRetProbe++;
+         return pr;
+      }
+      if (profS)
+         ContactProf::CD().bCand += cand.size();
+      // cut B (runs/2026-11-12-mc-cutB/brief_build.md): the probe's result is the law's answer (one peak) when the faces within R (the walk's set, cand) are one set joined through shared
+      // edges and no shared edge between two of them is concave toward c (b on c's side of plane A and a on c's side of plane B; fold built at load, RubberSurface::Link). Then the face
+      // pass, edge pass and merge are skipped. Check mode (VPX_FINDER_CHECK=1) runs the full law on every skippable call and counts any that ends with more than one peak.
+      bool cbSkip = false;
+      if (fold != nullptr && fold->size() == tris.size() && fr != nullptr && fr->t != nullptr && fr->t->useWalk && &cand == &fr->t->inI)
+      {
+         thread_local std::vector<uint32_t> mark;   // stamp: in the set; stamp + 1: reached
+         thread_local std::vector<int> st;
+         thread_local uint32_t stamp = 0;
+         if (mark.size() < tris.size())
+            mark.resize(tris.size(), 0u);
+         stamp += 2;
+         if (stamp < 2)
+         {
+            std::fill(mark.begin(), mark.end(), 0u);
+            stamp = 2;
+         }
+         for (const int i : cand)
+            mark[i] = stamp;
+         cbSkip = true;
+         for (size_t k = 0; k < cand.size() && cbSkip; k++)
+         {
+            const int i = cand[k];
+            const SurfaceTri &A = tris[i];
+            const double sA = (c - A.a).Dot(A.n);
+            for (int e = 0; e < 3; e++)
+            {
+               const int o = nb[i][e];
+               if (o <= i || mark[o] != stamp)
+                  continue;
+               const int fi = (*fold)[i][e];
+               if (fi == 0)
+                  continue;   // flat
+               int fo = 2;
+               for (int f = 0; f < 3; f++)
+                  if (nb[o][f] == i)
+                     fo = (*fold)[o][f];
+               const double sB = (c - tris[o].a).Dot(tris[o].n);
+               if (fi == 2 || fo == 2 || (fi * sA >= 0.0 && fo * sB >= 0.0))
+               {
+                  cbSkip = false;   // concave toward c (or unknown): a second patch is possible
+                  break;
+               }
+            }
+         }
+         if (cbSkip)   // one set: everything reached from the first face through shared edges
+         {
+            st.clear();
+            st.push_back(cand[0]);
+            mark[cand[0]] = stamp + 1;
+            size_t reached = 1;
+            while (!st.empty())
+            {
+               const int i = st.back();
+               st.pop_back();
+               for (int e = 0; e < 3; e++)
+               {
+                  const int o = nb[i][e];
+                  if (o >= 0 && mark[o] == stamp)
+                  {
+                     mark[o] = stamp + 1;
+                     reached++;
+                     st.push_back(o);
+                  }
+               }
+            }
+            cbSkip = reached == cand.size();
+         }
+      }
+      const bool cbCheck = cbSkip && fr->t->check;
+      if (profS)
+      {
+         if (cbSkip && !cbCheck)
+            ContactProf::CD().cbSkip++;
+         else
+         {
+            ContactProf::CD().cbFull++;
+            if (profObj != nullptr)
+               profObj->full++;
+         }
+      }
+      if (cbSkip && !cbCheck)
          return pr;
       // an edge's nearest point from its lower-id end, so both triangles on it get the same bits
-      const auto edgeDepth = [&](const int t, const int e, V3 &nOut) {
+      const auto edgeMeasure = [&](const int t, const int e, V3 &nOut) {
          const SurfaceTri &T = tris[t];
          const V3 *v[3] = { &T.a, &T.b, &T.c };
          const int a = e, b = (e + 1) % 3;
@@ -1130,6 +1580,45 @@ namespace RubberContact
          const V3 dv = c - q;
          const double dist = dv.Length();
          nOut = dist > 1e-12 ? dv / dist : V3();
+         return dist;
+      };
+      FaceTable *const ft = fr != nullptr && fr->t != nullptr && !fr->t->direct ? fr->t : nullptr;   // P3c: the edges' slots (VPX_FINDER_TABLE=0 or no table: measured directly)
+      const bool prof = ContactProf::CheckOn();
+      const auto edgeDepth = [&](const int t, const int e, V3 &nOut) {
+         FaceTable::ESlot *const sl = ft != nullptr ? ft->EdgeSlot(t, e, nb) : nullptr;
+         if (prof)
+            ContactProf::CD().eReads++;
+         double dist;
+         if (sl == nullptr)
+         {
+            dist = edgeMeasure(t, e, nOut);
+            if (prof)
+               ContactProf::CD().eFills++;
+         }
+         else
+         {
+            if (ft->count)
+               ft->ereads++;
+            if (sl->gen != ft->gen)
+            {
+               sl->dist = edgeMeasure(t, e, sl->n);
+               sl->gen = ft->gen;
+               if (ft->count)
+                  ft->efills++;
+               if (prof)
+                  ContactProf::CD().eFills++;
+            }
+            else if (ft->check)
+            {
+               V3 n2;
+               const double d2 = edgeMeasure(t, e, n2);
+               if (std::memcmp(&d2, &sl->dist, sizeof(double)) != 0 || std::memcmp(&n2.x, &sl->n.x, sizeof(double)) != 0 || std::memcmp(&n2.y, &sl->n.y, sizeof(double)) != 0
+                   || std::memcmp(&n2.z, &sl->n.z, sizeof(double)) != 0)
+                  ft->emism++;
+            }
+            dist = sl->dist;
+            nOut = sl->n;
+         }
          return dist > 1e-12 ? ball.R - dist - zero : -1.0;
       };
       thread_local std::vector<BarNode> nodes;   // scratch kept per thread
@@ -1181,10 +1670,18 @@ namespace RubberContact
          triNode.emplace_back(i, (int)nodes.size());
          nodes.push_back({ d, nn, 0 });
       }
+      profStamp(ContactProf::CD().bFace);
+      if (profS)
+      {
+         ContactProf::CD().bFaceNodes += nodes.size();
+         profEnd.nodes = nodes.size();
+      }
       if (nodes.size() < 2)
       {
          for (const auto &tn : triNode)
             triIdx[tn.first] = -1;
+         if (profS)
+            ContactProf::CD().bRetNodes++;
          return pr;
       }
       const auto nodeOf = [&](const int t) { return triIdx[t]; };
@@ -1208,10 +1705,24 @@ namespace RubberContact
          }
       for (const auto &tn : triNode)
          triIdx[tn.first] = -1;
+      profStamp(ContactProf::CD().bEdge);
+      if (profS)
+         ContactProf::CD().bNodes += nodes.size();
       FoldSum sum;
-      if (MergeBars(nodes, adj, sum) <= 1)
+      const int profPeaks = MergeBars(nodes, adj, sum);
+      profStamp(ContactProf::CD().bMerge);
+      if (profPeaks <= 1)
+      {
+         if (profS)
+            ContactProf::CD().bOnePeak++;
          return pr;
+      }
+      if (cbCheck)   // cut B check mode: the rule would have returned the probe's single answer here
+         fr->t->cbMism++;
       sum.Finish(pr, zero);
+      profStamp(ContactProf::CD().bFinish);
+      if (profS)
+         ContactProf::CD().bMulti++;
       return pr;
    }
 
@@ -1227,13 +1738,16 @@ namespace RubberContact
    }
 
    // a face in the plane of the nearest face has the same gap and closing speed: it is passed over; so is one whose plane the ball cannot reach within the step
-   inline double ArrivalTriangles(const BallSI &ball, const std::vector<SurfaceTri> &tris, const std::vector<int> &cand, const int nearest, const V3 &c, const V3 &v, const double a, const double hMax, const double touchM, const double arriveM)
+   inline double ArrivalTriangles(const BallSI &ball, const std::vector<SurfaceTri> &tris, const std::vector<int> &cand, const int nearest, const V3 &c, const V3 &v, const double a, const double hMax, const double touchM, const double arriveM,
+                                  const FaceRead *fr = nullptr)
    {
       double h = hMax;
       const double speed = v.Length();
       const SurfaceTri *const best = nearest >= 0 ? &tris[nearest] : nullptr;
-      for (const int i : cand)
+      const ContactProf::LoopTicks profLoop(cand.size());   // P3a profile (diagnostics only)
+      for (size_t j = 0; j < cand.size(); j++)
       {
+         const int i = cand[j];
          if (i == nearest)
             continue;
          const SurfaceTri &t = tris[i];
@@ -1242,7 +1756,7 @@ namespace RubberContact
          if (best != nullptr && std::abs(t.n.Dot(best->n)) > 0.9999 && std::abs((t.a - best->a).Dot(best->n)) < 1e-5)
             continue;
          int kind = 0;
-         const V3 dv = c - ClosestOnTriangle(t, c, kind);
+         const V3 dv = c - (fr != nullptr ? fr->At(j, t, c).p : ClosestOnTriangle(t, c, kind));   // shared_finder P3a: the table's measurement
          const double dist = dv.Length();
          if (dist <= 1e-12 || dist - ball.R <= touchM)
             continue;

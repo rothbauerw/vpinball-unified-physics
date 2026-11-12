@@ -88,6 +88,9 @@ struct RubberSurface
    // multi_contact 1: which faces share an edge (the ball's contacts on two faces joined by a pressed edge are one contact; RubberContact::BarsTriangles)
    std::vector<std::array<int, 3>> vid;   // per face: its welded vertices (vertices equal in all three float bits are one)
    std::vector<std::array<int, 3>> nb;    // per face: the face across edge e = (vertex e, vertex e+1), -1 none; empty until Link
+   // cut B (runs/2026-11-12-mc-cutB): per face and shared edge e, which side of this face's plane (by its normal n) the neighbour's third vertex lies on: +1 / -1; 0 when the fold is within
+   // the stored mesh's float32 rounding on both faces (flat); 2 unknown (a zero-area face, or a vertex exactly on the plane outside the band): always taken as concave. Built by Link.
+   std::vector<std::array<int8_t, 3>> fold;
    std::map<std::array<uint32_t, 3>, int> weld;   // vertex bits -> id, while faces are added
    int Link();   // builds nb from vid (once, after the last Add); returns the number of edges on more than two faces (each links its first pair only)
    // shared_finder (to-do 1.34, piece P1; runs/2026-11-11-finder/design.md sections 1-2): the finder's index over these faces, built once before the first cycle (HitRubber::FinderBuild).
@@ -201,6 +204,9 @@ public:
    int FinderObjIndex() const override { return m_surface != nullptr ? m_surface->fobj : -1; }
    // the finder's totals (query cost, re-queries), once a second of table time and when the table closes
    static void FinderTotals(bool force);
+   // shared_finder P3a: the ball's measurement table of this object at c (null: key off, or the item does not read the ball's query); the cost log's counters since its last row
+   RubberContact::FaceTable *FinderTable(const SurfaceContact &it, const RubberContact::V3 &c) const;
+   static void FinderTabTake(uint64_t &checks, uint64_t &fills, uint64_t &reads);
    // Non-legacy kickers are round holes in the playfield: the playfield host leaves no floor inside them (the ball rests on the rim, or falls in and is captured).
    // Filled by Kicker::PhysicSetup, cleared when the physics engine is built. x, y, r in VPX units.
    static void AddPlayfieldHole(float x, float y, float r);

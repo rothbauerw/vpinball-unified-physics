@@ -1249,15 +1249,24 @@ namespace
    }
 
    // the faces whose nearest point to c is surface: one inside a near cut's centre line (at or under the top) is not (as CarvedHole::Holds for a turntable)
-   void FacesLeft(const std::vector<SurfaceTri> &tris, const std::vector<int> &faces, const std::vector<int> &cuts, const V3 &c, std::vector<int> &out)
+   // shared_finder P3a: fr reads the faces' measurements from the ball's table (faces is then the query list), and outPos gets each kept face's position in it
+   void FacesLeft(const std::vector<SurfaceTri> &tris, const std::vector<int> &faces, const std::vector<int> &cuts, const V3 &c, std::vector<int> &out, const RubberContact::FaceRead *fr = nullptr,
+                  std::vector<int> *outPos = nullptr)
    {
       out.clear();
-      for (const int i : faces)
+      if (outPos != nullptr)
+         outPos->clear();
+      for (size_t j = 0; j < faces.size(); j++)
       {
+         const int i = faces[j];
          int kind;
-         const V3 p = RubberContact::ClosestOnTriangle(tris[i], c, kind);
+         const V3 p = fr != nullptr ? fr->At(j, tris[i], c).p : RubberContact::ClosestOnTriangle(tris[i], c, kind);
          if (std::none_of(cuts.begin(), cuts.end(), [&](const int ci) { return g_rims[ci].Holds(p); }))
+         {
             out.push_back(i);
+            if (outPos != nullptr)
+               outPos->push_back(fr != nullptr && fr->pos != nullptr ? fr->pos[j] : (int)j);
+         }
       }
    }
 
@@ -1840,21 +1849,41 @@ namespace PlayfieldCuts
    }
 
    RubberContact::TubeProbe Probe(const ContactSurface *const host, const RubberContact::BallSI &bs, const std::vector<SurfaceTri> &tris, const std::vector<int> &faces, const double edgeRho,
-                                  const V3 &c, const double reachM, const RubberContact::CarvedHole *const holes, const int nHoles, const bool patch, const double zero)
+                                  const V3 &c, const double reachM, const RubberContact::CarvedHole *const holes, const int nHoles, const bool patch, const double zero, RubberContact::FaceTable *const ft)
    {
-      static std::vector<int> cuts, left;   // (the physics thread's; reused)
+      static std::vector<int> cuts, left, leftPos;   // (the physics thread's; reused)
+      const RubberContact::FaceRead frF { ft, nullptr };   // shared_finder P3a: the ball's table (null: measured as before)
+      const RubberContact::FaceRead *const pF = ft != nullptr ? &frF : nullptr;
       static std::vector<RimHit> hits;
       static std::vector<RimHump> humps;
       NearCuts(host, c, reachM, cuts);
+      // shared_finder P3b: the walk's faces within R (HitRubber::FinderTable), in load order with their query-list positions; the probe with none within R reads the whole list with the
+      // box bound (its nearest wherever it is, as today). A turntable's hole (nHoles) moves a face's nearest point, so there the whole list as P3a.
+      const bool walk = ft != nullptr && ft->useWalk && nHoles == 0;
+      const std::vector<int> &in = walk ? ft->inI : faces;
+      const RubberContact::FaceRead frI { ft, walk ? ft->inJ.data() : nullptr };
+      const RubberContact::FaceRead *const pI = ft != nullptr ? &frI : nullptr;
       if (cuts.empty())   // today's probe
       {
-         RubberContact::TubeProbe pr = RubberContact::ProbeTriangles(bs, tris, faces, edgeRho, c, holes, nHoles);
+         RubberContact::TubeProbe pr;
+         if (walk && in.empty())
+         {
+            const RubberContact::FaceRead frP { ft, nullptr, true };
+            pr = RubberContact::ProbeTriangles(bs, tris, faces, edgeRho, c, holes, nHoles, 0.0, nullptr, &frP);
+         }
+         else
+            pr = RubberContact::ProbeTriangles(bs, tris, in, edgeRho, c, holes, nHoles, 0.0, nullptr, pI);
          if (patch)
-            RubberContact::PatchTriangles(bs, tris, faces, c, zero, pr, holes, nHoles);
+            RubberContact::PatchTriangles(bs, tris, in, c, zero, pr, holes, nHoles, pI);   // (the patch reads only faces within R)
          return pr;
       }
-      FacesLeft(tris, faces, cuts, c, left);
-      RubberContact::TubeProbe pr = RubberContact::ProbeTriangles(bs, tris, left, edgeRho, c, holes, nHoles);
+      FacesLeft(tris, in, cuts, c, left, pI, ft != nullptr ? &leftPos : nullptr);   // P3b: FacesLeft filters the walked set
+      const bool wide = walk && left.empty();   // P3b: no face left within R: the probe's nearest of every face left, with the box bound
+      if (wide)
+         FacesLeft(tris, faces, cuts, c, left, pF, &leftPos);
+      const RubberContact::FaceRead frL { ft, leftPos.data(), wide };   // the faces left, read at their query-list positions
+      const RubberContact::FaceRead *const pL = ft != nullptr ? &frL : nullptr;
+      RubberContact::TubeProbe pr = RubberContact::ProbeTriangles(bs, tris, left, edgeRho, c, holes, nHoles, 0.0, nullptr, pL);
       // The reach (beyond S = R + rho): a rim minimum matters here only if it is deeper than the faces' nearest (it becomes the probe) or presses (d = delta - zero > 0 within S - zero,
       // the patch sum), so with a face left the rim is searched to S + max(the faces' gap, -zero (patch), 0). With no face the deepest minimum is the probe wherever it is: no limit.
       // Every extremum is in closed form, so one search costs the same whatever its reach. Every hump is kept at its distance (one beyond the top gives s = 0).
@@ -1875,7 +1904,7 @@ namespace PlayfieldCuts
       if (best < 0)   // the flat (or nothing): the faces' fold sum as today; a rim facing a ball whose centre is outside the centre line is out of its reach
       {
          if (patch)
-            RubberContact::PatchTriangles(bs, tris, left, c, zero, pr, holes, nHoles);
+            RubberContact::PatchTriangles(bs, tris, left, c, zero, pr, holes, nHoles, pL);
          return pr;
       }
       const RimHit &b = hits[best];
@@ -2004,16 +2033,19 @@ namespace PlayfieldCuts
    }
 
    double ArrivalS(const ContactSurface *const host, const RubberContact::BallSI &bs, const std::vector<SurfaceTri> &tris, const std::vector<int> &faces, const int nearestSeg, const V3 &c,
-                   const V3 &v, const double a, const double hMax, const double touchM, const double arriveM, const double reachM)
+                   const V3 &v, const double a, const double hMax, const double touchM, const double arriveM, const double reachM, RubberContact::FaceTable *const ft)
    {
-      static std::vector<int> cuts, left;
+      static std::vector<int> cuts, left, leftPos;
       static std::vector<RimHit> hits;
+      const RubberContact::FaceRead frF { ft, nullptr };   // shared_finder P3a: the ball's table (null: measured as before)
+      const RubberContact::FaceRead *const pF = ft != nullptr ? &frF : nullptr;
       NearCuts(host, c, reachM, cuts);
       if (cuts.empty())   // today's bound
-         return RubberContact::ArrivalTriangles(bs, tris, faces, nearestSeg, c, v, a, hMax, touchM, arriveM);
+         return RubberContact::ArrivalTriangles(bs, tris, faces, nearestSeg, c, v, a, hMax, touchM, arriveM, pF);
       const int nT = (int)tris.size();
-      FacesLeft(tris, faces, cuts, c, left);
-      double h = RubberContact::ArrivalTriangles(bs, tris, left, nearestSeg < nT ? nearestSeg : -1, c, v, a, hMax, touchM, arriveM);
+      FacesLeft(tris, faces, cuts, c, left, pF, ft != nullptr ? &leftPos : nullptr);
+      const RubberContact::FaceRead frL { ft, leftPos.data() };
+      double h = RubberContact::ArrivalTriangles(bs, tris, left, nearestSeg < nT ? nearestSeg : -1, c, v, a, hMax, touchM, arriveM, ft != nullptr ? &frL : nullptr);
       // the reach: a minimum farther than this leaves h as it is (ArrivalStep: d > vc h + a h^2, with vc <= |v| and h only falling from here)
       const double h0 = h, beyondM = v.Length() * h0 + std::max(a, 0.0) * h0 * h0 + arriveM;
       for (const int ci : cuts)

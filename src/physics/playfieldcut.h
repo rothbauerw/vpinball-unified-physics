@@ -64,10 +64,10 @@ namespace PlayfieldCuts
    // inside a cut, or the deepest rim contact. patch: the group step's patch sum (the faces' fold sum, or the rim contacts' symmetric sum, playfieldcut.cpp Probe; zero = the touch's depth
    // zero). A rim contact's seg is tris.size() + the cut's index.
    RubberContact::TubeProbe Probe(const ContactSurface *host, const RubberContact::BallSI &bs, const std::vector<RubberContact::SurfaceTri> &tris, const std::vector<int> &faces, double edgeRho,
-                                  const RubberContact::V3 &c, double reachM, const RubberContact::CarvedHole *holes, int nHoles, bool patch, double zero);
+                                  const RubberContact::V3 &c, double reachM, const RubberContact::CarvedHole *holes, int nHoles, bool patch, double zero, RubberContact::FaceTable *ft = nullptr);   // ft: shared_finder P3a, the ball's measurement table
    // The step bound (ContactSurface::ArrivalS) of the same surface: the faces not inside a cut (ArrivalTriangles), and every rim contact but the probe's nearest (ArrivalStep each)
    double ArrivalS(const ContactSurface *host, const RubberContact::BallSI &bs, const std::vector<RubberContact::SurfaceTri> &tris, const std::vector<int> &faces, int nearestSeg,
-                   const RubberContact::V3 &c, const RubberContact::V3 &v, double a, double hMax, double touchM, double arriveM, double reachM);
+                   const RubberContact::V3 &c, const RubberContact::V3 &v, double a, double hMax, double touchM, double arriveM, double reachM, RubberContact::FaceTable *ft = nullptr);
    // A cut as the drawing needs it (parts/playfieldcutdraw.cpp, design section 8): the same numbers as its rim. Frame: centre (cx, cy) at the playfield's top z0, along (lx, ly), across
    // (px, py), metres (unit: metres per VPX unit). Shape (the slot's frame, comment above): a, hs, L, U1, wJ; the ramp's outline u = L - tau^2, w = c tau (tau from 0 at the tip to tauJ at
    // U1); th1 the round end's angle at U1; thick the through-hole's depth (the physics' through-hole, Rim::Holds).
