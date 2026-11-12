@@ -171,7 +171,8 @@ namespace
       return false;
    }
 
-   bool ApplySection(RubberObjectSettings &s, const std::filesystem::path &file, const std::string &section, const std::string &who, const char *keyPrefix = "")
+   // reportUnknown false: a section the part's own loader also reads (contactpartsini.h), which names every key neither reader knows; or a probe (the real load reports)
+   bool ApplySection(RubberObjectSettings &s, const std::filesystem::path &file, const std::string &section, const std::string &who, const char *keyPrefix = "", const bool reportUnknown = true)
    {
       std::ifstream in(file);
       if (!in)
@@ -197,7 +198,7 @@ namespace
          std::string key = eq == std::string::npos ? std::string() : Lower(Trim(line.substr(0, eq)));
          if (*keyPrefix != 0 && key.rfind("sling_", 0) != 0)   // in a [Slings] / [Sling:<name>] section the keys are written without sling_
             key = keyPrefix + key;
-         if (eq == std::string::npos || !ApplyKey(s, key, Trim(line.substr(eq + 1))))
+         if ((eq == std::string::npos || !ApplyKey(s, key, Trim(line.substr(eq + 1)))) && reportUnknown)
             PLOGW << "Rubber settings (" << who << "): ignored line '" << line << "'";
       }
       return true;
@@ -309,8 +310,14 @@ bool ContactHost::HingeWanted(const std::filesystem::path &file, const char *kin
       return false;
    RubberObjectSettings probe;
    probe.surfaceRubber = true;
-   ApplySection(probe, file, std::string(kind) + ":" + name, name);
+   ApplySection(probe, file, std::string(kind) + ":" + name, name, "", false);
    return probe.surfaceRubber;
+}
+
+bool ContactHost::IsSurfaceKey(const std::string &key)
+{
+   RubberObjectSettings scratch;
+   return ApplyKey(scratch, key, "0");
 }
 
 bool ContactHost::HardSurfaceWanted(const std::filesystem::path &file, const char *kind, const std::string &name)
@@ -319,7 +326,7 @@ bool ContactHost::HardSurfaceWanted(const std::filesystem::path &file, const cha
       return false;
    RubberObjectSettings probe;
    probe.surfaceRubber = true;   // a hard surface unless the object's own section says rubber = 0
-   ApplySection(probe, file, std::string(kind) + ":" + name, name);
+   ApplySection(probe, file, std::string(kind) + ":" + name, name, "", false);
    return probe.surfaceRubber;
 }
 
@@ -339,7 +346,11 @@ bool ContactHost::LoadHardSurfaceSettings(RubberObjectSettings &s, const std::fi
    s.rollingMu = ContactSettings::Get().enable ? ContactSettings::Get().rollingResistance : 0.0;
    s.surfaceRubber = true;
    ApplySection(s, file, "surfaces", name);
-   ApplySection(s, file, std::string(kind) + ":" + name, name);
+   // [Trigger:<name>], [Gate:<name>], [Spinner:<name>], [Bumper:<name>] are also read by the part's own loader (contactpartsini.h), which reports every key neither reader knows:
+   // not reported here, so the part's own keys (spring_n, close_mm, ...) are not called ignored
+   const std::string k = kind;
+   const bool partReads = k == "trigger" || k == "gate" || k == "spinner" || k == "bumper";
+   ApplySection(s, file, k + ":" + name, name, "", !partReads);
    Clamp(s, name, 1.0e6);
    s.contact = s.surfaceRubber;
    // Viscoelastic normal damping (the default for hard surfaces; VPX_VISCOELASTIC=0 or viscoelastic_damping = 0 restores the alpha law): gamma is calibrated so that a ball of the default

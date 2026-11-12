@@ -15,6 +15,7 @@
 #include "physics/contactbumper.h"
 #include "physics/wireswitchgroup.h"
 #include "physics/buttoncap.h"
+#include "physics/contacthost.h"
 
 namespace PartsIni
 {
@@ -86,6 +87,7 @@ namespace PartsIni
          else if (k == "release_gap_mm") {}   // the part host reads it (ContactHost::LoadHardSurfaceSettings)
          else if (k == "hit_window_deg") s.hitWindowDeg = v;
          else if (k == "rubber") {}   // the opt-out key (HitRubber::HingeWanted)
+         else if (ContactHost::IsSurfaceKey(k)) {}   // the surface material's (ContactHost::LoadHardSurfaceSettings reads it)
          else PLOGW << "Gate " << name << ": unknown key '" << k << "' ignored";
       });
    }
@@ -180,6 +182,7 @@ namespace PartsIni
          else if (k == "release_gap_mm") {}   // the part host reads it (ContactHost::LoadHardSurfaceSettings)
          else if (k == "hit_window_deg") s.hitWindowDeg = v;
          else if (k == "rubber") {}
+         else if (ContactHost::IsSurfaceKey(k)) {}   // the surface material's (ContactHost::LoadHardSurfaceSettings reads it)
          else PLOGW << "Spinner " << name << ": unknown key '" << k << "' ignored";
       });
    }
@@ -212,6 +215,7 @@ namespace PartsIni
                PLOGI << "[Triggers] wire_bend is no longer used (2026-11-10): ignored";
             said = true;
          }
+         else if (ContactHost::IsSurfaceKey(k)) {}   // the surface material's (ContactHost::LoadHardSurfaceSettings reads it)
          else
          {
             PLOGW << "Trigger " << name << ": unknown key '" << k << "' ignored";
@@ -235,7 +239,7 @@ namespace PartsIni
          else if (k == "stop_e") s.stopE = v;
          else if (k == "cap_h_mm") s.capHMm = v;
          else if (k == "heightoffset_mm" || k == "stop_below_mm" || k == "release_mm" || k == "wire_d_mm" || k == "bend_step_deg" || k == "arch_step_deg" || k == "wire_model" || k == "wire_sum" || k == "wire_bend") {}   // (the wire triggers')
-         else if (k == "release_gap_mm") {}   // the part host reads it (ContactHost::LoadHardSurfaceSettings)
+         else if (ContactHost::IsSurfaceKey(k)) {}   // the surface material's, release_gap_mm among them (ContactHost::LoadHardSurfaceSettings reads it)
          else
          {
             PLOGW << "Trigger " << name << ": unknown key '" << k << "' ignored";

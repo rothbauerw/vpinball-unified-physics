@@ -98,6 +98,7 @@ public:
    // (rebound ratio ~ 1 - alpha v at 1 m/s), then [Surfaces] and the object's own section on top. PROVISIONAL, unverified: the mapping from the stock elasticity.
    static bool HardSurfaceWanted(const std::filesystem::path &file, const char *kind, const std::string &name);
    static bool LoadHardSurfaceSettings(RubberObjectSettings &s, const std::filesystem::path &file, const char *kind, const std::string &name, double elasticity, double friction);
+   static bool IsSurfaceKey(const std::string &key);   // a key of the surface material (LoadHardSurfaceSettings): a part's own loader does not call it unknown
    static double HardSurfaceE(const HitObject *first);   // the part's restitution at 1 m/s: its elasticity with the stock falloff (0.3 without a collider)
    static bool HingeWanted(const std::filesystem::path &file, const char *kind, const std::string &name);   // like HardSurfaceWanted, for [Features] hinges (gates and spinners)
    // The playfield as a surface on the force model. s gets the material of the [Playfield] section (defaults: a steel ball on lacquered wood, all UNVERIFIED), tableMu the

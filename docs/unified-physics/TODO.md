@@ -13,7 +13,8 @@ G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
 In flight: 1.34 first (shared finder; step 3 next). 1.33: pieces 1-2 committed, piece 3 dropped (cost); keep/revert of piece 2 waits on 1.34; one-pass probe uncommitted in rubbercontact.h. Owed: snapshot hashes refresh. Lead log runs/2026-11-10-lead.
-Next decision: Button and Star committed. Parked with playfield holes: a ball on a flush Button lands on the wood through the cap (no hole), bounce e 0.86; user expects much more loss on a Button.
+Next decision: shared finder (1.34) step 3: score candidate indexes (grid, tree) offline on recorded ball paths by misses (must be 0), pieces examined per check, time per check. First fix stress v2's gates drive (S00 starts 8 mm inside a rubber) and add a Gorgar drive.
+Parked with playfield holes (Button and Star committed): a ball on a flush Button lands on the wood through the cap (no hole), bounce e 0.86; user expects much more loss on a Button.
 N12. Gorgar load: 0 halvings (cord grip 1cec677ab, rolling patch 87ec36642, stick-zone trial 49155d9e2: Drain-kicker 2-cycle gone, rounds per step -10 %); ~60 depth warnings < 20 um in the bottom pile and at the Drain kicker (stock kicker).
 N3. Playfield cuts: slot (drawn), groove, rectangle, cuts that meet in bbdee9278. Open: slot-in-groove 256 us/cycle (ramp edge search); normal jump at slot tips in the groove, b8 unchecked (runs/2026-11-10-cut-junction/results_ramp.txt). Later: draw new shapes, triangle, holes.
 N5. One reach rule from physics (speed plus force) for grouping and step length. Grouping: Gate001's 81 mm swing as one-cycle travel joins two lanes. Step length: speed only, no force. Check all parts; ball pairs of unequal mass and resting-ball wake (read only).
