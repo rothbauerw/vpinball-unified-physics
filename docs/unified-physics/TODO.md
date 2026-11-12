@@ -91,7 +91,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 6. Editor changes to replace the ini files (panels, settings saved in the .vpx); unified off per table for release.
 7. Old keys in 14 inis, then the unknown-key notice.
 10. Review ReleasePlan with the user, then PR to the official repo after 3-5.
-13. Old-law switches to delete once accepted (CLAUDE.md): roll/pivot/step_model 0, island_reach 0, ball_pair_reach 0.
+13. Old-law switches to delete once accepted (CLAUDE.md): roll/pivot/step_model 0, island_reach 0, ball_pair_reach 0, proximity_engage 0 (with shared_finder on, stock's copies are out of the path: balls fall through; load warns).
 
 ## 11. Switches and triggers
 1. Light-part contact cost (ball on a part of a few grams): worst cycle wire switch 54-181 us, Button 271 us (runs/2026-11-10-rollover/S1); limit 30 us. Midpoint solver must follow the ball-on-part contact clock: needs another solver class (rigid contact + impact law, or L-stable). Parked to N10.

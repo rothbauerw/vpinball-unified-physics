@@ -1910,6 +1910,15 @@ void HitRubber::FinderBuild(const bool atLoad)
       return;
    }
    g.on = true;
+   if (!PhysicsIni::Active(hosts[0]->m_ini).proximityEngage)
+   {
+      // with shared_finder on, stock's copies of converted meshes are out of stock's trees (P9), and proximity_engage = 0 leaves the contact system nothing that engages a free ball
+      // with them: balls pass through walls, ramps and the playfield (old-law switch, to-do 10.13)
+      const std::string msg = "[Features] proximity_engage = 0 with shared_finder = 1: no engagement path for converted surfaces, balls will fall through (set proximity_engage = 1)";
+      PLOGW << msg;
+      if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+         g_pplayer->m_liveUI->PushNotification(msg, 10000);
+   }
    {
       int i = 0;   // P2b: the registry's order, kept for a ball's surfaces (Regather and EngageImpl sort them by it)
       for (ContactHost *const o : ContactHost::Registry())
