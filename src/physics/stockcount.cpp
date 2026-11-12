@@ -95,8 +95,15 @@ namespace StockCount
                : t == eItemGate ? "gate" : t == eItemSpinner ? "spinner" : t == eItemKicker ? "kicker" : t == eItemTrigger ? "trigger" : t == eItemPlunger ? "plunger" : t == eItemHitTarget ? "target"
                : t == eItemTable ? "table" : "part";
             r->allowed = AllowedStock(t);
-            if (t == eItemTrigger && dynamic_cast<const Trigger *>(obj->m_editable) != nullptr && dynamic_cast<const Trigger *>(obj->m_editable)->OnWirePart())
-               r->allowed = nullptr;   // a wire trigger on the wire switch part is converted: no stock allowed
+            if (t == eItemTrigger && dynamic_cast<const Trigger *>(obj->m_editable) != nullptr)
+            {
+               // converted, no stock allowed: a wire trigger on the wire switch part, a Star or Button (rollover caps of the group step) and a None (the engine's sensing zone, trigger.cpp:812-906).
+               // Stock stays only for an Inder, and for a wire trigger with [Features] triggers = 0
+               const Trigger *const tr = dynamic_cast<const Trigger *>(obj->m_editable);
+               const TriggerShape sh = tr->m_d.m_shape;
+               if (tr->OnWirePart() || sh == TriggerStar || sh == TriggerButton || sh == TriggerNone)
+                  r->allowed = nullptr;
+            }
             if (t == eItemTable)   // the table's own edges (PhysicsEngine): no part of the table to convert yet
             {
                r->name = "table edge";

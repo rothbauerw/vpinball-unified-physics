@@ -326,11 +326,19 @@ struct ContactSystemImpl
 
    // A free ball (not held by any contact) that can reach another ball, held or free, this cycle joins the island with no surface contacts of its own: the engine has given it
    // gravity already, and the stock collision is skipped for the pair, so the two are solved together here. Chains grow until no free ball is within reach of a member.
+   // [Features] free_flight (physicsini.h): every free ball is a body of the step, not only one within reach of another ball, so no ball is moved by the stock flight
+   static bool FreeFlightOn()
+   {
+      static const bool on = []() { return PhysicsIni::Active(ContactHost::IniPathFor(g_pplayer->m_ptable->m_filename)).freeFlight; }();
+      return on;
+   }
+
    static void GatherFree(Cycle &cy)
    {
       CPROF(GatherFree);
       const ContactSettings &cs = *cy.cs;
-      if (!cs.ballContact)
+      const bool every = FreeFlightOn();
+      if (!cs.ballContact && !every)
          return;
       std::vector<Body> cand;
       for (auto *const ball : g_pplayer->m_vball)
@@ -342,6 +350,15 @@ struct ContactSystemImpl
          LoadBody(w, pb);
          LoadState(w);
          cand.push_back(std::move(w));
+      }
+      if (every)   // free_flight: each one a body with no contacts (its pair contacts, if any, are found as for any body: FindIslands)
+      {
+         for (Body &w : cand)
+         {
+            Sources::Begin(w, cy.dt);   // (its gravity, nudge and magnet pull: taken back, then given in the substeps)
+            cy.bodies.push_back(std::move(w));
+         }
+         return;
       }
       if (cand.empty() || (cy.bodies.empty() && cand.size() < 2))
          return;
@@ -2567,7 +2584,7 @@ void ContactSystemImpl::StepBalls(const double dt)
    if (!s_append)
       DispatchPending();   // (the engine dispatches after every step; this keeps a step that was not followed by one from losing its events)
    g_last = ContactSystem::CycleStats();
-   if (g_engaged.empty() && !(ContactSettings::Get().ballContact && g_pplayer->m_vball.size() >= 2))   // (two free balls are solved here too)
+   if (g_engaged.empty() && !(ContactSettings::Get().ballContact && g_pplayer->m_vball.size() >= 2) && !(FreeFlightOn() && !g_pplayer->m_vball.empty()))   // (two free balls are solved here too; with free_flight every ball)
       return;
    if (dt <= 0.0)
       return;
@@ -3832,7 +3849,7 @@ void ContactSystemImpl::CheckOverlaps(const float hittime, const double hS)
             Release(e.pb, "replay");   // engaged by an earlier simulation: the snapshot has no entry for it
          only.push_back(e.pb);
       }
-      RestoreSnap(&only);
+      RestoreSnap(FreeFlightOn() ? nullptr : &only);   // free_flight: every free ball is stepped again by StepSeconds below, so each starts from the snapshot (else one outside `only` would move twice)
       double t = 0.0;
       bool first = true;
       for (Rp &e : list)
@@ -3857,7 +3874,7 @@ void ContactSystemImpl::CheckOverlaps(const float hittime, const double hS)
                   mp->steppedS += idle;   // (PartAdvance advances it for the rest of the sub-interval only)
                }
             }
-         if (const BallSnap *const b0 = snapBall(e.pb))
+         if (const BallSnap *const b0 = snapBall(e.pb); b0 != nullptr && !FreeFlightOn())   // (free_flight: the step above has already flown it to the engagement)
             e.pb->m_d.m_pos = b0->pos + b0->vel * (float)(e.t * (double)hittime);   // its free flight to the engagement
          EngageImpl(e.host, e.pb, "overlap");
       }
@@ -3874,7 +3891,7 @@ void ContactSystemImpl::CheckOverlaps(const float hittime, const double hS)
       const BallSnap *const b0 = snapBall(pb);
       BallSI bs;
       bs.R = (double)pb->m_d.m_radius * U;
-      const Vertex3Ds p = b0->pos + b0->vel * (float)(t * (double)hittime);
+      const Vertex3Ds p = FreeFlightOn() ? pb->m_d.m_pos : b0->pos + b0->vel * (float)(t * (double)hittime);   // free_flight: where simulate(t) stepped it
       const V3 c((double)p.x * U, (double)p.y * U, (double)p.z * U);
       double gmin = 1e9;
       for (ContactHost *const o : parts)
