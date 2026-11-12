@@ -5,7 +5,9 @@
 // square to the playfield: s = the cap's sink, 0 at rest (the push nut on the bushing's underside), rest_mm flush with the wood (the top's underside on the bushing's top).
 //   spring   the leaf blade under the peg, linear in sink: spring_n up at rest (preload), spring_full_n at full sink; the cap's weight along the axis is its own term
 //   stops    up at s 0 and down at s rest_mm: BodyStop, rigid (no unknown while the body is on one), the impact law with a constant restitution stop_e, the rest rule (bodypart.h)
-//   surface  a flat round top, a vertical side cap_h_mm down from the top, the corner rounded with corner_mm: JetBumper::Revolve with 3 vertices, carried along the slide (one column, down)
+//   surface  a flat round top, a vertical side cap_h_mm down from the top, the corner rounded with corner_mm: JetBumper::Revolve with 3 vertices, carried along the slide (one column, down).
+//            A Star rollover (runs/2026-11-11-star/design.md) is the same model with another top (Top::Star): the dome through the stock star mesh's ridge tops, its tips' top edge
+//            rounded with corner_mm, its gentle kinks at the probe's edge minimum (StarOutline, StarRounding); default mass kStarMassG
 //   switch   closed while s >= close_mm, open below it (a plain leaf: no differential travel). Hit on close, Unhit on open
 //   material the bumper skirt's plastic set (contactbumper.h Params), ESTIMATED, for the ball's contact and the stops' Hertz stiffness (the rest rule's squash)
 // No friction, no tilt (design 2S). The table side is in trigger.cpp. Pure SI, world frame in metres, z up (the playfield's normal).
@@ -34,10 +36,96 @@ namespace ButtonCap
       double springN = 0.2;        // spring_n: the leaf's force up on the cap at rest, N (its preload; the cap's weight not included; user 2026-11-11 after watching the drive: 0.34 too strong)
       double springFullN = 0.25;   // spring_full_n: the leaf's force up at full sink (flush), N; linear between (user 2026-11-11)
       double cornerMm = 0.79375;   // corner_mm: the rounding of the edge between the top and the side (1/32 in, user 2026-11-10); at most the cap's radius and rest_mm (larger: a notice, and the largest that fits)
-      double massG = 1.0;          // mass_g: the cap with its peg, g (user 2026-11-10)
+      double massG = 1.0;          // mass_g: the cap with its peg, g (user 2026-11-10); a Star's default is kStarMassG (the owner sets it before reading the ini)
       double stopE = 0.2;          // stop_e: restitution of both stops (push nut up, flush down), the same at every speed (ESTIMATED from the user's video: no visible bounce; design 2S)
       double capHMm = 3.97;        // cap_h_mm: the cap's side from its top down (5/32 in, ESTIMATED, design 1H): the touchable shape; reaches into the hole at rest (must exceed rest_mm)
    };
+
+   // The cap's top: the Button's flat round top, or the Star's dome (runs/2026-11-11-star/design.md 1b). Nothing else of the model differs
+   enum class Top { Button, Star };
+   constexpr double kStarMassG = 2.5;   // mass_g's default for a Star, g (PartData S10: a star rollover 2-3 g, user estimate 2026-11-10)
+
+   // The Star's hit surface (design 1b; APPROXIMATION 1c: the smooth dome, not the spokes): a body of revolution through the ridge tops of the stock star mesh (triggerStarMesh.h: 10 spokes
+   // from a centre plateau to the tips), (radius, height) in mesh units: the radius x R in plan; the height x rest / kStarTop, so the top is rest_mm above the wood at rest whatever R
+   // (x 0.806 of the mesh at R 13.5 mm). The last point is the bottom of the tips' wall, below the wood (in the hole)
+   constexpr double kStarProfile[6][2] = { { 0.0, 0.292 }, { 0.19, 0.292 }, { 0.47, 0.256 }, { 0.79, 0.177 }, { 0.97, 0.105 }, { 0.97, -0.037 } };
+   constexpr double kStarTop = 0.292;   // the mesh's top (its plateau), mesh units
+   constexpr int kStarTip = 4;          // the tips' top edge (rounded corner_mm); corners 1-3 are the dome's kinks (rounded at the probe's edge minimum)
+
+   // An outline in (radius from the axis, height), m, starting on the axis, with each inner corner rounded by its own radius, as a Revolve sweep. Every straight part of the outline is a
+   // segment at a constant sweep radius parallel to it, every corner the circle of its radius tangent to both sides (the Revolve's normal is then the outline's: no taper on a
+   // surface segment). Where the radius changes between two corners, a joint along the side's normal joins the two circles tangent to that side at the same point: each circle of the
+   // joint lies inside the larger one, so it is never the nearest part for a point outside the cap. The start takes the radius of corner 1; the end is rounded as the Button's side
+   // (its circle's bottom on the last point) with the radius of the corner before it
+   struct RoundedOutline
+   {
+      struct P2 { double r, z; };
+      std::vector<P2> p;             // the points
+      std::vector<P2> d, n;          // each side's direction and its outward normal (left of the direction: up on a side going out)
+      std::vector<double> len;       // each side's length
+      std::vector<double> tanHalf;   // each inner corner's tan(turn / 2): its rounding radius times it is the length the rounding takes off each side (0 at the ends)
+
+      explicit RoundedOutline(std::vector<P2> pts) : p(std::move(pts))
+      {
+         for (size_t i = 0; i + 1 < p.size(); i++)
+         {
+            const double dr = p[i + 1].r - p[i].r, dz = p[i + 1].z - p[i].z, l = std::sqrt(dr * dr + dz * dz);
+            d.push_back({ dr / l, dz / l });
+            n.push_back({ -dz / l, dr / l });
+            len.push_back(l);
+         }
+         tanHalf.assign(p.size(), 0.0);
+         for (size_t i = 1; i + 1 < p.size(); i++)
+         {
+            const double c = d[i - 1].r * d[i].r + d[i - 1].z * d[i].z, s = std::fabs(d[i - 1].r * d[i].z - d[i - 1].z * d[i].r);
+            tanHalf[i] = s / (1.0 + c);
+         }
+      }
+      // rad[i]: corner i's rounding (1 .. size - 2; the ends' entries are not used)
+      std::vector<JetBumper::Revolve::Vtx> Sweep(const std::vector<double> &rad) const
+      {
+         const size_t m = p.size() - 1;
+         std::vector<JetBumper::Revolve::Vtx> v;
+         double a = rad[1];
+         v.push_back({ p[0].r - a * n[0].r, p[0].z - a * n[0].z, a });
+         for (size_t i = 1; i < m; i++)
+         {
+            const double b = rad[i], k = 1.0 + n[i - 1].r * n[i].r + n[i - 1].z * n[i].z;
+            const P2 c { p[i].r - b * (n[i - 1].r + n[i].r) / k, p[i].z - b * (n[i - 1].z + n[i].z) / k };   // the circle tangent to both sides
+            if (b != a)
+               v.push_back({ c.r + (b - a) * n[i - 1].r, c.z + (b - a) * n[i - 1].z, a });   // the joint: the side's own radius over the corner's tangent point
+            v.push_back({ c.r, c.z, b });
+            a = b;
+         }
+         v.push_back({ p[m].r - a * (n[m - 1].r + d[m - 1].r), p[m].z - a * (n[m - 1].z + d[m - 1].z), a });
+         return v;
+      }
+   };
+   // The Star's outline at rest for radius R and rest height rest (m)
+   inline RoundedOutline StarOutline(const double R, const double rest)
+   {
+      std::vector<RoundedOutline::P2> pts;
+      for (const auto &q : kStarProfile)
+         pts.push_back({ q[0] * R, q[1] / kStarTop * rest });
+      return RoundedOutline(std::move(pts));
+   }
+   // The Star's roundings that fit its sides (design 3, a tiny star: the largest that fits, as the Button's corner check): the three kinks share kink (the probe's edge minimum) unless
+   // their sides are too short; then the tips' edge takes corner (corner_mm) unless the side before it or the wall is too short. kinkFit, cornerFit: the largest that fit, m (the owner's notices)
+   struct StarRound
+   {
+      std::vector<double> rad;
+      double kinkFit = 0.0, cornerFit = 0.0;
+   };
+   inline StarRound StarRounding(const RoundedOutline &o, const double kink, const double corner)
+   {
+      const std::vector<double> &t = o.tanHalf, &L = o.len;
+      StarRound s;
+      s.kinkFit = std::min({ L[0] / t[1], L[1] / (t[1] + t[2]), L[2] / (t[2] + t[3]), L[3] / t[3] });
+      const double k = std::min(kink, s.kinkFit);
+      s.cornerFit = std::min((L[3] - k * t[3]) / t[kStarTip], L[kStarTip] / (t[kStarTip] + 1.0));   // the wall: the rounding's tangent length and the end circle's radius
+      s.rad = { 0.0, k, k, k, std::min(corner, s.cornerFit), 0.0 };
+      return s;
+   }
 
    // its own state beside the body's (PartRecords)
    struct CapState
@@ -63,8 +151,8 @@ namespace ButtonCap
       int stopUp = -1, stopDown = -1;
       std::vector<char> swLog;          // what happened, in order, until the owner reads it: 1 switch closed, 0 opened
 
-      // axis: the cap's axis on the playfield, m; radius: the cap's radius (the trigger's Radius), m; s: corner_mm and cap_h_mm already checked (the owner's notices)
-      void Build(const Settings &s, const V3 &axis, const double radius, const RubberContact::BallSI &b)
+      // axis: the cap's axis on the playfield, m; radius: the cap's radius (the trigger's Radius), m; s: corner_mm and cap_h_mm already checked (the owner's notices); top: its shape
+      void Build(const Settings &s, const V3 &axis, const double radius, const RubberContact::BallSI &b, const Top top = Top::Button)
       {
          const double mm = 1e-3;
          centre = axis;
@@ -78,7 +166,13 @@ namespace ButtonCap
          f0 = s.springN;
          k = (s.springFullN - s.springN) / travel;
          // (0, top - rc), (R - rc, top - rc), (R - rc, top - cap_h + rc), each swept by rc: the flat top, the torus corner, the side down cap_h from the top (below the wood: the hole)
-         prof.v = { { 0.0, travel - rc, rc }, { R - rc, travel - rc, rc }, { R - rc, travel - s.capHMm * mm + rc, rc } };
+         if (top == Top::Star)   // the dome through the star's ridge tops, its wall down into the hole (cap_h_mm not used): the tips' edge rounded rc, the kinks at the edge minimum
+         {
+            const RoundedOutline o = StarOutline(R, travel);
+            prof.v = o.Sweep(StarRounding(o, kEdgeMinM, rc).rad);
+         }
+         else
+            prof.v = { { 0.0, travel - rc, rc }, { R - rc, travel - rc, rc }, { R - rc, travel - s.capHMm * mm + rc, rc } };
          const JetBumper::Params pp;   // the skirt's plastic set: E, nu, restitution at 0.5 m/s, friction
          rp = RubberContact::RubberParams();
          rp.eMpa = pp.plasticEMpa;
@@ -182,10 +276,10 @@ namespace ButtonCap
       long failedSteps = 0, aloneSteps = 0, energySteps = 0;   // the part alone: a step not solved (rule 8), steps taken (cost), of them taken on energy alone (rule 8)
       int bookMs = 0;
 
-      void Build(const Settings &s, const V3 &axis, const double radius, const RubberContact::BallSI &b)
+      void Build(const Settings &s, const V3 &axis, const double radius, const RubberContact::BallSI &b, const Top top = Top::Button)
       {
          ball = b;
-         part.Build(s, axis, radius, b);
+         part.Build(s, axis, radius, b, top);
          idle = true;   // held on its up stop: nothing to step until a ball comes near or the gravity changes
       }
       // The switch's changes as the part's events. The adapter calls it before the host takes the events

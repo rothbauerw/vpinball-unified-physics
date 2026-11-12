@@ -696,7 +696,7 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       if (s_noted != g_pplayer)
       {
          s_noted = g_pplayer;
-         PLOGI << "Triggers: [Features] triggers = " << (on ? 1 : 0) << (on ? ": WireA-E are rollover switches of the contact system (group step); None is a sensing zone of the unified engine; Button is a rollover cap of the group step; Star and Inder stay stock sensors (not converted)" : ": None is a sensing zone of the unified engine; Button is a rollover cap of the group step; every other trigger is a stock sensor");
+         PLOGI << "Triggers: [Features] triggers = " << (on ? 1 : 0) << (on ? ": WireA-E are rollover switches of the contact system (group step); None is a sensing zone of the unified engine; Button and Star are rollover caps of the group step; Inder stays a stock sensor (not converted)" : ": None is a sensing zone of the unified engine; Button and Star are rollover caps of the group step; every other trigger is a stock sensor");
       }
       if (on && wire)
       {
@@ -809,42 +809,66 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          return;
       }
    }
-   if (!isUI && ContactSystem::Unified() && m_d.m_shape == TriggerButton)
+   if (!isUI && ContactSystem::Unified() && (m_d.m_shape == TriggerButton || m_d.m_shape == TriggerStar))
    {
-      // the rollover button (runs/2026-11-10-rollover/design.md): a plastic cap on its leaf switch, a part of the group step; no stock sensor (every Button on a unified table)
+      // the rollover button and the star rollover (runs/2026-11-10-rollover/design.md, runs/2026-11-11-star/design.md): a plastic cap on its leaf switch, a part of the group step; no
+      // stock sensor (every Button and Star on a unified table). One model: a Star differs only in its top (buttoncap.h Top::Star) and its default mass
       constexpr double U = ContactSystem::kMetresPerUnit;
+      const bool star = m_d.m_shape == TriggerStar;
+      const std::string kind = star ? "Star" : "Button";
       const std::filesystem::path ini = ContactHost::IniPathFor(m_ptable->m_filename);
       ButtonCap::Settings s;
+      if (star)
+         s.massG = ButtonCap::kStarMassG;   // (before the ini: mass_g still sets it)
       std::string ignoredKeys;
       PartsIni::LoadButtonCap(s, ini, GetName(), &ignoredKeys);
       std::vector<std::string> notices;   // load-time detectors (rule 8): on screen at the first cycle and in the log as WARN
       if (!ignoredKeys.empty())
-         notices.push_back("Button trigger " + GetName() + ": ini key(s) " + ignoredKeys + " not used (removed or unknown); remove them from the table's physics ini");
-      const double radiusMm = m_d.m_radius * U * 1e3, fitMm = std::min(radiusMm, s.restMm);   // design 4f: the corner fits under the cap's radius and its height above the wood
-      if (s.cornerMm > fitMm)
+         notices.push_back(kind + " trigger " + GetName() + ": ini key(s) " + ignoredKeys + " not used (removed or unknown); remove them from the table's physics ini");
+      const double radiusMm = m_d.m_radius * U * 1e3;
+      if (star)
       {
-         notices.push_back("Button trigger " + GetName() + ": corner_mm " + std::to_string(s.cornerMm) + " does not fit the cap (radius " + std::to_string(radiusMm) + " mm, rest_mm " + std::to_string(s.restMm) + "); " + std::to_string(fitMm) + " is used");
-         s.cornerMm = fitMm;
+         // star design 3: the tips' edge and the dome's kinks rounded within the star's sides (a tiny star: the largest that fits)
+         const ButtonCap::StarRound fit = ButtonCap::StarRounding(ButtonCap::StarOutline(m_d.m_radius * U, s.restMm * 1e-3), ButtonCap::Part::kEdgeMinM, s.cornerMm * 1e-3);
+         if (ButtonCap::Part::kEdgeMinM > fit.kinkFit)
+            notices.push_back("Star trigger " + GetName() + ": the star (radius " + std::to_string(radiusMm) + " mm) is too small for its dome's kinks rounded at " + std::to_string(ButtonCap::Part::kEdgeMinM * 1e3) + " mm; " + std::to_string(fit.kinkFit * 1e3) + " mm is used");
+         if (s.cornerMm * 1e-3 > fit.cornerFit)
+         {
+            notices.push_back("Star trigger " + GetName() + ": corner_mm " + std::to_string(s.cornerMm) + " does not fit the star's tips (radius " + std::to_string(radiusMm) + " mm, rest_mm " + std::to_string(s.restMm) + "); " + std::to_string(fit.cornerFit * 1e3) + " is used");
+            s.cornerMm = fit.cornerFit * 1e3;
+         }
+         if (s.capHMm != ButtonCap::Settings().capHMm)   // a Star's wall comes from its shape (the tips' wall), not cap_h_mm: a key set for it is not used, as an unknown key
+            notices.push_back("Star trigger " + GetName() + ": ini key cap_h_mm not used (a Star's wall comes from its shape); remove it from the table's physics ini");
       }
-      if (s.capHMm <= s.restMm)
+      else
       {
-         notices.push_back("Button trigger " + GetName() + ": cap_h_mm " + std::to_string(s.capHMm) + " does not reach into the hole at rest (it must exceed rest_mm); the default 3.97 mm is used");
-         s.capHMm = ButtonCap::Settings().capHMm;
+         const double fitMm = std::min(radiusMm, s.restMm);   // design 4f: the corner fits under the cap's radius and its height above the wood
+         if (s.cornerMm > fitMm)
+         {
+            notices.push_back("Button trigger " + GetName() + ": corner_mm " + std::to_string(s.cornerMm) + " does not fit the cap (radius " + std::to_string(radiusMm) + " mm, rest_mm " + std::to_string(s.restMm) + "); " + std::to_string(fitMm) + " is used");
+            s.cornerMm = fitMm;
+         }
+         if (s.capHMm <= s.restMm)
+         {
+            notices.push_back("Button trigger " + GetName() + ": cap_h_mm " + std::to_string(s.capHMm) + " does not reach into the hole at rest (it must exceed rest_mm); the default 3.97 mm is used");
+            s.capHMm = ButtonCap::Settings().capHMm;
+         }
       }
       if (s.springN <= s.massG * 1e-3 * 9.81 || s.springFullN < s.springN)
       {
-         notices.push_back("Button trigger " + GetName() + ": spring_n " + std::to_string(s.springN) + " / spring_full_n " + std::to_string(s.springFullN) + " do not hold the cap up (the preload must exceed its weight, the full force the preload); the defaults 0.34 / 0.69 N are used");
+         notices.push_back(kind + " trigger " + GetName() + ": spring_n " + std::to_string(s.springN) + " / spring_full_n " + std::to_string(s.springFullN) + " do not hold the cap up (the preload must exceed its weight, the full force the preload); the defaults " + std::to_string(ButtonCap::Settings().springN) + " / " + std::to_string(ButtonCap::Settings().springFullN) + " N are used");
          s.springN = ButtonCap::Settings().springN;
          s.springFullN = ButtonCap::Settings().springFullN;
       }
       const GroupStep::V3 axis((double)m_d.m_vCenter.x * U, (double)m_d.m_vCenter.y * U, (double)height * U);
       auto model = std::make_shared<ButtonCap::Cap>();
-      model->Build(s, axis, m_d.m_radius * U, RubberContact::BallSI());
-      // the drawn cap: the stock mesh (taller than the real cap), its top put at the physical top at rest, moved by the travel (looks only)
+      model->Build(s, axis, m_d.m_radius * U, RubberContact::BallSI(), star ? ButtonCap::Top::Star : ButtonCap::Top::Button);
+      // the drawn cap, moved by the travel (looks only). A Button: the stock mesh (taller than the real cap), its top put at the physical top at rest. A Star: the stock star mesh, its
+      // height scaled to the model's (GenerateMesh), its top already there
       float meshTop = -FLT_MAX;
       for (const Vertex3D_NoTex2 &v : SetupMeshData(TriggerButton).vertices)
          meshTop = max(meshTop, v.z * m_d.m_radius + 5.0f);   // (GenerateMesh's zoffset for a Button)
-      const double drawRest = s.restMm * 1e-3 / U - meshTop;
+      const double drawRest = star ? 0.0 : s.restMm * 1e-3 / U - meshTop;
       RubberObjectSettings hs;
       const JetBumper::Params pp;
       ContactHost::LoadHardSurfaceSettings(hs, ini, "trigger", GetName(), pp.plasticE, pp.plasticMu);
@@ -861,7 +885,11 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       physics->AddCollider(m_partHost, isUI);
       m_partAngle = (float)drawRest;
       const ButtonCap::Part &c = model->part;
-      PLOGI << "Trigger " << GetName() << ": button cap on the group step at (" << m_d.m_vCenter.x << ", " << m_d.m_vCenter.y << ") VPU, surface z " << height << " VPU; radius " << c.R * 1e3 << " mm, rest " << s.restMm
+      if (star)
+         PLOGI << "Trigger " << GetName() << ": star top: the dome through the star mesh's ridge tops, " << c.prof.v.size() << " sweep vertices, height x " << s.restMm / (ButtonCap::kStarTop * radiusMm)
+               << " of the mesh (top " << s.restMm << " mm), tips' edge rounded " << s.cornerMm << " mm, kinks " << ButtonCap::Part::kEdgeMinM * 1e3 << " mm; tips at r " << ButtonCap::kStarProfile[ButtonCap::kStarTip][0] * radiusMm
+               << " mm, " << ButtonCap::kStarProfile[ButtonCap::kStarTip][1] / ButtonCap::kStarTop * s.restMm << " mm up; cap_h_mm not used (the wall from the mesh)";
+      PLOGI << "Trigger " << GetName() << ": " << (star ? "star" : "button") << " cap on the group step at (" << m_d.m_vCenter.x << ", " << m_d.m_vCenter.y << ") VPU, surface z " << height << " VPU; radius " << c.R * 1e3 << " mm, rest " << s.restMm
             << " mm, corner " << s.cornerMm << " mm, close " << s.closeMm << " mm; spring " << s.springN << " N at rest, " << s.springFullN << " N flush; mass " << s.massG << " g; stops e " << s.stopE << " (sink only, one coordinate; stop k " << c.stops[c.stopUp].k << " N/m^1.5); cap " << s.capHMm << " mm tall; plastic E " << c.rp.eMpa
             << " MPa, mu " << c.rp.mu << "; enabled " << m_d.m_enabled << "; drawn offset at rest " << drawRest << " VPU";
       return;
@@ -1043,7 +1071,7 @@ void Trigger::UpdateAnimation(const float diff_time_msec)
       m_animHeightOffset = 0.0f;
       return;
    }
-   if (m_partHost != nullptr && m_d.m_shape == TriggerButton)   // a button cap: the stock mesh at the cap's travel (its adapter publishes the drawn offset in m_partAngle), not the timed slide
+   if (m_partHost != nullptr && (m_d.m_shape == TriggerButton || m_d.m_shape == TriggerStar))   // a button or star cap: the stock mesh at the cap's travel (its adapter publishes the drawn offset in m_partAngle), not the timed slide
    {
       m_hitEvent = m_unhitEvent = m_doAnimation = false;
       m_animHeightOffset = m_partAngle;
@@ -1224,6 +1252,13 @@ std::unique_ptr<std::vector<Vertex3D_NoTex2>> Trigger::GenerateMesh(Vertex3Ds &b
    else
       fullMatrix = Matrix3D::MatrixRotateZ(ANGTORAD(m_d.m_rotation));
 
+   // a Star cap on the unified engine (buttoncap.h Top::Star, star design 1d): the stock star mesh with its height scaled to the model's (mesh z x rest / kStarTop: the top rest_mm
+   // above its surface at rest), its normals with it; 0 = the stock mesh
+   float starZ = 0.f;
+   if (m_d.m_shape == TriggerStar && m_partHost != nullptr)
+      if (const ButtonCap::Cap *const cap = dynamic_cast<const ButtonCap::Cap *>(m_partHost->MovingPart()))
+         starZ = (float)(cap->part.travel / ContactSystem::kMetresPerUnit / ButtonCap::kStarTop);
+
    for (size_t i = 0; i < verts.size(); i++)
    {
       Vertex3Ds vert = fullMatrix * Vertex3Ds{verts[i].x, verts[i].y, verts[i].z};
@@ -1232,7 +1267,7 @@ std::unique_ptr<std::vector<Vertex3D_NoTex2>> Trigger::GenerateMesh(Vertex3Ds &b
       {
          outVerts[i].x = vert.x * m_d.m_radius + m_d.m_vCenter.x;
          outVerts[i].y = vert.y * m_d.m_radius + m_d.m_vCenter.y;
-         outVerts[i].z = vert.z * m_d.m_radius + baseHeight + zoffset;
+         outVerts[i].z = (starZ > 0.f ? vert.z * starZ : vert.z * m_d.m_radius) + baseHeight + zoffset;
       }
       else
       {
@@ -1243,6 +1278,12 @@ std::unique_ptr<std::vector<Vertex3D_NoTex2>> Trigger::GenerateMesh(Vertex3Ds &b
 
       vert = Vertex3Ds(verts[i].nx, verts[i].ny, verts[i].nz);
       vert = fullMatrix.MultiplyVectorNoTranslate(vert);
+      if (starZ > 0.f)   // (a normal under the scale diag(R, R, starZ): x and y times starZ / R, then unit length)
+      {
+         vert.x *= starZ / m_d.m_radius;
+         vert.y *= starZ / m_d.m_radius;
+         vert.Normalize();
+      }
       outVerts[i].nx = vert.x;
       outVerts[i].ny = vert.y;
       outVerts[i].nz = vert.z;
