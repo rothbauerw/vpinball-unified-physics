@@ -13,7 +13,7 @@ G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
 In flight: 1.34 first (shared finder; P1, P2a, P2b, P9, P3 static meshes committed). 1.33: piece 2 kept with cut B (stress v2 cost 52 to 1.7 us per cycle), piece 3 dropped (cost). Owed: snapshot hashes refresh. Lead log runs/2026-11-10-lead.
-Next decision: 1.34 a cheaper exact pre-test in the list pass (skip a face whose plane is farther than R; the list pass measures ~10.8 faces per check, the walk measured 4.3); then P4. Owed: rename the walk's leftover names (Walk, useWalk, walk counters).
+Next decision: 1.34 P4 (cuts and holes through the finder's query: locality, under 3 us per cycle today), then P5-P8. Plane pre-test dropped (3-10 ns per check). Separate: N3 ramp edge search (343 of 417 us per cycle, slot in groove).
 Parked with playfield holes (Button and Star committed): a ball on a flush Button lands on the wood through the cap (no hole), bounce e 0.86; user expects much more loss on a Button.
 N12. Gorgar load: 0 halvings (cord grip 1cec677ab, rolling patch 87ec36642, stick-zone trial 49155d9e2: Drain-kicker 2-cycle gone, rounds per step -10 %); ~60 depth warnings < 20 um in the bottom pile and at the Drain kicker (stock kicker).
 N3. Playfield cuts: slot (drawn), groove, rectangle, cuts that meet in bbdee9278. Open: slot-in-groove 256 us/cycle (ramp edge search); normal jump at slot tips in the groove, b8 unchecked (runs/2026-11-10-cut-junction/results_ramp.txt). Later: draw new shapes, triangle, holes.
@@ -83,7 +83,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 
 ## 9. Still stock (ask before converting)
 1. Stand-up and drop targets.
-2. Kickers: next (user 11-12); requirements first.
+2. Kickers: requirements agreed (Requirements.txt F); design next (KickerDesign.txt, ModelStandards 1b-1d).
 4. Plunger: other tables, auto plunger, mechanical input.
 5. Ramps: wire-ramp types, rebound, cost.
 6. Playfield material values unverified: compare with the user's video of a ball rolling on a playfield.

@@ -1857,16 +1857,16 @@ namespace PlayfieldCuts
       static std::vector<RimHit> hits;
       static std::vector<RimHump> humps;
       NearCuts(host, c, reachM, cuts);
-      // shared_finder P3b: the walk's faces within R (HitRubber::FinderTable), in load order with their query-list positions; the probe with none within R reads the whole list with the
+      // shared_finder P3b: the near pass's faces within R (HitRubber::FinderTable), in load order with their query-list positions; the probe with none within R reads the whole list with the
       // box bound (its nearest wherever it is, as today). A turntable's hole (nHoles) moves a face's nearest point, so there the whole list as P3a.
-      const bool walk = ft != nullptr && ft->useWalk && nHoles == 0;
-      const std::vector<int> &in = walk ? ft->inI : faces;
-      const RubberContact::FaceRead frI { ft, walk ? ft->inJ.data() : nullptr };
+      const bool nearOn = ft != nullptr && ft->useNear && nHoles == 0;
+      const std::vector<int> &in = nearOn ? ft->inI : faces;
+      const RubberContact::FaceRead frI { ft, nearOn ? ft->inJ.data() : nullptr };
       const RubberContact::FaceRead *const pI = ft != nullptr ? &frI : nullptr;
       if (cuts.empty())   // today's probe
       {
          RubberContact::TubeProbe pr;
-         if (walk && in.empty())
+         if (nearOn && in.empty())
          {
             const RubberContact::FaceRead frP { ft, nullptr, true };
             pr = RubberContact::ProbeTriangles(bs, tris, faces, edgeRho, c, holes, nHoles, 0.0, nullptr, &frP);
@@ -1877,8 +1877,8 @@ namespace PlayfieldCuts
             RubberContact::PatchTriangles(bs, tris, in, c, zero, pr, holes, nHoles, pI);   // (the patch reads only faces within R)
          return pr;
       }
-      FacesLeft(tris, in, cuts, c, left, pI, ft != nullptr ? &leftPos : nullptr);   // P3b: FacesLeft filters the walked set
-      const bool wide = walk && left.empty();   // P3b: no face left within R: the probe's nearest of every face left, with the box bound
+      FacesLeft(tris, in, cuts, c, left, pI, ft != nullptr ? &leftPos : nullptr);   // P3b: FacesLeft filters the near pass's set
+      const bool wide = nearOn && left.empty();   // P3b: no face left within R: the probe's nearest of every face left, with the box bound
       if (wide)
          FacesLeft(tris, faces, cuts, c, left, pF, &leftPos);
       const RubberContact::FaceRead frL { ft, leftPos.data(), wide };   // the faces left, read at their query-list positions

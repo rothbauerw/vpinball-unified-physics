@@ -842,12 +842,12 @@ namespace RubberContact
       uint64_t cyc = ~0ull;   // the counters: the cycle of the last contact check and the checks in it (hitrubber.cpp TabCheck)
       uint32_t nCyc = 0;
       bool count = false;    // P3a's per-read counters (fills, reads): check or profile mode only
-      bool direct = false;   // VPX_FINDER_TABLE=0 (diagnostics only, results equal): the loops measure every face directly (the walk still keeps its own measurements here)
+      bool direct = false;   // VPX_FINDER_TABLE=0 (diagnostics only, results equal): the loops measure every face directly (the near pass still keeps its own measurements here)
       int tag = -1;          // the counters: 1 = a rubber corner timed apart (design.md section 7), 0 = not, -1 = not yet known
       // shared_finder P3b (design.md section 4; list pass runs/2026-11-12-listpass/brief.md): the faces within R, found once per table (ball position) by one pass over the query list.
-      // inJ / inI: the faces within R of c, in load order (query-list positions, face indices); useWalk: the loops read them (false: the whole query list, check mode's comparison).
-      uint32_t walkGen = 0;
-      bool useWalk = false;
+      // inJ / inI: the faces within R of c, in load order (query-list positions, face indices); useNear: the loops read them (false: the whole query list, check mode's comparison).
+      uint32_t nearGen = 0;
+      bool useNear = false;
       std::vector<int> inJ, inI;
       // the query list's index for the edge slots (EdgeSlot), rebuilt once per query version: idx by face id gives the face's list position (stamped, never cleared)
       struct Idx
@@ -891,7 +891,7 @@ namespace RubberContact
          return &es[3 * (size_t)j + e];
       }
       void *objStats = nullptr;   // P3b2 counters (check or profile mode): the owner's per-object entry, looked up once
-      uint64_t walkMiss = 0, walkBox = 0, walkVisit = 0;   // check mode: faces within R the pass did not hand over; box tests and faces past the box (measured through the table) (counted with fills)
+      uint64_t nearMiss = 0, nearBox = 0, nearVisit = 0;   // check mode: faces within R the pass did not hand over; box tests and faces past the box (measured through the table) (counted with fills)
       int lastMissJ = -1;
       static double BoxD2(const SurfaceTri &t, const V3 &c)   // squared distance from c to the face's box: a lower bound of its distance
       {
@@ -915,11 +915,11 @@ namespace RubberContact
       }
       // the faces within R: one pass over the query list in list order (load order); a face is dropped when its box is farther than R (an exact lower bound of its distance), else
       // measured through the table. list: the object's query list (face indices, ascending). nb: only for the edge slots' index (built when the faces are linked).
-      void Walk(const std::vector<SurfaceTri> &tris, const std::vector<std::array<int, 3>> &nb, const std::vector<int> &list, const V3 &c, const double R2)
+      void NearPass(const std::vector<SurfaceTri> &tris, const std::vector<std::array<int, 3>> &nb, const std::vector<int> &list, const V3 &c, const double R2)
       {
-         if (walkGen == gen)
+         if (nearGen == gen)
             return;
-         walkGen = gen;
+         nearGen = gen;
          inJ.clear();
          if (!idxOk && nb.size() == tris.size())   // a new query list: index it (once per query version)
          {
@@ -940,11 +940,11 @@ namespace RubberContact
          {
             const int i = list[j];
             if (count)
-               walkBox++;
+               nearBox++;
             if (BoxD2(tris[i], c) > boxR2)
                continue;
             if (count)
-               walkVisit++;
+               nearVisit++;
             if (Get((int)j, tris[i], c).d2 < R2)
                inJ.push_back((int)j);
          }
@@ -958,7 +958,7 @@ namespace RubberContact
                const V3 dv = c - ClosestOnTriangle(tris[list[j]], c, k);
                if (dv.Dot(dv) < R2 && !std::binary_search(inJ.begin(), inJ.end(), (int)j))
                {
-                  walkMiss++;
+                  nearMiss++;
                   lastMissJ = (int)j;
                }
             }
@@ -1360,7 +1360,7 @@ namespace RubberContact
       const ContactProf::Ticks profBars(fr != nullptr && fr->t != nullptr && fr->t->tag == 1 ? ContactProf::CD().barsCorner : ContactProf::CD().bars);   // P3c profile (diagnostics only): the whole call, the probe inside included; the rubber corners apart
       if (ContactProf::CheckOn())
          ContactProf::CD().barsN++;
-      // mc-cost profile (diagnostics only): stamps between the parts; the object's entry (named once its table has walked)
+      // mc-cost profile (diagnostics only): stamps between the parts; the object's entry (named once its table has made its near pass)
       const bool profS = ContactProf::CheckOn();
       ContactProf::ObjBars *const profObj = profS && fr != nullptr && fr->t != nullptr ? ContactProf::ObjBarsOf(fr->t->objStats) : nullptr;
       struct ProfEnd
@@ -1407,11 +1407,11 @@ namespace RubberContact
       }
       if (profS)
          ContactProf::CD().bCand += cand.size();
-      // cut B (runs/2026-11-12-mc-cutB/brief_build.md): the probe's result is the law's answer (one peak) when the faces within R (the walk's set, cand) are one set joined through shared
+      // cut B (runs/2026-11-12-mc-cutB/brief_build.md): the probe's result is the law's answer (one peak) when the faces within R (the near pass's set, cand) are one set joined through shared
       // edges and no shared edge between two of them is concave toward c (b on c's side of plane A and a on c's side of plane B; fold built at load, RubberSurface::Link). Then the face
       // pass, edge pass and merge are skipped. Check mode (VPX_FINDER_CHECK=1) runs the full law on every skippable call and counts any that ends with more than one peak.
       bool cbSkip = false;
-      if (fold != nullptr && fold->size() == tris.size() && fr != nullptr && fr->t != nullptr && fr->t->useWalk && &cand == &fr->t->inI)
+      if (fold != nullptr && fold->size() == tris.size() && fr != nullptr && fr->t != nullptr && fr->t->useNear && &cand == &fr->t->inI)
       {
          thread_local std::vector<uint32_t> mark;   // stamp: in the set; stamp + 1: reached
          thread_local std::vector<int> st;

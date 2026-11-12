@@ -214,24 +214,24 @@ namespace
       uint64_t tsc0 = 0;
       std::chrono::steady_clock::time_point t0;
       int logged = 0;
-      uint64_t walks = 0, walkVisit = 0, walkFills = 0, walkIn = 0, walkList = 0;   // P3b counters (check or profile mode): walks made, faces visited and measured by them, faces handed over, query-list length
+      uint64_t passes = 0, nearVisit = 0, nearFills = 0, nearIn = 0, nearList = 0;   // P3b counters (check or profile mode): near passes made, faces box-tested and measured by them, faces handed over, query-list length
       uint64_t efills = 0, ereads = 0, emism = 0;   // P3c (check or profile mode): edges measured, edge reads, check-mode edge mismatches
       uint64_t cbMism = 0;   // cut B check mode: skippable calls whose full law ended with more than one peak
-      uint64_t walkMiss = 0, probeDiff = 0, walkBox = 0;   // P3b check mode: faces within R the walk did not hand over; probe answers that differ from the whole list's; box tests (counters)
-      int loggedWalk = 0;
+      uint64_t nearMiss = 0, probeDiff = 0, nearBox = 0;   // P3b check mode: faces within R the near pass did not hand over; probe answers that differ from the whole list's; box tests (counters)
+      int loggedNear = 0;
       std::vector<uint64_t> cornerTicks = std::vector<uint64_t>(65537, 0);   // P3b: time per contact check on the rubber corners (design.md section 7), 16-tick bins
       uint64_t cornerSum = 0, cornerN = 0;
-      struct ObjWalk   // P3b2 (check or profile mode): per object, walks made, query-list faces, faces visited, the walk's ticks
+      struct ObjNear   // P3b2 (check or profile mode): per object, near passes made, query-list faces, faces past the box, the pass's ticks
       {
-         uint64_t walks = 0, list = 0, visit = 0, ticks = 0;
+         uint64_t passes = 0, list = 0, visit = 0, ticks = 0;
          ContactProf::ObjBars bars;   // mc-cost profile (diagnostics only)
       };
-      std::map<std::string, ObjWalk> perObj;
+      std::map<std::string, ObjNear> perObj;
    };
    FinderTabStats g_tab;
    thread_local int g_tabDepth = 0;
-   thread_local bool g_walkOff = false;   // P3b check mode: the comparison's pass over the whole query list
-   thread_local bool g_walkCmp = false;   // P3b check mode: inside one comparison (ProbePatch calls Probe)
+   thread_local bool g_nearOff = false;   // P3b check mode: the comparison's pass over the whole query list
+   thread_local bool g_nearCmp = false;   // P3b check mode: inside one comparison (ProbePatch calls Probe)
    bool FinderTableOn()   // P3a's table on; VPX_FINDER_TABLE=0 (diagnostics only, results equal): the face loops measure every face directly
    {
       static const bool on = [] { const char *e = std::getenv("VPX_FINDER_TABLE"); return e == nullptr || e[0] != '0'; }();
@@ -243,14 +243,14 @@ namespace
       return a.overlap == b.overlap && a.seg == b.seg && eq(a.point.x, b.point.x) && eq(a.point.y, b.point.y) && eq(a.point.z, b.point.z) && eq(a.normal.x, b.normal.x) && eq(a.normal.y, b.normal.y)
          && eq(a.normal.z, b.normal.z) && eq(a.dist, b.dist) && eq(a.delta, b.delta) && eq(a.reff, b.reff) && eq(a.rho, b.rho) && eq(a.grad, b.grad);
    }
-   // P3b: the faces a loop reads. in: the walk's faces within R (load order, with their query-list positions); probe: the same, or with none within R the whole query list with the box bound
-   // (the probe's nearest wherever it is, as today). No walk (key off, check mode's whole-list pass): both the query list as P3a.
-   void WalkLists(RubberContact::FaceTable *const ft, const std::vector<int> &all, const bool walk, const std::vector<int> *&inL, RubberContact::FaceRead &inR, const std::vector<int> *&prL,
+   // P3b: the faces a loop reads. in: the near pass's faces within R (load order, with their query-list positions); probe: the same, or with none within R the whole query list with the box bound
+   // (the probe's nearest wherever it is, as today). No near pass (key off, check mode's whole-list pass): both the query list as P3a.
+   void NearLists(RubberContact::FaceTable *const ft, const std::vector<int> &all, const bool nearOn, const std::vector<int> *&inL, RubberContact::FaceRead &inR, const std::vector<int> *&prL,
                   RubberContact::FaceRead &prR)
    {
       inR.t = prR.t = ft;
       inL = prL = &all;
-      if (!walk || ft == nullptr || !ft->useWalk)
+      if (!nearOn || ft == nullptr || !ft->useNear)
          return;
       inL = &ft->inI;
       inR.pos = ft->inJ.data();
@@ -1576,19 +1576,19 @@ void HitRubber::Refresh(SurfaceContact &it, const double ballR, const double rea
 
 RubberContact::TubeProbe HitRubber::Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const
 {
-   if (m_surface != nullptr && !g_walkCmp && it.qFaces != nullptr && FinderCheckOn())   // P3b check mode: the walk's answer against the whole query list's (diagnostics only)
+   if (m_surface != nullptr && !g_nearCmp && it.qFaces != nullptr && FinderCheckOn())   // P3b check mode: the near pass's answer against the whole query list's (diagnostics only)
    {
-      g_walkCmp = true;
-      g_walkOff = true;
+      g_nearCmp = true;
+      g_nearOff = true;
       const RubberContact::TubeProbe r0 = Probe(bs, it, c);
-      g_walkOff = false;
+      g_nearOff = false;
       const RubberContact::TubeProbe r1 = Probe(bs, it, c);
-      g_walkCmp = false;
+      g_nearCmp = false;
       if (!SameProbe(r0, r1))
       {
          g_tab.probeDiff++;
-         if (g_tab.loggedWalk++ < 50)
-            PLOGW << "Finder walk probe differs: object " << Name() << ", seg " << r1.seg << " vs " << r0.seg << ", dist " << r1.dist << " vs " << r0.dist << ", cycle " << g_finder.cycle;
+         if (g_tab.loggedNear++ < 50)
+            PLOGW << "Finder near pass probe differs: object " << Name() << ", seg " << r1.seg << " vs " << r0.seg << ", dist " << r1.dist << " vs " << r0.dist << ", cycle " << g_finder.cycle;
       }
       return r1;
    }
@@ -1606,9 +1606,9 @@ RubberContact::TubeProbe HitRubber::Probe(const RubberContact::BallSI &bs, const
    const TabCheck tabCheck(ft, this, it, c);
    if (m_surface != nullptr)
    {
-      const std::vector<int> *inL, *prL;   // P3b: the walk's faces (the probe: the whole list with the box bound when none is within R)
+      const std::vector<int> *inL, *prL;   // P3b: the near pass's faces (the probe: the whole list with the box bound when none is within R)
       RubberContact::FaceRead frIn, frPr;
-      WalkLists(ft, it.Faces(c), true, inL, frIn, prL, frPr);
+      NearLists(ft, it.Faces(c), true, inL, frIn, prL, frPr);
       const RubberContact::FaceRead *const pPr = ft != nullptr ? &frPr : nullptr;
       if (m_surfaceKind == "playfield")
       {
@@ -1617,7 +1617,7 @@ RubberContact::TubeProbe HitRubber::Probe(const RubberContact::BallSI &bs, const
          Turntables::Holes(holes, nHoles);   // the playfield has a round hole under every turntable disc
          if (PlayfieldCuts::Any(this))   // holes cut in the playfield (playfieldcut.h): the faces inside a cut left out, its exact rim's contacts added. The cuts within the face list's reach are tested
             return PlayfieldCuts::Probe(this, bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, it.candR >= 0.0 ? it.candR : 1e30, holes, nHoles, false, 0.0, ft);
-         if (nHoles > 0)   // P3b: a turntable's hole moves a face's nearest point to its rim, so the walk's distances are not the probe's: the whole list as P3a
+         if (nHoles > 0)   // P3b: a turntable's hole moves a face's nearest point to its rim, so the near pass's distances are not the probe's: the whole list as P3a
             return RubberContact::ProbeTriangles(bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, holes, nHoles, 0.0, nullptr, fr);
          return RubberContact::ProbeTriangles(bs, m_surface->tris, *prL, m_set.edgeRadiusMm * 1e-3, c, holes, nHoles, 0.0, nullptr, pPr);
       }
@@ -1628,19 +1628,19 @@ RubberContact::TubeProbe HitRubber::Probe(const RubberContact::BallSI &bs, const
 
 RubberContact::TubeProbe HitRubber::ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const
 {
-   if (m_surface != nullptr && !g_walkCmp && it.qFaces != nullptr && FinderCheckOn())   // P3b check mode: as Probe
+   if (m_surface != nullptr && !g_nearCmp && it.qFaces != nullptr && FinderCheckOn())   // P3b check mode: as Probe
    {
-      g_walkCmp = true;
-      g_walkOff = true;
+      g_nearCmp = true;
+      g_nearOff = true;
       const RubberContact::TubeProbe r0 = ProbePatch(bs, it, c);
-      g_walkOff = false;
+      g_nearOff = false;
       const RubberContact::TubeProbe r1 = ProbePatch(bs, it, c);
-      g_walkCmp = false;
+      g_nearCmp = false;
       if (!SameProbe(r0, r1))
       {
          g_tab.probeDiff++;
-         if (g_tab.loggedWalk++ < 50)
-            PLOGW << "Finder walk patch differs: object " << Name() << ", seg " << r1.seg << " vs " << r0.seg << ", delta " << r1.delta << " vs " << r0.delta << ", cycle " << g_finder.cycle;
+         if (g_tab.loggedNear++ < 50)
+            PLOGW << "Finder near pass patch differs: object " << Name() << ", seg " << r1.seg << " vs " << r0.seg << ", delta " << r1.delta << " vs " << r0.delta << ", cycle " << g_finder.cycle;
       }
       return r1;
    }
@@ -1656,10 +1656,10 @@ RubberContact::TubeProbe HitRubber::ProbePatch(const RubberContact::BallSI &bs, 
    const RubberContact::FaceRead *const fr = ft != nullptr ? &frd : nullptr;
    checkProf.Tab(ft);
    const TabCheck tabCheck(ft, this, it, c);
-   const std::vector<int> *inL = nullptr, *prL = nullptr;   // P3b: the walk's faces (as Probe); the patch reads only faces within R (kind 0 and plane distance below R - zero)
+   const std::vector<int> *inL = nullptr, *prL = nullptr;   // P3b: the near pass's faces (as Probe); the patch reads only faces within R (kind 0 and plane distance below R - zero)
    RubberContact::FaceRead frIn, frPr;
    if (m_surface != nullptr)
-      WalkLists(ft, it.Faces(c), true, inL, frIn, prL, frPr);
+      NearLists(ft, it.Faces(c), true, inL, frIn, prL, frPr);
    const RubberContact::FaceRead *const pIn = ft != nullptr ? &frIn : nullptr, *const pPr = ft != nullptr ? &frPr : nullptr;
    if (m_surface != nullptr && m_surfaceKind == "playfield" && PlayfieldCuts::Any(this))   // (as Probe, with the patch sum of the faces' folds or of the cut's rim contacts)
    {
@@ -1671,7 +1671,7 @@ RubberContact::TubeProbe HitRubber::ProbePatch(const RubberContact::BallSI &bs, 
    if (ContactSettings::Get().multiContact && !(m_surface != nullptr && m_surfaceKind == "playfield"))   // every pressed part its own Hertz bar (rubbercontact.h BarsTube / BarsTriangles); the playfield (turntable holes) keeps the patch sum
    {
       if (m_surface != nullptr)
-         return RubberContact::BarsTriangles(bs, m_surface->tris, m_surface->vid, m_surface->nb, *prL, m_set.edgeRadiusMm * 1e-3, c, it.gs.zero, pPr, &m_surface->fold);   // P3b: the walked faces (bars only use faces within R)
+         return RubberContact::BarsTriangles(bs, m_surface->tris, m_surface->vid, m_surface->nb, *prL, m_set.edgeRadiusMm * 1e-3, c, it.gs.zero, pPr, &m_surface->fold);   // P3b: the near pass's faces (bars only use faces within R)
       return RubberContact::BarsTube(bs, m_ptsSI.data(), (int)m_ptsSI.size(), m_radiusSI, c, m_tubePre, it.gs.zero);
    }
    RubberContact::TubeProbe pr = Probe(bs, it, c);
@@ -2624,38 +2624,38 @@ RubberContact::FaceTable *HitRubber::FinderTable(const SurfaceContact &it, const
    if (t.tag < 0)
       t.tag = Name() == "zCol_Rubber_Corner_15" || Name() == "zCol_Rubber_Corner_16" || Name() == "zCol_Rubber_Corner_21" ? 1 : 0;
    t.Begin(c, q->ver, q->per[k].size());
-   t.useWalk = !g_walkOff;   // P3b: the walk, once per ball position (check mode's whole-list pass reads the list as P3a)
-   if (t.useWalk)
+   t.useNear = !g_nearOff;   // P3b: the near pass, once per ball position (check mode's whole-list pass reads the list as P3a)
+   if (t.useNear)
    {
-      const uint64_t m0 = t.walkMiss, b0 = t.walkBox, v0 = t.walkVisit, f0 = t.fills;
-      const uint32_t w0 = t.walkGen;
+      const uint64_t m0 = t.nearMiss, b0 = t.nearBox, v0 = t.nearVisit, f0 = t.fills;
+      const uint32_t w0 = t.nearGen;
       const uint64_t tw0 = t.count ? __rdtsc() : 0;
-      t.Walk(m_surface->tris, m_surface->nb, q->per[k], c, q->R * q->R);
-      if (t.count && t.walkGen != w0)   // the walk's counters: check or profile mode only
+      t.NearPass(m_surface->tris, m_surface->nb, q->per[k], c, q->R * q->R);
+      if (t.count && t.nearGen != w0)   // the near pass's counters: check or profile mode only
       {
          const uint64_t tw1 = __rdtsc();
          if (t.objStats == nullptr)
             t.objStats = &g_tab.perObj[Name()];   // std::map: the entry's address stays valid
-         FinderTabStats::ObjWalk &o = *static_cast<FinderTabStats::ObjWalk *>(t.objStats);
+         FinderTabStats::ObjNear &o = *static_cast<FinderTabStats::ObjNear *>(t.objStats);
          o.ticks += tw1 - tw0;
-         o.walks++;
+         o.passes++;
          o.list += q->per[k].size();
-         o.visit += t.walkVisit - v0;
-         g_tab.walkBox += t.walkBox - b0;
-         g_tab.walkVisit += t.walkVisit - v0;
-         g_tab.walkFills += t.fills - f0;
-         g_tab.walks++;
-         g_tab.walkIn += t.inI.size();
-         g_tab.walkList += q->per[k].size();
+         o.visit += t.nearVisit - v0;
+         g_tab.nearBox += t.nearBox - b0;
+         g_tab.nearVisit += t.nearVisit - v0;
+         g_tab.nearFills += t.fills - f0;
+         g_tab.passes++;
+         g_tab.nearIn += t.inI.size();
+         g_tab.nearList += q->per[k].size();
       }
-      if (t.walkMiss != m0)
+      if (t.nearMiss != m0)
       {
-         g_tab.walkMiss += t.walkMiss - m0;
-         if (g_tab.loggedWalk < 50)
+         g_tab.nearMiss += t.nearMiss - m0;
+         if (g_tab.loggedNear < 50)
          {
-            g_tab.loggedWalk++;
+            g_tab.loggedNear++;
             const int face = t.lastMissJ >= 0 && t.lastMissJ < (int)q->per[k].size() ? q->per[k][t.lastMissJ] : -1;
-            PLOGW << "Finder walk miss: object " << Name() << ", face " << face << ", piece " << (face >= 0 && face < (int)m_surface->piece.size() ? m_surface->piece[face] : -1) << ", ball "
+            PLOGW << "Finder near pass miss: object " << Name() << ", face " << face << ", piece " << (face >= 0 && face < (int)m_surface->piece.size() ? m_surface->piece[face] : -1) << ", ball "
                   << (const void *)q->ball << ", cycle " << g_finder.cycle << ", c " << c.x << " " << c.y << " " << c.z;
          }
       }
@@ -2703,29 +2703,29 @@ void HitRubber::FinderTotals(const bool force)
       PLOGI << "Finder table totals: " << g_tab.checks << " contact checks; faces measured " << (double)g_tab.fills / (double)g_tab.checks << " and table reads " << (double)g_tab.reads / (double)g_tab.checks
             << " per check (" << g_tab.fills << ", " << g_tab.reads << "); checks per ball, object and cycle median " << HistP(g_tab.perCyc, 0.5) << ", p90 " << HistP(g_tab.perCyc, 0.9) << ", worst "
             << g_tab.perCycWorst << "; time per check mean " << nsPerTick * (double)g_tab.tickSum / (double)g_tab.checks << " ns, p99 " << nsPerTick * 16.0 * (double)(HistP(g_tab.ticks, 0.99) + 1)
-            << ", worst " << nsPerTick * (double)g_tab.tickWorst << " (" << nsPerTick << " ns per tick); check-mode table mismatches " << g_tab.mism << "; P3b walk misses " << g_tab.walkMiss
-            << ", probe answers differing " << g_tab.probeDiff << ", box tests " << g_tab.walkBox << "; walks " << g_tab.walks << ", per walk: faces visited "
-            << (g_tab.walks > 0 ? (double)g_tab.walkVisit / (double)g_tab.walks : 0.0) << ", measured " << (g_tab.walks > 0 ? (double)g_tab.walkFills / (double)g_tab.walks : 0.0) << ", box tests "
-            << (g_tab.walks > 0 ? (double)g_tab.walkBox / (double)g_tab.walks : 0.0) << ", handed over " << (g_tab.walks > 0 ? (double)g_tab.walkIn / (double)g_tab.walks : 0.0) << ", query list "
-            << (g_tab.walks > 0 ? (double)g_tab.walkList / (double)g_tab.walks : 0.0) << "; rubber corners " << g_tab.cornerN << " checks, mean "
+            << ", worst " << nsPerTick * (double)g_tab.tickWorst << " (" << nsPerTick << " ns per tick); check-mode table mismatches " << g_tab.mism << "; P3b near pass misses " << g_tab.nearMiss
+            << ", probe answers differing " << g_tab.probeDiff << ", box tests " << g_tab.nearBox << "; near passes " << g_tab.passes << ", per pass: faces past the box "
+            << (g_tab.passes > 0 ? (double)g_tab.nearVisit / (double)g_tab.passes : 0.0) << ", measured " << (g_tab.passes > 0 ? (double)g_tab.nearFills / (double)g_tab.passes : 0.0) << ", box tests "
+            << (g_tab.passes > 0 ? (double)g_tab.nearBox / (double)g_tab.passes : 0.0) << ", handed over " << (g_tab.passes > 0 ? (double)g_tab.nearIn / (double)g_tab.passes : 0.0) << ", query list "
+            << (g_tab.passes > 0 ? (double)g_tab.nearList / (double)g_tab.passes : 0.0) << "; rubber corners " << g_tab.cornerN << " checks, mean "
             << (g_tab.cornerN > 0 ? nsPerTick * (double)g_tab.cornerSum / (double)g_tab.cornerN : 0.0) << " ns, p99 " << nsPerTick * 16.0 * (double)(HistP(g_tab.cornerTicks, 0.99) + 1)
             << ", time " << nsPerTick * (double)g_tab.cornerSum * 1e-3 << " us in all; P3c edge slots: measured " << g_tab.efills << ", reads " << g_tab.ereads << ", check-mode edge mismatches " << g_tab.emism << "; cut B check-mode mismatches " << g_tab.cbMism;
       if (ContactProf::CheckOn())   // P3a profile (diagnostics only)
          ContactProf::CheckDump(g.cycle - ContactProf::CD().cyc0, nsPerTick);
-      if (!g_tab.perObj.empty())   // P3b2: the 5 objects with the longest query list per walk (check or profile mode)
+      if (!g_tab.perObj.empty())   // P3b2: the 5 objects with the longest query list per pass (check or profile mode)
       {
          std::vector<std::pair<double, std::string>> v;
          for (const auto &e : g_tab.perObj)
-            v.emplace_back(-(double)e.second.list / (double)e.second.walks, e.first);
+            v.emplace_back(-(double)e.second.list / (double)e.second.passes, e.first);
          std::sort(v.begin(), v.end());
          std::ostringstream os;
          for (size_t i = 0; i < v.size() && i < 5; i++)
          {
-            const FinderTabStats::ObjWalk &o = g_tab.perObj[v[i].second];
-            os << "; " << v[i].second << " walks " << o.walks << ", list " << (double)o.list / (double)o.walks << ", visited " << (double)o.visit / (double)o.walks << ", ns per walk "
-               << nsPerTick * (double)o.ticks / (double)o.walks;
+            const FinderTabStats::ObjNear &o = g_tab.perObj[v[i].second];
+            os << "; " << v[i].second << " passes " << o.passes << ", list " << (double)o.list / (double)o.passes << ", past the box " << (double)o.visit / (double)o.passes << ", ns per pass "
+               << nsPerTick * (double)o.ticks / (double)o.passes;
          }
-         PLOGI << "Finder walk densest (" << g_tab.perObj.size() << " objects)" << os.str();
+         PLOGI << "Finder near pass densest (" << g_tab.perObj.size() << " objects)" << os.str();
       }
    }
 }
@@ -2857,5 +2857,5 @@ void ContactProf::CheckDump(const uint64_t cycles, const double nsPerTick)
 
 ContactProf::ObjBars *ContactProf::ObjBarsOf(void *objStats)   // mc-cost profile (diagnostics only)
 {
-   return objStats != nullptr ? &static_cast<FinderTabStats::ObjWalk *>(objStats)->bars : nullptr;
+   return objStats != nullptr ? &static_cast<FinderTabStats::ObjNear *>(objStats)->bars : nullptr;
 }
