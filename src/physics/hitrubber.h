@@ -90,6 +90,18 @@ struct RubberSurface
    std::vector<std::array<int, 3>> nb;    // per face: the face across edge e = (vertex e, vertex e+1), -1 none; empty until Link
    std::map<std::array<uint32_t, 3>, int> weld;   // vertex bits -> id, while faces are added
    int Link();   // builds nb from vid (once, after the last Add); returns the number of edges on more than two faces (each links its first pair only)
+   // shared_finder (to-do 1.34, piece P1; runs/2026-11-11-finder/design.md sections 1-2): the finder's index over these faces, built once before the first cycle (HitRubber::FinderBuild).
+   // Each face's tight box is SurfaceTri lo / hi (the triangle's corners; rounding zero for a mesh). In P1 only check mode (VPX_FINDER_CHECK=1) reads the index.
+   struct FinderNode
+   {
+      RubberContact::V3 lo, hi;     // the box over its items' boxes, m
+      int left = -1, right = -1;    // children (inner node); left < 0 = a leaf
+      int first = 0, count = 0;     // a leaf's items: order[first .. first + count)
+   };
+   std::vector<FinderNode> fnodes;  // the box tree over the faces (median split on the longest side, 4 faces per leaf, ties by face index); fnodes[0] is the root
+   std::vector<int> forder;         // face indices in the tree's leaf order
+   std::vector<int> piece;          // per face: its mesh piece (faces joined through shared edges, nb), numbered by each piece's first face in load order
+   int nPieces = 0;
 };
 
 // One ball in an engine-stepped contact with a static rubber (post ring, wall rubber): the rubbers it touches and the bookkeeping for the log and the release.
@@ -167,6 +179,12 @@ public:
    RubberContact::TubeProbe ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const override;
    RubberContact::TubeProbe Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const override;   // the nearest point of one surface contact (tube or faces)
    double LayerM() const override;
+   // shared_finder (to-do 1.34, piece P1): builds the index over every static mesh host once. atLoad: the call at the end of the table's load (PhysicsEngine), which drops
+   // any index left from a previous table first; the call at each cycle's gather is a no-op once built (it builds only if the load call did not run)
+   static void FinderBuild(bool atLoad = false);
+   // check mode (VPX_FINDER_CHECK=1, diagnostics only): once per engaged ball and cycle, every enabled mesh object with a face within the ball's radius must be among the ball's
+   // gathered surfaces (items) and found by the index's object tree; inPlayfieldHole: the ball is over a kicker's hole (the gather leaves the playfield out on purpose)
+   static void FinderCheckGather(const HitBall *ball, const std::vector<SurfaceContact> &items, const RubberContact::V3 &c, double ballR, bool inPlayfieldHole);
    // Non-legacy kickers are round holes in the playfield: the playfield host leaves no floor inside them (the ball rests on the rim, or falls in and is captured).
    // Filled by Kicker::PhysicSetup, cleared when the physics engine is built. x, y, r in VPX units.
    static void AddPlayfieldHole(float x, float y, float r);
@@ -244,6 +262,8 @@ private:
    StopResolver m_stopResolver;
    std::set<std::string> m_stopWarned;   // names already reported as not found (once each)
 
+   // check mode (VPX_FINDER_CHECK=1): at one evaluation of this mesh, every face within the ball's radius (a full scan) against today's list (it.Faces(c)) and the index
+   void FinderCheck(const SurfaceContact &it, const RubberContact::V3 &c, double ballR, int evalKind) const;
    std::shared_ptr<RubberSurface> m_surface;   // a wall / primitive host: its faces (m_pts is then empty)
    int m_linkOver = 0;                         // multi_contact: edges on more than two faces, counted when the faces' shared edges are built at load (Link)
    mutable bool m_linkNoticed = false;         // that count reported (log and screen) at the first ball near the surface, once

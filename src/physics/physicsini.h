@@ -46,6 +46,7 @@ namespace PhysicsIni
       float hitSpeedMin = 0.5f;   // [Features] hit_speed_min: impacts slower than this (ball velocity units, 18.53 = 1 m/s) do not fire the playfield Hit event
       bool magnets = true;        // electromagnets ([Magnet:<name>] sections); off = none
       bool turntables = true;     // turntables ([Turntable:<name>] sections); off = none
+      bool sharedFinder = true;   // shared_finder (on while tested, rule 6; to-do 1.34, runs/2026-11-11-finder/design.md): 1 = the shared finder's index over every static mesh's faces (a box tree per mesh object over its faces' boxes, faces joined through shared edges into mesh pieces, one box tree over the objects) is built once before the first cycle; in this step (P1) only check mode (VPX_FINDER_CHECK=1) reads it, so no result changes; 0 = no index
       bool playfieldCuts = true;  // playfield_cuts: holes cut in the playfield ([PlayfieldCut:<name>] sections, playfieldcut.h; the slot under a wire switch); off = every cut ignored, the playfield solid (on while tested, rule 6)
       bool hitSpeed = true;       // PROTOTYPE: Ball.HitSpeed (normal speed before an impact) and the table's Hit event for the playfield; off = neither
    };
@@ -161,6 +162,8 @@ namespace PhysicsIni
             f.turntables = on;
          else if (key == "playfield_cuts")
             f.playfieldCuts = on;
+         else if (key == "shared_finder")
+            f.sharedFinder = on;
          else if (key == "hit_speed")
             f.hitSpeed = on;
          else if (key == "hit_speed_min")
@@ -179,7 +182,7 @@ namespace PhysicsIni
       if (!ContactSystem::Unified())
       {
          f.flippers = f.flipperRubber = f.rubbers = f.playfieldContact = f.surfaceRubbers = f.hardSurfaces = f.proximityEngage = f.hinges = f.triggers = false;
-         f.bands = f.slings = f.contact = f.magnets = f.turntables = f.playfieldCuts = f.hitSpeed = false;
+         f.bands = f.slings = f.contact = f.magnets = f.turntables = f.playfieldCuts = f.hitSpeed = f.sharedFinder = false;
          return f;
       }
       if (!file.empty())

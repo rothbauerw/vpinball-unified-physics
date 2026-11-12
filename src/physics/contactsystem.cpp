@@ -268,6 +268,7 @@ struct ContactSystemImpl
    static void GatherBalls(Cycle &cy)
    {
       CPROF(GatherBalls);
+      HitRubber::FinderBuild();   // shared_finder: the index over every static mesh, once before the first cycle (P1: only check mode reads it)
       const double dt = cy.dt;
       for (auto eit = g_engaged.begin(); eit != g_engaged.end();)
       {
@@ -308,6 +309,7 @@ struct ContactSystemImpl
                for (SurfaceContact &it : e.items)
                   it.r->Refresh(it, w.bs.R, 2.0 * w.v.Length() * dt + 0.005, w.c);   // a surface: the faces the ball can reach this cycle
             }
+            HitRubber::FinderCheckGather(pb, e.items, w.c, w.bs.R, PlayfieldHolesExist() && InPlayfieldHole(pb->m_d.m_pos));   // check mode only (VPX_FINDER_CHECK=1)
             cy.bodies.push_back(std::move(w));
          }
       }

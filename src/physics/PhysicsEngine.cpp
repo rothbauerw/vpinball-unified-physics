@@ -91,6 +91,7 @@ PhysicsEngine::PhysicsEngine(PinTable *const table)
    m_hitoctree.EndReset();
    m_hitoctree.Finalize();
    m_pendingHitObjects = nullptr;
+   HitRubber::FinderBuild(true);   // shared_finder: the index over every static mesh host, at load (every host, the implicit playfield's included, exists here)
    #if !defined(NDEBUG) && defined(PRINT_DEBUG_COLLISION_TREE)
       m_hitoctree.DumpTree(0);
    #endif

@@ -7,6 +7,10 @@
 #include <cstring>
 #include <fstream>
 #include <sstream>
+#include <array>
+#include <chrono>
+#include <map>
+#include <mutex>
 
 #include "imgui/imgui.h"
 #include "parts/ball.h"
@@ -90,6 +94,193 @@ bool HitRubber::SurfaceHeightAt(const double xU, const double yU, double &zU) co
    }
    zU = best / U;
    return found;
+}
+
+
+// ---- The shared finder, piece P1 (to-do 1.34; runs/2026-11-11-finder/design.md sections 1, 2 and 5) ----
+//
+// The index is built once, before the first cycle, over every static mesh host (a wall, ramp, primitive or the playfield with faces): per object a box tree over its faces'
+// tight boxes and the faces' mesh pieces (joined through shared edges), and one box tree over the objects' boxes. In P1 nothing in the engine reads it: only check mode
+// (VPX_FINDER_CHECK=1) queries it and compares it, and today's face lists, with a full scan. Collidable is the host's own m_enabled, read at the query (a flag on the leaf).
+
+namespace
+{
+   using FinderNode = RubberSurface::FinderNode;
+
+   struct FinderObj
+   {
+      const HitRubber *host;
+      RubberContact::V3 lo, hi;   // the object's box: its face tree's root, m
+   };
+
+   struct FinderIndex
+   {
+      bool built = false, on = false;
+      std::vector<FinderObj> objs;     // in the host registry's order (load order)
+      std::vector<FinderNode> nodes;   // the box tree over the objects
+      std::vector<int> order;
+      // check mode
+      std::mutex mtx;
+      uint64_t evals = 0, facesNear = 0, missA = 0, missB = 0, gathers = 0, gMissA = 0, gMissB = 0;
+      std::map<std::string, std::array<uint64_t, 4>> byObj;   // object -> misses: list, index, gather, object tree
+      int logged = 0;
+      bool notifiedA = false, notifiedB = false, notifiedG = false;
+      uint32_t nextReportMs = 0;   // check mode: the totals are also written once a second of table time (a run may end without closing the table)
+      void Reset()   // the table closes (its first mesh host is deleted): the next table builds its own
+      {
+         built = on = false;
+         objs.clear();
+         nodes.clear();
+         order.clear();
+         evals = facesNear = missA = missB = gathers = gMissA = gMissB = 0;
+         byObj.clear();
+         logged = 0;
+         notifiedA = notifiedB = notifiedG = false;
+         nextReportMs = 0;
+      }
+   };
+   FinderIndex g_finder;
+
+   thread_local int g_finderDepth = 0;   // check mode: one check per evaluation (ProbePatch calls Probe)
+   struct FinderGuard
+   {
+      const bool on;
+      explicit FinderGuard(const bool o) : on(o) { if (on) g_finderDepth++; }
+      ~FinderGuard() { if (on) g_finderDepth--; }
+   };
+
+   bool FinderCheckOn()
+   {
+      static const bool on = [] { const char *e = std::getenv("VPX_FINDER_CHECK"); return e != nullptr && e[0] == '1'; }();
+      return on;
+   }
+
+   inline double Comp(const RubberContact::V3 &v, const int a) { return a == 0 ? v.x : a == 1 ? v.y : v.z; }
+
+   inline double BoxD2(const RubberContact::V3 &lo, const RubberContact::V3 &hi, const RubberContact::V3 &c)
+   {
+      const double dx = std::max(std::max(lo.x - c.x, c.x - hi.x), 0.0), dy = std::max(std::max(lo.y - c.y, c.y - hi.y), 0.0), dz = std::max(std::max(lo.z - c.z, c.z - hi.z), 0.0);
+      return dx * dx + dy * dy + dz * dz;
+   }
+
+   // A box tree over items with boxes (box(i, lo, hi)): split at the median of the box centres along the longest side of the node's box, ties by item index; leafSize items per leaf.
+   template <class BoxOf> int BuildTree(std::vector<FinderNode> &nodes, std::vector<int> &order, const BoxOf &box, const int first, const int count, const int leafSize)
+   {
+      FinderNode n;
+      n.lo = RubberContact::V3(INFINITY, INFINITY, INFINITY);
+      n.hi = RubberContact::V3(-INFINITY, -INFINITY, -INFINITY);
+      for (int k = first; k < first + count; k++)
+      {
+         RubberContact::V3 lo, hi;
+         box(order[k], lo, hi);
+         n.lo = RubberContact::V3(std::min(n.lo.x, lo.x), std::min(n.lo.y, lo.y), std::min(n.lo.z, lo.z));
+         n.hi = RubberContact::V3(std::max(n.hi.x, hi.x), std::max(n.hi.y, hi.y), std::max(n.hi.z, hi.z));
+      }
+      const int self = (int)nodes.size();
+      nodes.push_back(n);
+      if (count <= leafSize)
+      {
+         nodes[self].first = first;
+         nodes[self].count = count;
+         return self;
+      }
+      const RubberContact::V3 ext = n.hi - n.lo;
+      const int axis = ext.x >= ext.y && ext.x >= ext.z ? 0 : ext.y >= ext.z ? 1 : 2;
+      auto key = [&](const int i) { RubberContact::V3 lo, hi; box(i, lo, hi); return Comp(lo, axis) + Comp(hi, axis); };
+      const int mid = first + count / 2;
+      std::nth_element(order.begin() + first, order.begin() + mid, order.begin() + first + count, [&](const int a, const int b) { const double ka = key(a), kb = key(b); return ka < kb || (ka == kb && a < b); });
+      const int l = BuildTree(nodes, order, box, first, mid - first, leafSize);
+      const int r = BuildTree(nodes, order, box, mid, first + count - mid, leafSize);
+      nodes[self].left = l;
+      nodes[self].right = r;
+      return self;
+   }
+
+   // The items whose box lies within r of c (r2 = r^2: an exact box distance, a true lower bound on the item's distance), appended to out in tree order
+   template <class BoxOf> void QueryTree(const std::vector<FinderNode> &nodes, const std::vector<int> &order, const BoxOf &box, const RubberContact::V3 &c, const double r2, std::vector<int> &out)
+   {
+      if (nodes.empty())
+         return;
+      int stack[128];
+      int sp = 0;
+      stack[sp++] = 0;
+      while (sp > 0)
+      {
+         const FinderNode &n = nodes[stack[--sp]];
+         if (BoxD2(n.lo, n.hi, c) > r2)
+            continue;
+         if (n.left < 0)
+         {
+            for (int k = n.first; k < n.first + n.count; k++)
+            {
+               RubberContact::V3 lo, hi;
+               box(order[k], lo, hi);
+               if (BoxD2(lo, hi, c) <= r2)
+                  out.push_back(order[k]);
+            }
+         }
+         else if (sp + 2 <= 128)
+         {
+            stack[sp++] = n.right;
+            stack[sp++] = n.left;
+         }
+      }
+   }
+
+   void FinderReport()
+   {
+      FinderIndex &g = g_finder;
+      if (!g.on || !FinderCheckOn())
+         return;
+      std::ostringstream o;
+      o << "Finder check totals: " << g.evals << " mesh evaluations (" << g.facesNear << " faces within the ball's radius), misses of today's face lists " << g.missA << ", of the index "
+        << g.missB << "; " << g.gathers << " ball gathers, objects with a face within the radius missing from the gather " << g.gMissA << ", from the index's object tree " << g.gMissB;
+      PLOGI << o.str();
+      for (const auto &e : g.byObj)
+         PLOGI << "Finder check totals: " << e.first << ": misses list " << e.second[0] << ", index " << e.second[1] << ", gather " << e.second[2] << ", object tree " << e.second[3];
+   }
+
+   void FinderPeriodic()   // (the caller holds g_finder.mtx)
+   {
+      FinderIndex &g = g_finder;
+      const uint32_t now = g_pplayer != nullptr ? g_pplayer->m_time_msec : 0;
+      if (now < g.nextReportMs)
+         return;
+      if (g.nextReportMs != 0)
+         FinderReport();
+      g.nextReportMs = now + 1000;
+   }
+
+   void FinderMiss(const int what, const std::string &obj, const int face, const int piece, const double dM, const RubberContact::V3 &c, const char *where)
+   {
+      FinderIndex &g = g_finder;
+      static const char *const names[4] = { "today's face list", "the shared finder's index", "the ball's gathered objects", "the index's object tree" };
+      g.byObj[obj][what]++;
+      if (g.logged < 200)
+      {
+         g.logged++;
+         PLOGW << "Finder check: " << names[what] << " missed " << obj << " face " << face << " (piece " << piece << ") at " << dM * 1e3 << " mm from the ball centre (" << c.x << ", " << c.y << ", " << c.z
+               << ") m, t=" << (g_pplayer != nullptr ? g_pplayer->m_time_msec : 0) << " ms, " << where;
+      }
+      bool &said = what == 0 ? g.notifiedA : what == 1 ? g.notifiedB : g.notifiedG;
+      if (!said)
+      {
+         said = true;
+         const std::string msg = "Finder check: " + std::string(names[what]) + " missed a face of " + obj + " within the ball's radius (VPX_FINDER_CHECK; see vpinball.log 'Finder check')";
+         PLOGW << msg;
+         if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+            g_pplayer->m_liveUI->PushNotification(msg, 5000);
+      }
+   }
+
+   void FinderClose(const bool meshHost)
+   {
+      if (meshHost && g_finder.built)
+      {
+         FinderReport();
+         g_finder.Reset();
+      }
+   }
 }
 
 HitRubber::HitRubber(IEditable *editable, const std::vector<Vertex3Ds> &pts, const float radius, const RubberObjectSettings &settings, const std::filesystem::path &iniPath, const std::string &name)
@@ -193,6 +384,7 @@ HitRubber::HitRubber(IEditable *editable, std::shared_ptr<RubberSurface> surface
 
 HitRubber::~HitRubber()
 {
+   FinderClose(m_surface != nullptr);   // the shared finder's index belongs to the table being closed
    // A ball can outlive its physics engine (a script still references it when the table closes): it must not keep a pointer to a band that is gone (the contact system lets
    // go of the host's balls in ~ContactHost)
    for (const BandBall &e : m_engaged)
@@ -1046,6 +1238,10 @@ void HitRubber::Refresh(SurfaceContact &it, const double ballR, const double rea
 
 RubberContact::TubeProbe HitRubber::Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const
 {
+   const bool finderCheck = m_surface != nullptr && g_finderDepth == 0 && FinderCheckOn();   // check mode (VPX_FINDER_CHECK=1): diagnostics only
+   if (finderCheck)
+      FinderCheck(it, c, bs.R, 0);
+   const FinderGuard finderGuard(finderCheck);
    if (m_surface != nullptr)
    {
       if (m_surfaceKind == "playfield")
@@ -1064,6 +1260,10 @@ RubberContact::TubeProbe HitRubber::Probe(const RubberContact::BallSI &bs, const
 
 RubberContact::TubeProbe HitRubber::ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const
 {
+   const bool finderCheck = m_surface != nullptr && g_finderDepth == 0 && FinderCheckOn();   // check mode (as Probe; the Probe inside is not checked again)
+   if (finderCheck)
+      FinderCheck(it, c, bs.R, 1);
+   const FinderGuard finderGuard(finderCheck);
    if (m_surface != nullptr && m_surfaceKind == "playfield" && PlayfieldCuts::Any(this))   // (as Probe, with the patch sum of the faces' folds or of the cut's rim contacts)
    {
       const RubberContact::CarvedHole *holes = nullptr;
@@ -1093,6 +1293,10 @@ RubberContact::TubeProbe HitRubber::ProbePatch(const RubberContact::BallSI &bs, 
 
 double HitRubber::ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, const int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, const double a, const double hMax, const double touchM, const double arriveM) const
 {
+   const bool finderCheck = m_surface != nullptr && g_finderDepth == 0 && FinderCheckOn();   // check mode (as Probe)
+   if (finderCheck)
+      FinderCheck(it, c, bs.R, 2);
+   const FinderGuard finderGuard(finderCheck);
    if (m_surface != nullptr && m_surfaceKind == "playfield" && PlayfieldCuts::Any(this))   // (as Probe: the faces not inside a cut, and the cut's rim contacts other than the probe's nearest)
       return PlayfieldCuts::ArrivalS(this, bs, m_surface->tris, it.Faces(c), nearestSeg, c, v, a, hMax, touchM, arriveM, it.candR >= 0.0 ? it.candR : 1e30);
    if (m_surface != nullptr)
@@ -1605,4 +1809,228 @@ void HitRubber::DrawUI(std::function<Vertex2D(Vertex3Ds)> project, ImDrawList *d
       if (p0.x != FLT_MAX && p1.x != FLT_MAX)
          drawList->AddLine(ImVec2(p0.x, p0.y), ImVec2(p1.x, p1.y), lCol);
    }
+}
+void HitRubber::FinderBuild(const bool atLoad)
+{
+   FinderIndex &g = g_finder;
+   if (atLoad && g.built)
+   {
+      FinderReport();
+      g.Reset();
+   }
+   if (g.built)
+      return;
+   g.built = true;
+   std::vector<HitRubber *> hosts;
+   int skipped = 0;
+   for (ContactHost *const o : ContactHost::Registry())
+   {
+      HitRubber *const h = dynamic_cast<HitRubber *>(o);
+      if (h == nullptr || h->m_surface == nullptr || h->m_surface->tris.empty())
+         continue;
+      if (h->m_surfaceKind != "playfield" && h->m_surfaceKind != "wall" && h->m_surfaceKind != "ramp" && h->m_surfaceKind != "primitive")
+      {
+         skipped++;
+         continue;
+      }
+      hosts.push_back(h);
+   }
+   if (hosts.empty())
+      return;
+   if (!PhysicsIni::Active(hosts[0]->m_ini).sharedFinder)
+   {
+      PLOGI << "Shared finder: off ([Features] shared_finder = 0)";
+      return;
+   }
+   g.on = true;
+   const auto t0 = std::chrono::steady_clock::now();
+   double slowestMs = 0.0, l2Ms = 0.0;
+   std::string slowest;
+   size_t faces = 0, l2Nodes = 0, bytes = 0, slowestFaces = 0;
+   int pieces = 0, disabled = 0;
+   for (HitRubber *const h : hosts)
+   {
+      const auto a = std::chrono::steady_clock::now();
+      RubberSurface &s = *h->m_surface;
+      const int n = (int)s.tris.size();
+      // mesh pieces: faces joined through shared edges (nb, built by Link at load), numbered in load order of each piece's first face
+      s.piece.assign(n, -1);
+      s.nPieces = 0;
+      std::vector<int> stack;
+      for (int i = 0; i < n; i++)
+      {
+         if (s.piece[i] >= 0)
+            continue;
+         s.piece[i] = s.nPieces;
+         stack.push_back(i);
+         while (!stack.empty())
+         {
+            const int f = stack.back();
+            stack.pop_back();
+            if (s.nb.size() != s.tris.size())
+               continue;
+            for (int e = 0; e < 3; e++)
+            {
+               const int m = s.nb[f][e];
+               if (m >= 0 && s.piece[m] < 0)
+               {
+                  s.piece[m] = s.nPieces;
+                  stack.push_back(m);
+               }
+            }
+         }
+         s.nPieces++;
+      }
+      s.fnodes.clear();
+      s.forder.resize(n);
+      for (int i = 0; i < n; i++)
+         s.forder[i] = i;
+      BuildTree(s.fnodes, s.forder, [&s](const int i, RubberContact::V3 &lo, RubberContact::V3 &hi) { lo = s.tris[i].lo; hi = s.tris[i].hi; }, 0, n, 4);
+      g.objs.push_back({ h, s.fnodes[0].lo, s.fnodes[0].hi });
+      const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a).count();
+      l2Ms += ms;
+      if (ms > slowestMs)
+      {
+         slowestMs = ms;
+         slowest = h->m_name;
+         slowestFaces = n;
+      }
+      faces += n;
+      pieces += s.nPieces;
+      l2Nodes += s.fnodes.size();
+      bytes += s.fnodes.size() * sizeof(FinderNode) + s.forder.size() * sizeof(int) + s.piece.size() * sizeof(int);
+      if (!h->m_enabled)
+         disabled++;
+   }
+   const auto b = std::chrono::steady_clock::now();
+   g.order.resize(g.objs.size());
+   for (size_t i = 0; i < g.objs.size(); i++)
+      g.order[i] = (int)i;
+   BuildTree(g.nodes, g.order, [&g](const int i, RubberContact::V3 &lo, RubberContact::V3 &hi) { lo = g.objs[i].lo; hi = g.objs[i].hi; }, 0, (int)g.objs.size(), 4);
+   bytes += g.nodes.size() * sizeof(FinderNode) + g.order.size() * sizeof(int) + g.objs.size() * sizeof(FinderObj);
+   const auto t1 = std::chrono::steady_clock::now();
+   const double l1Ms = std::chrono::duration<double, std::milli>(t1 - b).count(), totalMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
+   PLOGI << "Shared finder: index built for " << g.objs.size() << " static mesh objects (" << disabled << " not collidable at load; " << skipped << " other surface hosts left out), " << faces << " faces in "
+         << pieces << " mesh pieces; nodes: " << l2Nodes << " in the objects' face trees, " << g.nodes.size() << " in the object tree; memory " << bytes << " bytes (" << sizeof(FinderNode)
+         << " per node); build " << totalMs << " ms (face trees and pieces " << l2Ms << " ms, slowest " << slowest << " " << slowestMs << " ms for " << slowestFaces << " faces; object tree " << l1Ms << " ms)"
+         << (atLoad ? "; at load" : "; at the first cycle (the load call did not run)") << (FinderCheckOn() ? "; check mode on (VPX_FINDER_CHECK)" : "");
+}
+
+void HitRubber::FinderCheck(const SurfaceContact &it, const RubberContact::V3 &c, const double ballR, const int evalKind) const
+{
+   if (!g_finder.built)
+      FinderBuild();   // (an evaluation before the first cycle's gather)
+   FinderIndex &g = g_finder;
+   if (!g.on || m_surface == nullptr)
+      return;
+   static const char *const kinds[3] = { "probe", "probe patch", "arrival" };
+   const std::vector<RubberContact::SurfaceTri> &tris = m_surface->tris;
+   const double r2 = ballR * ballR;
+   thread_local std::vector<int> full, listA, listB, objHit;
+   thread_local std::vector<double> dist;
+   full.clear();
+   dist.clear();
+   for (int i = 0; i < (int)tris.size(); i++)   // the slow way: every face, an exact box reject then the exact distance
+   {
+      if (BoxD2(tris[i].lo, tris[i].hi, c) > r2)
+         continue;
+      int kind = 0;
+      const RubberContact::V3 p = RubberContact::ClosestOnTriangle(tris[i], c, kind);
+      const RubberContact::V3 dv = c - p;
+      const double d2 = dv.Dot(dv);
+      if (d2 <= r2)
+      {
+         full.push_back(i);
+         dist.push_back(std::sqrt(d2));
+      }
+   }
+   std::lock_guard<std::mutex> lk(g.mtx);
+   FinderPeriodic();
+   g.evals++;
+   if (full.empty())
+      return;
+   g.facesNear += full.size();
+   listA = it.Faces(c);
+   std::sort(listA.begin(), listA.end());
+   objHit.clear();
+   QueryTree(g.nodes, g.order, [&g](const int i, RubberContact::V3 &lo, RubberContact::V3 &hi) { lo = g.objs[i].lo; hi = g.objs[i].hi; }, c, r2, objHit);
+   const bool found = std::any_of(objHit.begin(), objHit.end(), [&](const int k) { return g.objs[k].host == this; });
+   listB.clear();
+   if (found)
+   {
+      const RubberSurface &s = *m_surface;
+      QueryTree(s.fnodes, s.forder, [&s](const int i, RubberContact::V3 &lo, RubberContact::V3 &hi) { lo = s.tris[i].lo; hi = s.tris[i].hi; }, c, r2, listB);
+      std::sort(listB.begin(), listB.end());
+   }
+   for (size_t k = 0; k < full.size(); k++)
+   {
+      const int f = full[k];
+      const int pc = (int)m_surface->piece.size() > f ? m_surface->piece[f] : -1;
+      if (!std::binary_search(listA.begin(), listA.end(), f))
+      {
+         g.missA++;
+         FinderMiss(0, m_name, f, pc, dist[k], c, kinds[evalKind]);
+      }
+      if (!std::binary_search(listB.begin(), listB.end(), f))
+      {
+         g.missB++;
+         FinderMiss(1, m_name, f, pc, dist[k], c, kinds[evalKind]);
+      }
+   }
+}
+
+void HitRubber::FinderCheckGather(const HitBall *ball, const std::vector<SurfaceContact> &items, const RubberContact::V3 &c, const double ballR, const bool inPlayfieldHole)
+{
+   if (!g_finder.built)
+      FinderBuild();   // (an evaluation before the first cycle's gather)
+   FinderIndex &g = g_finder;
+   if (!g.on || !FinderCheckOn())
+      return;
+   const double r2 = ballR * ballR;
+   thread_local std::vector<int> objHit;
+   objHit.clear();
+   QueryTree(g.nodes, g.order, [&g](const int i, RubberContact::V3 &lo, RubberContact::V3 &hi) { lo = g.objs[i].lo; hi = g.objs[i].hi; }, c, r2, objHit);
+   std::lock_guard<std::mutex> lk(g.mtx);
+   FinderPeriodic();
+   g.gathers++;
+   for (int k = 0; k < (int)g.objs.size(); k++)
+   {
+      const FinderObj &ob = g.objs[k];
+      const HitRubber *const h = ob.host;
+      if (!h->m_enabled || !h->m_set.contact || h->m_set.band || (inPlayfieldHole && h->m_surfaceKind == "playfield"))
+         continue;   // (as the gather: a disabled object, one off the contact model, and the playfield over a kicker's hole are left out there on purpose)
+      if (BoxD2(ob.lo, ob.hi, c) > r2)
+         continue;
+      const std::vector<RubberContact::SurfaceTri> &tris = h->m_surface->tris;
+      int nearest = -1;
+      double nearestD2 = r2;
+      for (int i = 0; i < (int)tris.size(); i++)
+      {
+         if (BoxD2(tris[i].lo, tris[i].hi, c) > nearestD2)
+            continue;
+         int kind = 0;
+         const RubberContact::V3 p = RubberContact::ClosestOnTriangle(tris[i], c, kind);
+         const RubberContact::V3 dv = c - p;
+         const double d2 = dv.Dot(dv);
+         if (d2 <= nearestD2)
+         {
+            nearestD2 = d2;
+            nearest = i;
+         }
+      }
+      if (nearest < 0)
+         continue;
+      const int pc = (int)h->m_surface->piece.size() > nearest ? h->m_surface->piece[nearest] : -1;
+      if (std::none_of(items.begin(), items.end(), [h](const SurfaceContact &it) { return it.r == static_cast<const ContactSurface *>(h); }))
+      {
+         g.gMissA++;
+         FinderMiss(2, h->m_name, nearest, pc, std::sqrt(nearestD2), c, "gather");
+      }
+      if (std::find(objHit.begin(), objHit.end(), k) == objHit.end())
+      {
+         g.gMissB++;
+         FinderMiss(3, h->m_name, nearest, pc, std::sqrt(nearestD2), c, "gather");
+      }
+   }
+   (void)ball;
 }
