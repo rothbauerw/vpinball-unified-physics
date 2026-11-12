@@ -27,6 +27,8 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 34. One shared finder for every contact (static, moving, tubes, ball pairs): complete, short, local, one index; replaces the per-part finders. Requirements accepted: runs/2026-11-11-finder/requirements.md. Design accepted: runs/2026-11-11-finder/design.md (build P1-P9).
 36. Release check's fixed 2 mm hold for a closing ball (contactsystem.cpp:707, from the port): no physics behind it; release at the ball's reach instead (mesh hosts already do with shared_finder).
 37. A no-op stock hit that splits a cycle moved S00's bounce spin 3.5 % (stress v2, 2894 ms; finder-P2b S00 trace): step-split sensitivity; check against the 1 us reference. Parked.
+38. Overlap replay with free_flight (every free ball stepped by the contact system, bb3898626): the replay now restores and re-steps every ball; seen only not to crash (19 replays). Judge one replayed hit against the same hit without a replay.
+39. Stress v2 cost over rule 5: worst 7-cycle window 9.6-9.8 ms (limit 3 ms), worst cycle 4.8-5.3 ms, with free_flight 0 and 1 alike (runs/2026-11-12-freeflight timing csv). Cause not traced.
 35. Stress v2 diverter: both diverter walls collide (the script's switch is not run), S09 jams between them and climbs ~3x what its velocity gives (cy 49168; finder/gap/cy49168.py). Check energy (rule 10b).
 10. Sleep (default off): a ball on a flipper never sleeps (bats have no rest check). Whether sleep becomes default: user.
 13. Moving script/animated primitives: details from the user.
@@ -76,6 +78,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 9. 750 bench: 4 energy lines (Hgo1_2, Hgo1_29 87.1 mJ; Hgo2_55 24.9; Hgo2_66 53.4) = ball 2.3-3.8 mm in Rubber4 at first sight; likely replay starting mid-hit (inferred). Confirm, then start earlier or declare (rule 10b).
 8. Build-compare script compiles /fp:precise by default, so a reported difference is logic, not rounding (ModelStandards trap: a byte difference is not a logic difference).
 10. A state carries between replays in one chunk: Hgo5_77 differs only after earlier balls change, identical when run alone; find what carries over (runs/2026-11-10-old-loop/results_piece1.txt).
+12. Snapshot self-test fails on Gorgar: 30 of 8001 steps differ (19 with free_flight), "contacts (3 engaged balls)", before free flight too. Find what the snapshot misses.
 11. Accuracy bench for moving parts: real hits on flipper bats, jet bumpers, gates, spinners, wire switches and sling plates, judged by impulse against the 1 us reference as the static bench is (today's 750 hits are static surfaces only).
 
 ## 9. Still stock (ask before converting)
@@ -91,7 +94,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 6. Editor changes to replace the ini files (panels, settings saved in the .vpx); unified off per table for release.
 7. Old keys in 14 inis, then the unknown-key notice.
 10. Review ReleasePlan with the user, then PR to the official repo after 3-5.
-13. Old-law switches to delete once accepted (CLAUDE.md): roll/pivot/step_model 0, island_reach 0, ball_pair_reach 0, proximity_engage 0 (with shared_finder on, stock's copies are out of the path: balls fall through; load warns).
+13. Old-law switches to delete once accepted (CLAUDE.md): roll/pivot/step_model 0, island_reach 0, ball_pair_reach 0, free_flight 0, proximity_engage 0 (with shared_finder on, stock's copies are out of the path: balls fall through; load warns).
 
 ## 11. Switches and triggers
 1. Light-part contact cost (ball on a part of a few grams): worst cycle wire switch 54-181 us, Button 271 us (runs/2026-11-10-rollover/S1); limit 30 us. Midpoint solver must follow the ball-on-part contact clock: needs another solver class (rigid contact + impact law, or L-stable). Parked to N10.
