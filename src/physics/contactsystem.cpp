@@ -2134,15 +2134,11 @@ struct ContactSystemImpl
             continue;   // an earlier event deleted the ball
          g_pplayer->m_pactiveball = ph.pb->m_pBall;
          g_pplayer->m_physics->OnBallWallHit(*ph.pb, ph.normal, ph.speed);
-         if (ph.s->IsPlayfield())
+         if (const PhysicsEngine &pe = *g_pplayer->m_physics; pe.HitSpeedEvents())
          {
-            const PhysicsEngine &pe = *g_pplayer->m_physics;
-            if (pe.HitSpeedEvents())
-            {
-               ph.pb->m_hitSpeed = ph.speed;
-               if (ph.speed >= pe.HitSpeedMin())
-                  g_pplayer->m_ptable->FireVoidEvent(DISPID_HitEvents_Hit);
-            }
+            ph.pb->m_hitSpeed = ph.speed;   // every surface's first touch (shared_finder P9: a converted part's stock copy no longer sets it), before the part's Hit event below
+            if (ph.s->IsPlayfield() && ph.speed >= pe.HitSpeedMin())
+               g_pplayer->m_ptable->FireVoidEvent(DISPID_HitEvents_Hit);   // the playfield has no Hit event of its own: the table's
          }
          if (ContactTraceOn())
             PLOGI << "PartHit " << ph.s->Name() << " t=" << g_pplayer->m_time_msec << " speed_ms " << ph.speed * VS << " event " << (ph.s->HitEventObject() != nullptr && ph.s->HitEventObject()->m_fe ? 1 : 0)

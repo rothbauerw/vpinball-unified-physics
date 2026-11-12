@@ -26,6 +26,7 @@ void ContactTraceBall(const char *stage, const HitBall *pb, bool items, int isla
 
 #include "physics/hitrubber.h"
 #include "physics/physicsini.h"
+#include <unordered_set>
 #include "physics/magnet.h"
 #include "physics/turntable.h"
 #include "physics/playfieldcut.h"
@@ -124,6 +125,9 @@ PhysicsEngine::~PhysicsEngine()
    if (m_pendingHitObjects)
       ReleaseVHO(*m_pendingHitObjects, false);
    ReleaseVHO(m_hitoctree.GetHitObjects(), false);
+   for (HitObject *const ho : m_outOfTree)   // shared_finder P9: after the parts' PhysicRelease (the hosts, which point at them, are tree objects deleted above)
+      delete ho;
+   m_outOfTree.clear();
 
    if (g_pplayer)
       g_pplayer->m_pluginAPI.ReleaseMsgID(m_onUpdatePhysicsMsgId);
@@ -221,6 +225,7 @@ void PhysicsEngine::AddStaticColliders(IEditable *editable)
 void PhysicsEngine::ReleaseStaticColliders(IEditable *editable)
 {
    editable->GetIHitable()->PhysicRelease(this, false); // Balls remove their HitBall from the dynamic quadtree through RemoveCollider
+   std::erase_if(m_outOfTree, [editable](HitObject *ho) { if (ho->m_editable != editable) return false; delete ho; return true; });   // shared_finder P9
    vector<HitObject *> &vho = m_hitoctree.BeginReset();
    std::erase_if(vho,
       [this, editable](HitObject *ho)
@@ -233,6 +238,24 @@ void PhysicsEngine::ReleaseStaticColliders(IEditable *editable)
          }
          return false;
       });
+}
+
+// shared_finder P9 ([Features] shared_finder = 1, unified engine): the stock copies (triangles, lines, points) of a wall, ramp or primitive whose faces the contact
+// system holds (m_surfaceHost set) stay out of stock's trees: the finder's query finds every contact with them, and stock's search could only find a hit it hands to the
+// host (with the ball already held, a hit that does nothing but split the cycle). They stay in the part's m_vhoCollidable (the Collidable switch, the Hit event carrier)
+// and the engine frees them (m_outOfTree). A slingshot segment does its own kick (it ignores the host), so it stays in the tree. The playfield primitive's copies leave too (P9b); stock's HitPlane is outside the trees and stays.
+void PhysicsEngine::KeepHostedCopiesOutOfTrees(const vector<HitObject *> &copies, size_t from, const std::filesystem::path &ini)
+{
+   if (m_pendingHitObjects == nullptr || from >= copies.size() || !PhysicsIni::Active(ini).sharedFinder)
+      return;
+   std::unordered_set<HitObject *> out;
+   for (size_t i = from; i < copies.size(); i++)
+      if (copies[i]->m_surfaceHost != nullptr && copies[i]->GetType() != eLineSegSlingshot)
+         out.insert(copies[i]);
+   std::erase_if(*m_pendingHitObjects, [&out](HitObject *ho) { return out.count(ho) != 0; });
+   for (size_t i = from; i < copies.size(); i++)   // in the part's order (deterministic)
+      if (out.count(copies[i]) != 0)
+         m_outOfTree.push_back(copies[i]);
 }
 
 void PhysicsEngine::RegisterHitObject(HitObject *hitObject)

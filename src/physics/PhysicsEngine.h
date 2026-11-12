@@ -38,6 +38,7 @@ public:
    // Add or remove a collider, as a consequence of PhysicSetup/Release
    // Colliders are given to the physics engine which owns them, except for balls which always owns their HitBall (therefore, being the only one using RemoveCollider)
    void AddCollider(HitObject * collider, const bool isUI);
+   void KeepHostedCopiesOutOfTrees(const vector<HitObject *> &copies, size_t from, const std::filesystem::path &ini); // shared_finder P9: see PhysicsEngine.cpp
    void RemoveCollider(HitObject * collider, const bool isUI);
    void CollectColliders(IEditable *editable, vector<HitObject *> *hitObjects, bool isUI);
 
@@ -158,6 +159,7 @@ private:
    class HitRubber *m_playfieldHost = nullptr; // the playfield on the force model (null = the stock plane contact)
    std::string m_leftoverHosts;                 // see LeftoverHosts()
    vector<class ContactHost *> m_ownedHosts;      // surface hosts the engine creates itself (turntable discs); deleted with the engine
+   vector<HitObject *> m_outOfTree;               // shared_finder P9: stock copies of converted walls, ramps and primitives kept out of the trees (KeepHostedCopiesOutOfTrees); the engine frees them
    HitPlane m_hitTopGlass;
 
    vector<MoverObject *> m_vmover; // moving objects for physics simulation

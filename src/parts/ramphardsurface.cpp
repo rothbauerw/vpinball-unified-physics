@@ -57,6 +57,7 @@ void Ramp::AddHardSurface(PhysicsEngine* physics, const bool isUI, const Vertex2
          host->SetEventCarrier(collidersBefore < m_vhoCollidable.size() ? m_vhoCollidable[collidersBefore] : nullptr);
          for (size_t i = collidersBefore; i < m_vhoCollidable.size(); i++)
             m_vhoCollidable[i]->m_surfaceHost = host;   // the ramp's own colliders hand a hit to the host
+         physics->KeepHostedCopiesOutOfTrees(m_vhoCollidable, collidersBefore, rubberIni);   // shared_finder P9: the copies out of stock's trees (PhysicsEngine.cpp)
          SetupHitObject(physics, host, isUI);           // the host is enabled and disabled with them (Collidable)
          PLOGI << "Ramp " << GetName() << ": hard surface on (" << rubberFaces->tris.size() << " faces, mu " << rubberSettings.mu << ", alpha " << rubberSettings.alphaSPerM << ")";
       }
