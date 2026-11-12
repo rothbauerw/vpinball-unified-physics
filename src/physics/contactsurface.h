@@ -46,7 +46,8 @@ struct SurfaceContact
    double candR = -1.0;           // < 0 = no list
    static constexpr double kTightSkin = 0.002;   // m
    // the faces to test for a ball at c: the short list while the ball is within the skin of where it was filtered, the whole Verlet list beyond it
-   const std::vector<int> &Faces(const RubberContact::V3 &c) const { return (c - tightC).Length() <= kTightSkin ? cand : candV; }
+   // shared_finder P2b (key on, a static mesh host): the ball's per-cycle query's faces of this object (qFaces, set by HitRubber::FinderBind; a re-query refreshes it in place)
+   const std::vector<int> &Faces(const RubberContact::V3 &c) const { return qFaces != nullptr ? *qFaces : (c - tightC).Length() <= kTightSkin ? cand : candV; }
    // no face within reach: the surface has nothing to probe this cycle
    bool NoFaces(const RubberContact::V3 &c) const { return candR >= 0.0 && Faces(c).empty(); }
    bool touching = false;         // in contact at the last substep (a hit event is a transition to touching)
@@ -64,7 +65,8 @@ struct SurfaceContact
    // The last probe of this surface in the arrival loop: the gap (m, < 0 = overlap; probeT < 0 = none yet this cycle), where the ball was and when (s into the cycle). A static
    // surface's gap can shrink by no more than the ball has moved since, so a surface the ball cannot reach in the rest of the cycle is not probed again (ProbeBody).
    double probeGap = 0.0, probeT = -1.0;
-   void *finderQ = nullptr;       // shared_finder P2a: the ball's per-cycle query (hitrubber.cpp FinderBallQ), set at each cycle's gather; null = none (an item made after the gather)
+   void *finderQ = nullptr;       // shared_finder: the ball's per-cycle query (hitrubber.cpp FinderBallQ), set at each cycle's gather and at engagement (HitRubber::FinderBind); null = none
+   const std::vector<int> *qFaces = nullptr;   // shared_finder P2b (key on): this static mesh object's faces in the ball's query (Faces reads it in place of cand / candV); null = today's lists
    RubberContact::V3 probeC;
 };
 
@@ -75,6 +77,8 @@ public:
    virtual const std::string &Name() const = 0;
    // The faces (or the part of the geometry) the ball can reach this cycle: within ballR + reachM of c (metres)
    virtual void Refresh(SurfaceContact &it, double ballR, double reachM, const RubberContact::V3 &c) const = 0;
+   // shared_finder: this surface's index in the finder's objects (a static mesh host in the index), -1 = not in it (its own finder)
+   virtual int FinderObjIndex() const { return -1; }
    // The nearest point of the surface to a ball at c
    virtual RubberContact::TubeProbe Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const = 0;
    // The same, as the group step's law reads it: the ball's contact patch has a size, so a fold under it pushes along the patch's average (rubbercontact.h PatchTube, PatchTriangles)

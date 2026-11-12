@@ -189,7 +189,16 @@ public:
    // shared_finder piece P2a (runs/2026-11-11-finder/design.md section 3): the per-cycle query of one engaged ball at the cycle start (centre c, radius R + reach, v the
    // ball's velocity at the cycle start, dt the cycle), kept for the cycle; the ball's surface items point at it (SurfaceContact::finderQ). In P2a nothing reads its result
    // except check mode and the timing counters, so no result changes.
-   static void FinderQuery(const HitBall *ball, std::vector<SurfaceContact> &items, const RubberContact::V3 &c, const RubberContact::V3 &v, double ballR, double dt);
+   static void FinderQuery(const HitBall *ball, const RubberContact::V3 &c, const RubberContact::V3 &v, double ballR, double dt);
+   // shared_finder P2b ([Features] shared_finder = 1): the query finds every static mesh contact (FinderDrives). FinderQueryAt: a query of a ball around c, radius ballR + extM, with no
+   // cycle bookkeeping (a free ball's engagement test, a new contact). FinderBind: the ball's items point at its query, and each static mesh item reads that object's faces from it.
+   // FinderHosts: the static mesh hosts the ball's query found, in load order.
+   static bool FinderDrives();
+   static void FinderQueryAt(const HitBall *ball, const RubberContact::V3 &c, double ballR, double extM);
+   static void FinderBind(const HitBall *ball, std::vector<SurfaceContact> &items, bool cycleItems);   // cycleItems: the engaged ball's own set (kept for the re-query's count)
+   static void FinderBindOne(const HitBall *ball, SurfaceContact &it);
+   static void FinderHosts(const HitBall *ball, std::vector<ContactHost *> &out);
+   int FinderObjIndex() const override { return m_surface != nullptr ? m_surface->fobj : -1; }
    // the finder's totals (query cost, re-queries), once a second of table time and when the table closes
    static void FinderTotals(bool force);
    // Non-legacy kickers are round holes in the playfield: the playfield host leaves no floor inside them (the ball rests on the rim, or falls in and is captured).

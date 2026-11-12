@@ -135,7 +135,7 @@ struct ContactSystemImpl
 {
    static void StepBalls(double dt);   // dt: seconds
    static void Release(HitBall *ball, const char *why);
-   static void Regather(BallContact &e, const Vertex3Ds &pos, float radiusU);
+   static void Regather(BallContact &e, const Vertex3Ds &pos, float radiusU, bool finder);   // finder: shared_finder P2b, the static mesh hosts come from the ball's query
    static bool EngageImpl(ContactHost *host, HitBall *pb, const char *how);
    static void EngageNear(double dt);   // dt: the cycle in seconds
    static void CordNear(double dt);     // likewise
@@ -293,17 +293,24 @@ struct ContactSystemImpl
             w.o = o;
             w.e = &e;
             LoadBody(w, pb);
+            const bool finder = HitRubber::FinderDrives();   // shared_finder P2b (key on): the cycle's query finds the ball's static mesh surfaces
+            if (finder)
+            {
+               LoadState(w);
+               HitRubber::FinderQuery(pb, w.c, w.v, w.bs.R, dt);   // the per-cycle query (design.md section 3), before the gather that reads it
+            }
             {
                CPROF(Regather);
-               Regather(e, w.posStart, pb->m_d.m_radius);   // (over a kicker's hole the playfield is left out)
+               Regather(e, w.posStart, pb->m_d.m_radius, finder);   // (over a kicker's hole the playfield is left out)
             }
             if (PlayfieldHolesExist() && InPlayfieldHole(pb->m_d.m_pos) && std::any_of(e.items.begin(), e.items.end(), [](const SurfaceContact &it) { return it.r->IsPlayfield(); }))
             {
                cy.releases.emplace_back(pb, "kicker hole");   // rolled into a non-legacy kicker's circle with nothing else to hold it
                continue;
             }
-            LoadState(w);
-            HitRubber::FinderQuery(pb, e.items, w.c, w.v, w.bs.R, dt);   // shared_finder P2a: the per-cycle query, beside today's gathers; nothing reads it yet
+            if (!finder)
+               LoadState(w);
+            HitRubber::FinderBind(pb, e.items, true);   // shared_finder (key on): each static mesh item reads its faces from the ball's query (its Refresh below does nothing)
             w.band = e.band;
             Sources::Begin(w, dt);
             {
@@ -2730,7 +2737,10 @@ void ContactSystemImpl::EngageNear(const double dt)
       const float reachU = pb->m_d.m_radius + (float)(travelM / U) + 20.0f;
       // Verlet: the last scan found every surface farther than m_nearSafeU from where the ball was then (box distance less the radius and a margin); until the ball has
       // travelled that far, less what it can cross in two cycles, there is nothing to find
-      if (pb->m_nearSafeU >= 0.f && nowMs - pb->m_nearMs < 10 && std::sqrt((double)(pos - pb->m_nearPos).LengthSquared()) + travelM / U < (double)pb->m_nearSafeU)
+      // shared_finder P2b (key on): the static mesh hosts are tested every cycle from the ball's query (radius R + the reach below), the Verlet skip covers only the others
+      const bool finder = HitRubber::FinderDrives();
+      const bool skipOthers = pb->m_nearSafeU >= 0.f && nowMs - pb->m_nearMs < 10 && std::sqrt((double)(pos - pb->m_nearPos).LengthSquared()) + travelM / U < (double)pb->m_nearSafeU;
+      if (skipOthers && !finder)
          continue;
       float minBoxGapU = 1e9f;
       BallSI bs;
@@ -2739,23 +2749,47 @@ void ContactSystemImpl::EngageNear(const double dt)
       const V3 v((double)pb->m_d.m_vel.x * VS, (double)pb->m_d.m_vel.y * VS, (double)pb->m_d.m_vel.z * VS);
       ContactHost *best = nullptr;
       double bestGap = 1e9, pfGap = 1e9, pfClosing = 0.0;
-      for (ContactHost *const o : ContactHost::Registry())
+      thread_local std::vector<ContactHost *> hosts;
+      hosts.clear();
+      if (finder)
+      {
+         HitRubber::FinderQueryAt(pb, c, bs.R, travelM + 0.005);   // as the Refresh below asked of each mesh: the faces within R + 2 x speed x 1 ms + 5 mm (a static surface: no bound of its own)
+         HitRubber::FinderHosts(pb, hosts);
+      }
+      if (!skipOthers)
+         for (ContactHost *const o : ContactHost::Registry())
+            if (!finder || o->FinderObjIndex() < 0)
+               hosts.push_back(o);
+      if (finder)   // the registry's order, as the one loop gave them (the nearest wins; a tie goes to the first)
+         std::stable_sort(hosts.begin(), hosts.end(), [](const ContactHost *a, const ContactHost *b) { return a->m_regOrder < b->m_regOrder; });
+      for (ContactHost *const o : hosts)
       {
          if (!o->m_enabled || !o->m_set.contact || o->m_set.band)
             continue;
+         const bool mesh = finder && o->FinderObjIndex() >= 0;
          const double vb = PreventOn() ? o->SurfaceSpeedBoundMS(dt) : 0.0;   // the surface's own closing-speed bound (a moving part; 0 for a static surface)
          const float reachHost = reachU + (float)(2.0 * vb * dt / U);
          const FRect3D &bb = o->m_hitBBox;
+         if (!mesh)   // (a mesh host found by the query: it has a face within the reach; the Verlet skip's bound is the others')
          {
             const float dx = std::max({ bb.left - pos.x, 0.f, pos.x - bb.right }), dy = std::max({ bb.top - pos.y, 0.f, pos.y - bb.bottom }), dz = std::max({ bb.zlow - pos.z, 0.f, pos.z - bb.zhigh });
             minBoxGapU = std::min(minBoxGapU, std::sqrt(dx * dx + dy * dy + dz * dz) - pb->m_d.m_radius);
          }
-         if (pos.x < bb.left - reachHost || pos.x > bb.right + reachHost || pos.y < bb.top - reachHost || pos.y > bb.bottom + reachHost || pos.z < bb.zlow - reachHost || pos.z > bb.zhigh + reachHost)
+         if (!mesh && (pos.x < bb.left - reachHost || pos.x > bb.right + reachHost || pos.y < bb.top - reachHost || pos.y > bb.bottom + reachHost || pos.z < bb.zlow - reachHost || pos.z > bb.zhigh + reachHost))
             continue;
          if (o->m_surfaceKind == "playfield" && InPlayfieldHole(pos))
             continue;   // the kicker's
          o->ReloadIfChanged();
-         auto ce = std::find_if(cache.begin(), cache.end(), [&](const NearEntry &n) { return n.ball == pb && n.host == o; });
+         SurfaceContact itq;   // a mesh host found by the query: its faces from the query (no cached list)
+         if (mesh)
+         {
+            itq.r = o;
+            HitRubber::FinderBindOne(pb, itq);
+         }
+         auto ce = cache.end();
+         if (!mesh)
+         {
+         ce = std::find_if(cache.begin(), cache.end(), [&](const NearEntry &n) { return n.ball == pb && n.host == o; });
          if (ce == cache.end())
          {
             cache.push_back({ pb, o, SurfaceContact(), nowMs });
@@ -2763,7 +2797,8 @@ void ContactSystemImpl::EngageNear(const double dt)
             ce->it.r = o;
          }
          ce->seenMs = nowMs;
-         SurfaceContact &it = ce->it;
+         }
+         SurfaceContact &it = mesh ? itq : ce->it;
          o->Refresh(it, bs.R, travelM + 2.0 * vb * dt + 0.005, c);
          const TubeProbe pr = o->Probe(bs, it, c);
          if (pr.dist <= 0.0)
@@ -2791,9 +2826,12 @@ void ContactSystemImpl::EngageNear(const double dt)
             const double mm = pfGap * 1e3;
             ContactProf::Note(std::string("free ball not engaged (y>1500): playfield gap ") + (pfGap > 1e8 ? "none(box/hole/cooldown)" : mm <= 0.0 ? "<=0mm" : mm < 0.5 ? "<0.5mm" : mm < 1.0 ? "<1mm" : mm < 3.0 ? "<3mm" : mm < 10.0 ? "<10mm" : ">=10mm") + (pfClosing > 0.0 ? " closing" : " receding"));
          }
+         if (!skipOthers)   // (key on with the skip: the others were not scanned, their bound stands)
+         {
          pb->m_nearPos = pos;
          pb->m_nearMs = nowMs;
-         pb->m_nearSafeU = minBoxGapU - 6.0f;   // (a surface within its release gap, about 4 U, qualifies; the margin keeps the box test conservative)
+         pb->m_nearSafeU = minBoxGapU - 6.0f;
+         }   // (a surface within its release gap, about 4 U, qualifies; the margin keeps the box test conservative)
       }
    }
 }
@@ -2885,8 +2923,27 @@ bool ContactSystemImpl::EngageImpl(ContactHost *const host, HitBall *const pb, c
    const V3 v((double)pb->m_d.m_vel.x * VS, (double)pb->m_d.m_vel.y * VS, (double)pb->m_d.m_vel.z * VS);
    {
       const float reach = pb->m_d.m_radius + 20.0f;   // VPX units: the ball radius plus what it can travel during a hit
-      for (ContactHost *const o : ContactHost::Registry())
+      // shared_finder P2b (key on): the static mesh hosts other than the one that found the ball come from a query at the engagement, radius R + 20 U (the reach above, to a face
+      // instead of the host's box); kept in the registry's order
+      const bool finder = HitRubber::FinderDrives();
+      thread_local std::vector<ContactHost *> hosts;
+      hosts.clear();
+      if (finder)
       {
+         HitRubber::FinderQueryAt(pb, c, bs.R, 20.0 * U);
+         HitRubber::FinderHosts(pb, hosts);
+      }
+      for (ContactHost *const o : ContactHost::Registry())
+         if (!finder || o->FinderObjIndex() < 0 || o == host)
+            hosts.push_back(o);
+      if (finder)
+      {
+         std::stable_sort(hosts.begin(), hosts.end(), [](const ContactHost *a, const ContactHost *b) { return a->m_regOrder < b->m_regOrder; });
+         hosts.erase(std::unique(hosts.begin(), hosts.end()), hosts.end());   // (the host found by both)
+      }
+      for (ContactHost *const o : hosts)
+      {
+         const bool mesh = finder && o->FinderObjIndex() >= 0;
          if (o != host)
          {
             if (!o->m_enabled || !o->m_set.contact)
@@ -2896,8 +2953,8 @@ bool ContactSystemImpl::EngageImpl(ContactHost *const host, HitBall *const pb, c
             if (o->m_set.band)
                continue;   // the band rubbers are the band model's: as a rigid surface contact they would stop the ball before the band could deflect (as Regather)
             const FRect3D &bb = o->m_hitBBox;
-            if (posStart.x < bb.left - reach || posStart.x > bb.right + reach || posStart.y < bb.top - reach || posStart.y > bb.bottom + reach
-                || posStart.z < bb.zlow - reach || posStart.z > bb.zhigh + reach)
+            if (!mesh && (posStart.x < bb.left - reach || posStart.x > bb.right + reach || posStart.y < bb.top - reach || posStart.y > bb.bottom + reach
+                || posStart.z < bb.zlow - reach || posStart.z > bb.zhigh + reach))
                continue;
             o->ReloadIfChanged();
          }
@@ -2909,6 +2966,7 @@ bool ContactSystemImpl::EngageImpl(ContactHost *const host, HitBall *const pb, c
          it.touching = o == host && std::strcmp(how, "near") != 0;   // the stock collider that found the ball fires its own hit event; a surface found by proximity gets its event from the first touch
          rb.items.push_back(it);
       }
+      HitRubber::FinderBind(pb, rb.items, false);   // key on: the mesh items read the engagement query's faces (their Refresh below does nothing; the inside check re-queries as the seat moves the ball)
    }
    // The ball starts the engagement touching or a little inside the rubber (the hit was found within a step). Go back to the instant it first touched: along its
    // own velocity, by depth / closing speed, at most one physics step; if it is not closing (pushed in by something else), seat it at touching distance along the normal.
@@ -3062,22 +3120,60 @@ bool ContactSystem::EngageBand(HitRubber *const band, HitBall *const pb)
    return true;
 }
 
-void ContactSystemImpl::Regather(BallContact &e, const Vertex3Ds &pos, const float radiusU)
+void ContactSystemImpl::Regather(BallContact &e, const Vertex3Ds &pos, const float radiusU, const bool finder)
 {
    const float reach = radiusU + 20.0f;   // as at engagement
    // A Verlet list: the surfaces within reach + 10 U are kept and collected again only after the ball has moved 5 U (or 10 ms have passed: a part can become collidable)
    constexpr float kMarginU = 10.0f, kMoveU = 5.0f;
    const uint32_t nowMs = g_pplayer->m_time_msec;
    const bool hole = PlayfieldHolesExist() && InPlayfieldHole(pos);
-   if (e.regathered && hole == e.inHole && nowMs - e.regatherMs < 10 && (pos - e.regatherPos).LengthSquared() < kMoveU * kMoveU)
+   const bool rescan = !(e.regathered && hole == e.inHole && nowMs - e.regatherMs < 10 && (pos - e.regatherPos).LengthSquared() < kMoveU * kMoveU);
+   if (!rescan && !finder)
       return;
+   std::vector<SurfaceContact> next;
+   if (finder)
+   {
+      // shared_finder P2b (design.md section 3): the static mesh hosts every cycle from the ball's query (a face within R + reach), the others from the Verlet list below as today;
+      // kept in the registry's order, as the registry loop gave them
+      thread_local std::vector<ContactHost *> found;
+      HitRubber::FinderHosts(e.ball, found);
+      for (ContactHost *const o : found)
+      {
+         if (!o->m_set.contact)
+            continue;
+         if (hole && o->IsPlayfield())
+            continue;   // no floor over a kicker's hole
+         const auto old = std::find_if(e.items.begin(), e.items.end(), [o](const SurfaceContact &it) { return it.r == o; });
+         if (old == e.items.end() && o->m_set.band)
+            continue;   // (as below)
+         if (old != e.items.end())
+         {
+            next.push_back(std::move(*old));
+            continue;
+         }
+         o->ReloadIfChanged();
+         SurfaceContact it;
+         it.r = o;
+         it.rp = o->m_set.ToParams();
+         it.hLayer = o->LayerM();
+         it.st.Reset();
+         next.push_back(std::move(it));
+      }
+      if (!rescan)   // the other surfaces: the set as it is
+         for (SurfaceContact &it : e.items)
+            if (it.r != nullptr && it.r->FinderObjIndex() < 0)
+               next.push_back(std::move(it));
+   }
+   if (rescan)
+   {
    e.inHole = hole;
    e.regathered = true;
    e.regatherPos = pos;
    e.regatherMs = nowMs;
-   std::vector<SurfaceContact> next;
    for (ContactHost *const o : ContactHost::Registry())
    {
+      if (finder && o->FinderObjIndex() >= 0)
+         continue;   // a static mesh host: from the query, above
       if (!o->m_enabled || !o->m_set.contact)
          continue;
       if (hole && o->IsPlayfield())
@@ -3102,6 +3198,9 @@ void ContactSystemImpl::Regather(BallContact &e, const Vertex3Ds &pos, const flo
       it.st.Reset();
       next.push_back(std::move(it));
    }
+   }
+   if (finder)
+      std::stable_sort(next.begin(), next.end(), [](const SurfaceContact &a, const SurfaceContact &b) { return static_cast<const ContactHost *>(a.r)->m_regOrder < static_cast<const ContactHost *>(b.r)->m_regOrder; });
    if (!next.empty())   // never drop the whole set: the release test below decides when the ball is free
       e.items = std::move(next);
 }
@@ -3132,6 +3231,7 @@ bool ContactSystem::Engage(ContactHost *const host, HitBall *const pb, const cha
       it.hLayer = host->LayerM();
       it.st.Reset();
       it.touching = true;   // the collider that found the ball fires its own hit event
+      HitRubber::FinderBindOne(pb, it);   // shared_finder (key on): its faces from the ball's query of this cycle (the inside check re-queries if the ball is outside it)
       items.push_back(std::move(it));
    }
    return true;

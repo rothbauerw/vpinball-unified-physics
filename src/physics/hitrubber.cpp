@@ -122,11 +122,14 @@ namespace
       std::vector<int> objs;     // the objects found (index into the finder's objs), in load order
       std::vector<int> first;    // per found object k: its faces are faces[first[k] .. first[k + 1])
       std::vector<int> faces;    // the faces found, per object in load order
+      std::vector<std::vector<int>> per;   // P2b: per finder object (index into the finder's objs), its faces found (empty: not found); items read it in place (SurfaceContact::qFaces)
+      const std::vector<SurfaceContact> *items = nullptr;   // P2b: the ball's surfaces this cycle (FinderBind): a re-query counts the objects it finds that are not among them
       RubberContact::V3 vPrev;   // the ball's velocity at the last query (m/s): the acceleration is its change over one cycle
       uint64_t vPrevCycle = 0;
       bool queried = false;
       int reqThis = 0;           // re-queries in the current cycle
       double reqNs = 0.0;        // time spent in re-queries, ns (summed at the totals)
+      uint64_t reqNew = 0;       // P2b: objects a re-query found that were not among the ball's surfaces (summed at the totals)
    };
 
    // the timing counters' histogram: 10 ns bins up to 200 us
@@ -162,6 +165,7 @@ namespace
       // P2a: the per-cycle queries and their counters
       std::unordered_map<const HitBall *, FinderBallQ> balls;   // node-based: an item's pointer to its ball's query stays valid as balls are added
       uint64_t cycle = 0, queries = 0, noPrev = 0, objsFound = 0, facesFound = 0, qCycles = 0, reqCycles = 0, reqTotal = 0;
+      uint64_t queriesAt = 0, reqNewObj = 0;   // P2b: queries with no cycle bookkeeping (FinderQueryAt); objects a re-query found that were not among the ball's surfaces
       int reqWorst = 0;
       FinderHist qNs, qObjNs;          // query time per ball-cycle; per ball-cycle and object found
       uint32_t nextTotalsMs = 0;
@@ -180,6 +184,7 @@ namespace
          order.clear();
          balls.clear();
          cycle = queries = noPrev = objsFound = facesFound = qCycles = reqCycles = reqTotal = 0;
+         queriesAt = reqNewObj = 0;
          reqWorst = 0;
          qNs = FinderHist();
          qObjNs = FinderHist();
@@ -1256,6 +1261,8 @@ void HitRubber::Refresh(SurfaceContact &it, const double ballR, const double rea
       if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
          g_pplayer->m_liveUI->PushNotification(msg, 5000);
    }
+   if (it.qFaces != nullptr)
+      return;   // shared_finder P2b (key on): the ball's query holds this object's faces (FinderBind)
    // A list built with some margin stays good until the ball has moved farther than the margin allows: scanning every face of a playfield mesh for every ball on every
    // call was the main cost of a table with several balls on it.
    const double need = ballR + reachM;
@@ -1903,6 +1910,11 @@ void HitRubber::FinderBuild(const bool atLoad)
       return;
    }
    g.on = true;
+   {
+      int i = 0;   // P2b: the registry's order, kept for a ball's surfaces (Regather and EngageImpl sort them by it)
+      for (ContactHost *const o : ContactHost::Registry())
+         o->m_regOrder = i++;
+   }
    const auto t0 = std::chrono::steady_clock::now();
    double slowestMs = 0.0, l2Ms = 0.0;
    std::string slowest;
@@ -2154,6 +2166,10 @@ void HitRubber::FinderRun(void *const qv, const double r)
    FinderIndex &g = g_finder;
    FinderBallQ &q = *static_cast<FinderBallQ *>(qv);
    const double r2 = r * r;
+   if (q.per.size() != g.objs.size())
+      q.per.assign(g.objs.size(), std::vector<int>());
+   for (const int k : q.objs)
+      q.per[k].clear();   // the last result's
    q.objs.clear();
    q.first.clear();
    q.faces.clear();
@@ -2174,11 +2190,12 @@ void HitRubber::FinderRun(void *const qv, const double r)
       std::sort(q.faces.begin() + b, q.faces.end());   // load order (R9)
       q.objs.push_back(k);
       q.first.push_back((int)b);
+      q.per[k].assign(q.faces.begin() + b, q.faces.end());
    }
    q.first.push_back((int)q.faces.size());
 }
 
-void HitRubber::FinderQuery(const HitBall *const ball, std::vector<SurfaceContact> &items, const RubberContact::V3 &c, const RubberContact::V3 &v, const double ballR, const double dt)
+void HitRubber::FinderQuery(const HitBall *const ball, const RubberContact::V3 &c, const RubberContact::V3 &v, const double ballR, const double dt)
 {
    FinderIndex &g = g_finder;
    if (!g.on)
@@ -2207,9 +2224,8 @@ void HitRubber::FinderQuery(const HitBall *const ball, std::vector<SurfaceContac
    q.reach = ContactReachM(v.Length(), accel, dt);
    q.ext = q.reach;
    q.reqThis = 0;
+   q.items = nullptr;
    FinderRun(&q, ballR + q.reach);
-   for (SurfaceContact &it : items)
-      it.finderQ = &q;
    const double ns = std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count();
    g.queries++;
    g.objsFound += q.objs.size();
@@ -2229,8 +2245,12 @@ void HitRubber::FinderInside(const SurfaceContact &it, const RubberContact::V3 &
       return;
    const auto t0 = std::chrono::steady_clock::now();
    q->ext = 2.0 * stray;   // the factor 2 bounds the repeats; completeness comes from this check (design.md section 4)
-   FinderRun(q, q->R + q->ext);
+   FinderRun(q, q->R + q->ext);   // (P2b: every item of the ball reads its object's faces in place, so the lists are refreshed before this evaluation measures)
    q->reqThis++;
+   if (q->items != nullptr)   // P2b: an object the re-query found that is not among the ball's surfaces (engagement comes from the cycle's query; counted, reported in the totals)
+      for (const int k : q->objs)
+         if (std::none_of(q->items->begin(), q->items->end(), [k](const SurfaceContact &o) { return o.r->FinderObjIndex() == k; }))
+            q->reqNew++;
    q->reqNs += std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count();
 }
 
@@ -2248,11 +2268,72 @@ void HitRubber::FinderTotals(const bool force)
    if (g.queries == 0)
       return;
    double reqNs = 0.0;
+   g.reqNewObj = 0;
    for (const auto &e : g.balls)
+   {
       reqNs += e.second.reqNs;
+      g.reqNewObj += e.second.reqNew;
+   }
    PLOGI << "Finder query totals: " << g.queries << " ball-cycle queries (" << g.noPrev << " with no previous velocity), objects found " << (double)g.objsFound / (double)g.queries << " and faces "
          << (double)g.facesFound / (double)g.queries << " per query; time per query mean " << g.qNs.sum / (double)g.qNs.n << " ns, p99 " << g.qNs.P(0.99) << ", worst " << g.qNs.worst
          << "; per query and object found mean " << (g.qObjNs.n > 0 ? g.qObjNs.sum / (double)g.qObjNs.n : 0.0) << " ns, p99 " << g.qObjNs.P(0.99) << ", worst " << g.qObjNs.worst << "; re-queries "
          << g.reqTotal << " in " << g.reqCycles << " of " << g.qCycles << " ball-cycles (" << (g.qCycles > 0 ? 100.0 * (double)g.reqCycles / (double)g.qCycles : 0.0) << " %), worst " << g.reqWorst
-         << " in one ball-cycle, time " << reqNs << " ns in all";
+         << " in one ball-cycle, time " << reqNs << " ns in all; P2b: queries at engagement " << g.queriesAt << ", objects a re-query found that were not among the ball's surfaces " << g.reqNewObj;
+}
+
+// ---- The shared finder, piece P2b: the query finds every static mesh contact ([Features] shared_finder = 1) ----
+
+bool HitRubber::FinderDrives()
+{
+   return g_finder.on;
+}
+
+void HitRubber::FinderQueryAt(const HitBall *const ball, const RubberContact::V3 &c, const double ballR, const double extM)
+{
+   FinderIndex &g = g_finder;
+   if (!g.on)
+      return;
+   FinderBallQ &q = g.balls[ball];
+   q.c0 = c;
+   q.R = ballR;
+   q.reach = q.ext = extM;
+   q.items = nullptr;
+   FinderRun(&q, ballR + extM);
+   g.queriesAt++;
+}
+
+void HitRubber::FinderBindOne(const HitBall *const ball, SurfaceContact &it)
+{
+   FinderIndex &g = g_finder;
+   if (!g.on)
+      return;
+   FinderBallQ &q = g.balls[ball];
+   it.finderQ = &q;
+   const int k = it.r->FinderObjIndex();
+   if (k < 0)
+      return;
+   if (q.per.size() != g.objs.size())
+      q.per.assign(g.objs.size(), std::vector<int>());
+   it.qFaces = &q.per[k];
+   it.candR = q.R + q.reach;   // how far the list reaches from the query's centre (>= 0: a list is held; the cuts read it as their reach)
+}
+
+void HitRubber::FinderBind(const HitBall *const ball, std::vector<SurfaceContact> &items, const bool cycleItems)
+{
+   if (!g_finder.on)
+      return;
+   for (SurfaceContact &it : items)
+      FinderBindOne(ball, it);
+   g_finder.balls[ball].items = cycleItems ? &items : nullptr;
+}
+
+void HitRubber::FinderHosts(const HitBall *const ball, std::vector<ContactHost *> &out)
+{
+   out.clear();
+   FinderIndex &g = g_finder;
+   if (!g.on)
+      return;
+   const FinderBallQ &q = g.balls[ball];
+   for (const int k : q.objs)
+      out.push_back(const_cast<HitRubber *>(g.objs[k].host));
 }

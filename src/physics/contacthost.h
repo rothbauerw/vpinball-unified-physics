@@ -82,6 +82,7 @@ public:
    // every live host, so a solve can include the surfaces near the ball
    static std::vector<ContactHost *> &Registry();
    static std::vector<ContactHost *> &AllHosts() { return Registry(); }
+   int m_regOrder = 0;   // shared_finder P2b: this host's place in the registry when the finder was built (a ball's surfaces are kept in this order, as the registry loops gave them)
    // Hosts that are still registered: called when a new physics engine starts, where there must be none (a host the previous table did not release is tested against every
    // ball of this one). Empty if there are none, else "N (kind name, ...)".
    static std::string LeftoverHosts();
