@@ -11,6 +11,7 @@
 #include <chrono>
 #include <map>
 #include <mutex>
+#include <unordered_map>
 
 #include "imgui/imgui.h"
 #include "parts/ball.h"
@@ -113,18 +114,63 @@ namespace
       RubberContact::V3 lo, hi;   // the object's box: its face tree's root, m
    };
 
+   // P2a: one engaged ball's per-cycle query (design.md section 3), kept for the cycle; only the ball's own evaluations (one thread) write it after the gather
+   struct FinderBallQ
+   {
+      RubberContact::V3 c0;      // the query's centre: the ball's centre at the cycle start, m
+      double R = 0.0, reach = 0.0, ext = 0.0;   // ball radius; reach (ContactReachM); ext: how far the ball may stray from c0 inside the volume (reach, 2 x stray after a re-query)
+      std::vector<int> objs;     // the objects found (index into the finder's objs), in load order
+      std::vector<int> first;    // per found object k: its faces are faces[first[k] .. first[k + 1])
+      std::vector<int> faces;    // the faces found, per object in load order
+      RubberContact::V3 vPrev;   // the ball's velocity at the last query (m/s): the acceleration is its change over one cycle
+      uint64_t vPrevCycle = 0;
+      bool queried = false;
+      int reqThis = 0;           // re-queries in the current cycle
+      double reqNs = 0.0;        // time spent in re-queries, ns (summed at the totals)
+   };
+
+   // the timing counters' histogram: 10 ns bins up to 200 us
+   struct FinderHist
+   {
+      std::vector<uint32_t> b = std::vector<uint32_t>(20001, 0);
+      uint64_t n = 0;
+      double sum = 0.0, worst = 0.0;
+      void Add(const double ns)
+      {
+         b[std::min((size_t)std::max(ns / 10.0, 0.0), b.size() - 1)]++;
+         n++;
+         sum += ns;
+         worst = std::max(worst, ns);
+      }
+      double P(const double q) const
+      {
+         uint64_t acc = 0;
+         const uint64_t need = (uint64_t)std::ceil(q * (double)n);
+         for (size_t i = 0; i < b.size(); i++)
+            if ((acc += b[i]) >= need)
+               return (double)(i + 1) * 10.0;
+         return worst;
+      }
+   };
+
    struct FinderIndex
    {
       bool built = false, on = false;
       std::vector<FinderObj> objs;     // in the host registry's order (load order)
       std::vector<FinderNode> nodes;   // the box tree over the objects
       std::vector<int> order;
+      // P2a: the per-cycle queries and their counters
+      std::unordered_map<const HitBall *, FinderBallQ> balls;   // node-based: an item's pointer to its ball's query stays valid as balls are added
+      uint64_t cycle = 0, queries = 0, noPrev = 0, objsFound = 0, facesFound = 0, qCycles = 0, reqCycles = 0, reqTotal = 0;
+      int reqWorst = 0;
+      FinderHist qNs, qObjNs;          // query time per ball-cycle; per ball-cycle and object found
+      uint32_t nextTotalsMs = 0;
       // check mode
       std::mutex mtx;
-      uint64_t evals = 0, facesNear = 0, missA = 0, missB = 0, gathers = 0, gMissA = 0, gMissB = 0;
-      std::map<std::string, std::array<uint64_t, 4>> byObj;   // object -> misses: list, index, gather, object tree
+      uint64_t evals = 0, facesNear = 0, missA = 0, missB = 0, gathers = 0, gMissA = 0, gMissB = 0, missQ = 0, gMissQ = 0, gWider = 0, noQ = 0;
+      std::map<std::string, std::array<uint64_t, 5>> byObj;   // object -> misses: list, index, gather, object tree, per-cycle query
       int logged = 0;
-      bool notifiedA = false, notifiedB = false, notifiedG = false;
+      bool notifiedA = false, notifiedB = false, notifiedG = false, notifiedQ = false;
       uint32_t nextReportMs = 0;   // check mode: the totals are also written once a second of table time (a run may end without closing the table)
       void Reset()   // the table closes (its first mesh host is deleted): the next table builds its own
       {
@@ -132,10 +178,16 @@ namespace
          objs.clear();
          nodes.clear();
          order.clear();
-         evals = facesNear = missA = missB = gathers = gMissA = gMissB = 0;
+         balls.clear();
+         cycle = queries = noPrev = objsFound = facesFound = qCycles = reqCycles = reqTotal = 0;
+         reqWorst = 0;
+         qNs = FinderHist();
+         qObjNs = FinderHist();
+         nextTotalsMs = 0;
+         evals = facesNear = missA = missB = gathers = gMissA = gMissB = missQ = gMissQ = gWider = noQ = 0;
          byObj.clear();
          logged = 0;
-         notifiedA = notifiedB = notifiedG = false;
+         notifiedA = notifiedB = notifiedG = notifiedQ = false;
          nextReportMs = 0;
       }
    };
@@ -234,10 +286,11 @@ namespace
          return;
       std::ostringstream o;
       o << "Finder check totals: " << g.evals << " mesh evaluations (" << g.facesNear << " faces within the ball's radius), misses of today's face lists " << g.missA << ", of the index "
-        << g.missB << "; " << g.gathers << " ball gathers, objects with a face within the radius missing from the gather " << g.gMissA << ", from the index's object tree " << g.gMissB;
+        << g.missB << ", of the per-cycle query " << g.missQ << " (evaluations with no query " << g.noQ << "); " << g.gathers << " ball gathers, objects with a face within the radius missing from the gather "
+        << g.gMissA << ", from the index's object tree " << g.gMissB << "; gathered objects missing from the query " << g.gMissQ << " with a face within R + reach, " << g.gWider << " with none (the gather is wider)";
       PLOGI << o.str();
       for (const auto &e : g.byObj)
-         PLOGI << "Finder check totals: " << e.first << ": misses list " << e.second[0] << ", index " << e.second[1] << ", gather " << e.second[2] << ", object tree " << e.second[3];
+         PLOGI << "Finder check totals: " << e.first << ": misses list " << e.second[0] << ", index " << e.second[1] << ", gather " << e.second[2] << ", object tree " << e.second[3] << ", query " << e.second[4];
    }
 
    void FinderPeriodic()   // (the caller holds g_finder.mtx)
@@ -254,7 +307,7 @@ namespace
    void FinderMiss(const int what, const std::string &obj, const int face, const int piece, const double dM, const RubberContact::V3 &c, const char *where)
    {
       FinderIndex &g = g_finder;
-      static const char *const names[4] = { "today's face list", "the shared finder's index", "the ball's gathered objects", "the index's object tree" };
+      static const char *const names[5] = { "today's face list", "the shared finder's index", "the ball's gathered objects", "the index's object tree", "the per-cycle query" };
       g.byObj[obj][what]++;
       if (g.logged < 200)
       {
@@ -262,7 +315,7 @@ namespace
          PLOGW << "Finder check: " << names[what] << " missed " << obj << " face " << face << " (piece " << piece << ") at " << dM * 1e3 << " mm from the ball centre (" << c.x << ", " << c.y << ", " << c.z
                << ") m, t=" << (g_pplayer != nullptr ? g_pplayer->m_time_msec : 0) << " ms, " << where;
       }
-      bool &said = what == 0 ? g.notifiedA : what == 1 ? g.notifiedB : g.notifiedG;
+      bool &said = what == 0 ? g.notifiedA : what == 1 ? g.notifiedB : what == 4 ? g.notifiedQ : g.notifiedG;
       if (!said)
       {
          said = true;
@@ -277,6 +330,7 @@ namespace
    {
       if (meshHost && g_finder.built)
       {
+         HitRubber::FinderTotals(true);
          FinderReport();
          g_finder.Reset();
       }
@@ -1239,6 +1293,8 @@ void HitRubber::Refresh(SurfaceContact &it, const double ballR, const double rea
 RubberContact::TubeProbe HitRubber::Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const
 {
    const bool finderCheck = m_surface != nullptr && g_finderDepth == 0 && FinderCheckOn();   // check mode (VPX_FINDER_CHECK=1): diagnostics only
+   if (m_surface != nullptr)
+      FinderInside(it, c);   // shared_finder P2a: the inside check of the ball's query volume (re-query counted; nothing reads the query yet)
    if (finderCheck)
       FinderCheck(it, c, bs.R, 0);
    const FinderGuard finderGuard(finderCheck);
@@ -1261,6 +1317,8 @@ RubberContact::TubeProbe HitRubber::Probe(const RubberContact::BallSI &bs, const
 RubberContact::TubeProbe HitRubber::ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const
 {
    const bool finderCheck = m_surface != nullptr && g_finderDepth == 0 && FinderCheckOn();   // check mode (as Probe; the Probe inside is not checked again)
+   if (m_surface != nullptr)
+      FinderInside(it, c);   // shared_finder P2a: the inside check of the ball's query volume (re-query counted; nothing reads the query yet)
    if (finderCheck)
       FinderCheck(it, c, bs.R, 1);
    const FinderGuard finderGuard(finderCheck);
@@ -1294,6 +1352,8 @@ RubberContact::TubeProbe HitRubber::ProbePatch(const RubberContact::BallSI &bs, 
 double HitRubber::ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, const int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, const double a, const double hMax, const double touchM, const double arriveM) const
 {
    const bool finderCheck = m_surface != nullptr && g_finderDepth == 0 && FinderCheckOn();   // check mode (as Probe)
+   if (m_surface != nullptr)
+      FinderInside(it, c);   // shared_finder P2a: the inside check of the ball's query volume (re-query counted; nothing reads the query yet)
    if (finderCheck)
       FinderCheck(it, c, bs.R, 2);
    const FinderGuard finderGuard(finderCheck);
@@ -1887,6 +1947,7 @@ void HitRubber::FinderBuild(const bool atLoad)
          s.forder[i] = i;
       BuildTree(s.fnodes, s.forder, [&s](const int i, RubberContact::V3 &lo, RubberContact::V3 &hi) { lo = s.tris[i].lo; hi = s.tris[i].hi; }, 0, n, 4);
       g.objs.push_back({ h, s.fnodes[0].lo, s.fnodes[0].hi });
+      s.fobj = (int)g.objs.size() - 1;
       const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a).count();
       l2Ms += ms;
       if (ms > slowestMs)
@@ -1962,10 +2023,29 @@ void HitRubber::FinderCheck(const SurfaceContact &it, const RubberContact::V3 &c
       QueryTree(s.fnodes, s.forder, [&s](const int i, RubberContact::V3 &lo, RubberContact::V3 &hi) { lo = s.tris[i].lo; hi = s.tris[i].hi; }, c, r2, listB);
       std::sort(listB.begin(), listB.end());
    }
+   // P2a: the ball's per-cycle query (after the inside check) must hold every face within the ball's radius
+   const FinderBallQ *const q = static_cast<const FinderBallQ *>(it.finderQ);
+   int qa = 0, qb = 0;
+   if (q == nullptr)
+      g.noQ++;
+   else
+   {
+      const auto o = std::lower_bound(q->objs.begin(), q->objs.end(), m_surface->fobj);
+      if (o != q->objs.end() && *o == m_surface->fobj)
+      {
+         qa = q->first[o - q->objs.begin()];
+         qb = q->first[o - q->objs.begin() + 1];
+      }
+   }
    for (size_t k = 0; k < full.size(); k++)
    {
       const int f = full[k];
       const int pc = (int)m_surface->piece.size() > f ? m_surface->piece[f] : -1;
+      if (q != nullptr && !std::binary_search(q->faces.begin() + qa, q->faces.begin() + qb, f))
+      {
+         g.missQ++;
+         FinderMiss(4, m_name, f, pc, dist[k], c, kinds[evalKind]);
+      }
       if (!std::binary_search(listA.begin(), listA.end(), f))
       {
          g.missA++;
@@ -2032,5 +2112,147 @@ void HitRubber::FinderCheckGather(const HitBall *ball, const std::vector<Surface
          FinderMiss(3, h->m_name, nearest, pc, std::sqrt(nearestD2), c, "gather");
       }
    }
+   // P2a: every mesh object today's gather engages must be among the per-cycle query's objects (one with no face within R + reach of the query's centre: the gather is wider)
+   const FinderBallQ *const q = items.empty() ? nullptr : static_cast<const FinderBallQ *>(items[0].finderQ);
+   if (q != nullptr)
+      for (int k = 0; k < (int)g.objs.size(); k++)
+      {
+         const HitRubber *const h = g.objs[k].host;
+         if (std::none_of(items.begin(), items.end(), [h](const SurfaceContact &it) { return it.r == static_cast<const ContactSurface *>(h); }) || std::binary_search(q->objs.begin(), q->objs.end(), k))
+            continue;
+         const std::vector<RubberContact::SurfaceTri> &tris = h->m_surface->tris;
+         const double rq = q->R + q->ext;
+         int nearest = -1;
+         double nearestD2 = rq * rq;
+         for (int i = 0; i < (int)tris.size(); i++)
+         {
+            if (BoxD2(tris[i].lo, tris[i].hi, q->c0) > nearestD2)
+               continue;
+            int kind = 0;
+            const RubberContact::V3 dv = q->c0 - RubberContact::ClosestOnTriangle(tris[i], q->c0, kind);
+            if (dv.Dot(dv) <= nearestD2)
+            {
+               nearestD2 = dv.Dot(dv);
+               nearest = i;
+            }
+         }
+         if (nearest < 0)
+            g.gWider++;
+         else
+         {
+            g.gMissQ++;
+            FinderMiss(4, h->m_name, nearest, (int)h->m_surface->piece.size() > nearest ? h->m_surface->piece[nearest] : -1, std::sqrt(nearestD2), q->c0, "gather");
+         }
+      }
    (void)ball;
+}
+
+// ---- The shared finder, piece P2a: the per-cycle query (design.md sections 3 and 4), run beside today's gathers; nothing in the engine reads it yet ----
+
+void HitRubber::FinderRun(void *const qv, const double r)
+{
+   FinderIndex &g = g_finder;
+   FinderBallQ &q = *static_cast<FinderBallQ *>(qv);
+   const double r2 = r * r;
+   q.objs.clear();
+   q.first.clear();
+   q.faces.clear();
+   thread_local std::vector<int> hit;
+   hit.clear();
+   QueryTree(g.nodes, g.order, [&g](const int i, RubberContact::V3 &lo, RubberContact::V3 &hi) { lo = g.objs[i].lo; hi = g.objs[i].hi; }, q.c0, r2, hit);
+   std::sort(hit.begin(), hit.end());   // load order (R9)
+   for (const int k : hit)
+   {
+      const HitRubber *const h = g.objs[k].host;
+      if (!h->m_enabled)
+         continue;   // not collidable now: skipped by its flag
+      const RubberSurface &s = *h->m_surface;
+      const size_t b = q.faces.size();
+      QueryTree(s.fnodes, s.forder, [&s](const int i, RubberContact::V3 &lo, RubberContact::V3 &hi) { lo = s.tris[i].lo; hi = s.tris[i].hi; }, q.c0, r2, q.faces);
+      if (q.faces.size() == b)
+         continue;
+      std::sort(q.faces.begin() + b, q.faces.end());   // load order (R9)
+      q.objs.push_back(k);
+      q.first.push_back((int)b);
+   }
+   q.first.push_back((int)q.faces.size());
+}
+
+void HitRubber::FinderQuery(const HitBall *const ball, std::vector<SurfaceContact> &items, const RubberContact::V3 &c, const RubberContact::V3 &v, const double ballR, const double dt)
+{
+   FinderIndex &g = g_finder;
+   if (!g.on)
+      return;
+   const auto t0 = std::chrono::steady_clock::now();
+   FinderBallQ &q = g.balls[ball];
+   if (q.queried)   // the last query's re-queries, per ball-cycle
+   {
+      g.qCycles++;
+      g.reqCycles += q.reqThis > 0 ? 1 : 0;
+      g.reqTotal += q.reqThis;
+      g.reqWorst = std::max(g.reqWorst, q.reqThis);
+   }
+   // a: the ball's acceleration from its net force in the previous cycle, taken as its velocity change over that cycle (the engine keeps no net force per ball);
+   // none known (the ball was not engaged last cycle): 0, and the inside check covers it
+   double accel = 0.0;
+   if (q.queried && q.vPrevCycle + 1 == g.cycle)
+      accel = (v - q.vPrev).Length() / dt;
+   else
+      g.noPrev++;
+   q.vPrev = v;
+   q.vPrevCycle = g.cycle;
+   q.queried = true;
+   q.c0 = c;
+   q.R = ballR;
+   q.reach = ContactReachM(v.Length(), accel, dt);
+   q.ext = q.reach;
+   q.reqThis = 0;
+   FinderRun(&q, ballR + q.reach);
+   for (SurfaceContact &it : items)
+      it.finderQ = &q;
+   const double ns = std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count();
+   g.queries++;
+   g.objsFound += q.objs.size();
+   g.facesFound += q.faces.size();
+   g.qNs.Add(ns);
+   if (!q.objs.empty())
+      g.qObjNs.Add(ns / (double)q.objs.size());
+}
+
+void HitRubber::FinderInside(const SurfaceContact &it, const RubberContact::V3 &c) const
+{
+   FinderBallQ *const q = static_cast<FinderBallQ *>(it.finderQ);
+   if (q == nullptr || !g_finder.on)
+      return;
+   const double stray = (c - q->c0).Length();
+   if (stray <= q->ext)
+      return;
+   const auto t0 = std::chrono::steady_clock::now();
+   q->ext = 2.0 * stray;   // the factor 2 bounds the repeats; completeness comes from this check (design.md section 4)
+   FinderRun(q, q->R + q->ext);
+   q->reqThis++;
+   q->reqNs += std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count();
+}
+
+void HitRubber::FinderTotals(const bool force)
+{
+   FinderIndex &g = g_finder;
+   if (!force)
+      g.cycle++;
+   if (!g.on)
+      return;
+   const uint32_t now = g_pplayer != nullptr ? g_pplayer->m_time_msec : 0;
+   if (!force && now < g.nextTotalsMs)
+      return;
+   g.nextTotalsMs = now + 1000;
+   if (g.queries == 0)
+      return;
+   double reqNs = 0.0;
+   for (const auto &e : g.balls)
+      reqNs += e.second.reqNs;
+   PLOGI << "Finder query totals: " << g.queries << " ball-cycle queries (" << g.noPrev << " with no previous velocity), objects found " << (double)g.objsFound / (double)g.queries << " and faces "
+         << (double)g.facesFound / (double)g.queries << " per query; time per query mean " << g.qNs.sum / (double)g.qNs.n << " ns, p99 " << g.qNs.P(0.99) << ", worst " << g.qNs.worst
+         << "; per query and object found mean " << (g.qObjNs.n > 0 ? g.qObjNs.sum / (double)g.qObjNs.n : 0.0) << " ns, p99 " << g.qObjNs.P(0.99) << ", worst " << g.qObjNs.worst << "; re-queries "
+         << g.reqTotal << " in " << g.reqCycles << " of " << g.qCycles << " ball-cycles (" << (g.qCycles > 0 ? 100.0 * (double)g.reqCycles / (double)g.qCycles : 0.0) << " %), worst " << g.reqWorst
+         << " in one ball-cycle, time " << reqNs << " ns in all";
 }

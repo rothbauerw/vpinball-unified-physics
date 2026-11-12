@@ -29,6 +29,10 @@ struct SurfaceState
 };
 
 // What one ball has with ONE surface: the material parameters, the shear state kept between cycles, and the faces near the ball this cycle.
+// The reach of a ball over one cycle (to-do N5, the one reach rule; shared finder design.md section 3): how far its centre can move in dt from its speed and its
+// acceleration, reach = speed x dt + 1/2 x accel x dt^2 (m; speed m/s, accel m/s^2, dt s). Used first by the shared finder's per-cycle query (to-do 1.34 P2a).
+inline double ContactReachM(const double speed, const double accel, const double dt) { return speed * dt + 0.5 * accel * dt * dt; }
+
 struct SurfaceContact
 {
    const ContactSurface *r = nullptr;
@@ -60,6 +64,7 @@ struct SurfaceContact
    // The last probe of this surface in the arrival loop: the gap (m, < 0 = overlap; probeT < 0 = none yet this cycle), where the ball was and when (s into the cycle). A static
    // surface's gap can shrink by no more than the ball has moved since, so a surface the ball cannot reach in the rest of the cycle is not probed again (ProbeBody).
    double probeGap = 0.0, probeT = -1.0;
+   void *finderQ = nullptr;       // shared_finder P2a: the ball's per-cycle query (hitrubber.cpp FinderBallQ), set at each cycle's gather; null = none (an item made after the gather)
    RubberContact::V3 probeC;
 };
 

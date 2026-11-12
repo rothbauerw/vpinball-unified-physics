@@ -102,6 +102,7 @@ struct RubberSurface
    std::vector<int> forder;         // face indices in the tree's leaf order
    std::vector<int> piece;          // per face: its mesh piece (faces joined through shared edges, nb), numbered by each piece's first face in load order
    int nPieces = 0;
+   int fobj = -1;                   // this object's index in the finder's object list (load order), -1 = not in the index
 };
 
 // One ball in an engine-stepped contact with a static rubber (post ring, wall rubber): the rubbers it touches and the bookkeeping for the log and the release.
@@ -185,6 +186,12 @@ public:
    // check mode (VPX_FINDER_CHECK=1, diagnostics only): once per engaged ball and cycle, every enabled mesh object with a face within the ball's radius must be among the ball's
    // gathered surfaces (items) and found by the index's object tree; inPlayfieldHole: the ball is over a kicker's hole (the gather leaves the playfield out on purpose)
    static void FinderCheckGather(const HitBall *ball, const std::vector<SurfaceContact> &items, const RubberContact::V3 &c, double ballR, bool inPlayfieldHole);
+   // shared_finder piece P2a (runs/2026-11-11-finder/design.md section 3): the per-cycle query of one engaged ball at the cycle start (centre c, radius R + reach, v the
+   // ball's velocity at the cycle start, dt the cycle), kept for the cycle; the ball's surface items point at it (SurfaceContact::finderQ). In P2a nothing reads its result
+   // except check mode and the timing counters, so no result changes.
+   static void FinderQuery(const HitBall *ball, std::vector<SurfaceContact> &items, const RubberContact::V3 &c, const RubberContact::V3 &v, double ballR, double dt);
+   // the finder's totals (query cost, re-queries), once a second of table time and when the table closes
+   static void FinderTotals(bool force);
    // Non-legacy kickers are round holes in the playfield: the playfield host leaves no floor inside them (the ball rests on the rim, or falls in and is captured).
    // Filled by Kicker::PhysicSetup, cleared when the physics engine is built. x, y, r in VPX units.
    static void AddPlayfieldHole(float x, float y, float r);
@@ -264,6 +271,10 @@ private:
 
    // check mode (VPX_FINDER_CHECK=1): at one evaluation of this mesh, every face within the ball's radius (a full scan) against today's list (it.Faces(c)) and the index
    void FinderCheck(const SurfaceContact &it, const RubberContact::V3 &c, double ballR, int evalKind) const;
+   // shared_finder P2a (design.md section 4): the inside check of one evaluation at ball centre c: outside the ball's query volume, the query runs again around its centre
+   // with radius R + 2 x the stray (counted; nothing reads the result in P2a)
+   void FinderInside(const SurfaceContact &it, const RubberContact::V3 &c) const;
+   static void FinderRun(void *q, double r);   // the query itself (q: a FinderBallQ), radius r around its centre
    std::shared_ptr<RubberSurface> m_surface;   // a wall / primitive host: its faces (m_pts is then empty)
    int m_linkOver = 0;                         // multi_contact: edges on more than two faces, counted when the faces' shared edges are built at load (Link)
    mutable bool m_linkNoticed = false;         // that count reported (log and screen) at the first ball near the surface, once

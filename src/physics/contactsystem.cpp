@@ -269,6 +269,7 @@ struct ContactSystemImpl
    {
       CPROF(GatherBalls);
       HitRubber::FinderBuild();   // shared_finder: the index over every static mesh, once before the first cycle (P1: only check mode reads it)
+      HitRubber::FinderTotals(false);   // shared_finder P2a: counts the cycle; the query's totals once a second of table time
       const double dt = cy.dt;
       for (auto eit = g_engaged.begin(); eit != g_engaged.end();)
       {
@@ -302,6 +303,7 @@ struct ContactSystemImpl
                continue;
             }
             LoadState(w);
+            HitRubber::FinderQuery(pb, e.items, w.c, w.v, w.bs.R, dt);   // shared_finder P2a: the per-cycle query, beside today's gathers; nothing reads it yet
             w.band = e.band;
             Sources::Begin(w, dt);
             {
