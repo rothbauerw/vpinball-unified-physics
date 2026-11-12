@@ -46,6 +46,7 @@ namespace
 namespace ContactSystem
 {
    static bool s_unified = false, s_unifiedSet = false;
+   static bool s_freeFlight = false, s_proximity = false;   // [Features] free_flight and proximity_engage of this table: read at each table load (SetTable), not once per process
 
    void SetTable(const std::filesystem::path &tableFile)
    {
@@ -57,6 +58,9 @@ namespace ContactSystem
       const bool found = !file.empty() && PhysicsIni::ReadFeatures(file, f);
       s_unified = found && f.unified;   // no file, no [Features] or no  unified = 1  = stock VPX physics
       s_unifiedSet = true;
+      s_freeFlight = s_unified && f.freeFlight;
+      const char *const px = getenv("VPX_PROXIMITY");   // (diagnostic override, TestingPlaybook)
+      s_proximity = s_unified && (px != nullptr ? atoi(px) != 0 : f.proximityEngage);
       ContactSettings::StartPlay(tableFile);   // (after the switch above: the settings ask it)
       if (s_unified)
          PLOGI << "Contact system: unified engine on (" << file.string() << "; dev fallback: stock hit search still runs for object types not yet converted)";
@@ -329,8 +333,7 @@ struct ContactSystemImpl
    // [Features] free_flight (physicsini.h): every free ball is a body of the step, not only one within reach of another ball, so no ball is moved by the stock flight
    static bool FreeFlightOn()
    {
-      static const bool on = []() { return PhysicsIni::Active(ContactHost::IniPathFor(g_pplayer->m_ptable->m_filename)).freeFlight; }();
-      return on;
+      return ContactSystem::s_freeFlight;
    }
 
    static void GatherFree(Cycle &cy)
@@ -2710,15 +2713,7 @@ void ContactSystemImpl::EngageNear(const double dt)
    CordNear(dt);
    CPROF(EngageNear);
    ContactProf::Cycle();
-   static const bool on = []()
-   {
-      const char *const e = getenv("VPX_PROXIMITY");
-      if (e != nullptr)
-         return atoi(e) != 0;
-      const std::filesystem::path ini = ContactHost::IniPathFor(g_pplayer->m_ptable->m_filename);
-      return PhysicsIni::Active(ini).proximityEngage;
-   }();
-   if (!on)
+   if (!ContactSystem::s_proximity)   // (read at the table load, SetTable)
       return;
    // The faces near each free ball, per surface, kept between cycles (a Verlet list: Refresh only rescans when the ball has moved out of the list): scanning a mesh playfield
    // afresh for every free ball every cycle would cost milliseconds.
