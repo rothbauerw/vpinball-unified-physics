@@ -717,6 +717,7 @@ namespace RubberContact
       V3 a, b, c;            // vertices
       V3 n;                  // unit normal of the face (either orientation: the ball side is taken from where the ball is)
       V3 lo, hi;             // bounding box
+      bool area;             // false: zero area (three points on a line), no face of its own
    };
 
    inline SurfaceTri MakeSurfaceTri(const V3 &a, const V3 &b, const V3 &c)
@@ -727,7 +728,8 @@ namespace RubberContact
       t.c = c;
       const V3 cr = (b - a).Cross(c - a);
       const double l = cr.Length();
-      t.n = l > 0.0 ? cr / l : V3(0.0, 0.0, 1.0);
+      t.area = l > 0.0;
+      t.n = t.area ? cr / l : V3(0.0, 0.0, 1.0);
       t.lo = V3(std::min({ a.x, b.x, c.x }), std::min({ a.y, b.y, c.y }), std::min({ a.z, b.z, c.z }));
       t.hi = V3(std::max({ a.x, b.x, c.x }), std::max({ a.y, b.y, c.y }), std::max({ a.z, b.z, c.z }));
       return t;
@@ -805,10 +807,20 @@ namespace RubberContact
       }
    };
 
+   // One candidate face as the probe measured it: its nearest point to the ball centre, the kind of that point, the squared distance.
+   struct FaceHit
+   {
+      int i;
+      int kind;
+      V3 p;
+      double d2;
+   };
+
    // halfThick > 0: the faces are the mid-surface of a sheet of thickness 2 halfThick (a gate plate): the surface is everything within halfThick of the faces
    // (flat on both sides, edges rounded to radius halfThick), so the depth is R + halfThick - distance. Pass edgeRho = halfThick for such a sheet.
+   // hits (optional): every candidate's measurement, in candidate order, for a caller that needs the other faces too (BarsTriangles), so each face is measured once.
    inline TubeProbe ProbeTriangles(const BallSI &ball, const std::vector<SurfaceTri> &tris, const std::vector<int> &cand, double edgeRho, const V3 &c,
-                                   const CarvedHole *holes = nullptr, int nHoles = 0, double halfThick = 0.0)
+                                   const CarvedHole *holes = nullptr, int nHoles = 0, double halfThick = 0.0, std::vector<FaceHit> *hits = nullptr)
    {
       TubeProbe pr;
       double bestD2 = INFINITY;
@@ -832,6 +844,8 @@ namespace RubberContact
          }
          const V3 dv = c - p;
          const double d2 = dv.Dot(dv);
+         if (hits != nullptr)
+            hits->push_back({ i, kind, p, d2 });
          // on a tie prefer the face over an edge or a corner (the diagonal of a flat face is an "edge" of both its triangles)
          if (d2 < bestD2 - 1e-18 || (d2 < bestD2 + 1e-18 && kind < bestKind))
          {
@@ -1101,7 +1115,9 @@ namespace RubberContact
    inline TubeProbe BarsTriangles(const BallSI &ball, const std::vector<SurfaceTri> &tris, const std::vector<std::array<int, 3>> &vid, const std::vector<std::array<int, 3>> &nb,
                                   const std::vector<int> &cand, const double edgeRho, const V3 &c, const double zero)
    {
-      TubeProbe pr = ProbeTriangles(ball, tris, cand, edgeRho, c);
+      thread_local std::vector<FaceHit> hits;   // each candidate measured once, by the probe (scratch kept per thread)
+      hits.clear();
+      TubeProbe pr = ProbeTriangles(ball, tris, cand, edgeRho, c, nullptr, 0, 0.0, &hits);
       if (!pr.overlap || pr.seg < 0 || pr.reff <= 0.0 || pr.delta <= zero || cand.size() < 2 || nb.size() != tris.size())
          return pr;
       // an edge's nearest point from its lower-id end, so both triangles on it get the same bits
@@ -1125,21 +1141,20 @@ namespace RubberContact
       triNode.clear();
       if (triIdx.size() < tris.size())
          triIdx.resize(tris.size(), -1);
-      for (const int i : cand)
+      for (const FaceHit &fh : hits)
       {
+         const int i = fh.i;
          const SurfaceTri &T = tris[i];
          if (std::abs((c - T.a).Dot(T.n)) >= ball.R - zero)
             continue;   // every point of the face and its edges is at least the plane distance away: depth <= 0
-         if ((T.b - T.a).Cross(T.c - T.a).Length() <= 0.0)
-            continue;   // zero area: no face (as MakeSurfaceTri)
-         int kind = 0;
-         const V3 p = ClosestOnTriangle(T, c, kind);
+         if (!T.area)
+            continue;   // zero area: no face (MakeSurfaceTri)
          double d;
          V3 nn;
-         if (kind == 0)
+         if (fh.kind == 0)
          {
-            const V3 dv = c - p;
-            const double dist = dv.Length();
+            const V3 dv = c - fh.p;
+            const double dist = std::sqrt(fh.d2);   // = dv.Length()
             if (dist <= 1e-12)
                continue;
             d = ball.R - dist - zero;
