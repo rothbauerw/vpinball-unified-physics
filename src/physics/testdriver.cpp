@@ -28,8 +28,9 @@
 //    ball NAME x y z vx vy vz [radius mass]   create a ball: x, y in VPX units, z = height of the ball's bottom above the playfield (U), velocity in m/s
 //    destroy NAME                             remove the ball
 //    flip PART 1|0                            flipper solenoid on / off (as the script's RotateToEnd / RotateToStart)
-//    enabled PART 1|0                         a flipper's or a trigger's Enabled (as the script's Flipper.Enabled, Trigger.Enabled)
-//    kick NAME angle speed                    a kicker kicks its ball out (as the script's Kicker.Kick angle, speed)
+//    enabled PART 1|0                         a flipper's, a trigger's or a kicker's Enabled (as the script's Flipper.Enabled, Trigger.Enabled, Kicker.Enabled)
+//    kick NAME angle speed [incl [x y z]]     a kicker kicks its ball out (as the script's Kicker.Kick angle, speed, inclination; inclination default 0; with x y z, U, as KickXYZ's offset)
+//    kickerball NAME KICKER                   a kicker makes a ball (as the script's Kicker.CreateBall); the ball is NAME from then on. Refused (an occupied kicker): a log line, no ball
 //    sling PART                               fire the sling coil of a rubber band (as Rubber.SlingTrigger)
 //    magnet NAME V                            supply voltage of a [Magnet:NAME] in the physics ini (as the script's Magnet NAME, V; 0 = off)
 //    turntable NAME V                         motor voltage of a [Turntable:NAME] in the physics ini (as the script's Turntable NAME, V; 0 = off)
@@ -403,21 +404,57 @@ namespace TestDriver
          {
             Flipper *const f = a.args.size() == 2 ? static_cast<Flipper *>(FindPart(a.args[0], eItemFlipper)) : nullptr;
             Trigger *const tr = a.args.size() == 2 && f == nullptr ? static_cast<Trigger *>(FindPart(a.args[0], eItemTrigger)) : nullptr;
-            if ((f == nullptr && tr == nullptr) || (a.args[1] != "1" && a.args[1] != "0"))
-               Warn(at + "expected a flipper or trigger name and 1 or 0");
+            Kicker *const kk = a.args.size() == 2 && f == nullptr && tr == nullptr ? static_cast<Kicker *>(FindPart(a.args[0], eItemKicker)) : nullptr;
+            if ((f == nullptr && tr == nullptr && kk == nullptr) || (a.args[1] != "1" && a.args[1] != "0"))
+               Warn(at + "expected a flipper, trigger or kicker name and 1 or 0");
             else if (f != nullptr)
                f->put_Enabled(a.args[1] == "1" ? VARIANT_TRUE : VARIANT_FALSE);
-            else
+            else if (tr != nullptr)
                tr->put_Enabled(a.args[1] == "1" ? VARIANT_TRUE : VARIANT_FALSE);
+            else
+               kk->put_Enabled(a.args[1] == "1" ? VARIANT_TRUE : VARIANT_FALSE);
+         }
+         else if (a.verb == "kickerball")
+         {
+            Kicker *const k = a.args.size() == 2 ? static_cast<Kicker *>(FindPart(a.args[1], eItemKicker)) : nullptr;
+            if (k == nullptr)
+               Warn(at + "expected a ball name and a kicker name");
+            else
+            {
+               TBall *b = FindBall(a.args[0]);
+               if (b == nullptr)
+               {
+                  s.balls.push_back(TBall());
+                  b = &s.balls.back();
+                  b->name = a.args[0];
+               }
+               else
+                  Remove(*b);
+               IBall *ib = nullptr;
+               k->CreateBall(&ib);
+               b->ball = ib != nullptr ? static_cast<Ball *>(ib) : nullptr;   // (the script's reference is kept, as a script would hold it)
+               b->respawnDue = false;
+               if (b->ball != nullptr)
+               {
+                  const HitBall &hb = b->ball->m_hitBall;
+                  b->x = hb.m_d.m_pos.x;
+                  b->y = hb.m_d.m_pos.y;
+                  b->z = hb.m_d.m_pos.z;
+                  b->vx = b->vy = b->vz = 0.f;
+                  b->radius = hb.m_d.m_radius;
+                  b->mass = hb.m_d.m_mass;
+               }
+               PLOGI << "Test driver: kickerball " << a.args[0] << " " << a.args[1] << ": " << (b->ball != nullptr ? "made" : "refused (no ball)") << ", t=" << t;
+            }
          }
          else if (a.verb == "kick")
          {
-            Kicker *const k = a.args.size() == 3 ? static_cast<Kicker *>(FindPart(a.args[0], eItemKicker)) : nullptr;
-            float angle, speed;
-            if (k == nullptr || !Num(a, 1, angle) || !Num(a, 2, speed))
-               Warn(at + "expected a kicker name, an angle and a speed");
+            Kicker *const k = a.args.size() == 3 || a.args.size() == 4 || a.args.size() == 7 ? static_cast<Kicker *>(FindPart(a.args[0], eItemKicker)) : nullptr;
+            float angle, speed, incl = 0.f, ox = 0.f, oy = 0.f, oz = 0.f;
+            if (k == nullptr || !Num(a, 1, angle) || !Num(a, 2, speed) || (a.args.size() >= 4 && !Num(a, 3, incl)) || (a.args.size() == 7 && (!Num(a, 4, ox) || !Num(a, 5, oy) || !Num(a, 6, oz))))
+               Warn(at + "expected a kicker name, an angle, a speed, an optional inclination and an optional x y z offset");
             else
-               k->Kick(angle, speed, 0.f);
+               k->KickXYZ(angle, speed, incl, ox, oy, oz);
          }
          else if (a.verb == "sling")
          {

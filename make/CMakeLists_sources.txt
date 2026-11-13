@@ -127,6 +127,7 @@ set(VPX_SOURCES
    src/meshes/hitTargetT1SlimMesh.h
    src/meshes/hitTargetT2SlimMesh.h
    src/meshes/kickerCupMesh.h
+   src/meshes/kickerCupSys7.h
    src/meshes/kickerHitMesh.h
    src/meshes/kickerHoleMesh.h
    src/meshes/kickerSimpleHoleMesh.h
@@ -244,6 +245,9 @@ set(VPX_SOURCES
    src/physics/pairform.h
    src/physics/hitrubber.cpp
    src/physics/hitrubber.h
+   src/physics/carvedholes.cpp
+   src/physics/carvedholes.h
+   src/physics/kickerarm.h
    src/physics/coilmodel.h
    src/physics/hitsling.cpp
    src/physics/hitsling.h

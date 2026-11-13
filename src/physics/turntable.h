@@ -37,8 +37,6 @@ namespace Turntables
    bool SetDuty(const char *name, float duty);               // PWM: mean voltage = duty x rated volts (-1..1)
    bool GetSpeedRpm(const char *name, float &rpm);
    bool GetAngleDeg(const char *name, float &deg);
-   // contact side
-   void Holes(const RubberContact::CarvedHole *&holes, int &n);
    void Render(Renderer *renderer);                          // draws the discs that have visible = 1 (and their gap rings)
    void ReleaseRender();
 }

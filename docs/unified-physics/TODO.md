@@ -14,6 +14,7 @@ G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 ## Now
 In flight: 1.34 first (shared finder; P1-P3, P9 static meshes, P4b cuts, P5 static tubes). 1.33: piece 2 kept with cut B (stress v2 cost 52 to 1.7 us per cycle), piece 3 dropped (cost). Owed: snapshot hashes refresh. Lead log runs/2026-11-10-lead.
 Next decision: 1.34 P6 (rigid moving parts); P4c (turntable and kicker holes in the near pass) after the kicker lead's hole change. Refs since P5 (/fp:fast moved last digits): runs/2026-11-13-finder-P5. Separate: N3 ramp edge search (343 of 417 us per cycle, slot in groove).
+Kickers: physical Sys7 cup and virtual store in the branch ([Features] kickers; KickerDesign.txt; hole list in carvedholes.cpp for P4c). Next: 10.14. Physical resting cost 102 us per cycle is the contact system's. Lead log runs/2026-11-12-lead.
 Parked with playfield holes (Button and Star committed): a ball on a flush Button lands on the wood through the cap (no hole), bounce e 0.86; user expects much more loss on a Button.
 N12. Gorgar load: 0 halvings (cord grip 1cec677ab, rolling patch 87ec36642, stick-zone trial 49155d9e2: Drain-kicker 2-cycle gone, rounds per step -10 %); ~60 depth warnings < 20 um in the bottom pile and at the Drain kicker (stock kicker).
 N3. Playfield cuts (slot, groove, rectangle, meets: bbdee9278). Open: slot-in-groove 256 us/cycle; normal jump at slot tips (cut-junction/results_ramp.txt); ball held where a slot crosses a rect's edge gains energy (finder-P4b S20, S06). Later: draw new shapes, triangle, holes.
@@ -83,7 +84,6 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 
 ## 9. Still stock (ask before converting)
 1. Stand-up and drop targets.
-2. Kickers: requirements agreed (Requirements.txt F); design next (KickerDesign.txt, ModelStandards 1b-1d).
 4. Plunger: other tables, auto plunger, mechanical input.
 5. Ramps: wire-ramp types, rebound, cost.
 6. Playfield material values unverified: compare with the user's video of a ball rolling on a playfield.
@@ -95,6 +95,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 7. Old keys in 14 inis, then the unknown-key notice.
 10. Review ReleasePlan with the user, then PR to the official repo after 3-5.
 13. Old-law switches to delete once accepted (CLAUDE.md): roll/pivot/step_model 0, island_reach 0, ball_pair_reach 0, free_flight 0, proximity_engage 0 (with shared_finder on, stock's copies are out of the path: balls fall through; load warns).
+14. Rename HitRubber: it hosts every static mesh, the playfield included. Kicker lead, right after the kicker work is committed; agree timing with the finder lead (1.34 edits hitrubber.cpp).
 
 ## 11. Switches and triggers
 1. Light-part contact cost (ball on a part of a few grams): worst cycle wire switch 54-181 us, Button 271 us (runs/2026-11-10-rollover/S1); limit 30 us. Midpoint solver must follow the ball-on-part contact clock: needs another solver class (rigid contact + impact law, or L-stable). Parked to N10.

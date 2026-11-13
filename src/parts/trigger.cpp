@@ -12,6 +12,7 @@
 #include "meshes/triggerStarMesh.h"
 #include "meshes/triggerWireDMesh.h"
 #include "parts/ball.h"
+#include "parts/kicker.h"
 #include "parts/Collection.h"
 #include "physics/collideex.h"
 #include "physics/contacthost.h"
@@ -452,8 +453,15 @@ namespace
    }
 }
 
-bool ContactSystem::NoneZones::Inside(const Zone &z, const double x, const double y, const double zc)
+bool ContactSystem::NoneZones::Inside(const Zone &z, const double x, const double y, const double zc, const double R, const bool held)
 {
+   if (z.kicker != nullptr)   // a physical kicker's switch with travel: the centre inside the hole's circle and the ball's bottom at or below the close height, or, once closed, the open height
+   {
+      const double dx = x - z.cx, dy = y - z.cy;
+      if (z.virt)   // a virtual kicker's sensing zone: the centre inside the circle and its height range
+         return dx * dx + dy * dy < z.r * z.r && zc >= z.zClose && zc <= z.zOpen;
+      return dx * dx + dy * dy < z.r * z.r && zc - R <= (held ? z.zOpen : z.zClose);
+   }
    if (zc < z.zlow || zc > (double)z.zlow + z.trigger->m_d.m_hit_height || x < z.x0 || x > z.x1 || y < z.y0 || y > z.y1)
       return false;
    bool in = false;   // even-odd crossing count, half-open: a point on a face belongs to one side only
@@ -466,20 +474,38 @@ bool ContactSystem::NoneZones::Inside(const Zone &z, const double x, const doubl
    return in;
 }
 
-// the ball's list against where its centre now is: Hit for a centre inside and not listed, Unhit for one outside and listed
-void ContactSystem::NoneZones::Judge(const Zone &z, HitBall *const b, const bool in, const double t)
+bool ContactSystem::NoneZones::Enabled(const Zone &z)
+{
+   return z.kicker != nullptr || z.trigger->m_d.m_enabled;   // (a physical kicker's switch is always on: no Enabled on a real part, Requirements F 9)
+}
+
+IFireEvents *ContactSystem::NoneZones::Owner(const Zone &z)
+{
+   return z.kicker != nullptr ? (IFireEvents *)z.kicker : (IFireEvents *)z.trigger;
+}
+
+// the ball's list against where its centre now is: Hit for a centre inside and not listed, Unhit for one outside and listed. A kicker's held ball follows the list (Kicker::HeldChange).
+void ContactSystem::NoneZones::Judge(const Zone &z, HitBall *const b, const bool in, const double t, const Vertex3Ds &at)
 {
    vector<IFireEvents *> &vol = *b->m_d.m_vpVolObjs;
-   const int i = FindIndexOf(vol, (IFireEvents *)z.trigger);
+   const int i = FindIndexOf(vol, Owner(z));
    if (in && i < 0)
    {
-      vol.push_back((IFireEvents *)z.trigger);
-      m_events.push_back({ t, z.trigger, b, true });
+      if (z.virt && !z.kicker->Park(b, at))
+         return;   // a full or disabled virtual kicker: not caught, not listed, no Hit (as stock)
+      vol.push_back(Owner(z));
+      m_events.push_back({ t, z.trigger, b, true, z.kicker });
+      if (z.kicker != nullptr && !z.virt)
+         z.kicker->HeldChange(b, true);
    }
    else if (!in && i >= 0)
    {
+      if (z.virt && z.kicker->Parked(b))
+         return;   // the parked ball is held at its place (a held ball, kickerarm.h): no Unhit until it is kicked
       vol.erase(vol.begin() + i);
-      m_events.push_back({ t, z.trigger, b, false });
+      m_events.push_back({ t, z.trigger, b, false, z.kicker });
+      if (z.kicker != nullptr && !z.virt)
+         z.kicker->HeldChange(b, false);
    }
 }
 
@@ -498,8 +524,8 @@ void ContactSystem::NoneZones::ApplyPlacements(const double t)
          continue;
       const bool placed = std::find(m_placed.begin(), m_placed.end(), b) != m_placed.end();
       for (const Zone &z : m_zones)
-         if (z.trigger->m_d.m_enabled && (placed || z.recheck))
-            Judge(z, b, Inside(z, b->m_d.m_pos.x, b->m_d.m_pos.y, b->m_d.m_pos.z), t);
+         if (Enabled(z) && (placed || z.recheck))
+            Judge(z, b, Inside(z, b->m_d.m_pos.x, b->m_d.m_pos.y, b->m_d.m_pos.z, b->m_d.m_radius, FindIndexOf(*b->m_d.m_vpVolObjs, Owner(z)) >= 0), t, b->m_d.m_pos);
    }
    m_placed.clear();
    for (Zone &z : m_zones)
@@ -509,12 +535,40 @@ void ContactSystem::NoneZones::ApplyPlacements(const double t)
 // the chord s -> e against one zone: the inside state along it changes only where the chord crosses a face or a z limit; each change is judged at its time
 void ContactSystem::NoneZones::Chord(const Zone &z, HitBall *const b, const Vertex3Ds &s, const Vertex3Ds &e, const double startS, const double hS)
 {
-   const double zhigh = (double)z.zlow + z.trigger->m_d.m_hit_height;
-   if (max(s.x, e.x) < z.x0 || min(s.x, e.x) > z.x1 || max(s.y, e.y) < z.y0 || min(s.y, e.y) > z.y1 || max(s.z, e.z) < z.zlow || min(s.z, e.z) > zhigh)
-      return;   // the chord never meets the zone's box: outside all along, nothing changes
+   const double R = b->m_d.m_radius;
    const double dx = (double)e.x - s.x, dy = (double)e.y - s.y, dz = (double)e.z - s.z;
    vector<double> &cut = m_cut;
    cut.clear();
+   const bool listed = z.kicker != nullptr && FindIndexOf(*b->m_d.m_vpVolObjs, Owner(z)) >= 0;   // a kicker's switch: closed for this ball (its travel: the open height applies)
+   if (z.kicker != nullptr)   // a kicker's switch: where the chord crosses the hole's circle and where the ball's bottom crosses the close and the open height (a virtual kicker: its centre the height range)
+   {
+      const bool outBox = max(s.x, e.x) < z.cx - z.r || min(s.x, e.x) > z.cx + z.r || max(s.y, e.y) < z.cy - z.r || min(s.y, e.y) > z.cy + z.r
+         || (z.virt ? max(s.z, e.z) < z.zClose || min(s.z, e.z) > z.zOpen : min(s.z, e.z) - R > z.zClose);
+      if (!listed && outBox)
+         return;   // not listed, and the chord never meets the zone's box: nothing changes
+      const double qx = (double)s.x - z.cx, qy = (double)s.y - z.cy;
+      const double a = dx * dx + dy * dy, bq = 2.0 * (qx * dx + qy * dy), c = qx * qx + qy * qy - z.r * z.r;
+      const double disc = bq * bq - 4.0 * a * c;
+      if (a > 0.0 && disc > 0.0)
+      {
+         const double sq = std::sqrt(disc);
+         for (const double t : { (-bq - sq) / (2.0 * a), (-bq + sq) / (2.0 * a) })
+            if (t > 0.0 && t < 1.0)
+               cut.push_back(t);
+      }
+      if (dz != 0.0)
+         for (const double zb : { z.zClose, z.zOpen })
+         {
+            const double t = (zb + (z.virt ? 0.0 : R) - s.z) / dz;   // (a switch: the ball's bottom; a virtual kicker: its centre)
+            if (t > 0.0 && t < 1.0)
+               cut.push_back(t);
+         }
+   }
+   else
+   {
+   const double zhigh = (double)z.zlow + z.trigger->m_d.m_hit_height;
+   if (max(s.x, e.x) < z.x0 || min(s.x, e.x) > z.x1 || max(s.y, e.y) < z.y0 || min(s.y, e.y) > z.y1 || max(s.z, e.z) < z.zlow || min(s.z, e.z) > zhigh)
+      return;   // the chord never meets the zone's box: outside all along, nothing changes
    for (size_t i = 0, j = z.poly.size() - 1; i < z.poly.size(); j = i++)
    {
       const double ax = z.poly[j].x, ay = z.poly[j].y, rx = z.poly[i].x - ax, ry = z.poly[i].y - ay;
@@ -534,23 +588,26 @@ void ContactSystem::NoneZones::Chord(const Zone &z, HitBall *const b, const Vert
       if (t1 > 0.0 && t1 < 1.0)
          cut.push_back(t1);
    }
+   }
    std::sort(cut.begin(), cut.end());
    const int n = (int)cut.size();
-   // the state at the start, on each piece between cuts (its middle), at the end; a change between neighbours is judged at the cut between them
-   bool was = Inside(z, s.x, s.y, s.z);
+   // the state at the start, on each piece between cuts (its middle), at the end; a change between neighbours is judged at the cut between them. A kicker's switch starts from its own
+   // state (closed or open for this ball) and each piece is judged against the height that state sets (its travel)
+   bool was = z.kicker != nullptr && !z.virt ? listed : listed || Inside(z, s.x, s.y, s.z, R, listed);   // (a virtual kicker: a listed ball is in until judged out, even from its place on the zone's edge; a ball inside that was not caught stays uncaught)
    double tPrev = 0.0;
    for (int k = 0; k <= n; k++)
    {
       const double tNext = k < n ? cut[k] : 1.0, tm = 0.5 * (tPrev + tNext);
-      const bool in = Inside(z, s.x + tm * dx, s.y + tm * dy, s.z + tm * dz);
+      const bool in = Inside(z, s.x + tm * dx, s.y + tm * dy, s.z + tm * dz, R, was);
       if (in != was)
-         Judge(z, b, in, startS + tPrev * hS);
+         Judge(z, b, in, startS + tPrev * hS, z.virt ? e : Vertex3Ds((float)(s.x + tPrev * dx), (float)(s.y + tPrev * dy), (float)(s.z + tPrev * dz)));   // (a virtual kicker parks the ball where
+                                                                                                                                                   // it is at the step's end, no move back: design 1i)
       was = in;
       tPrev = tNext;
    }
-   const bool in = Inside(z, e.x, e.y, e.z);
+   const bool in = Inside(z, e.x, e.y, e.z, R, was);
    if (in != was)
-      Judge(z, b, in, startS + hS);
+      Judge(z, b, in, startS + hS, e);
 }
 
 void ContactSystem::NoneZones::SubStart(const double startS)
@@ -579,7 +636,7 @@ void ContactSystem::NoneZones::SubTest(const double startS, const double hS)
       if (m_start[i].first != b || b->m_d.m_vpVolObjs == nullptr)
          continue;   // (no ball is made or destroyed between SubStart and here)
       for (const Zone &z : m_zones)
-         if (z.trigger->m_d.m_enabled)
+         if (Enabled(z))
             Chord(z, b, m_start[i].second, b->m_d.m_pos, startS, hS);
    }
    if (g_noneTimed)
@@ -613,6 +670,11 @@ void ContactSystem::NoneZones::CycleEnd(const double cycleS)
       if (ev.ball == nullptr)
          continue;
       g_pplayer->m_pactiveball = ev.ball->m_pBall;   // the ball for the script's ActiveBall
+      if (ev.kicker != nullptr)
+      {
+         ev.kicker->HeldEvent(ev.hit);
+         continue;
+      }
       if (ev.hit)
          ev.trigger->TriggerAnimationHit();
       else
@@ -641,7 +703,7 @@ void ContactSystem::NoneZones::BallGone(const HitBall *const ball)
          ev.ball = nullptr;
    if (ball->m_d.m_vpVolObjs != nullptr)
       for (const Zone &z : m_zones)
-         if (FindIndexOf(*ball->m_d.m_vpVolObjs, (IFireEvents *)z.trigger) >= 0 && !z.trigger->m_d.m_stateSrcLink.empty() && !OtherBallListed(z.trigger, ball))
+         if (z.trigger != nullptr && FindIndexOf(*ball->m_d.m_vpVolObjs, (IFireEvents *)z.trigger) >= 0 && !z.trigger->m_d.m_stateSrcLink.empty() && !OtherBallListed(z.trigger, ball))
             g_pplayer->m_resURIResolver.SetBoolState(z.trigger->m_d.m_stateSrcLink, false);   // no Unhit (design 4b): the switch opens when no other ball is still in the zone, no script call
 }
 
@@ -658,9 +720,28 @@ void ContactSystem::NoneZones::Add(Trigger *const trigger, vector<Vertex2D> &&po
    m_zones.push_back(std::move(z));
 }
 
+void ContactSystem::NoneZones::AddKicker(Kicker *const kicker, const double cx, const double cy, const double r, const double zClose, const double zOpen, const bool virt)
+{
+   Zone z { nullptr, {}, (float)(cx - r), (float)(cx + r), (float)(cy - r), (float)(cy + r), (float)zClose, false };
+   z.kicker = kicker;
+   z.cx = cx;
+   z.cy = cy;
+   z.r = r;
+   z.zClose = zClose;
+   z.zOpen = zOpen;
+   z.virt = virt;
+   m_zones.push_back(std::move(z));
+}
+
+void ContactSystem::NoneZones::Remove(const Kicker *const kicker)
+{
+   std::erase_if(m_zones, [kicker](const Zone &z) { return z.kicker != nullptr && z.kicker == kicker; });
+   Remove((const Trigger *)nullptr);   // (no trigger zone is removed; the lists and totals are cleared when this was the last zone)
+}
+
 void ContactSystem::NoneZones::Remove(const Trigger *const trigger)
 {
-   std::erase_if(m_zones, [trigger](const Zone &z) { return z.trigger == trigger; });
+   std::erase_if(m_zones, [trigger](const Zone &z) { return z.trigger != nullptr && z.trigger == trigger; });
    if (!m_zones.empty())
       return;
    if (g_noneTimed && m_cycles > 0)
@@ -675,7 +756,7 @@ void ContactSystem::NoneZones::Remove(const Trigger *const trigger)
 void ContactSystem::NoneZones::Recheck(const Trigger *const trigger)
 {
    for (Zone &z : m_zones)
-      if (z.trigger == trigger)
+      if (z.trigger != nullptr && z.trigger == trigger)
          z.recheck = true;
 }
 

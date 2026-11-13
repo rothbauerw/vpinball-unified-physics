@@ -12,6 +12,7 @@
 #include "parts/flipper.h"
 #include "contactsystem.h"
 #include "hitrubber.h"
+#include "kickerarm.h"
 #include "contactparthost.h"
 #include "hitball.h"
 #include "hitflipper.h"
@@ -164,6 +165,8 @@ struct ContactSystemImpl
       V3 eddyDir;
       double eStart = 0.0, eScale = 0.0;   // the energy check: the ball's energy at the cycle's start, and what the allowance is a share of
       HitRubber *band = nullptr;   // a band that holds the ball (the group step takes the whole island)
+      bool held = false;           // a ball a kicker holds (parked) or carries (KickerDesign 1h): infinite mass in the pair law, its velocity given (v), no gravity, spin 0
+      V3 heldA;                    // its given acceleration, m/s2 (the arm's path's centripetal pull; 0 parked)
    };
 
    struct BallHit
@@ -208,6 +211,14 @@ struct ContactSystemImpl
       static void Begin(Body &w, const double dt, const bool always = false)
       {
          HitBall *const pb = w.pb;
+         if (w.held)   // a ball a kicker holds is not stepped (KickerDesign 1h): no gravity, nudge or magnets were given, none are taken or owed
+         {
+            w.extTaken = true;
+            w.magnetsOn = false;
+            w.magAcc = 0.0;
+            w.extBaseVS = w.extOwe = V3();
+            return;
+         }
          // A free ball (no contact of its own, in an island only through a ball pair) has nothing of the stock engine under it: its gravity, nudge and magnet pull act in the substeps like an engaged ball's.
          const bool onPlayfieldModel = always || w.e == nullptr || std::any_of(w.e->items.begin(), w.e->items.end(), [](const SurfaceContact &it) { return it.r->IsFloor(); });
          w.extTaken = onPlayfieldModel;
@@ -256,6 +267,9 @@ struct ContactSystemImpl
       w.bs.m = kMassUnitKg * (double)pb->m_d.m_mass;
       w.lScale = (double)pb->Inertia() * DEFAULT_STEPTIME_S;
       w.posStart = pb->m_d.m_pos;
+      Vertex3Ds aU;
+      w.held = KickerHold::Held(pb, &aU);
+      w.heldA = V3((double)aU.x, (double)aU.y, (double)aU.z) * (U / (DEFAULT_STEPTIME_S * DEFAULT_STEPTIME_S));   // U/VPT^2 -> m/s2
    }
 
    // SI state of a ball
@@ -266,6 +280,8 @@ struct ContactSystemImpl
       w.c = V3((double)w.posStart.x * U, (double)w.posStart.y * U, (double)w.posStart.z * U);
       w.v = V3((double)pb->m_d.m_vel.x * VS, (double)pb->m_d.m_vel.y * VS, (double)pb->m_d.m_vel.z * VS);
       w.w = V3((double)pb->m_angularmomentum.x * wScale, (double)pb->m_angularmomentum.y * wScale, (double)pb->m_angularmomentum.z * wScale);
+      if (w.held)
+         w.w = V3();   // (spin zero: KickerDesign 1h)
    }
 
    // The balls held by a force-model contact
@@ -288,7 +304,7 @@ struct ContactSystemImpl
          }
          {
             HitBall *const pb = e.ball;
-            if (pb->m_d.m_lockedInKicker)   // captured by a kicker: the kicker holds it, not the contact
+            if (pb->m_d.m_lockedInKicker || KickerHold::Held(pb))   // captured by a kicker, or held by one (KickerDesign 1h: no surface contacts): the kicker holds it, not the contact
             {
                cy.releases.emplace_back(pb, "kicker");
                continue;
@@ -536,8 +552,8 @@ struct ContactSystemImpl
          for (int i = 0; i < nw; i++)
          {
             const Body &w = cy.bodies[i];
-            vc[find(i)] += (ballPairs ? 0.0 : w.v.Length()) + (w.extBaseVS.Length() / PHYSICS_STEPTIME_S + w.magAcc) * T;
-            if (ballPairs)
+            vc[find(i)] += (ballPairs ? (w.held ? 2.0 * (w.v.Length() + w.heldA.Length() * T) : 0.0) : w.v.Length()) + (w.extBaseVS.Length() / PHYSICS_STEPTIME_S + w.magAcc) * T;
+            if (ballPairs && !w.held)   // (a held ball's speed is given, not the group's energy: a ball leaves it at up to twice its speed, as a moving part's surface)
                eg[find(i)] += 0.5 * w.bs.m * w.v.Dot(w.v) + 0.5 * w.bs.Inertia() * w.w.Dot(w.w);
          }
          for (int p = 0; p < np; p++)
@@ -877,8 +893,8 @@ struct ContactSystemImpl
                   depth1 = d;
                }
             }
-         w.eStart = BodyMotion(w, g) + held;
-         w.eScale = 0.5 * w.bs.m * w.v.Dot(w.v) + 0.5 * w.bs.Inertia() * w.w.Dot(w.w) + held;
+         w.eStart = (w.held ? 0.0 : BodyMotion(w, g)) + held;   // (a held ball's motion and height are the kicker's: KickerDesign 1h)
+         w.eScale = (w.held ? 0.0 : 0.5 * w.bs.m * w.v.Dot(w.v) + 0.5 * w.bs.Inertia() * w.w.Dot(w.w)) + held;
          if (w.e != nullptr)
          {
             const double rise = held - std::max(w.e->endStored, 0.0);
@@ -929,7 +945,7 @@ struct ContactSystemImpl
       for (const int i : isl.members)
       {
          Body &w = cy.bodies[i];
-         driven = driven || w.band != nullptr || w.magAcc > 0.0
+         driven = driven || w.band != nullptr || w.magAcc > 0.0 || (w.held && w.v.Length() > 0.0)   // (a carried ball: the arm, a drive)
             || (w.extBaseVS.Length() > 0.0 && (w.extBaseVS * (1.0 / PHYSICS_STEPTIME_S) - g).Length() > 0.02 * g.Length());   // (the nudge)
          double held = 0.0;
          if (w.e != nullptr)
@@ -941,7 +957,7 @@ struct ContactSystemImpl
             }
             w.e->endStored = held;
          }
-         const double e = BodyMotion(w, g) + held + w.endPair;
+         const double e = (w.held ? 0.0 : BodyMotion(w, g)) + held + w.endPair;
          e0 += w.eStart;
          e1 += e;
          scale += w.eScale;
@@ -1271,7 +1287,15 @@ struct ContactSystemImpl
       static std::vector<const ContactMovingPart *> partsIn;
       PartsInSolve(cy, isl, partsIn);
       bool gSet = false;
+      static std::vector<int> order;   // the island's members, held balls last (KickerDesign 1h): a pair with a held ball has it as its b, the body forces do not move (GroupStep::Ball::held)
+      order.clear();
       for (const int i : isl.members)
+         if (!cy.bodies[i].held)
+            order.push_back(i);
+      for (const int i : isl.members)
+         if (cy.bodies[i].held)
+            order.push_back(i);
+      for (const int i : order)
       {
          Body &w = cy.bodies[i];
          if (!ring && g.nb >= CordBand::kMaxBalls)   // (the cord's own limit)
@@ -1314,6 +1338,10 @@ struct ContactSystemImpl
             }
          }
          b.fExt = V3();
+         b.held = w.held;
+         b.heldA = w.heldA;
+         if (w.held)
+            b.w = V3();   // (spin zero)
          if (!gSet && w.extBaseVS.Length() > 0.0)
          {
             g.set.g = w.extBaseVS * (1.0 / PHYSICS_STEPTIME_S);   // gravity along the table's slope, and the nudge
@@ -1323,7 +1351,7 @@ struct ContactSystemImpl
          b.brakeRate = w.eddyRate;
          b.brakeAxis = w.eddyDir;
          // a cells magnet's pull: a stored energy of the ball's place; on the body it is the same acceleration as AddVelocityIncrement's (m / the steel mass it uses)
-         b.fieldScale = g.nf > 0 && w.pb->m_magnetic ? b.m / (7800.0 * 4.0 / 3.0 * M_PI * b.R * b.R * b.R * std::max(0.001f, w.pb->m_d.m_mass)) : 0.0;
+         b.fieldScale = g.nf > 0 && w.pb->m_magnetic && !w.held ? b.m / (7800.0 * 4.0 / 3.0 * M_PI * b.R * b.R * b.R * std::max(0.001f, w.pb->m_d.m_mass)) : 0.0;   // (a held ball: no fields)
          if (w.magAcc > 0.0)   // what stays held for the cycle: the other balls' part, the magnets not on a field: a drive
          {
             const float mp[3] = { w.pb->m_d.m_pos.x, w.pb->m_d.m_pos.y, w.pb->m_d.m_pos.z };
@@ -1885,7 +1913,7 @@ struct ContactSystemImpl
          }
       }
       int ib = 0;
-      for (const int i : isl.members)
+      for (const int i : order)   // (the group's order: held balls last)
       {
          if (ib >= g.nb)
             break;
@@ -2281,6 +2309,8 @@ struct ContactSystemImpl
       {
          if (pb->m_d.m_lockedInKicker)
             return "ball captured by a kicker";
+         if (KickerHold::Held(pb))
+            return "ball held by a kicker";
          if (!SameV(pb->m_d.m_pos, pb->m_sleepPos))
             return "ball moved outside the step";
          if (!SameV(pb->m_d.m_vel, Vertex3Ds(0.f, 0.f, 0.f)) || !SameV(pb->m_angularmomentum, Vertex3Ds(0.f, 0.f, 0.f)))
@@ -2384,13 +2414,13 @@ struct ContactSystemImpl
             for (auto *const a : g_pplayer->m_vball)
             {
                const HitBall &h = a->m_hitBall;
-               if (h.m_sleepGroup == 0 && !h.m_d.m_lockedInKicker)
+               if (h.m_sleepGroup == 0 && !h.m_d.m_lockedInKicker && !KickerHold::Held(&h))
                   eAwake += 0.5 * (h.m_d.m_mass * ContactSystem::kMassUnitKg * h.m_d.m_vel.Dot(h.m_d.m_vel) * VS * VS + h.m_angularmomentum.Dot(h.m_angularmomentum) / h.Inertia() * ContactSystem::kMassUnitKg * VS * VS);
             }
          for (auto *const a : g_pplayer->m_vball)
          {
             const HitBall *const pa = &a->m_hitBall;
-            if (pa->m_sleepGroup != 0 || pa->m_d.m_lockedInKicker)
+            if (pa->m_sleepGroup != 0 || pa->m_d.m_lockedInKicker || KickerHold::Held(pa))
                continue;
             const double ra = (double)pa->m_d.m_radius * U, va = std::sqrt((double)pa->m_d.m_vel.Dot(pa->m_d.m_vel)) * VS;
             const double va2 = pairReach ? BallSpeedBound(eAwake, pa->m_d.m_mass * ContactSystem::kMassUnitKg, 0.0) : 0.0;
@@ -2441,7 +2471,7 @@ struct ContactSystemImpl
          spinMax = std::max(spinMax, spin);
          pb->m_sleepHoldS = std::max(v, spin) < vs ? pb->m_sleepHoldS + PHYSICS_STEPTIME_S : 0.0;
          minHold = std::min(minHold, pb->m_sleepHoldS);
-         if (b.band != nullptr || pb->m_bandOwner != nullptr || pb->m_d.m_lockedInKicker)
+         if (b.band != nullptr || pb->m_bandOwner != nullptr || pb->m_d.m_lockedInKicker || KickerHold::Held(pb))
             bandKick = true;
          if (pb->m_contact != nullptr)
             for (const SurfaceContact &it : pb->m_contact->items)
@@ -2679,7 +2709,7 @@ void ContactSystemImpl::CordNear(const double dt)
    for (auto *const ball : g_pplayer->m_vball)
    {
       HitBall *const pb = &ball->m_hitBall;
-      if (pb->m_bandOwner != nullptr || pb->m_d.m_lockedInKicker)
+      if (pb->m_bandOwner != nullptr || pb->m_d.m_lockedInKicker || KickerHold::Held(pb))
          continue;
       const Vertex3Ds &pos = pb->m_d.m_pos;
       const double speed = std::sqrt((double)pb->m_d.m_vel.Dot(pb->m_d.m_vel)) * VS;
@@ -2746,7 +2776,7 @@ void ContactSystemImpl::EngageNear(const double dt)
    for (auto *const ball : g_pplayer->m_vball)
    {
       HitBall *const pb = &ball->m_hitBall;
-      if (pb->m_contact != nullptr || pb->m_bandOwner != nullptr || pb->m_d.m_lockedInKicker || pb->m_sleepGroup != 0)
+      if (pb->m_contact != nullptr || pb->m_bandOwner != nullptr || pb->m_d.m_lockedInKicker || KickerHold::Held(pb) || pb->m_sleepGroup != 0)
          continue;
       const Vertex3Ds &pos = pb->m_d.m_pos;
       const double speed = std::sqrt((double)pb->m_d.m_vel.Dot(pb->m_d.m_vel)) * VS;
@@ -2929,8 +2959,8 @@ bool ContactSystemImpl::EngageImpl(ContactHost *const host, HitBall *const pb, c
    CPROF(EngageImpl);
    const ContactProf::Stage profStage(ContactProf::StEngageImpl);   // P3a profile: the calling stage of the checks here (diagnostics only)
    using namespace RubberContact;
-   if ((host != nullptr && !host->m_set.contact) || pb->m_bandOwner != nullptr || pb->m_contact != nullptr || pb->m_d.m_lockedInKicker)
-      return false;   // (a ball held in a kicker belongs to the kicker)
+   if ((host != nullptr && !host->m_set.contact) || pb->m_bandOwner != nullptr || pb->m_contact != nullptr || pb->m_d.m_lockedInKicker || KickerHold::Held(pb))
+      return false;   // (a ball held in a kicker, parked or carried, belongs to the kicker: KickerDesign 1h)
    if (host != nullptr && host->m_surfaceKind == "playfield" && InPlayfieldHole(pb->m_d.m_pos))
       return false;   // the kicker's
    BallContact rb;
@@ -3233,7 +3263,7 @@ void ContactSystem::EngageNear(const double cycleS)
 // over a kicker's hole (the kicker, not converted).
 bool ContactSystem::Engage(ContactHost *const host, HitBall *const pb, const char *how)
 {
-   if (pb->m_d.m_lockedInKicker)
+   if (pb->m_d.m_lockedInKicker || KickerHold::Held(pb))
       return true;   // the kicker holds it: no surface acts on it, nothing to solve
    if (pb->m_contact == nullptr)
       return ContactSystemImpl::EngageImpl(host, pb, how);
@@ -3433,6 +3463,27 @@ void ContactProf::Dump(const char *why)
 void ContactSystem::Dispatch()
 {
    ContactSystemImpl::DispatchPending();
+}
+
+void ContactSystem::NoteDriveWork(const HitBall *const ball, const double joules, const char *const what)
+{
+   static const void *owner = nullptr;
+   static double total = 0.0;   // the run's drive work between cycles, J (from this table start)
+   if (owner != g_pplayer)
+   {
+      owner = g_pplayer;
+      total = 0.0;
+   }
+   total += joules;
+   const char *const name = TestDriver::BallName(ball);
+   const Vertex3Ds &p = ball->m_d.m_pos;
+   PLOGI << "Drive between cycles: " << what << ", ball " << (name != nullptr ? name : "") << " at (" << p.x << ", " << p.y << ", " << p.z << "): work " << joules * 1e6 << " uJ (drive total "
+         << total * 1e6 << " uJ), t=" << (g_pplayer != nullptr ? g_pplayer->m_time_msec : 0);
+}
+
+void ContactSystem::DropKeptDoubles(const HitBall *const ball)
+{
+   ContactSystemImpl::g_keptDoubles.erase(ball);   // (the copy is of a state the ball no longer has: contactsystem.h)
 }
 
 void ContactSystem::NotePlaced(const HitBall *const ball)
@@ -3787,7 +3838,7 @@ void ContactSystemImpl::CheckOverlaps(const float hittime, const double hS)
    if (parts.empty())
       return;
    const double tol = ContactSettings::Get().arrivalDepthUm * 1e-6;
-   auto isFree = [](const HitBall *pb) { return pb->m_contact == nullptr && pb->m_bandOwner == nullptr && !pb->m_d.m_lockedInKicker; };
+   auto isFree = [](const HitBall *pb) { return pb->m_contact == nullptr && pb->m_bandOwner == nullptr && !pb->m_d.m_lockedInKicker && !KickerHold::Held(pb); };
    struct Cand
    {
       HitBall *pb;

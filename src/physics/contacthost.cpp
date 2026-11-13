@@ -346,10 +346,10 @@ bool ContactHost::LoadHardSurfaceSettings(RubberObjectSettings &s, const std::fi
    s.rollingMu = ContactSettings::Get().enable ? ContactSettings::Get().rollingResistance : 0.0;
    s.surfaceRubber = true;
    ApplySection(s, file, "surfaces", name);
-   // [Trigger:<name>], [Gate:<name>], [Spinner:<name>], [Bumper:<name>] are also read by the part's own loader (contactpartsini.h), which reports every key neither reader knows:
+   // [Trigger:<name>], [Gate:<name>], [Spinner:<name>], [Bumper:<name>], [Kicker:<name>] are also read by the part's own loader (contactpartsini.h), which reports every key neither reader knows:
    // not reported here, so the part's own keys (spring_n, close_mm, ...) are not called ignored
    const std::string k = kind;
-   const bool partReads = k == "trigger" || k == "gate" || k == "spinner" || k == "bumper";
+   const bool partReads = k == "trigger" || k == "gate" || k == "spinner" || k == "bumper" || k == "kicker";
    ApplySection(s, file, k + ":" + name, name, "", !partReads);
    Clamp(s, name, 1.0e6);
    s.contact = s.surfaceRubber;

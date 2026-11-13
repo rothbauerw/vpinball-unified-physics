@@ -25,6 +25,7 @@ void ContactTraceBall(const char *stage, const HitBall *pb, bool items, int isla
 #include "utils/ushock_output.h"
 
 #include "physics/hitrubber.h"
+#include "physics/kickerarm.h"
 #include "physics/physicsini.h"
 #include <unordered_set>
 #include "physics/magnet.h"
@@ -915,7 +916,7 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
          for (const auto ball : g_pplayer->m_vball)
          {
             HitBall &hb = ball->m_hitBall;
-            if (hb.m_d.m_lockedInKicker)
+            if (hb.m_d.m_lockedInKicker || KickerHold::Held(&hb))
                continue;
             float p[3] = { hb.m_d.m_pos.x, hb.m_d.m_pos.y, hb.m_d.m_pos.z }, v[3] = { hb.m_d.m_vel.x, hb.m_d.m_vel.y, hb.m_d.m_vel.z };
             float L[3] = { hb.m_angularmomentum.x, hb.m_angularmomentum.y, hb.m_angularmomentum.z };
@@ -1024,7 +1025,7 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
 
       #ifdef USE_EMBREE
             for (size_t i = 0; i < m_vballs.size(); i++)
-               if (!m_vballs[i]->m_d.m_lockedInKicker
+               if (!m_vballs[i]->m_d.m_lockedInKicker && !KickerHold::Held(m_vballs[i])
 #ifdef C_DYNAMIC
                   && m_vballs[i]->m_dynamic > 0
 #endif
@@ -1045,7 +1046,7 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
       {
          HitBall *const pball = m_vballs[i];
 
-         if (!pball->m_d.m_lockedInKicker
+         if (!pball->m_d.m_lockedInKicker && !KickerHold::Held(pball)   // (a ball a kicker holds: no stock hit tests, KickerDesign 1h)
          #ifdef C_DYNAMIC
              && pball->m_dynamic > 0
          #endif
@@ -1364,7 +1365,10 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
    } // end physics loop
 
    if (ContactSystem::Unified())
+   {
+      KickerHold::CycleEnd(cycleS);   // the kickers' held balls (KickerDesign 1h): carried balls on the arm's path, parked balls checked, before the cycle's events
       m_noneZones.CycleEnd(cycleS);   // None triggers: the cycle's Hit / Unhit events, in crossing order (design.md 1)
+   }
 }
 
 string PhysicsEngine::GetPerfInfo(bool resetMax)

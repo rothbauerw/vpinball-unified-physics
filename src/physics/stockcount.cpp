@@ -15,6 +15,7 @@
 #include "physics/testdriver.h"
 #include "parts/ball.h"
 #include "parts/trigger.h"
+#include "parts/kicker.h"
 #include "core/player.h"
 #include "physics/PhysicsEngine.h"
 #include "ui/live/LiveUI.h"
@@ -104,6 +105,8 @@ namespace StockCount
                if (tr->OnWirePart() || sh == TriggerStar || sh == TriggerButton || sh == TriggerNone)
                   r->allowed = nullptr;
             }
+            if (t == eItemKicker && dynamic_cast<const Kicker *>(obj->m_editable) != nullptr && dynamic_cast<const Kicker *>(obj->m_editable)->IsConverted())
+               r->allowed = nullptr;   // a physical or virtual kicker on the unified path (KickerDesign 7f): converted, no stock allowed
             if (t == eItemTable)   // the table's own edges (PhysicsEngine): no part of the table to convert yet
             {
                r->name = "table edge";

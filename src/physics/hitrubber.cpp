@@ -18,7 +18,7 @@
 #include "parts/ball.h"
 #include "physics/hitrubber.h"
 #include "physics/cordband.h"
-#include "physics/turntable.h"
+#include "physics/carvedholes.h"
 #include "physics/playfieldcut.h"
 #include "physics/contactsystem.h"
 #include "physics/hitball.h"
@@ -782,6 +782,7 @@ void HitRubber::AddPlayfieldHole(const float x, const float y, const float r)
 void HitRubber::ClearPlayfieldHoles()
 {
    g_playfieldHoles.clear();
+   CarvedHoles::Clear();   // the turntables' and the physical kickers' holes (carvedholes.cpp; the kickers add theirs in PhysicSetup, the turntables in Turntables::Setup, both after this)
 }
 
 // A ball whose centre is inside a non-legacy kicker's circle belongs to the kicker: VPX implements the kicker's funnel, capture and release together with the stock floor
@@ -1599,7 +1600,7 @@ void HitRubber::Refresh(SurfaceContact &it, const double ballR, const double rea
    const RubberContact::CarvedHole *holes = nullptr;
    int nHoles = 0;
    if (m_surfaceKind == "playfield")
-      Turntables::Holes(holes, nHoles);
+      CarvedHoles::Get(holes, nHoles);
    it.cand.clear();
    it.tightC = c;
    if (nHoles > 0)
@@ -1799,7 +1800,7 @@ RubberContact::TubeProbe HitRubber::Probe(const RubberContact::BallSI &bs, const
       {
          const RubberContact::CarvedHole *holes = nullptr;
          int nHoles = 0;
-         Turntables::Holes(holes, nHoles);   // the playfield has a round hole under every turntable disc
+         CarvedHoles::Get(holes, nHoles);   // the playfield has a round hole under every turntable disc and every physical kicker
          if (PlayfieldCuts::Any(this))   // holes cut in the playfield (playfieldcut.h): the faces inside a cut left out, its exact rim's contacts added. The cuts within the face list's reach are tested
             return PlayfieldCuts::Probe(this, bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, it.candR >= 0.0 ? it.candR : 1e30, holes, nHoles, false, 0.0, ft, FinderCutsOf(it));
          if (nHoles > 0)   // P3b: a turntable's hole moves a face's nearest point to its rim, so the near pass's distances are not the probe's: the whole list as P3a
@@ -1862,7 +1863,7 @@ RubberContact::TubeProbe HitRubber::ProbePatch(const RubberContact::BallSI &bs, 
    {
       const RubberContact::CarvedHole *holes = nullptr;
       int nHoles = 0;
-      Turntables::Holes(holes, nHoles);
+      CarvedHoles::Get(holes, nHoles);
       return PlayfieldCuts::Probe(this, bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, it.candR >= 0.0 ? it.candR : 1e30, holes, nHoles, true, it.gs.zero, ft, FinderCutsOf(it));
    }
    if (ContactSettings::Get().multiContact && !(m_surface != nullptr && m_surfaceKind == "playfield"))   // every pressed part its own Hertz bar (rubbercontact.h BarsTube / BarsTriangles); the playfield (turntable holes) keeps the patch sum
@@ -1905,7 +1906,7 @@ RubberContact::TubeProbe HitRubber::ProbePatch(const RubberContact::BallSI &bs, 
       const RubberContact::CarvedHole *holes = nullptr;
       int nHoles = 0;
       if (m_surfaceKind == "playfield")
-         Turntables::Holes(holes, nHoles);   // (as Probe)
+         CarvedHoles::Get(holes, nHoles);   // (as Probe)
       if (nHoles > 0)   // P3b: a turntable's hole: the whole list as P3a (as Probe)
          RubberContact::PatchTriangles(bs, m_surface->tris, it.Faces(c), c, it.gs.zero, pr, holes, nHoles, fr);
       else
@@ -2520,7 +2521,7 @@ void HitRubber::FinderBuild(const bool atLoad)
       HitRubber *const h = dynamic_cast<HitRubber *>(o);
       if (h == nullptr || h->m_surface == nullptr || h->m_surface->tris.empty())
          continue;
-      if (h->m_surfaceKind != "playfield" && h->m_surfaceKind != "wall" && h->m_surfaceKind != "ramp" && h->m_surfaceKind != "primitive")
+      if (h->m_surfaceKind != "playfield" && h->m_surfaceKind != "wall" && h->m_surfaceKind != "ramp" && h->m_surfaceKind != "primitive" && h->m_surfaceKind != "kicker")
       {
          skipped++;
          continue;

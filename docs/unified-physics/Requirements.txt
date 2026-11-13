@@ -172,3 +172,33 @@ Lifted from GateSpinnerDesign.txt (user, 2026-10-14 unless dated). Part sizes: P
 4. Neither adds energy at any collision angle (the old hinged plates did, in the user's play).
 5. Spinner spin-down varies by machine: a setting. A spinner that barely goes over the top and falls back through the switch's closed window fires a second Spin (user 2026-10-15).
 6. A held-open gate is a script open and close with a set open angle; no coil is modelled.
+
+F. KICKERS
+----------
+Agreed with the user 2026-11-12, one item at a time (draft and tests: runs/2026-11-12-kicker-cup; lead log runs/2026-11-12-lead). Saucers (scoops) later.
+1. Catch and hold: a ball rolls into the cup and comes to rest there by contact on the shared static path. No position snap, no zeroing of speed or spin, no steering of the velocity (stock's
+   funnel and its old-velocity restore are not carried over). A held ball is a ball at rest in the cup; another ball can hit it and move it.
+2. Hole: the hole in the surface is assumed to exist; the kicker cuts its own hole once the playfield cut-hole feature is ready. Fall-through is out of scope (replaced by the cut-hole work).
+3. Cup: each cup type is one hand-made collision mesh, separate from the drawn mesh, with faces only where a ball touches; parts that move or give way (pins, switch actuators) are
+   left out. Targets (chosen for feel and cost, not measured part data): resting place within 0.5 mm of the full display part; about 1 us per contact check.
+4. Eject: today's Kick, KickZ, KickXYZ commands (angle, speed, inclination, scatter, offset) for now; energy enters only through the kick. On a physical kicker the kick's velocity is
+   given to the ball where it rests in the cup, and the cup and rim act on it through the contact law (no lift to playfield level first); which angle and speed clear each cup is measured.
+   A coil-driven eject (arm) comes later. Stock quirks decided in the design: inclination read as radians when <= pi/2; a downward inclination keeps the full horizontal speed.
+   A Kick with no inclination on a physical kicker adds the upward speed that lifts the ball's bottom to 0.25 in above the playfield (user 2026-11-12).
+5. Script interface kept: CreateBall, CreateSizedBall(WithMass), DestroyBall, Hit and Unhit.
+6. Held: the cup's switch closes (Hit) when the ball's centre is inside the hole and its bottom reaches 0.5 mm above the cup's resting depth, and opens again (Unhit) only when the
+   bottom rises 3 mm above that close point (user 2026-11-12: a switch with travel between close and open; several closings while a ball rocks are normal on real parts). Kick
+   and DestroyBall act on a held ball (switch closed). Sys7: rest 10.65 mm below the playfield, close at 10.15 mm, open at 7.15 mm (tuned, not measured). On the K2 bench run this
+   gave one Hit per ball for all 4 balls, 0.29-0.47 s after the ball entered the hole.
+7. Cups: Sys7 first, the whole path working with it (catch, hold, kick, events, cost); Data East, Plastic 1 (no pin), Plastic 2 and Williams follow as collision meshes only (cups from
+   references/pinball-parts-main/Kickers/Kickers.blend). Each kicker picks its cup by a physics-ini key with a default per VPX kicker type; the user gives the type-to-cup mapping when
+   the second cup is added.
+8. Cost is stated with 1, 2 and 6 balls (ModelStandards 4b).
+9. Two kicker types. Physical (items 1-7): always has its cup and no Enabled setting (nothing to switch off on a real part). Virtual: a ball store, discouraged, for subways, scripted
+   locks and holders; VPX's legacy kicker option maps to it. Default: virtual; a kicker is physical only where the table's physics ini says so (user 2026-11-12, after K3: script
+   kick speeds tuned for stock's lift trap the ball in a real cup, e.g. Gorgar's 0.43 m/s never leaves the Sys7 cup).
+10. Virtual kicker: a sensing zone (kicker circle, height range) tests the ball centre each cycle. An empty kicker parks the entering ball where it is, speed and spin zeroed (energy only
+   leaves), no snap, no lift; Hit fires after the step. Other balls meet a parked ball through the shared ball-ball law as a ball of infinite mass that forces do not move (user 2026-11-13,
+   after a reset hold let a resting neighbour sink); a second ball entering a full kicker is not caught. Kick releases it at its parked place plus the script's offset with the kick's speed, angle and scatter (the only energy in); an offset that starts the ball inside something
+   falls under the overlap rule (no stored energy reaches the ball). Unhit when the kicked ball's centre leaves the zone. CreateBall makes a parked ball, DestroyBall removes it.
+   Limit: a parked ball floats where it was caught (even mid-air), the reason it is discouraged.

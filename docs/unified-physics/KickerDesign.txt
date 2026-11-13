@@ -1,0 +1,132 @@
+KICKER DESIGN  (all 7 sections approved by the user 2026-11-12; requirements: Requirements.txt section F)
+==========================================================================================================
+Closest existing models (ModelStandards 1b): static surface = a wall's hard-surface host (parts/surface.cpp ~235-270: RubberSurface faces -> HitRubber host, BarsTriangles probe);
+the hole = the turntable's CarvedHole (rubbercontact.h ~803, playfield faces inside it do not press); the sensing = trigger None zones (physics/nonezones.h, parts/trigger.cpp
+455-620: centre test on the chord, events queued and fired after the step); a held ball = the magnets' pair form with the other ball held (pairform.h kind 0, b < 0).
+Lead log: runs/2026-11-12-lead/log.md. Tests so far: runs/2026-11-12-kicker-cup.
+
+
+1. Physical laws and bodies  (APPROVED by the user 2026-11-12)
+-----------------------------------------
+Physical kicker (Requirements F 1-8):
+ a. Bodies: the ball, and one static body, the kicker's collision mesh: the cup (hand-made, faces only where a ball touches) plus the hole's wall below the rim (c gives the rim).
+    Nothing in the kicker moves; the switch and pins are left out (F 3).
+ b. Law: the existing static-mesh contact (ContactCore: Hertz + damping + friction + twist, BarsTriangles for several pressed faces). No new law. Material: hard surface
+    (cup plastic or steel), from an ini section [Kicker:<name>] with [Surfaces] defaults, as walls do.
+ c. The hole: the playfield's faces do not press a ball inside the hole's circle, as for the turntable's CarvedHole. This replaces today's exclusion (g_playfieldHoles /
+    InPlayfieldHole), which takes the playfield away from the ball at any height and hands the ball to stock. Playfield only, as the turntable (F 2). The hole's radius is
+    the real cutout's (18.93 mm at the playfield top for the Sys7 cutout, measured in Kickers.blend; 1.34 mm bevel to 17.6, wall 16.4), part of the cup data, not the VPX
+    kicker radius (25 U = 13.5 mm, the ball's own radius).
+ d. Gravity, the cup and friction bring the ball to rest; nothing else holds it (F 1).
+ e. The kick: one instantaneous velocity change of the ball where it is (the script's speed, angle, inclination, scatter and offset), the drive; the cup and rim then act
+    on the ball through the same contact law (F 4).
+ f. Held: the cup switch closes when the ball's centre is inside the hole and its bottom is within 0.5 mm of the resting depth, and opens only 3 mm above that close point
+    (Requirements F 6, changed by the user 2026-11-12 after K2's Hit chatter at a single 8 mm depth), judged on each step's chord as trigger None zones do. It moves nothing.
+Virtual kicker (F 9-10):
+ g. Bodies: the ball and a sensing zone. A parked ball is not stepped (its own flag, not stock's m_lockedInKicker).
+ h. Holding (user 2026-11-13, after K4): a parked or carried ball has infinite mass. It is not stepped (no gravity, no surface contacts, spin zero); its place is fixed
+    (parked) or the arm's path at each moment (carried). In the shared ball-ball pair law it is a body that forces do not move, with a given velocity (0, or the path's);
+    another ball meets it with the same law and bounces off it as off a ball that will not move. A parked ball does no work; a carried ball's work on another ball is the
+    arm's drive work, booked. This puts in the unified law what stock does for its locked ball (hitball.cpp: infinite mass). History: the magnets' held form is an energy
+    term, not a contact (K3c); a reset hold (ordinary ball in the cycle, put back at its end) let a resting neighbour sink 0.1 mm in 150 ms (K4) and keeping the put-back's
+    depth would store energy made by a teleport.
+ i. Capture zeroes the parked ball's speed and spin (energy only leaves); Kick restores motion as the drive in e.
+Stock is not deleted (user 2026-11-12): on the unified path the new kicker replaces it; with unified = 0 the stock kicker runs unchanged. Once accepted, the unified path's
+own kicker workarounds go: the g_playfieldHoles exclusion and its hand-over to stock, the m_lockedInKicker skips inside the contact system (PairEligible, contactsystem.cpp
+skips), the stock counter's kicker rows. KickerHitCircle, collide.cpp, quadtree.cpp and hitball.cpp's frozen ball stay for stock.
+
+
+2. Stiff things and the step  (APPROVED by the user 2026-11-12; ModelStandards 3)
+------------------------------------------------------------
+ a. The kicker has no internal contacts (no stops, pins or blades: F 3), so its stiffest contact is the ball on the cup, a hard surface like a ball on a wall. Its step comes
+    from the shared step rule (ModelStandards 2c); the kicker states no step facts of its own.
+ b. Several pressed faces at once (two ledges, a ring of faces): one Hertz bar per pressed face (multi_contact, on for every static host except the playfield,
+    hitrubber.cpp:1671). A ball resting across a fold between two faces is the trap 'no root at a fold' (ModelStandards 6): the cup mesh is built so no resting place
+    sits on a fold, and the rest-grid check (mk_grid.py) runs on each cup.
+ c. The rim: the playfield's carved hole (1c) gives it: a face point inside the circle moves out to the circle (rubbercontact.h:1060-1072), so the rim is a sharp circular edge
+    of the playfield, with the same law and edge rounding (edge_radius_mm) as every mesh edge. The cutout's real bevel is left out until the playfield cut-hole work.
+ d. The kick changes the ball's velocity between cycles, as any script action does; the next step meets the ball already moving (its approach speed is a step fact). The
+    resting squash given back at the kick is micro-joules (depth about 1 um, measured offline).
+ e. Virtual kicker: a ball meeting a parked ball is a steel-on-steel pair, the stiffest contact in the game, the same as two moving balls today: the shared rule.
+ f. A held ball at rest is touching every cycle; whether it sleeps (to-do 1.10, sleep off by default) belongs to the cost section.
+
+
+3. Energy  (APPROVED by the user 2026-11-12; ModelStandards 2h)
+-----------------------------------------
+ a. Drives: gravity (the ball falls into the cup) and the kick. Nothing else adds energy: no lift to playfield level (stock's hold lifts the ball), no funnel, no speed restore.
+ b. Losses: the contact's damping and friction in the cup and on the rim; the virtual kicker's capture (speed and spin set to zero) is a loss the kicker reports.
+ c. The kick acts between cycles. Its work (kinetic energy after minus before, the scatter and a downward inclination included) is reported to the energy book as drive work,
+    so the between-cycle comparison does not read it as a rise.
+ d. A kick or a CreateBall that starts a ball inside something (the script's offset): the existing first-sight rule applies (contactsystem.cpp:810: a contact found inside
+    that was not inside at the last cycle's end has stored nothing; the kicker calls NotePlaced). No stored energy reaches the ball.
+ e. The resting squash in the cup was stored by gravity and is given back by the same contact law; nothing to book.
+ f. Checks: the energy book closes every cycle on the bench (catch, rest, kick); a ball falling into the cup and resting never gains energy (step sweep, ModelStandards 5a).
+
+
+4. The kick  (APPROVED by the user 2026-11-12)
+-------------------------
+ a. Physical kicker: the kick changes only the held ball's velocity, where it is; it never moves the ball. KickXYZ's x, y, z offsets and KickZ's height are teleports and are
+    ignored (one on-screen notice per kicker, rule 8). Angle and inclination in degrees only (user 2026-11-12: the radians rule only confuses). Horizontal speed = speed cos(incl),
+    vertical = speed sin(incl), up or down (stock's downward quirk dropped). Scatter as today. The cup and rim then act through the contact law.
+    REPLACED 2026-11-13 (user): a velocity set in the cup sends a fast ball into the hole wall before it rises (K3: 0.86 -> 0.30 m/s), and a fixed upward speed does too.
+ c. The arm stroke (physical kicker, APPROVED by the user 2026-11-13, picture runs/2026-11-12-kicker-cup/arm_final.png): the ball is carried along a quarter circle of radius 17 mm (an idealised kicker arm, its pivot below the end
+    point, in the plane of the kick direction after scatter): from its resting place, starting straight up, to the top, where it moves horizontally in the kick direction with
+    its bottom 0.25 in (6.35 mm) above the playfield (rise 17.0 mm for Sys7, 17 mm forward, about 3 mm clear of the hole). Speed (user 2026-11-13, replaces steady
+    acceleration): the ball reaches the kick's speed within the first 1 ms cycle and keeps it along the arc until release (full arc 26.7 mm: 62 ms at 0.43 m/s, 27 ms at
+    1 m/s), then flies free. Inclination (user 2026-11-13): the stroke ends where the arc's direction equals the inclination: none or 0 deg = the full arc, 45 deg = half the
+    arc (released 12.0 mm higher, 5.0 mm forward, moving 45 deg up), 90 deg = no arc (straight up from rest). Values chosen for feel, not measured.
+    Carried, not riding: the path is prescribed (a real arm would lose the ball near the top above 0.41 m/s). During the carry: spin zero; the cup is not touched (the arc is
+    clear of it); another ball meets the carried ball as in 1h (infinite mass moving on the path); the switch opens as in 1f.
+    Energy: the arm's work (kinetic energy at exit plus the lift's m g h) is the kick's drive work, booked as in 3c.
+ b. Virtual kicker: today's behaviour, for compatibility: offsets applied, velocity set, stock's speed split; but angle and inclination in degrees only, as a (user 2026-11-12).
+    Stated limit: an old script that passes inclination in radians (e.g. KickZ 0, 30, 1.56 for a kick straight up) kicks nearly flat and must be edited.
+
+
+5. Cost estimate  (APPROVED by the user 2026-11-12; DevelopmentRules 5, ModelStandards 4)
+-------------------------------------------------------------------
+Offline measurements (runs/2026-11-12-kicker-cup, results_handmade.txt; one contact check = BarsTriangles with the faces within the ball's reach, true distance):
+ Sys7 hand-made cup, 341 faces: 0.11 us at rest, 1.07 / 0.99 us 2 / 5 mm off rest (full display mesh 0.45 / 5.3 / 3.0 us). MEASURED.
+ a. 1 ball (held or rolling through): checks per object-cycle median 4 (to-do 1.17) -> about 0.5 us a cycle at rest, about 4 us rolling. INFERRED (offline cost x engine count).
+ b. 2 balls (one held, one hitting it or both in a large cup): the cup's cost twice plus one ball pair; about 8 us. INFERRED.
+ c. 6 balls: a kicker holds one ball; 6 only as a pile over the hole (rare); stated, not designed for. Cost = the pile's, already judged by the pile requirements (Requirements B).
+ d. Worst seen 598 checks per object-cycle (to-do 1.17) would be 60-640 us for any cup: over the 30 us limit, as for every mesh; the fix is the check count (1.17), not the cup.
+ e. The hole: each playfield face check tests the carved holes (a few ns each); with about 10 kickers on a table, only holes near the ball should be tested (the finder's
+    list), else every playfield check pays for every hole. To measure.
+ f. Sensing zone: one chord test per ball near the kicker per cycle (trigger None zones: ns). Virtual kicker: one ball pair per ball near a parked ball.
+ g. Sleep: a held ball at rest costs about 0.5 us a cycle, so sleep (to-do 1.10) is not needed for the kicker.
+ h. Measured in the engine before the kicker is called done: worst cycle and worst 7-cycle window with 1, 2 and 6 balls, focused driver run (rule 3).
+
+
+6. What breaks  (APPROVED by the user 2026-11-12; DevelopmentRules 7; all INFERRED until tested)
+--------------------------------------------------------------------------
+ a. A physical kicker not on the playfield (wall top, ramp): no carved hole there (1c). It is refused at load with a notice (rule 8) asking for the virtual type. Stated limit
+    until the cut-hole work.
+ b. VPX kicker radius vs the cup: the drawn kicker and the real cup can differ in size; physics uses the cup, the drawing is untouched; a notice when they differ by more
+    than a set amount.
+ c. CreateBall into an occupied kicker is not allowed (user 2026-11-12), both types: when a ball is held, or any ball overlaps the new ball's place, no ball is created
+    (CreateBall returns nothing) and a notice is raised once per kicker (rule 8).
+ d. Kick with no held ball: nothing happens (as today). Kick speed 0: the ball stays. Huge speed: an ordinary fast ball (the fast-ball watchdog sees it).
+ e. Kick or DestroyBall inside the Hit handler: events fire after the step (2f), so the ball is in a settled state of the step; same as triggers today.
+ f. Scripts that read BallCntOver, LastCapturedBall or the held ball: answered from the held state (F 6); a ball that rattles out is no longer held.
+ g. A held ball now feels magnets, nudge and tilt (stock froze it): correct physics; a nudge can rock it out of a shallow cup.
+ h. Table restart and teardown: carved holes cleared at engine start (as the turntable's), the cup host deleted with the kicker, a parked ball destroyed with the table.
+ i. A kicker hole over another hole or a turntable: both carve; stated, not designed for.
+ j. A table without kickers, and a second table in the same process: nothing kept in statics but the hole list, which is cleared at engine start.
+ k. A virtual KickXYZ / KickZ offset or a CreateBall that places the ball inside an object leaves it embedded there for good: the first-sight rule (3d) stores no energy from
+    the placement, so nothing pushes it out (K5a: 11 mm inside Wall10; 8 mm into the playfield, rolling 1.5 s across the table that deep). No notice (user 2026-11-13): the
+    table author must choose offsets that start the ball in free space.
+ Checked how: each case above gets a line in the kicker's stress set (rule 10) or the bench; which are run is decided when the build is planned.
+
+
+7. Settings, events and the interface  (APPROVED by the user 2026-11-12; ModelStandards 2a, 2f, 2g; DevelopmentRules 6)
+--------------------------------------------------------------------------------------------------
+ a. Switch: [Features] kickers = 1 (on by default while tested); 0 = today's stock kicker unchanged. Deleted with the stock path once the user accepts the new one.
+ b. Per kicker, [Kicker:<name>] in the table's physics ini: type = physical | virtual (default virtual, user 2026-11-12 after K3); cup = sys7 (the only
+    cup at first); switch_depth_mm (default per cup, tuned); material keys as a wall's hard surface (e_mpa, mu, restitution, edge_radius_mm ...) with [Surfaces] defaults.
+    Unknown or duplicate keys raise the notice (rule 8). Each key described beside it in the code; all values written to the log at load.
+ c. The cup mesh is compiled in (a header like the stock meshes, mm, kicker frame), one per cup type; its hole radius is part of the cup data.
+ d. Interface: the physical kicker is a static surface host (a HitRubber, as a wall builds one) plus the carved hole; no moving part, no GroupStep::Part. The virtual kicker
+    is a sensing zone plus the parked-ball state; the parked ball enters the pair law as a held ball (pairform.h b < 0). No kicker special case inside contactsystem.cpp.
+ e. Events: Hit and Unhit from the held test (F 6), queued with their time and fired after the step, as trigger None zones do (trigger.cpp CycleEnd); no script runs inside
+    the step. A destroyed ball is dropped from the queue (BallGone).
+ f. Stock counter: the kicker leaves AllowedStock when converted; any stock use by a converted kicker fails the driver run.

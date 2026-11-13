@@ -4,6 +4,7 @@
 #include "hitball.h"
 #include "physics/stockcount.h"
 #include "physics/hitrubber.h"
+#include "physics/kickerarm.h"
 #include "physics/hitflipper.h"
 #include "parts/ball.h"
 
@@ -682,6 +683,11 @@ void BallMoverObject::UpdateDisplacements(const float dtime)
 
 void HitBall::UpdateDisplacements(const float dtime)
 {
+   if (KickerHold::Held(this))   // a ball a kicker holds is not stepped (KickerDesign 1h): its place is the kicker's (fixed, or the arm's path), moved only by the pair law's given move
+   {
+      m_rubberAdvanced = false;
+      return;
+   }
    if (m_sleepGroup != 0)   // pile sleep: held where it went to sleep, spin and orientation too
       return;
    if (!m_d.m_lockedInKicker)
@@ -718,7 +724,7 @@ void BallMoverObject::UpdateVelocities()
 
 void HitBall::UpdateVelocities()
 {
-   if (!m_d.m_lockedInKicker) // Gravity
+   if (!m_d.m_lockedInKicker && !KickerHold::Held(this)) // Gravity (a ball a kicker holds is not stepped: KickerDesign 1h)
    {
       BallControl* const ballControl = m_physics->GetBallControl();
       if (ballControl && m_pBall == ballControl->GetDraggedBall())

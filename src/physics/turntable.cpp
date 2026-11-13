@@ -2,6 +2,7 @@
 
 #include "core/stdafx.h"
 #include "physics/turntable.h"
+#include "physics/carvedholes.h"
 #include "physics/contactparthost.h"
 #include "physics/contactdiscpart.h"
 #include "physics/physicsini.h"
@@ -106,7 +107,6 @@ namespace Turntables
       std::vector<Turntable> g_tt;
       std::map<std::string, size_t> g_byName;
       std::map<std::string, std::pair<bool, float>> g_pending;   // script calls made before the physics started: (isDuty, value)
-      std::vector<RubberContact::CarvedHole> g_holes;
 
       void Derive(Turntable &t)
       {
@@ -259,7 +259,6 @@ namespace Turntables
    {
       g_tt.clear();
       g_byName.clear();
-      g_holes.clear();
       const std::filesystem::path file = PhysicsIni::FindUnified(table->m_filename);
       if (file.empty())
          return;
@@ -308,7 +307,7 @@ namespace Turntables
             t.z = t.playfieldZ;
          const double R = t.radiusMm * 1e-3 / UM;   // table units
          const double hole = (t.radiusMm + t.gapMm) * 1e-3;
-         g_holes.push_back({ t.x * UM, t.y * UM, hole, t.playfieldZ * UM });
+         CarvedHoles::Add({ t.x * UM, t.y * UM, hole, t.playfieldZ * UM });   // the playfield's carved holes (carvedholes.h; cleared when the engine is built)
 
          // the disc: a flat polygon at the top height, plus a skirt down to the playfield when it stands proud of it: the stock colliders that find the ball, and the host's box
          std::vector<Vertex3Ds> top;
@@ -430,12 +429,6 @@ namespace Turntables
          a += 360.0;
       deg = (float)a;
       return true;
-   }
-
-   void Holes(const RubberContact::CarvedHole *&holes, int &n)
-   {
-      holes = g_holes.data();
-      n = (int)g_holes.size();
    }
 
    namespace

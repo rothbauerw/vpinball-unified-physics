@@ -8,6 +8,8 @@
 
 class HitBall;
 class Trigger;
+class Kicker;
+class IFireEvents;
 
 namespace ContactSystem
 {
@@ -25,25 +27,39 @@ namespace ContactSystem
       void Add(Trigger *trigger, std::vector<Vertex2D> &&poly, float zlow); // Trigger::PhysicSetup: a None trigger's zone (polygon in VPX units, surface height)
       void Remove(const Trigger *trigger);    // Trigger::PhysicRelease
       void Recheck(const Trigger *trigger);   // Enabled went true or HitHeight changed: every ball judged where it is for this zone (the placement rule, design 4d, 4e)
+      // A physical kicker's switch (KickerDesign.txt 1f, 7e; Requirements F 6): a switch with travel. It closes (Hit) when the ball's centre is inside the hole's circle and its bottom reaches
+      // zClose; once closed it opens (Unhit) only when the bottom rises above zOpen (zOpen > zClose) or the centre leaves the circle. The same chord test, event queue and firing as a None
+      // zone, the kicker as owner (BallCntOver reads the ball's m_vpVolObjs, the kicker's held ball follows it). Always on (a physical kicker has no Enabled, F 9). VPX units.
+      // A virtual kicker's sensing zone (KickerDesign.txt 1g-1i; Requirements F 10; virt): the ball's centre inside the circle (cx, cy, r) and its height between zClose (the surface) and zOpen
+      // (the surface + HitHeight), tested on the chord as a None zone. Entering, the kicker parks the ball if it is empty and enabled (Kicker::Park; else the ball is not listed, no Hit); the
+      // parked ball is not judged out (a held ball stays at its place); a kicked ball gets its Unhit when its centre leaves.
+      void AddKicker(Kicker *kicker, double cx, double cy, double r, double zClose, double zOpen, bool virt = false);   // Kicker::PhysicSetup
+      void Remove(const Kicker *kicker);      // Kicker::PhysicRelease
 
    private:
       struct Zone
       {
-         Trigger *trigger;
+         Trigger *trigger;               // a None trigger's zone (null for a kicker's)
          std::vector<Vertex2D> poly;     // the polygon, VPX units
          float x0, x1, y0, y1;           // its box
          float zlow;                     // the surface height under the trigger
          bool recheck;                   // every ball is judged where it is (the placement rule)
+         Kicker *kicker = nullptr;       // a physical kicker's switch (trigger null): the circle (cx, cy, r); the height of the ball's bottom that closes it (zClose) and above which it opens (zOpen), VPX units
+         double cx = 0.0, cy = 0.0, r = 0.0, zClose = 0.0, zOpen = 0.0;
+         bool virt = false;              // a virtual kicker's sensing zone: zClose .. zOpen is the ball centre's height range
       };
       struct Event
       {
          double t;                       // time in the cycle, s
-         Trigger *trigger;
+         Trigger *trigger;               // (null for a kicker's event)
          HitBall *ball;                  // null once the ball is destroyed
          bool hit;
+         Kicker *kicker;
       };
-      static bool Inside(const Zone &z, double x, double y, double zc);   // the ball centre in the zone
-      void Judge(const Zone &z, HitBall *b, bool in, double t);
+      static bool Inside(const Zone &z, double x, double y, double zc, double R, bool held);   // the ball centre in the zone (R: the ball's radius; held: the ball is listed, for a kicker's switch travel)
+      static bool Enabled(const Zone &z);
+      static IFireEvents *Owner(const Zone &z);   // the zone's object as the ball's m_vpVolObjs lists it (IFireEvents *)
+      void Judge(const Zone &z, HitBall *b, bool in, double t, const Vertex3Ds &at);   // at: the ball's centre where the change is judged (a virtual kicker parks it there)
       void ApplyPlacements(double t);
       void Chord(const Zone &z, HitBall *b, const Vertex3Ds &s, const Vertex3Ds &e, double startS, double hS);
 

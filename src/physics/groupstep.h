@@ -270,7 +270,14 @@ namespace GroupStep
       double fieldScale = 0.0;   // how much of the group's fields it feels (Group::field); 0 = none
       double brakeRate = 0.0;    // a viscous brake on its spin across an axis (the eddy currents in a coil's field), 1/s; 0 = none. The caller's, held for the cycle
       V3 brakeAxis;              // the axis (unit): a spin about it is not braked
+      // held (KickerDesign 1h): a ball a kicker holds (parked) or carries (the arm) has infinite mass: forces do not move it (inverse mass and inertia 0), its move is given: velocity v
+      // and acceleration heldA (m/s2, the arm's path's; 0 parked), spin 0, no gravity. Its rows in the solve are that move; its own energy is the kicker's, not the group's; the work the
+      // contacts' forces on it do over its move is a drive (books.driveJ: 0 for a parked ball). The caller puts held balls after the others, so a pair with one has it as its b.
+      bool held = false;
+      V3 heldA;
       double I() const { return 0.4 * m * R * R; }
+      double InvM() const { return held ? 0.0 : 1.0 / m; }      // inverse mass (0: held)
+      V3 Given(const double h) const { return v * h + heldA * (0.5 * h * h); }   // a held ball's move over h
    };
 
    struct Settings
@@ -1404,6 +1411,8 @@ namespace GroupStep
          for (int i = 0; i < nb; i++)
          {
             const Ball &b = ball[i];
+            if (b.held)
+               continue;   // (a held ball's motion and height are the kicker's: KickerDesign 1h)
             e += 0.5 * b.m * b.v.Dot(b.v) + 0.5 * b.I() * b.w.Dot(b.w) - b.m * set.g.Dot(b.c);
             if (nf > 0 && b.fieldScale != 0.0)
                e += FieldEnergy(b);
@@ -1630,7 +1639,7 @@ namespace GroupStep
             // an opening one is not taken off: the test only decides whether the item is probed; probing one more costs one probe, dropping one that arrives is a fault
             V3 aRelNow = fNet[it.a] * (1.0 / A.m);
             if (it.b >= 0)
-               aRelNow = aRelNow - fNet[it.b] * (1.0 / ball[it.b].m);
+               aRelNow = aRelNow - (ball[it.b].held ? ball[it.b].heldA : fNet[it.b] * (1.0 / ball[it.b].m));
             const auto reach = [&](const double v, const V3 &n) { return v * set.hMax + 0.5 * std::max(-aRelNow.Dot(n), 0.0) * set.hMax * set.hMax; };
             bool termNear = false;   // a term the longest step can reach though the union's depth cannot be
             for (int t = 0; terms && !termNear && t < hp.nt; t++)
@@ -1705,7 +1714,7 @@ namespace GroupStep
                   const double slipNow = ut.Length();
                   V3 aRel = fNet[it.a] * (1.0 / A.m);
                   if (it.b >= 0)
-                     aRel = aRel - fNet[it.b] * (1.0 / ball[it.b].m);
+                     aRel = aRel - (ball[it.b].held ? ball[it.b].heldA : fNet[it.b] * (1.0 / ball[it.b].m));
                   const double omNow = std::sqrt(L.K(hp.delta) / L.mRed);
                   steady = std::fabs(dDot) <= set.vSteady && std::fabs(aRel.Dot(hp.n)) <= set.vSteady * omNow && (slipNow <= set.vSteady || (set.slideFree && slipNow * std::sqrt(ktE * L.mt) > L.mu * L.F(dE)));
                   if (!steady)
@@ -1732,7 +1741,7 @@ namespace GroupStep
                const double omR = std::sqrt(L.K(hp.delta) / L.mRed);
                V3 aRel = fNet[it.a] * (1.0 / A.m);
                if (it.b >= 0)
-                  aRel = aRel - fNet[it.b] * (1.0 / ball[it.b].m);
+                  aRel = aRel - (ball[it.b].held ? ball[it.b].heldA : fNet[it.b] * (1.0 / ball[it.b].m));
                const double x = dDot / omR, y = aRel.Dot(hp.n) / (omR * omR), amp = std::sqrt(x * x + y * y);
                const double hm = amp > 0.0 ? std::sqrt(12.0 * set.epsRest / amp) / omR : set.hMax;
                hs = std::max(hs, std::min(hm, set.hMax));
@@ -2052,6 +2061,8 @@ namespace GroupStep
          for (int i = 0; i < nb; i++)
          {
             const Ball &b = ball[i];
+            if (b.held)
+               continue;
             s.ke += 0.5 * b.m * b.v.Dot(b.v) + 0.5 * b.I() * b.w.Dot(b.w);
             s.pe += -b.m * set.g.Dot(b.c) + (nf > 0 && b.fieldScale != 0.0 ? FieldEnergy(b) : 0.0);
          }
@@ -2306,7 +2317,7 @@ namespace GroupStep
          {
             // the force and torque the solve used (Eval's at its move), over the mass and inertia: the mean accelerations of that move (m dv = F h at a solution),
             // bounded by the forces however short h is (from the move itself, (dc - v h) 2 / h^2 is the solve's tolerance over h^2 when h is near zero)
-            warmA[i] = evF[i] * (1.0 / ball[i].m);
+            warmA[i] = evF[i] * ball[i].InvM();
             warmAl[i] = evM[i] * (1.0 / ball[i].I());
          }
          warmOn = true;
@@ -2580,8 +2591,8 @@ namespace GroupStep
          if (it.b >= 0)
          {
             const Ball &B = ball[it.b];
-            it.mRed = A.m * B.m / (A.m + B.m);
-            invMt += 1.0 / B.m + B.R * B.R / B.I();
+            it.mRed = B.held ? A.m : A.m * B.m / (A.m + B.m);   // (a held ball: infinite mass, KickerDesign 1h)
+            invMt += B.held ? 0.0 : 1.0 / B.m + B.R * B.R / B.I();
          }
          it.mt = 1.0 / invMt;
          it.alpha = rp.alphaSPerM;
@@ -2725,13 +2736,13 @@ namespace GroupStep
          double posScale = 0.1;
          for (int i = 0; i < nb; i++)
          {
-            dc[i] = V3(xv[6 * i], xv[6 * i + 1], xv[6 * i + 2]);
-            dw[i] = V3(xv[6 * i + 3], xv[6 * i + 4], xv[6 * i + 5]);
+            dc[i] = ball[i].held ? ball[i].Given(h) : V3(xv[6 * i], xv[6 * i + 1], xv[6 * i + 2]);   // (a held ball: its given move, spin 0)
+            dw[i] = ball[i].held ? V3() : V3(xv[6 * i + 3], xv[6 * i + 4], xv[6 * i + 5]);
             wm[i] = ball[i].w + dw[i] * 0.5;
             b1[i] = bm[i] = ball[i];
             b1[i].c = ball[i].c + dc[i];
             bm[i].c = ball[i].c + dc[i] * 0.5;
-            F[i] = set.g * ball[i].m + ball[i].fExt;
+            F[i] = ball[i].held ? V3() : set.g * ball[i].m + ball[i].fExt;   // (a held ball: no gravity; F gathers the contacts' forces on it)
             M[i] = V3();
             posScale = std::max(posScale, std::fabs(ball[i].c.x) + std::fabs(ball[i].c.y) + std::fabs(ball[i].c.z));
          }
@@ -2819,7 +2830,7 @@ namespace GroupStep
             const double q0 = PairForm::Q(T, c0a, two ? c0b : nullptr), q1 = PairForm::Q(T, c1a, two ? c1b : nullptr);
             PairForm::Q(T, cma, two ? cmb : nullptr, gm, gm + 3);
             const double dq[6] = { dc[T.a].x, dc[T.a].y, dc[T.a].z, two ? dc[T.b].x : 0.0, two ? dc[T.b].y : 0.0, two ? dc[T.b].z : 0.0 };
-            const double iM[6] = { 1.0 / ball[T.a].m, 1.0 / ball[T.a].m, 1.0 / ball[T.a].m, two ? 1.0 / ball[T.b].m : 0.0, two ? 1.0 / ball[T.b].m : 0.0, two ? 1.0 / ball[T.b].m : 0.0 };
+            const double iM[6] = { ball[T.a].InvM(), ball[T.a].InvM(), ball[T.a].InvM(), two ? ball[T.b].InvM() : 0.0, two ? ball[T.b].InvM() : 0.0, two ? ball[T.b].InvM() : 0.0 };
             double gd[6];
             Gonzalez(gm, q1 - q0, 16.0 * 2.220446049250313e-16 * std::fabs(q1) + noiseD, dq, iM, two ? 6 : 3, set.gonzalezMass, gd);
             F[T.a] = F[T.a] + V3(gd[0], gd[1], gd[2]) * T.g;
@@ -2912,7 +2923,7 @@ namespace GroupStep
             if (pr)
             {
                dq[3] = dc[it.b].x; dq[4] = dc[it.b].y; dq[5] = dc[it.b].z;
-               iM[3] = iM[4] = iM[5] = 1.0 / ball[it.b].m;
+               iM[3] = iM[4] = iM[5] = ball[it.b].InvM();   // (a held ball takes none of the correction: infinite mass)
             }
             for (int j = 0; j < nq; j++)
             {
@@ -3737,6 +3748,21 @@ namespace GroupStep
          for (int i = 0; i < nb; i++)
          {
             const Ball &b = ball[i];
+            if (b.held)   // infinite mass (KickerDesign 1h): its rows are its given move, met exactly (residual 0, a row and column of its own); what the contacts' forces on it do over
+            {             // that move is the kicker's work on the group, a drive (0 for a parked ball)
+               driveW -= F[i].Dot(dc[i]);
+               for (int a = 0; a < 6; a++)
+               {
+                  Res[6 * i + a] = 0.0;
+                  if (J)
+                  {
+                     for (int c = 0; c < nU; c++)
+                        J[6 * i + a][c] = J[c][6 * i + a] = 0.0;
+                     J[6 * i + a][6 * i + a] = a < 3 ? InertiaSlope(b.m, h) : b.I();
+                  }
+               }
+               continue;
+            }
             const V3 rc = InertiaRow(dc[i], b.v, b.m, h) - F[i] * h;
             const V3 rw = dw[i] * b.I() - M[i] * h;
             Res[6 * i] = rc.x; Res[6 * i + 1] = rc.y; Res[6 * i + 2] = rc.z;
@@ -3847,7 +3873,8 @@ namespace GroupStep
                const double ex = Energy() - E0;
                double K = 0.0;
                for (int i = 0; i < nb; i++)
-                  K += 0.5 * ball[i].m * ball[i].v.Dot(ball[i].v) + 0.5 * ball[i].I() * ball[i].w.Dot(ball[i].w);
+                  if (!ball[i].held)
+                     K += 0.5 * ball[i].m * ball[i].v.Dot(ball[i].v) + 0.5 * ball[i].I() * ball[i].w.Dot(ball[i].w);
                for (int p = 0; p < np; p++)
                   K += part[p]->KineticJ();
                if (!(ex < K) && tries < 11)   // it cannot be paid: shorter (the path keeps its elements, so the energy has no step in it now)
@@ -3859,7 +3886,8 @@ namespace GroupStep
                {
                   Restore();
                   for (int i = 0; i < nb; i++)
-                     ball[i].v = ball[i].v * -1.0;
+                     if (!ball[i].held)   // (a held ball's speed is given)
+                        ball[i].v = ball[i].v * -1.0;
                   for (int p = 0; p < np; p++)
                      part[p]->ScaleSpeeds(-1.0);
                   Done();
@@ -3872,10 +3900,11 @@ namespace GroupStep
                {
                   const double s = std::sqrt(1.0 - ex / K);
                   for (int i = 0; i < nb; i++)
-                  {
-                     ball[i].v = ball[i].v * s;
-                     ball[i].w = ball[i].w * s;
-                  }
+                     if (!ball[i].held)
+                     {
+                        ball[i].v = ball[i].v * s;
+                        ball[i].w = ball[i].w * s;
+                     }
                   for (int p = 0; p < np; p++)
                      part[p]->ScaleSpeeds(s);
                }
@@ -3885,7 +3914,8 @@ namespace GroupStep
                   if (tries < 11)
                      continue;
                   for (int i = 0; i < nb; i++)
-                     ball[i].v = ball[i].v * -1.0;
+                     if (!ball[i].held)
+                        ball[i].v = ball[i].v * -1.0;
                   for (int p = 0; p < np; p++)
                      part[p]->ScaleSpeeds(-1.0);
                   Done();
@@ -3911,7 +3941,13 @@ namespace GroupStep
          // no move can be formed at any length (a force that cannot be formed at all): the balls go on by their speeds alone, the path follows them, and the same closure applies; what cannot be paid turns back
          Restore();
          for (int i = 0; i < nb; i++)
-            ball[i].c = ball[i].c + ball[i].v * hTry;
+            if (ball[i].held)   // (its given move)
+            {
+               ball[i].c = ball[i].c + ball[i].Given(hTry);
+               ball[i].v = ball[i].v + ball[i].heldA * hTry;
+            }
+            else
+               ball[i].c = ball[i].c + ball[i].v * hTry;
          for (int p = 0; p < np; p++)
             part[p]->BallsMoved(ball, nb);
          stamp++;
@@ -3919,14 +3955,16 @@ namespace GroupStep
             const double ex = Energy() - E0;
             double K = 0.0;
             for (int i = 0; i < nb; i++)
-               K += 0.5 * ball[i].m * ball[i].v.Dot(ball[i].v) + 0.5 * ball[i].I() * ball[i].w.Dot(ball[i].w);
+               if (!ball[i].held)
+                  K += 0.5 * ball[i].m * ball[i].v.Dot(ball[i].v) + 0.5 * ball[i].I() * ball[i].w.Dot(ball[i].w);
             for (int p = 0; p < np; p++)
                K += part[p]->KineticJ();
             if (!(ex < K))
             {
                Restore();
                for (int i = 0; i < nb; i++)
-                  ball[i].v = ball[i].v * -1.0;
+                  if (!ball[i].held)
+                     ball[i].v = ball[i].v * -1.0;
                for (int p = 0; p < np; p++)
                   part[p]->ScaleSpeeds(-1.0);
                books.energyBounces++;
@@ -3935,10 +3973,11 @@ namespace GroupStep
             {
                const double sf = std::sqrt(1.0 - ex / K);
                for (int i = 0; i < nb; i++)
-               {
-                  ball[i].v = ball[i].v * sf;
-                  ball[i].w = ball[i].w * sf;
-               }
+                  if (!ball[i].held)
+                  {
+                     ball[i].v = ball[i].v * sf;
+                     ball[i].w = ball[i].w * sf;
+                  }
                for (int p = 0; p < np; p++)
                   part[p]->ScaleSpeeds(sf);
             }
@@ -3984,7 +4023,7 @@ namespace GroupStep
             // the first guess: the last step's accelerations carried on, or in the stop search this step's own from its last solve (a guess only: the solve's
             // answer does not depend on it)
             const V3 &ag = warmOn ? warmA[i] : aLast[i], &alg = warmOn ? warmAl[i] : alphaLast[i];
-            const V3 g0 = (ball[i].v + ag * (0.5 * h)) * h, w0 = alg * h;
+            const V3 g0 = ball[i].held ? ball[i].Given(h) : (ball[i].v + ag * (0.5 * h)) * h, w0 = ball[i].held ? V3() : alg * h;
             x[6 * i] = g0.x; x[6 * i + 1] = g0.y; x[6 * i + 2] = g0.z;
             x[6 * i + 3] = w0.x; x[6 * i + 4] = w0.y; x[6 * i + 5] = w0.z;
          }
@@ -4009,8 +4048,20 @@ namespace GroupStep
             }
             for (int a = 0; a < nU; a++)
                x[a] *= 0.5;
+            PinHeld(h);
          }
          return true;
+      }
+      // a held ball's unknowns: its given move, spin 0 (its rows keep them: residual 0, a row and column of their own)
+      void PinHeld(const double h)
+      {
+         for (int i = 0; i < nb; i++)
+            if (ball[i].held)
+            {
+               const V3 g = ball[i].Given(h);
+               x[6 * i] = g.x; x[6 * i + 1] = g.y; x[6 * i + 2] = g.z;
+               x[6 * i + 3] = x[6 * i + 4] = x[6 * i + 5] = 0.0;
+            }
       }
 
       // Solve one step of h from the state now (the end values stay in x and ie[])
@@ -4572,6 +4623,7 @@ namespace GroupStep
          const Books histBk0 = hist ? books : Books();
          if (ImpOn())   // (test tooling: the impulses of the Eval this step was accepted on)
             ImpAccept(h);
+         PinHeld(h);   // (a held ball's move: given)
          for (int p = 0; p < np; p++)   // before the balls move: a part reads their state at the step's start
          {
             double dJ = 0.0, lJ = 0.0;
@@ -4593,8 +4645,8 @@ namespace GroupStep
             b.c = b.c + dc;
             b.v = EndRate(dc, b.v, h);
             b.w = b.w + dw;
-            aLast[i] = evF[i] * (1.0 / b.m);         // the next step's first guess: the force and torque of the move taken (Eval's at it), not (v1 - v0) / h, which is
-            alphaLast[i] = evM[i] * (1.0 / b.I());   // the solve's tolerance over h for a step near zero long (a stop search on a stop: 5.7e12 m/s^2, a guess 88 km off)
+            aLast[i] = evF[i] * b.InvM();            // the next step's first guess: the force and torque of the move taken (Eval's at it), not (v1 - v0) / h, which is
+            alphaLast[i] = b.held ? V3() : evM[i] * (1.0 / b.I());   // the solve's tolerance over h for a step near zero long (a stop search on a stop: 5.7e12 m/s^2, a guess 88 km off)
          }
          for (int k = 0; k < ni; k++)
          {
