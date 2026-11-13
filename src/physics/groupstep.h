@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <string>
 #include <utility>
@@ -1266,6 +1267,38 @@ namespace GroupStep
          shape.b.Grow((size_t)ns + 1);
          shape.b[ns++] = s;
       }
+      // shared_finder re-engage ([Features] shared_finder = 1; runs/2026-11-13-finder-reengage/design.md): a surface the ball's inside check found inside an attempt joins the group in the
+      // middle of a step. Its contacts are added after the others with nothing kept (as Configure makes them), every other contact keeps its state, the books go on; the owner sets each new
+      // contact's zero (SetShapeItem) and the step's attempt runs again from the step's start state (Solve). The shape's storage is the owner's and must not move. Returns the first new item.
+      int AddShapeMidStep(const Shape *const s)
+      {
+         AddShape(s);
+         const int sIdx = ns - 1, k0 = ni;
+         const size_t n = (size_t)ni + (s->onlyBall >= 0 ? 1 : (size_t)nb);
+         const auto grow = [&](auto &b) {
+            b.Grow(n);
+            for (size_t k = (size_t)ni; k < n; k++)
+               b[k] = std::decay_t<decltype(b[0])>();
+         };
+         grow(item); grow(law); grow(hNow); grow(h1c); grow(hmc); grow(d0s); grow(h0s); grow(ie); grow(farNow); grow(prevSlipS); grow(prevOnS); grow(szRec); grow(esI0);
+         for (int a = 0; a < nb; a++)
+         {
+            if (s->onlyBall >= 0 && s->onlyBall != a)
+               continue;
+            Item &it = item[ni++];
+            it = Item();
+            it.a = a;
+            it.s = sIdx;
+         }
+         stamp++;   // (every cached probe of the step's start is taken again)
+         return k0;
+      }
+      // the owner's mid-step join, after each attempt: the number of shapes it added (> 0: the attempt runs again); allow false (past kJoinRounds): add none, -1 if one is waiting.
+      // Unset: none (every use but an island's with shared_finder on)
+      std::function<int(bool)> midJoin;
+      int joinRounds = 0;   // joins in the current step (Step)
+      long joinCapHit = 0;  // attempts that found more after kJoinRounds joins in one step (the owner reads and clears it)
+      static constexpr int kJoinRounds = 8;   // each round adds an object, so the rounds are bounded by the objects; more than this in one step is a fault, logged
       void AddPart(Part *const p)
       {
          part.b.Grow((size_t)np + 1);
@@ -1832,6 +1865,7 @@ namespace GroupStep
             part[p]->WipeStepWork();
          double h = hTry;
          nHalveDiag = 0;
+         joinRounds = 0;
          failContactBuf.clear();
          for (;;)
          {
@@ -4071,19 +4105,40 @@ namespace GroupStep
          for (;;)
          {
             farOff = false;
-            if (!SolveOnce(h))
+            const bool ok0 = SolveOnce(h);
+            if (Joined())
+               continue;   // a surface found inside the attempt joined: the attempt again from the step's start, with it
+            if (!ok0)
                return false;
             if (!FarStillFar(x))
             {
                farOff = true;
                const bool ok = SolveOnce(h);
                farOff = false;
+               if (Joined())
+                  continue;
                return ok;   // (its lists hold every piece)
             }
             if (NearStillNear(x))
                return true;
             nearGrow *= 4.0;   // a piece off a list was reached: the lists anew from a longer reach, the attempt again
          }
+      }
+      // shared_finder re-engage: the owner's join after an attempt (midJoin); true = a shape was added, run the attempt again. Bounded per step (kJoinRounds): past it, a fault logged once per table use
+      bool Joined()
+      {
+         if (!midJoin)
+            return false;
+         if (joinRounds >= kJoinRounds)
+         {
+            if (midJoin(false) < 0)
+               joinCapHit++;   // (the owner logs it as a fault after the cycle's steps)
+            return false;
+         }
+         if (midJoin(true) <= 0)
+            return false;
+         joinRounds++;
+         return true;
       }
       // diagnostics, off by default (VPX_GROUP_ROUND_TRACE=1): each round of an attempt, the residual by row in speed units and the parts' row terms; the first failed attempt of a step kept in failRoundBuf
       static bool RoundTraceOn() { static const bool on = []() { const char *const e = getenv("VPX_GROUP_ROUND_TRACE"); return e != nullptr && atoi(e) != 0; }(); return on; }

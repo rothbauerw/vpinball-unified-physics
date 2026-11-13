@@ -149,7 +149,8 @@ namespace
       bool queried = false;
       int reqThis = 0;           // re-queries in the current cycle
       double reqNs = 0.0;        // time spent in re-queries, ns (summed at the totals)
-      uint64_t reqNew = 0;       // P2b: objects a re-query found that were not among the ball's surfaces (summed at the totals)
+      uint64_t reqNew = 0;       // P2b: objects a re-query found that were not among the ball's surfaces (summed at the totals); re-engage: each counted once per cycle, as recorded below
+      std::vector<int> pend;     // re-engage: those objects, recorded for engagement in the cycle (the group step takes them: FinderTakeNew)
       uint64_t ver = 0;          // P3a: the query's version: each query, re-query and bind starts every table of the ball anew
       std::vector<RubberContact::FaceTable> tab;   // P3a: per finder object, the ball's measurement table of its faces in per[k] (one per ball position)
       const HitBall *ball = nullptr;   // P3a: the ball (check mode's log)
@@ -228,6 +229,27 @@ namespace
       }
    };
    FinderIndex g_finder;
+   // re-engage (design runs/2026-11-13-finder-reengage): some ball has an object recorded for engagement; the joins' counters (reset with the finder at table close)
+   bool g_joinPendAny = false;
+   struct JoinStats
+   {
+      uint64_t joins = 0, again = 0, insideAtStart = 0, notHandled = 0, capHit = 0, timed = 0, items = 0, touched = 0;
+      double ns = 0.0;
+      std::map<std::string, uint64_t> byKind;
+      bool notified = false;
+      int logged = 0;
+   };
+   JoinStats g_join;
+   // an object recorded for the ball and not taken before its next query: not handled mid-cycle (a ball not on the group step this cycle)
+   void JoinLeftover(FinderBallQ &q)
+   {
+      if (q.pend.empty())
+         return;
+      for (const int k : q.pend)
+         ContactSurfaceHost::FinderJoinNotHandled(q.ball, k >= 0 && k < (int)g_finder.objs.size() && g_finder.objs[k].host != nullptr ? g_finder.objs[k].host->Name() : std::string("?"),
+            "the ball was not stepped by the group step after it was found");
+      q.pend.clear();
+   }
 
    // shared_finder P3a counters: one contact check = one outermost Probe, ProbePatch or ArrivalS of a static mesh host with a measurement table (key on)
    struct FinderTabStats
@@ -600,6 +622,8 @@ namespace
          ContactSurfaceHost::FinderTotals(true);
          FinderReport();
          g_finder.Reset();
+         g_join = JoinStats();
+         g_joinPendAny = false;
       }
    }
 }
@@ -2922,6 +2946,7 @@ void ContactSurfaceHost::FinderQuery(const HitBall *const ball, const RubberCont
       return;
    const auto t0 = std::chrono::steady_clock::now();
    FinderBallQ &q = g.balls[ball];
+   JoinLeftover(q);   // re-engage: an object recorded last cycle and never joined
    if (q.queried)   // the last query's re-queries, per ball-cycle
    {
       g.qCycles++;
@@ -2968,10 +2993,15 @@ void ContactSurfaceHost::FinderInside(const SurfaceContact &it, const RubberCont
    q->ext = 2.0 * stray;   // the factor 2 bounds the repeats; completeness comes from this check (design.md section 4)
    FinderRun(q, q->R + q->ext);   // (P2b: every item of the ball reads its object's faces in place, so the lists are refreshed before this evaluation measures)
    q->reqThis++;
-   if (q->items != nullptr)   // P2b: an object the re-query found that is not among the ball's surfaces (engagement comes from the cycle's query; counted, reported in the totals)
+   if (q->items != nullptr)   // an object the re-query found that is not among the ball's surfaces: recorded for engagement (re-engage: the group step joins it mid-step), counted once
       for (const int k : q->objs)
-         if (std::none_of(q->items->begin(), q->items->end(), [k](const SurfaceContact &o) { return o.r->FinderObjIndex() == k; }))
+         if (std::none_of(q->items->begin(), q->items->end(), [k](const SurfaceContact &o) { return o.r->FinderObjIndex() == k; })
+             && std::find(q->pend.begin(), q->pend.end(), k) == q->pend.end())
+         {
             q->reqNew++;
+            q->pend.push_back(k);
+            g_joinPendAny = true;
+         }
    q->reqNs += std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count();
 }
 
@@ -3065,7 +3095,17 @@ void ContactSurfaceHost::FinderTotals(const bool force)
          << (double)g.facesFound / (double)g.queries << " per query; time per query mean " << g.qNs.sum / (double)g.qNs.n << " ns, p99 " << g.qNs.P(0.99) << ", worst " << g.qNs.worst
          << "; per query and object found mean " << (g.qObjNs.n > 0 ? g.qObjNs.sum / (double)g.qObjNs.n : 0.0) << " ns, p99 " << g.qObjNs.P(0.99) << ", worst " << g.qObjNs.worst << "; re-queries "
          << g.reqTotal << " in " << g.reqCycles << " of " << g.qCycles << " ball-cycles (" << (g.qCycles > 0 ? 100.0 * (double)g.reqCycles / (double)g.qCycles : 0.0) << " %), worst " << g.reqWorst
-         << " in one ball-cycle, time " << reqNs << " ns in all; P2b: queries at engagement " << g.queriesAt << ", objects a re-query found that were not among the ball's surfaces " << g.reqNewObj;
+         << " in one ball-cycle, time " << reqNs << " ns in all; P2b: queries at engagement " << g.queriesAt << ", objects a re-query found that were not among the ball's surfaces " << g.reqNewObj
+         << [&]() {   // re-engage: the mid-step joins
+               std::ostringstream o;
+               o << "; re-engage: mid-step joins " << g_join.joins << " (";
+               for (const auto &e : g_join.byKind)
+                  o << e.first << " " << e.second << " ";
+               o << "), contacts joined " << g_join.items << " of which touching at a step's end in that cycle " << g_join.touched << ", attempts run again " << g_join.again << ", found inside at the step's start " << g_join.insideAtStart << ", not handled " << g_join.notHandled << ", over 8 joins in a step " << g_join.capHit;
+               if (g_join.timed > 0)
+                  o << ", join time " << g_join.ns * 1e-3 << " us in all over " << g.cycle << " cycles (" << g_join.ns * 1e-3 / (double)std::max<uint64_t>(g.cycle, 1) << " us per cycle)";
+               return o.str();
+            }();
    if (g_tab.checks > 0)   // P3a: the measurement tables
    {
       const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - g_tab.t0).count();
@@ -3113,6 +3153,7 @@ void ContactSurfaceHost::FinderQueryAt(const HitBall *const ball, const RubberCo
    if (!g.on)
       return;
    FinderBallQ &q = g.balls[ball];
+   JoinLeftover(q);   // re-engage: an object recorded and never joined
    q.c0 = c;
    q.R = ballR;
    q.reach = q.ext = extM;
@@ -3146,6 +3187,75 @@ void ContactSurfaceHost::FinderBind(const HitBall *const ball, std::vector<Surfa
    for (SurfaceContact &it : items)
       FinderBindOne(ball, it);
    g_finder.balls[ball].items = cycleItems ? &items : nullptr;
+}
+
+bool ContactSurfaceHost::FinderPendAny()
+{
+   return g_joinPendAny;
+}
+
+void ContactSurfaceHost::FinderTakeNew(const HitBall *const ball, std::vector<ContactHost *> &out)
+{
+   out.clear();
+   FinderIndex &g = g_finder;
+   if (!g.on)
+      return;
+   const auto f = g.balls.find(ball);
+   if (f != g.balls.end())
+   {
+      for (const int k : f->second.pend)
+         out.push_back(const_cast<ContactSurfaceHost *>(g.objs[k].host));
+      f->second.pend.clear();
+   }
+   g_joinPendAny = std::any_of(g.balls.begin(), g.balls.end(), [](const auto &e) { return !e.second.pend.empty(); });
+}
+
+void ContactSurfaceHost::FinderJoinNote(const std::string &kind, const bool againAttempt, const bool insideAtStart, const double ns)
+{
+   if (!kind.empty())
+   {
+      g_join.joins++;
+      g_join.byKind[kind]++;
+   }
+   g_join.again += againAttempt ? 1 : 0;
+   g_join.insideAtStart += insideAtStart ? 1 : 0;
+   if (ns > 0.0)
+   {
+      g_join.ns += ns;
+      g_join.timed++;
+   }
+}
+
+void ContactSurfaceHost::FinderJoinNotHandled(const HitBall *const ball, const std::string &host, const char *const why)
+{
+   g_join.notHandled++;
+   if (g_join.logged < 20)
+   {
+      g_join.logged++;
+      PLOGW << "Contact finder: ball " << (const void *)ball << " reached " << host << " beyond its predicted reach and it could not join the ball's step: " << why
+            << " (not handled mid-cycle, a fault: the next cycle's query engages it), cycle " << g_finder.cycle;
+   }
+   if (!g_join.notified && g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+   {
+      g_join.notified = true;
+      g_pplayer->m_liveUI->PushNotification("Contact finder: a ball reached " + host + " beyond its predicted reach and it could not join the step (see vpinball.log)", 8000);
+   }
+}
+
+void ContactSurfaceHost::FinderJoinTouched(const int items, const int touched)
+{
+   g_join.items += (uint64_t)items;
+   g_join.touched += (uint64_t)touched;
+}
+
+void ContactSurfaceHost::FinderJoinCapHit(const long n)
+{
+   g_join.capHit += (uint64_t)n;
+   if (n > 0 && g_join.logged < 20)
+   {
+      g_join.logged++;
+      PLOGW << "Contact finder: more than 8 mid-step joins in one group step (a fault): the step went on without the next, cycle " << g_finder.cycle;
+   }
 }
 
 void ContactSurfaceHost::FinderHosts(const HitBall *const ball, std::vector<ContactHost *> &out)

@@ -1282,6 +1282,8 @@ struct ContactSystemImpl
       static std::vector<DepthCause> cause;
       balls.resize(isl.members.size());
       cause.resize(isl.members.size());
+      static std::vector<Body *> bodyOf;   // re-engage: each group ball's body (its surface items)
+      bodyOf.assign(isl.members.size(), nullptr);
       g.Size((int)isl.members.size());
       std::vector<ContactSurfaceHost *> cords;
       static std::vector<ContactMovingPart *> parts;   // the moving parts on the group in this island
@@ -1309,6 +1311,7 @@ struct ContactSystemImpl
             Sources::Begin(w, cy.dt, true);
          const int ib = g.nb++;
          balls[ib] = w.pb;
+         bodyOf[ib] = &w;
          GroupStep::Ball &b = g.ball[ib];
          b.m = w.bs.m;
          b.R = w.bs.R;
@@ -1466,7 +1469,7 @@ struct ContactSystemImpl
          }
          g.AddForm(t);
       }
-      const int nSurf = g.ns;   // the surfaces' shapes; after them each cord's posts (rubbers on posts: GroupStepDesign 13)
+      int nSurf = g.ns;   // the surfaces' shapes; after them each cord's posts (rubbers on posts: GroupStepDesign 13). A surface joined mid-step in an island with no cord is one more (re-engage)
       for (ContactSurfaceHost *const c : cords)
       {
          CordFollow(*c->Cord(), g.ball, balls.data(), g.nb);
@@ -1836,7 +1839,107 @@ struct ContactSystemImpl
          return hc;
       };
       g.phaseMs = g_pplayer->m_time_msec;   // (VPX_GROUP_PHASE_TIMING rows)
-      const bool ok = g.StepsOver(cy.dt, done, ruleCap, [&]() { ringStep(); book.AfterStep(); partEnergy(); });
+      // re-engage ([Features] shared_finder = 1; runs/2026-11-13-finder-reengage/design.md). Law: non-penetration, a surface acts on a ball from its first touch. An object the ball's inside check
+      // found beyond its predicted reach, inside an attempt, joins the ball's surfaces (as the cycle's gather makes them: Regather) and the group (its shape after the others), with nothing kept
+      // and its zero from the step's start (SetShapeItem, as the cycle's start sets a new touch); the attempt then runs again from the step's start state (GroupStep::Group::Solve).
+      // Not joined here (a fault, counted and logged: FinderJoinNotHandled): a ball with no surface items of its own, an island with a cord (its posts follow the surfaces' shapes).
+      static std::vector<ContactHost *> joinHosts;
+      static std::vector<int> joinedK;   // the items joined this cycle; joinedTouch: touching at the end of some step of the cycle (counted: FinderJoinTouched)
+      static std::vector<char> joinedTouch;
+      joinedK.clear();
+      joinedTouch.clear();
+      if (ContactSurfaceHost::FinderDrives())
+         g.midJoin = [&](const bool allow) -> int {
+            if (!ContactSurfaceHost::FinderPendAny())
+               return 0;
+            if (!allow)
+               return -1;
+            const bool timed = ContactProf::CheckOn();
+            const auto t0 = timed ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point();
+            int added = 0;
+            bool inside = false;
+            const int nbNow = g.nb;
+            for (int ib = 0; ib < nbNow; ib++)
+            {
+               ContactSurfaceHost::FinderTakeNew(balls[ib], joinHosts);
+               if (joinHosts.empty())
+                  continue;
+               Body &w = *bodyOf[ib];
+               HitBall *const pb = balls[ib];
+               const bool hole = PlayfieldHolesExist() && InPlayfieldHole(pb->m_d.m_pos);
+               for (ContactHost *const o : joinHosts)
+               {
+                  if (w.e == nullptr || !cords.empty())
+                  {
+                     ContactSurfaceHost::FinderJoinNotHandled(pb, o->m_name, w.e == nullptr ? "the ball has no surface items" : "the ball's island has a cord");
+                     continue;
+                  }
+                  std::vector<SurfaceContact> &items = w.e->items;
+                  if (!o->m_set.contact || (hole && o->IsPlayfield()) || o->m_set.band || std::any_of(items.begin(), items.end(), [o](const SurfaceContact &it) { return it.r == o; }))
+                     continue;   // (as Regather leaves them out)
+                  o->ReloadIfChanged();
+                  SurfaceContact nit;
+                  nit.r = o;
+                  nit.rp = o->m_set.ToParams();
+                  nit.hLayer = o->LayerM();
+                  nit.st.Reset();
+                  const uintptr_t old0 = (uintptr_t)items.data(), old1 = (uintptr_t)(items.data() + items.size());
+                  items.push_back(std::move(nit));
+                  if ((uintptr_t)items.data() != old0)   // the shapes point at the ball's items: moved with them
+                     for (SurfaceShape &s : shapes)
+                        if ((uintptr_t)s.it >= old0 && (uintptr_t)s.it < old1)
+                           s.it = items.data() + ((uintptr_t)s.it - old0) / sizeof(SurfaceContact);
+                  SurfaceContact &it = items.back();
+                  ContactSurfaceHost::FinderBindOne(pb, it);
+                  it.r->Refresh(it, w.bs.R, 2.0 * w.v.Length() * cy.dt + 0.005, w.c);   // (a static mesh with the finder on: its faces come from the ball's query)
+                  shapes.emplace_back();
+                  SurfaceShape &sh = shapes.back();
+                  sh.r = it.r;
+                  sh.it = &it;
+                  sh.bs = w.bs;
+                  sh.rp = it.rp;
+                  sh.layerM = it.hLayer;
+                  sh.onlyBall = ib;
+                  const int k0 = g.AddShapeMidStep(&sh);
+                  nSurf = g.ns;
+                  hitOn.resize(g.ni, 0);
+                  for (int k = k0; k < g.ni; k++)
+                  {
+                     g.SetShapeItem(k, false, 0.0, V3());
+                     hitOn[k] = 0;
+                     joinedK.push_back(k);
+                     joinedTouch.push_back(g.item[k].dZero > 0.0 ? 1 : 0);
+                     if (g.item[k].dZero > 0.0)
+                     {
+                        inside = true;
+                        PLOGW << "Contact finder: ball " << (const void *)pb << " joined " << o->m_name << " mid-step already " << g.item[k].dZero * 1e6 << " um inside at the step's start (its zero takes it, nothing stored), t=" << g_pplayer->m_time_msec;
+                     }
+                  }
+                  if (ContactTraceOn())
+                     PLOGI << "ContactJoin " << o->m_name << " t=" << g_pplayer->m_time_msec << " mid-step (found by the inside check beyond the ball's predicted reach), ball " << (const void *)pb;
+                  ContactSurfaceHost::FinderJoinNote(o->m_surfaceKind.empty() ? std::string("?") : o->m_surfaceKind, false, false, 0.0);
+                  added++;
+               }
+            }
+            if (added > 0)
+               ContactSurfaceHost::FinderJoinNote(std::string(), true, inside, timed ? std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count() : 0.0);
+            return added;
+         };
+      const bool ok = g.StepsOver(cy.dt, done, ruleCap, [&]() {
+         ringStep();
+         book.AfterStep();
+         partEnergy();
+         for (size_t j = 0; j < joinedK.size(); j++)   // re-engage: a joined contact touching at a step's end
+            joinedTouch[j] = joinedTouch[j] || g.item[joinedK[j]].touching ? 1 : 0;
+      });
+      g.midJoin = nullptr;
+      if (!joinedK.empty())
+         ContactSurfaceHost::FinderJoinTouched((int)joinedK.size(), (int)std::count(joinedTouch.begin(), joinedTouch.end(), (char)1));
+      if (g.joinCapHit > 0)
+      {
+         ContactSurfaceHost::FinderJoinCapHit(g.joinCapHit);
+         g.joinCapHit = 0;
+      }
       if (statsPath != nullptr)
       {
          static long n = 0, steps = 0, rounds = 0, eSteps = 0, fails = 0, halv = 0;

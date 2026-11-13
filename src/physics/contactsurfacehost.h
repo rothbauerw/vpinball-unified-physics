@@ -202,6 +202,15 @@ public:
    static void FinderBind(const HitBall *ball, std::vector<SurfaceContact> &items, bool cycleItems);   // cycleItems: the engaged ball's own set (kept for the re-query's count)
    static void FinderBindOne(const HitBall *ball, SurfaceContact &it);
    static void FinderHosts(const HitBall *ball, std::vector<ContactHost *> &out);
+   // shared_finder re-engage (runs/2026-11-13-finder-reengage/design.md): an object the inside check's re-query found that is not among the ball's surfaces is recorded for engagement;
+   // the group step takes it (FinderTakeNew: the ball's recorded hosts, cleared) and joins it mid-step. FinderPendAny: some ball has one recorded. One not taken by the ball's next query is
+   // a fault, logged and counted ("not handled"). FinderJoinNote: counters of the joins (kind: the host's surface kind; ns: the join's own time, 0 when not timed)
+   static bool FinderPendAny();
+   static void FinderTakeNew(const HitBall *ball, std::vector<ContactHost *> &out);
+   static void FinderJoinNote(const std::string &kind, bool againAttempt, bool insideAtStart, double ns);
+   static void FinderJoinNotHandled(const HitBall *ball, const std::string &host, const char *why);
+   static void FinderJoinCapHit(long n);
+   static void FinderJoinTouched(int items, int touched);   // the contacts joined in an island's cycle, and how many of them were touching at the end of some step of it
    // shared_finder P4b: the cut pieces around c0 within r (the cuts' box tree, built once per cut Setup), in index order, into cq; the item's ball's cut query (null: key off)
    static void FinderCuts(PlayfieldCuts::CutQuery &cq, const RubberContact::V3 &c0, double r);
    static PlayfieldCuts::CutQuery *FinderCutsOf(const SurfaceContact &it);
