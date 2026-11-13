@@ -48,6 +48,7 @@ namespace ContactSystem
 {
    static bool s_unified = false, s_unifiedSet = false;
    static bool s_freeFlight = false, s_proximity = false;   // [Features] free_flight and proximity_engage of this table: read at each table load (SetTable), not once per process
+   static bool s_seatEditorBalls = false;   // [Features] seat_editor_balls of this table (physicsini.h), read likewise; off with the unified engine off
 
    void SetTable(const std::filesystem::path &tableFile)
    {
@@ -60,6 +61,7 @@ namespace ContactSystem
       s_unified = found && f.unified;   // no file, no [Features] or no  unified = 1  = stock VPX physics
       s_unifiedSet = true;
       s_freeFlight = s_unified && f.freeFlight;
+      s_seatEditorBalls = s_unified && f.seatEditorBalls;
       const char *const px = getenv("VPX_PROXIMITY");   // (diagnostic override, TestingPlaybook)
       s_proximity = s_unified && (px != nullptr ? atoi(px) != 0 : f.proximityEngage);
       ContactSettings::StartPlay(tableFile);   // (after the switch above: the settings ask it)
@@ -2600,6 +2602,13 @@ struct ContactSystemImpl
    static void CheckOverlaps(float hittime, double hS);   // hittime: engine time units (the free flight only); hS: the same in seconds
    static void SeatAtTouch(const std::vector<SurfaceContact> &items, const BallSI &bs, V3 &c, const V3 &v, double &delta0, double &rewound);
    static void SeatKeepsOthers(const std::vector<SurfaceContact> &items, const ContactSurface *self, const BallSI &bs, const V3 &c0, V3 &c);
+   // The surfaces a ball at its position may touch, as an engagement takes them: host, the surface whose collider found the ball (taken without the checks below; null = none, the
+   // start-up pass), how: as EngageImpl. c: the ball's centre (m), for the finder's query.
+   static void GatherItems(ContactHost *host, const HitBall *pb, const BallSI &bs, const V3 &c, const char *how, std::vector<SurfaceContact> &items);
+   // A ball found inside with no earlier clean state: minimum translation along the normal of each overlapped surface to touching distance, up to 8 passes (UnifiedContactDesign 11, point 6).
+   // Velocities unchanged, nothing stored. delta0: the deepest overlap at the first pass (m, kept if larger); passes: passes taken; left: the deepest overlap left (m); inside (may be null):
+   // the surfaces it moved the ball out of. Returns the distance moved (m).
+   static double SeatNoPast(std::vector<SurfaceContact> &items, const BallSI &bs, V3 &c, double &delta0, int &passes, double &left, std::vector<const ContactSurface *> *inside);
    static void DispatchPending()
    {
       if (s_pendingCy != nullptr)
@@ -2953,6 +2962,91 @@ void ContactSystem::SeatKeepsOthers(const HitBall *const pb, const ContactSurfac
       ContactSystemImpl::SeatKeepsOthers(pb->m_contact->items, self, bs, c0, c);
 }
 
+void ContactSystemImpl::GatherItems(ContactHost *const host, const HitBall *const pb, const BallSI &bs, const V3 &c, const char *const how, std::vector<SurfaceContact> &items)
+{
+   using namespace RubberContact;
+   const Vertex3Ds posStart = pb->m_d.m_pos;
+   const float reach = pb->m_d.m_radius + 20.0f;   // VPX units: the ball radius plus what it can travel during a hit
+   // shared_finder P2b (key on): the static mesh hosts other than the one that found the ball come from a query at the engagement, radius R + 20 U (the reach above, to a face
+   // instead of the host's box); kept in the registry's order
+   const bool finder = ContactSurfaceHost::FinderDrives();
+   thread_local std::vector<ContactHost *> hosts;
+   hosts.clear();
+   if (finder)
+   {
+      ContactSurfaceHost::FinderQueryAt(pb, c, bs.R, 20.0 * U);
+      ContactSurfaceHost::FinderHosts(pb, hosts);
+   }
+   for (ContactHost *const o : ContactHost::Registry())
+      if (!finder || o->FinderObjIndex() < 0 || o == host)
+         hosts.push_back(o);
+   if (finder)
+   {
+      std::stable_sort(hosts.begin(), hosts.end(), [](const ContactHost *a, const ContactHost *b) { return a->m_regOrder < b->m_regOrder; });
+      hosts.erase(std::unique(hosts.begin(), hosts.end()), hosts.end());   // (the host found by both)
+   }
+   for (ContactHost *const o : hosts)
+   {
+      const bool mesh = finder && o->FinderObjIndex() >= 0;
+      if (o != host)
+      {
+         if (!o->m_enabled || !o->m_set.contact)
+            continue;
+         if (o->IsPlayfield() && InPlayfieldHole(posStart))
+            continue;   // no floor over a kicker's hole
+         if (o->m_set.band)
+            continue;   // the band rubbers are the band model's: as a rigid surface contact they would stop the ball before the band could deflect (as Regather)
+         const FRect3D &bb = o->m_hitBBox;
+         if (!mesh && (posStart.x < bb.left - reach || posStart.x > bb.right + reach || posStart.y < bb.top - reach || posStart.y > bb.bottom + reach
+             || posStart.z < bb.zlow - reach || posStart.z > bb.zhigh + reach))
+            continue;
+         o->ReloadIfChanged();
+      }
+      SurfaceContact it;
+      it.r = o;
+      it.rp = o->m_set.ToParams();
+      it.hLayer = o->LayerM();
+      it.st.Reset();
+      it.touching = o == host && std::strcmp(how, "near") != 0;   // the stock collider that found the ball fires its own hit event; a surface found by proximity gets its event from the first touch
+      items.push_back(it);
+   }
+   ContactSurfaceHost::FinderBind(pb, items, false);   // key on: the mesh items read the engagement query's faces (their Refresh below does nothing; the inside check re-queries as the seat moves the ball)
+}
+
+double ContactSystemImpl::SeatNoPast(std::vector<SurfaceContact> &items, const BallSI &bs, V3 &c, double &delta0, int &passes, double &left, std::vector<const ContactSurface *> *const inside)
+{
+   // along the normal of each overlapped surface (the playfield is one of them) to touching distance, repeated up to 8 passes
+   using namespace RubberContact;
+   const V3 c0 = c;
+   for (SurfaceContact &it : items)
+      it.r->Refresh(it, bs.R, 0.03, c);
+   for (; passes < 8; passes++)
+   {
+      bool moved = false;
+      for (const SurfaceContact &it : items)
+      {
+         const TubeProbe p0 = it.r->Probe(bs, it, c);
+         if (!p0.overlap || p0.delta <= 1e-6)
+            continue;
+         if (passes == 0)
+            delta0 = std::max(delta0, p0.delta);
+         c = c + p0.normal * p0.delta;
+         moved = true;
+         if (inside != nullptr && std::find(inside->begin(), inside->end(), it.r) == inside->end())
+            inside->push_back(it.r);
+      }
+      if (!moved)
+         break;
+   }
+   for (const SurfaceContact &it : items)
+   {
+      const TubeProbe p0 = it.r->Probe(bs, it, c);
+      if (p0.overlap)
+         left = std::max(left, p0.delta);
+   }
+   return (c - c0).Length();
+}
+
 // A ball enters when a surface's stock collider finds it (the stock impulse is skipped) and leaves when it is clear of every surface and receding.
 bool ContactSystemImpl::EngageImpl(ContactHost *const host, HitBall *const pb, const char *how)
 {
@@ -2970,53 +3064,7 @@ bool ContactSystemImpl::EngageImpl(ContactHost *const host, HitBall *const pb, c
    const Vertex3Ds posStart = pb->m_d.m_pos;
    V3 c((double)posStart.x * U, (double)posStart.y * U, (double)posStart.z * U);
    const V3 v((double)pb->m_d.m_vel.x * VS, (double)pb->m_d.m_vel.y * VS, (double)pb->m_d.m_vel.z * VS);
-   {
-      const float reach = pb->m_d.m_radius + 20.0f;   // VPX units: the ball radius plus what it can travel during a hit
-      // shared_finder P2b (key on): the static mesh hosts other than the one that found the ball come from a query at the engagement, radius R + 20 U (the reach above, to a face
-      // instead of the host's box); kept in the registry's order
-      const bool finder = ContactSurfaceHost::FinderDrives();
-      thread_local std::vector<ContactHost *> hosts;
-      hosts.clear();
-      if (finder)
-      {
-         ContactSurfaceHost::FinderQueryAt(pb, c, bs.R, 20.0 * U);
-         ContactSurfaceHost::FinderHosts(pb, hosts);
-      }
-      for (ContactHost *const o : ContactHost::Registry())
-         if (!finder || o->FinderObjIndex() < 0 || o == host)
-            hosts.push_back(o);
-      if (finder)
-      {
-         std::stable_sort(hosts.begin(), hosts.end(), [](const ContactHost *a, const ContactHost *b) { return a->m_regOrder < b->m_regOrder; });
-         hosts.erase(std::unique(hosts.begin(), hosts.end()), hosts.end());   // (the host found by both)
-      }
-      for (ContactHost *const o : hosts)
-      {
-         const bool mesh = finder && o->FinderObjIndex() >= 0;
-         if (o != host)
-         {
-            if (!o->m_enabled || !o->m_set.contact)
-               continue;
-            if (o->IsPlayfield() && InPlayfieldHole(posStart))
-               continue;   // no floor over a kicker's hole
-            if (o->m_set.band)
-               continue;   // the band rubbers are the band model's: as a rigid surface contact they would stop the ball before the band could deflect (as Regather)
-            const FRect3D &bb = o->m_hitBBox;
-            if (!mesh && (posStart.x < bb.left - reach || posStart.x > bb.right + reach || posStart.y < bb.top - reach || posStart.y > bb.bottom + reach
-                || posStart.z < bb.zlow - reach || posStart.z > bb.zhigh + reach))
-               continue;
-            o->ReloadIfChanged();
-         }
-         SurfaceContact it;
-         it.r = o;
-         it.rp = o->m_set.ToParams();
-         it.hLayer = o->LayerM();
-         it.st.Reset();
-         it.touching = o == host && std::strcmp(how, "near") != 0;   // the stock collider that found the ball fires its own hit event; a surface found by proximity gets its event from the first touch
-         rb.items.push_back(it);
-      }
-      ContactSurfaceHost::FinderBind(pb, rb.items, false);   // key on: the mesh items read the engagement query's faces (their Refresh below does nothing; the inside check re-queries as the seat moves the ball)
-   }
+   GatherItems(host, pb, bs, c, how, rb.items);
    // The ball starts the engagement touching or a little inside the rubber (the hit was found within a step). Go back to the instant it first touched: along its
    // own velocity, by depth / closing speed, at most one physics step; if it is not closing (pushed in by something else), seat it at touching distance along the normal.
    // Nothing is stored as compression.
@@ -3036,34 +3084,8 @@ bool ContactSystemImpl::EngageImpl(ContactHost *const host, HitBall *const pb, c
    int noPastPasses = 0;
    if (noPast && host != nullptr)
    {
-      // Minimum translation: along the normal of each overlapped surface (the playfield is one of them) to touching distance, repeated up to 8 passes. Velocities unchanged. A ball that is squeezed and does not fit keeps
-      // the overlap that is left, and the force law carries it.
-      const V3 c0 = c;
-      for (SurfaceContact &it : rb.items)
-         it.r->Refresh(it, bs.R, 0.03, c);
-      for (; noPastPasses < 8; noPastPasses++)
-      {
-         bool moved = false;
-         for (const SurfaceContact &it : rb.items)
-         {
-            const TubeProbe p0 = it.r->Probe(bs, it, c);
-            if (!p0.overlap || p0.delta <= 1e-6)
-               continue;
-            if (noPastPasses == 0)
-               rb.delta0 = std::max(rb.delta0, p0.delta);
-            c = c + p0.normal * p0.delta;
-            moved = true;
-         }
-         if (!moved)
-            break;
-      }
-      noPastMoved = (c - c0).Length();
-      for (const SurfaceContact &it : rb.items)
-      {
-         const TubeProbe p0 = it.r->Probe(bs, it, c);
-         if (p0.overlap)
-            noPastLeft = std::max(noPastLeft, p0.delta);
-      }
+      // Minimum translation (SeatNoPast). A ball that is squeezed and does not fit keeps the overlap that is left, and the force law carries it.
+      noPastMoved = SeatNoPast(rb.items, bs, c, rb.delta0, noPastPasses, noPastLeft, nullptr);
    }
    else if (host != nullptr)
    {
@@ -3491,6 +3513,32 @@ void ContactSystem::NotePlaced(const HitBall *const ball)
    g_placed.push_back(ball);
    if (g_pplayer != nullptr && g_pplayer->m_physics != nullptr)
       g_pplayer->m_physics->m_noneZones.Placed(ball);   // the None triggers judge it where it is (placement rule)
+}
+
+void ContactSystem::PushOutAtStart(HitBall *const ball, const std::string &name)
+{
+   if (!Unified() || !s_seatEditorBalls || ball->m_d.m_lockedInKicker)
+      return;
+   using namespace RubberContact;
+   BallSI bs;
+   bs.R = (double)ball->m_d.m_radius * U;
+   const Vertex3Ds p = ball->m_d.m_pos;
+   const V3 c0((double)p.x * U, (double)p.y * U, (double)p.z * U);
+   V3 c = c0;
+   std::vector<SurfaceContact> items;
+   ContactSystemImpl::GatherItems(nullptr, ball, bs, c, "start", items);
+   double delta0 = 0.0, left = 0.0;
+   int passes = 0;
+   std::vector<const ContactSurface *> inside;
+   const double moved = ContactSystemImpl::SeatNoPast(items, bs, c, delta0, passes, left, &inside);
+   if (inside.empty())
+      return;
+   ball->m_d.m_pos = Vertex3Ds((float)(c.x / U), (float)(c.y / U), (float)(c.z / U));
+   std::string names;
+   for (const ContactSurface *const h : inside)
+      names += (names.empty() ? "" : ", ") + h->Name();
+   PLOGI << "Editor ball " << name << " was inside " << names << " at play start (" << delta0 * 1e6 << " um deep): moved out by the shortest way, " << moved * 1e3 << " mm in " << passes << " passes, "
+         << left * 1e6 << " um overlap left; from " << p.x << ' ' << p.y << ' ' << p.z << " to " << ball->m_d.m_pos.x << ' ' << ball->m_d.m_pos.y << ' ' << ball->m_d.m_pos.z;
 }
 
 void ContactSystem::SleepCycleStart()

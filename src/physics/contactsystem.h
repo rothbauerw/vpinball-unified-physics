@@ -41,6 +41,10 @@ namespace ContactSystem
    void Step(double hS);
    double SubIntervalS();   // the engine's current sub-interval in seconds, as the last Step was given it
 void NotePlaced(const HitBall *ball);   // a script or the driver put this ball where it is: a position move no step did, and no fault (GroupStepDesign 17)
+   // A ball placed in the table editor, at play start before the table script's Init (unified engine and [Features] seat_editor_balls = 1 only): moved out of any surface it overlaps (the playfield, walls, ramps,
+   // primitives, rubbers, moving parts at their rest pose; not other balls) by the shortest move, the no-past seating (SeatNoPast). Velocity and spin unchanged, nothing stored or booked.
+   // One INFO log line per ball moved. name: the ball's name, for the log.
+   void PushOutAtStart(HitBall *ball, const std::string &name);
    // A drive acted on this ball between cycles (a kicker's kick, KickerDesign 3c): its work, J (kinetic energy after minus before; negative = taken), what: the drive. Booked as drive work:
    // a log line and the run's total of such work (no step's books hold it: the next cycle's energy check starts from the ball as the drive left it).
    void NoteDriveWork(const HitBall *ball, double joules, const char *what);

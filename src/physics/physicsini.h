@@ -49,6 +49,8 @@ namespace PhysicsIni
       bool sharedFinder = true;   // shared_finder (on while tested, rule 6; to-do 1.34, runs/2026-11-11-finder/design.md): 1 = the shared finder's index over every static mesh's faces (a box tree per mesh object over its faces' boxes, faces joined through shared edges into mesh pieces, one box tree over the objects) is built once before the first cycle; in this step (P1) only check mode (VPX_FINDER_CHECK=1) reads it, so no result changes; 0 = no index
       bool playfieldCuts = true;  // playfield_cuts: holes cut in the playfield ([PlayfieldCut:<name>] sections, playfieldcut.h; the slot under a wire switch); off = every cut ignored, the playfield solid (on while tested, rule 6)
       bool freeFlight = true;     // free_flight (on while tested, rule 6; runs/2026-11-12-freeflight/log.md): 1 = every ball the contact system does not hold is still stepped by it each cycle, as a body with no contacts (its gravity, nudge and magnets in the substeps), so no ball is ever moved by the stock flight (pos += time x end velocity); 0 = such a ball is moved by stock as before
+      bool seatEditorBalls = true; // seat_editor_balls (on while tested, rule 6; runs/2026-11-13-editor-balls): 1 = at play start each ball placed in the table editor is moved out of any surface it overlaps
+                                  // (playfield, walls, ramps, primitives, rubbers, moving parts at rest; not other balls) by the shortest move, the no-past seating (ContactSystem::PushOutAtStart); 0 = left where it was placed, as today
       bool kickers = true;        // kickers (on while tested, rule 6; KickerDesign.txt): 1 = a kicker of type physical ([Kicker:<name>] type; default virtual) is a cup of the
                                   // contact model under a hole carved in the playfield, with Hit / Unhit from its held test; a virtual kicker is a sensing zone that parks the ball, a held ball of infinite mass (kickerarm.h); 0 = every kicker on today's path, unchanged
       bool hitSpeed = true;       // PROTOTYPE: Ball.HitSpeed (normal speed before an impact) and the table's Hit event for the playfield; off = neither
@@ -173,6 +175,8 @@ namespace PhysicsIni
             f.hitSpeed = on;
          else if (key == "kickers")
             f.kickers = on;
+         else if (key == "seat_editor_balls")
+            f.seatEditorBalls = on;
          else if (key == "hit_speed_min")
             f.hitSpeedMin = (float)atof(v.c_str());
          else
@@ -189,7 +193,7 @@ namespace PhysicsIni
       if (!ContactSystem::Unified())
       {
          f.flippers = f.flipperRubber = f.rubbers = f.playfieldContact = f.surfaceRubbers = f.hardSurfaces = f.proximityEngage = f.hinges = f.triggers = false;
-         f.bands = f.slings = f.contact = f.magnets = f.turntables = f.playfieldCuts = f.hitSpeed = f.sharedFinder = f.freeFlight = f.kickers = false;
+         f.bands = f.slings = f.contact = f.magnets = f.turntables = f.playfieldCuts = f.hitSpeed = f.sharedFinder = f.freeFlight = f.kickers = f.seatEditorBalls = false;
          return f;
       }
       if (!file.empty())

@@ -937,7 +937,11 @@ void Player::InitTableSession(const bool isInitial)
    for (auto editable : m_ptable->GetParts())
    {
       if (editable->GetItemType() == ItemTypeEnum::eItemBall)
+      {
          m_vball.push_back(static_cast<Ball *>(editable));
+         ContactSystem::PushOutAtStart(&static_cast<Ball *>(editable)->m_hitBall, editable->GetName());   // out of any surface it was placed inside, by the shortest move, before the zones judge it
+         ContactSystem::NotePlaced(&static_cast<Ball *>(editable)->m_hitBall);   // a ball present at play start is a placement, as CreateBall's: the zones (a virtual kicker) judge it where it is
+      }
 
       editable->TimerSetup(m_vht);
 
