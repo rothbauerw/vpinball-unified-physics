@@ -32,6 +32,10 @@ namespace ContactSystem
 
    // Reads the table's physics ini (PhysicsIni::FindUnified) once per table, before any part's PhysicSetup; [Features] unified = 1 switches the unified engine on.
    void SetTable(const std::filesystem::path &tableFile);
+   // Live tuning, the one owner of the table's physics ini during play: called when the playfield window gains focus (Player::OnFocusChanged, between frames, never inside a
+   // physics step). One look at the file's write time; if it changed since the readers read it, every reader reads its sections again: [Contact] (ContactSettings::Reload),
+   // the magnets (Magnets::Reload), every contact host (ContactHost::ReloadAll; a bat through its PartAdapter::ReloadSettings). No physics path looks at the file.
+   void ReloadChangedIni();
 
    // The table runs on the unified engine: only with  unified = 1  in the table's physics ini; no ini or no key = stock VPX physics.
    bool Unified();

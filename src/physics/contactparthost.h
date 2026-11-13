@@ -20,8 +20,9 @@ public:
    virtual void Publish() = 0;
    // The part's events of the interval, in the order they happened. Called after the step (ContactSystem::DeferEvent): a script may move or delete balls.
    virtual void Fire(const std::vector<ContactMovingPart::Event> &events) = 0;
-   // The part's contact settings come from the table load only: a change of the ini while running does not reload them
-   virtual bool FixedSettings() const { return false; }
+   // Live tuning: the physics ini changed (ContactSystem::ReloadChangedIni, on playfield focus gain, between frames). True = the part handled it (a bat reads its keys again
+   // and passes the host its settings; a turntable disc keeps the settings it was built with); false = the host reads its own ini section again
+   virtual bool ReloadSettings() { return false; }
 };
 
 class ContactPartHost final : public ContactHost

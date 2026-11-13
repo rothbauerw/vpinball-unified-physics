@@ -68,8 +68,8 @@ void ContactPartHost::PartAdvance()
 
 void ContactPartHost::Reload() const
 {
-   if (m_adapter->FixedSettings())
-      return;   // (a turntable disc keeps the settings it was built with: its keys are read when the table loads)
+   if (m_adapter->ReloadSettings() || m_ini.empty())
+      return;   // (the part reloaded its own keys, or kept them; a host with no ini of its own has nothing to read)
    RubberObjectSettings s;
    if (m_hardSurface)
       LoadHardSurfaceSettings(s, m_ini, m_surfaceKind.c_str(), m_name, m_partE, m_partMu);

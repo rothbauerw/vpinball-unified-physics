@@ -116,8 +116,6 @@ namespace Magnets
       const void *g_owner = nullptr;
       bool g_loaded = false, g_anyCurrent = false;
       std::filesystem::path g_file;             // the ini the magnets were read from
-      std::filesystem::file_time_type g_fileTime{};
-      uint32_t g_nextCheckMs = 0;
       std::map<std::string, std::pair<bool, float>> g_pending;   // what the script set before the magnets were loaded (e.g. a call at the top of the script): (isDuty, volts or duty)
 
       constexpr int TN = 128;              // table nodes per direction
@@ -508,9 +506,6 @@ namespace Magnets
             return;
          const std::filesystem::path file = PhysicsIni::FindUnified(g_pplayer->m_ptable->m_filename);
          g_file = file;
-         std::error_code tec;
-         if (!file.empty())
-            g_fileTime = std::filesystem::last_write_time(file, tec);
          if (file.empty())
          {
             PLOGI << "Magnets: no vpx_physics.ini found next to " << g_pplayer->m_ptable->m_filename.string() << " (and VPX_PHYSICS_INI is not set), no magnets";
@@ -643,31 +638,29 @@ namespace Magnets
             g_owner = g_pplayer;
             Load();
             g_pending.clear();
-            g_nextCheckMs = g_pplayer->m_time_msec + 1000;
          }
-         else if (!g_file.empty() && g_pplayer->m_time_msec >= g_nextCheckMs)
+      }
+   }
+
+   // Live tuning: the table's physics ini changed (ContactSystem::ReloadChangedIni, on playfield focus gain, between frames; no physics path looks at the file).
+   // The magnets are read again; a coil keeps its voltage and current.
+   void Reload()
+   {
+      CheckSession();
+      if (!g_loaded || g_file.empty() || g_pplayer == nullptr)
+         return;   // (not loaded yet: the first physics step reads the file as it is then)
+      std::map<std::string, std::pair<double, double>> keep;
+      for (const Magnet &m : g_magnets)
+         keep[PhysicsIni::Lower(m.name)] = { m.volts, m.amps };
+      PLOGI << "Magnets: " << g_file.string() << " changed, reloading";
+      Load();
+      for (Magnet &m : g_magnets)
+      {
+         const auto it = keep.find(PhysicsIni::Lower(m.name));
+         if (it != keep.end())
          {
-            // like the other settings: re-read the ini when it has been saved (checked once a second of game time); a coil keeps its voltage and current
-            g_nextCheckMs = g_pplayer->m_time_msec + 1000;
-            std::error_code ec;
-            const auto t = std::filesystem::last_write_time(g_file, ec);
-            if (!ec && t != g_fileTime)
-            {
-               std::map<std::string, std::pair<double, double>> keep;
-               for (const Magnet &m : g_magnets)
-                  keep[PhysicsIni::Lower(m.name)] = { m.volts, m.amps };
-               PLOGI << "Magnets: " << g_file.string() << " changed, reloading";
-               Load();
-               for (Magnet &m : g_magnets)
-               {
-                  const auto it = keep.find(PhysicsIni::Lower(m.name));
-                  if (it != keep.end())
-                  {
-                     m.volts = it->second.first;
-                     m.amps = it->second.second;
-                  }
-               }
-            }
+            m.volts = it->second.first;
+            m.amps = it->second.second;
          }
       }
    }

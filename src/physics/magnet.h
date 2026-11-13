@@ -21,6 +21,7 @@ namespace Magnets
 {
    void Step();                                              // once per 1 ms physics frame: advance every coil current
    bool CurrentSteady();                                     // pile sleep: no coil current would change in the next Step (each at its own fixed point)
+   void Reload();                                            // live tuning: the physics ini changed (ContactSystem::ReloadChangedIni, on playfield focus gain): the magnets read again, coils keep volts and amps
    void RenderGuides(class Renderer *renderer);              // draws the guide tubes and stops that have tube_visible = 1
    void ReleaseRender();                                     // frees the drawn guide meshes (called when the renderer shuts down)
    bool HasGuides();                                         // true if an air-core magnet has a guide tube or stop (checked once per physics cycle)

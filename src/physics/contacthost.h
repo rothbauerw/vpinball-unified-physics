@@ -109,8 +109,9 @@ public:
    static RubberObjectSettings TurntableSettings(double mu, double rollingResistance);
    void SetHardSurface(double elasticity, double friction) { m_hardSurface = true; m_partE = elasticity; m_partMu = friction; }
    const RubberObjectSettings &ContactSettings() const { return m_set; }
-   // The settings file changed (checked at most once a second): read the settings again (Reload: what a host reloads depends on its kind)
-   void ReloadIfChanged() const;
+   // Live tuning: the table's physics ini changed (ContactSystem::ReloadChangedIni, on playfield focus gain, between frames, never inside a physics step): every host reads its
+   // settings again (Reload: what a host reloads depends on its kind). No physics path looks at the file.
+   static void ReloadAll();
 
    // ---- the ball found by a stock collider ----
    // A stock collider of the object found the ball. True if the force model holds it from now on (the stock impulse is skipped). False only for an object not converted (a setting) and the
@@ -148,7 +149,5 @@ protected:
    double m_partE = 0.3, m_partMu = 0.3;       // that part's elasticity and friction (for the reload of its settings)
 
 private:
-   mutable std::filesystem::file_time_type m_iniTime;
-   mutable std::chrono::steady_clock::time_point m_lastCheck;
    friend struct ContactSystemImpl;   // the contact system steps the contact-held balls (contactsystem.cpp)
 };

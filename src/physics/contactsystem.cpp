@@ -49,6 +49,8 @@ namespace ContactSystem
    static bool s_unified = false, s_unifiedSet = false;
    static bool s_freeFlight = false, s_proximity = false;   // [Features] free_flight and proximity_engage of this table: read at each table load (SetTable), not once per process
    static bool s_seatEditorBalls = false;   // [Features] seat_editor_balls of this table (physicsini.h), read likewise; off with the unified engine off
+   static std::filesystem::path s_iniFile;   // the table's physics ini (PhysicsIni::FindUnified at SetTable; empty = none): every reader reads this one file
+   static std::filesystem::file_time_type s_iniTime{};   // its write time when the readers last read it (SetTable, ReloadChangedIni)
 
    void SetTable(const std::filesystem::path &tableFile)
    {
@@ -56,6 +58,13 @@ namespace ContactSystem
       g_partEnergyLines = 0;
       g_partEnergyTold = false;
       const std::filesystem::path file = PhysicsIni::FindUnified(tableFile);
+      s_iniFile = file;
+      s_iniTime = {};
+      if (!file.empty())
+      {
+         std::error_code ec;
+         s_iniTime = std::filesystem::last_write_time(file, ec);   // (before the readers read it: a save after this is seen at the next focus gain)
+      }
       PhysicsIni::Features f;
       const bool found = !file.empty() && PhysicsIni::ReadFeatures(file, f);
       s_unified = found && f.unified;   // no file, no [Features] or no  unified = 1  = stock VPX physics
@@ -69,6 +78,21 @@ namespace ContactSystem
          PLOGI << "Contact system: unified engine on (" << file.string() << "; dev fallback: stock hit search still runs for object types not yet converted)";
       else
          PLOGI << "Contact system: stock VPX physics, every new model off (" << (file.empty() ? std::string("no physics ini") : file.string() + " has no [Features] unified = 1") << ")";
+   }
+
+   void ReloadChangedIni()
+   {
+      if (!s_unifiedSet || s_iniFile.empty())
+         return;   // (no table read yet, or no physics ini at table load: nothing to look at)
+      std::error_code ec;
+      const auto t = std::filesystem::last_write_time(s_iniFile, ec);
+      if (ec || t == s_iniTime)
+         return;   // (unchanged; or gone or locked: everything keeps its settings, the next focus gain looks again)
+      s_iniTime = t;
+      PLOGI << "Physics ini " << s_iniFile.string() << " changed: reloading [Contact], the magnets and every contact host (the bats included); [Features] take the next play";
+      ContactSettings::Reload();
+      Magnets::Reload();
+      ContactHost::ReloadAll();
    }
 
    bool Unified()
@@ -1658,8 +1682,6 @@ struct ContactSystemImpl
       // for a test run (VPX_CORD_ENERGY): the group's own books over the cycle, stored energy included, told at each new largest rise
       static const bool cordEnergy = std::getenv("VPX_CORD_ENERGY") != nullptr;
       const bool cordEnergyOn = cordEnergy && !cords.empty();
-      for (ContactSurfaceHost *const c : cords)
-         c->ReloadIfChanged();   // as a ring: the file is looked at while a ball is on it
       const double cordE0 = cordEnergyOn ? g.Energy() : 0.0;
       // a part's books (always on, rule 8): the group's energy across the cycle against what its drives did and its losses took
       const double partE0 = hasPart ? g.Energy() : 0.0;
@@ -1882,7 +1904,6 @@ struct ContactSystemImpl
                   std::vector<SurfaceContact> &items = w.e->items;
                   if (!o->m_set.contact || (hole && o->IsPlayfield()) || o->m_set.band || std::any_of(items.begin(), items.end(), [o](const SurfaceContact &it) { return it.r == o; }))
                      continue;   // (as Regather leaves them out)
-                  o->ReloadIfChanged();
                   SurfaceContact nit;
                   nit.r = o;
                   nit.rp = o->m_set.ToParams();
@@ -2857,7 +2878,6 @@ void ContactSystemImpl::CordNear(const double dt)
          const FRect3D &bb = o->m_hitBBox;
          if (pos.x < bb.left - reachU || pos.x > bb.right + reachU || pos.y < bb.top - reachU || pos.y > bb.bottom + reachU || pos.z < bb.zlow - reachU || pos.z > bb.zhigh + reachU)
             continue;
-         o->ReloadIfChanged();
          SurfaceContact it;
          it.r = o;
          const TubeProbe pr = o->Probe(bs, it, c);
@@ -2944,7 +2964,6 @@ void ContactSystemImpl::EngageNear(const double dt)
             continue;
          if (o->m_surfaceKind == "playfield" && InPlayfieldHole(pos))
             continue;   // the kicker's
-         o->ReloadIfChanged();
          SurfaceContact itq;   // a mesh host found by the query: its faces from the query (no cached list)
          if (mesh)
          {
@@ -3102,7 +3121,6 @@ void ContactSystemImpl::GatherItems(ContactHost *const host, const HitBall *cons
          if (!mesh && (posStart.x < bb.left - reach || posStart.x > bb.right + reach || posStart.y < bb.top - reach || posStart.y > bb.bottom + reach
              || posStart.z < bb.zlow - reach || posStart.z > bb.zhigh + reach))
             continue;
-         o->ReloadIfChanged();
       }
       SurfaceContact it;
       it.r = o;
@@ -3320,7 +3338,6 @@ void ContactSystemImpl::Regather(BallContact &e, const Vertex3Ds &pos, const flo
          next.push_back(std::move(*old));
          continue;
       }
-      o->ReloadIfChanged();
       SurfaceContact it;
       it.r = o;
       it.rp = o->m_set.ToParams();
@@ -3358,7 +3375,6 @@ void ContactSystemImpl::Regather(BallContact &e, const Vertex3Ds &pos, const flo
          next.push_back(std::move(*old));
          continue;
       }
-      o->ReloadIfChanged();
       SurfaceContact it;
       it.r = o;
       it.rp = o->m_set.ToParams();
@@ -3391,7 +3407,6 @@ bool ContactSystem::Engage(ContactHost *const host, HitBall *const pb, const cha
    std::vector<SurfaceContact> &items = pb->m_contact->items;
    if (std::none_of(items.begin(), items.end(), [host](const SurfaceContact &it) { return it.r == host; }))
    {
-      host->ReloadIfChanged();
       SurfaceContact it;
       it.r = host;
       it.rp = host->ContactSettings().ToParams();

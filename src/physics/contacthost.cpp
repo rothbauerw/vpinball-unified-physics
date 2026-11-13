@@ -422,9 +422,6 @@ bool ContactHost::SurfaceCollide(HitBall *const pball, const Vertex3Ds &n)
       return false;
    if (ContactOwns(pball->m_d))
       return true;   // already held: another collider of the same hit
-   ReloadIfChanged();
-   if (!m_set.contact)
-      return false;
    const float dot = -(n.Dot(pball->m_d.m_vel));
    if (dot < C_LOWNORMVEL)
       return !(IsPlayfield() && InPlayfieldHole(pball->m_d.m_pos));   // receding or sliding: no closing speed, nothing to solve (the slow pass takes a ball resting or rolling here)
@@ -440,8 +437,7 @@ bool ContactHost::SlowContact(HitBall *const pball)
       return false;
    if (ContactOwns(pball->m_d))
       return true;   // already held (by this or another collider of the same touch)
-   ReloadIfChanged();
-   return m_set.contact && ContactEngage(pball, "slow");
+   return ContactEngage(pball, "slow");
 }
 
 bool ContactHost::ContactOwns(const BallS &ball) const
@@ -463,10 +459,6 @@ ContactHost::ContactHost(IEditable *editable, const RubberObjectSettings &settin
    : HitObject(editable), m_set(settings), m_ini(iniPath), m_name(name), m_surfaceKind(kind != nullptr ? kind : "")
 {
    Registry().push_back(this);
-   std::error_code ec;
-   if (!m_ini.empty())
-      m_iniTime = std::filesystem::last_write_time(m_ini, ec);
-   m_lastCheck = std::chrono::steady_clock::now();
 }
 
 ContactHost::~ContactHost()
@@ -495,20 +487,10 @@ std::string ContactHost::LeftoverHosts()
    return s + (reg.size() > 6 ? ", ...)" : ")");
 }
 
-void ContactHost::ReloadIfChanged() const
+void ContactHost::ReloadAll()
 {
-   if (m_ini.empty())
-      return;
-   const auto now = std::chrono::steady_clock::now();
-   if (now - m_lastCheck < std::chrono::seconds(1))
-      return;
-   m_lastCheck = now;
-   std::error_code ec;
-   const auto mtime = std::filesystem::last_write_time(m_ini, ec);
-   if (ec || mtime == m_iniTime)
-      return;
-   m_iniTime = mtime;
-   Reload();
+   for (ContactHost *const h : Registry())
+      h->Reload();   // (every host's file is the table's physics ini, IniPathFor; a host with none, or a part that keeps its settings, reads nothing)
 }
 
 bool ContactHost::GroupModel() const

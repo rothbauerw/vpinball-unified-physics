@@ -1540,6 +1540,8 @@ static void FixedCordValues(CordFixed::Part &p, const RubberObjectSettings &s)
 
 void ContactSurfaceHost::Reload() const
 {
+   if (m_ini.empty())
+      return;   // (no physics ini at table load: the host keeps the settings it was built with)
    RubberObjectSettings s;
    if (m_surface != nullptr && m_surfaceKind == "playfield")
    {
@@ -1586,7 +1588,6 @@ void ContactSurfaceHost::Collide(const CollisionEvent &coll)
    if (dot < C_LOWNORMVEL)
       return;   // receding or sliding: nothing to solve (a resting ball is handled by Contact)
 
-   ReloadIfChanged();
    if (ContactEngage(pball))
       g_pplayer->m_physics->OnBallWallHit(*pball, n, dot);   // the force-model contact is stepped by the engine from here on (no impulse here)
    else

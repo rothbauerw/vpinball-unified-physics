@@ -109,18 +109,6 @@ namespace
          BatPart::Part &p = *m.m_part;
          constexpr double U = ContactSystem::kMetresPerUnit;
          p.bookMs = (int)g_pplayer->m_time_msec;
-         // the bat's ini keys are read again about every 0.5 s (as the flipper's own stepping did); a change reconfigures the part and the host
-         if (++m_reloadCounter >= 500)
-         {
-            m_reloadCounter = 0;
-            const auto before = p.bat.iniTime;
-            p.bat.LoadSettings(m.m_pflipper->GetName(), m.m_pflipper->m_ptable != nullptr ? m.m_pflipper->m_ptable->m_filename : std::filesystem::path(), false);
-            if (p.bat.iniTime != before)
-            {
-               p.Configure();   // (the state is kept)
-               m_host->SetContactSettings(FlipperHostSettings(p.bat.set));
-            }
-         }
          m_host->m_enabled = m.m_enabled;   // the flipper's Enabled: the balls touch the bat or not
          // the state the script and the renderer read
          const BatGroup::Part &g = p.gp;
@@ -187,12 +175,20 @@ namespace
             }
       }
 
-      bool FixedSettings() const override { return true; }   // (the host has no ini of its own: Publish reloads the bat's keys and passes them on)
+      // the table's physics ini changed (on playfield focus gain, between frames): the bat's keys read again; the part is reconfigured (its state is kept) and the host gets its settings
+      bool ReloadSettings() override
+      {
+         FlipperMoverObject &m = *m_mover;
+         BatPart::Part &p = *m.m_part;
+         p.bat.LoadSettings(m.m_pflipper->GetName(), m.m_pflipper->m_ptable != nullptr ? m.m_pflipper->m_ptable->m_filename : std::filesystem::path());
+         p.Configure();
+         m_host->SetContactSettings(FlipperHostSettings(p.bat.set));
+         return true;
+      }
 
    private:
       FlipperMoverObject *m_mover;
       HitFlipper *m_flipper;
-      int m_reloadCounter = 0;
       bool m_warned = false;
    };
 }
@@ -206,7 +202,7 @@ ContactPartHost *FlipperMoverObject::MakePart(HitFlipper *const owner, const flo
 {
    constexpr double U = ContactSystem::kMetresPerUnit;
    auto part = std::make_shared<BatPart::Part>();
-   part->bat.LoadSettings(m_pflipper->GetName(), m_pflipper->m_ptable != nullptr ? m_pflipper->m_ptable->m_filename : std::filesystem::path(), true);
+   part->bat.LoadSettings(m_pflipper->GetName(), m_pflipper->m_ptable != nullptr ? m_pflipper->m_ptable->m_filename : std::filesystem::path());
    // A bat has one path. A table that asks for another is told it is ignored (rule 8).
    const std::filesystem::path iniU = m_pflipper->m_ptable != nullptr ? PhysicsIni::FindUnified(m_pflipper->m_ptable->m_filename) : std::filesystem::path();
    if (!part->bat.set.rubberContact || !PhysicsIni::Active(iniU).flippers)

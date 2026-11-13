@@ -20,7 +20,7 @@ public:
    FlipperSettings set;
    FlipperDerived der;
    std::filesystem::path iniPath;
-   std::filesystem::file_time_type iniTime{};
-   // (Re)builds the settings from the ini file (the table's vpx_physics.ini; none = the defaults). In contactbatini.cpp (VPX side).
-   void LoadSettings(const std::string &who, const std::filesystem::path &tableFile, bool force);
+   // (Re)builds the settings from the ini file (the table's vpx_physics.ini; none = the defaults): at table load, and again when the file changed (ContactSystem::ReloadChangedIni,
+   // on playfield focus gain, through the flipper's PartAdapter::ReloadSettings). In contactbatini.cpp (VPX side).
+   void LoadSettings(const std::string &who, const std::filesystem::path &tableFile);
 };

@@ -1536,6 +1536,10 @@ void Player::OnFocusChanged()
    if (m_playfieldWnd->IsFocused())
    {
       PLOGI << "Playfield window gained focus";
+      // Live tuning: the physics ini is edited in another window, then VPX is clicked again; its changes are read here, between frames (the event loop, ProcessOSMessages
+      // from UpdateGameLogic, runs before UpdatePhysics), never inside a physics step. m_physics is null before the table's ini is read (SetTable).
+      if (m_physics != nullptr)
+         ContactSystem::ReloadChangedIni();
    }
    else
    {

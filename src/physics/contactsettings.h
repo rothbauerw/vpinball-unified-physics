@@ -54,8 +54,9 @@ struct ContactSettings
    int stepModel = 1;                // step_model (default 1 since 2026-11-05): 0 = a steady contact is stepped at omegaHRest / its frequency at the expected depth; 1 = by the motion in its mode: h <= sqrt(12 eps / A) / omega at its real depth (A the mode's amplitude), never shorter than rule 0
    double rollSmoothRadS = 0.05;     // roll_smooth_rad_s: the rolling torque's smoothing through zero spin in the group step, rad/s
    double arrivalDepthUm = 2.0;      // arrival_depth_um: the deepest a ball may start a contact before the step is taken again (rewind), um
-   static const ContactSettings& Get();   // checks the file for changes about twice a second of game time
+   static const ContactSettings& Get();   // the settings in force (read at StartPlay; Get never looks at the file during play)
    static void StartPlay(const std::filesystem::path& tableFile);   // the start of a play, before any part is built: the file as it is now
+   static void Reload();   // live tuning: the file changed (ContactSystem::ReloadChangedIni, on playfield focus gain): [Contact] read again
    void ToStep(GroupStep::Settings& s) const;   // the group step's settings from these keys and the step floor: every group the engine steps, an island's and a part's alone (GroupStep::EngineSettings)
    // The friction impulse a contact applies for the impulse `x` that would cancel the slip (signed): inside the static limit it sticks (x); beyond it, it slides at the dynamic limit
    // (muDynamicRatio times the static one). With the settings off (stock engine) it is the plain clamp to the static limit.

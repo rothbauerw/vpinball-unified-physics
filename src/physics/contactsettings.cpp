@@ -187,10 +187,8 @@ namespace
 namespace
 {
    ContactSettings cur;
-   std::filesystem::path path;
-   std::filesystem::file_time_type stamp{};
-   bool pathKnown = false, loaded = false;
-   uint32_t nextCheckMs = 0;
+   std::filesystem::path path;   // the table's physics ini (PhysicsIni::FindUnified at StartPlay); empty = none, the defaults
+   bool loaded = false;
 
    // what the group step takes from the keys: renewed whenever they are (GroupStep::EngineSettings, the settings of a part stepping alone)
    void Publish() { cur.ToStep(GroupStep::EngineSettings()); }
@@ -208,23 +206,25 @@ namespace
    }
 }
 
-// The start of a play, before any part is built: [Contact] as the file is now, nothing kept from the last play or table. Game time starts again at 0, so the check in Get would not see a change until it passed the last play's
+// The start of a play, before any part is built: [Contact] as the file is now, nothing kept from the last play or table. Read once here; while playing, only a change of the file
+// seen when the playfield window gains focus reads it again (Reload, from ContactSystem::ReloadChangedIni): no physics path looks at the file.
 void ContactSettings::StartPlay(const std::filesystem::path& tableFile)
 {
    cur = ContactSettings();
-   stamp = {};
-   nextCheckMs = 0;
    path = PhysicsIni::FindUnified(tableFile);
-   pathKnown = !path.empty();
    loaded = true;
-   std::error_code ec;
-   if (pathKnown)
-      stamp = std::filesystem::last_write_time(path, ec);
-   if (pathKnown && !ec)
+   if (!path.empty())
       LoadNow();
    else
       cur.enable = PhysicsIni::Active(std::filesystem::path()).contact;   // no file: the defaults (off on the stock engine)
    Publish();
+}
+
+// Live tuning: the table's physics ini changed (ContactSystem::ReloadChangedIni, on focus gain, between frames): [Contact] read again
+void ContactSettings::Reload()
+{
+   if (loaded && !path.empty())
+      LoadNow();
 }
 
 // The group step's settings from [Contact], and its floor: a step that cannot be solved gives up at hMin (in real time it must not spend the frame halving; the fixed-step reference may)
@@ -275,40 +275,8 @@ void ContactSettings::ToStep(GroupStep::Settings& s) const
 
 const ContactSettings& ContactSettings::Get()
 {
-   if (g_pplayer == nullptr)
-      return cur;
-   if (!pathKnown)
-   {
-      if (g_pplayer->m_ptable != nullptr && !g_pplayer->m_ptable->m_filename.empty())
-         path = PhysicsIni::FindUnified(g_pplayer->m_ptable->m_filename);   // the table's vpx_physics.ini (or VPX_PHYSICS_INI)
-      pathKnown = !path.empty();
-      if (!pathKnown && !loaded)
-      {
-         loaded = true;   // no file: the defaults (off on the stock engine)
-         cur = ContactSettings();
-         cur.enable = PhysicsIni::Active(std::filesystem::path()).contact;
-         Publish();
-      }
-   }
-   if (pathKnown && (!loaded || g_pplayer->m_time_msec >= nextCheckMs))
-   {
-      nextCheckMs = g_pplayer->m_time_msec + 500;
-      std::error_code ec;
-      const auto mtime = std::filesystem::last_write_time(path, ec);
-      if (!ec && (!loaded || mtime != stamp))
-      {
-         stamp = mtime;
-         loaded = true;
-         LoadNow();
-      }
-      else if (ec)
-      {
-         loaded = true; // no file: the defaults stay (off on the stock engine)
-         cur = ContactSettings();
-         cur.enable = PhysicsIni::Active(std::filesystem::path()).contact;
-         Publish();
-      }
-   }
+   if (g_pplayer != nullptr && !loaded)   // (asked before the table's SetTable: the table's file, read once)
+      StartPlay(g_pplayer->m_ptable != nullptr ? g_pplayer->m_ptable->m_filename : std::filesystem::path());
    return cur;
 }
 

@@ -94,7 +94,7 @@ namespace Turntables
             }
          }
          void Fire(const std::vector<ContactMovingPart::Event> &) override {}
-         bool FixedSettings() const override { return true; }
+         bool ReloadSettings() override { return true; }   // (the disc keeps the settings it was built with: its keys are read when the table loads)
 
       private:
          std::shared_ptr<DiscModel::Engine> m_model;

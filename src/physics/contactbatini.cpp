@@ -182,10 +182,9 @@ bool FlipperApplyKey(FlipperSettings &s, const std::string &key, const std::stri
    return FlipperModel::ApplyKey(s, FlipperModel::Lower(key), FlipperModel::Trim(val));
 }
 
-void ContactBat::LoadSettings(const std::string &who, const std::filesystem::path &tableFile, const bool force)
+void ContactBat::LoadSettings(const std::string &who, const std::filesystem::path &tableFile)
 {
    using namespace FlipperModel;
-   std::error_code ec;
    if (iniPath.empty())
    {
       if (!tableFile.empty())
@@ -193,14 +192,9 @@ void ContactBat::LoadSettings(const std::string &who, const std::filesystem::pat
    }
    if (iniPath.empty())
    {
-      if (force)
-         Derive(set, der);
+      Derive(set, der);
       return;
    }
-   const auto mtime = std::filesystem::last_write_time(iniPath, ec);
-   if (!force && (ec || mtime == iniTime))
-      return;
-   iniTime = ec ? std::filesystem::file_time_type{} : mtime;
    FlipperSettings s;
    ApplySection(s, iniPath, "flippers", who);
    ApplySection(s, iniPath, "flipper:" + who, who);
