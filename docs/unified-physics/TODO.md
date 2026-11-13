@@ -26,7 +26,7 @@ N9. Branch pushed: every commit is on the fork. Engine work (part_guess_accel, c
 N10. Performance tests: not built; review TestMatrixDesign with the user when building them. Includes the stress table driver clock after start-up and the 144 Hz frame budget. Any safety-net trip (e.g. the cord's hold and let-go) fails the run.
 
 ## 1. Contact system (tasks)
-34. One shared finder for every contact (static, moving, tubes, ball pairs): complete, short, local, one index; replaces the per-part finders. Requirements accepted: runs/2026-11-11-finder/requirements.md. Design accepted: runs/2026-11-11-finder/design.md (build P1-P9).
+34. One shared finder for every contact (static, moving, tubes, ball pairs): complete, short, local, one index; replaces the per-part finders. Requirements, design: runs/2026-11-11-finder (P1-P9). Snapshot likely misses its state: a retake dropped JewelRamp from a ball's list (aircore-ff/snap_trace)
 36. Release check's fixed 2 mm hold for a closing ball (contactsystem.cpp:707, from the port): no physics behind it; release at the ball's reach instead (mesh hosts already do through the shared finder).
 37. A no-op stock hit that splits a cycle moved S00's bounce spin 3.5 % (stress v2, 2894 ms; finder-P2b S00 trace): step-split sensitivity; check against the 1 us reference. Parked.
 38. Overlap replay with free_flight (every free ball stepped by the contact system, bb3898626): the replay now restores and re-steps every ball; seen only not to crash (19 replays). Judge one replayed hit against the same hit without a replay.
@@ -68,7 +68,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 ## 6. Magnets (rules: ModelStandards section 8)
 2. Energy by construction for magnets (goal G2): pair force not energy exact; iron-core and plug cases unchecked.
 7. Long rod core, moving magnets.
-9. Guide tube ConstrainBall sets held balls' positions outside the group step (PhysicsEngine.cpp:866): breaks the shared path. Code read only.
+9. Guide tube ConstrainBall acts outside the group step (PhysicsEngine.cpp:866): breaks the shared path. The coil body must always be solid: tube = 0 lets a ball into the winding, where the pull drops to a dipole-only cutoff (magnet.cpp AircorePull); remove both.
 
 ## 7. Turntable
 1. Constant-speed AC motor option.
