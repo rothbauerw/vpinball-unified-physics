@@ -553,14 +553,39 @@ namespace RubberContact
 
    // pts: n+1 centreline vertices (pivot-free world frame, m). Tilted rubbers work because the points are taken after the rubber transform.
    // pre: optional, built from the same points (a static centreline); the result is the same.
-   inline TubeProbe ProbeTube(const BallSI &ball, const V3 *pts, int n, double rho, const V3 &c, const TubePre *pre = nullptr)
+   // segs (shared_finder P5, needs pre): the segments to read, in index order (the ball's query); the nearest of them, the same arithmetic and tie rule (the first in index order)
+   inline TubeProbe ProbeTube(const BallSI &ball, const V3 *pts, int n, double rho, const V3 &c, const TubePre *pre = nullptr, const std::vector<int> *segs = nullptr)
    {
       TubeProbe pr;
       pr.rho = rho;
       double bestD2 = INFINITY;   // squared: the nearest segment is found without a square root per segment
       V3 bestP;
       int bestI = -1;
-      if (pre != nullptr && n >= 2)
+      if (pre != nullptr && segs != nullptr)
+      {
+         for (const int i : *segs)
+         {
+            const double L2 = pre->L2[i];
+            if (L2 <= 0.0)
+               continue;
+            const V3 dm = c - pre->mid[i];
+            const double lim = std::sqrt(bestD2) * (1.0 + 1e-9) + 1e-12 + pre->rad[i];
+            if (dm.Dot(dm) > lim * lim)
+               continue;
+            const V3 &t = pre->t[i];
+            const double s = std::min(std::max((c - pts[i]).Dot(t) / L2, 0.0), 1.0);
+            const V3 p = pts[i] + t * s;
+            const V3 dv = c - p;
+            const double d2 = dv.Dot(dv);
+            if (d2 < bestD2)
+            {
+               bestD2 = d2;
+               bestP = p;
+               bestI = i;
+            }
+         }
+      }
+      else if (pre != nullptr && n >= 2)
       {
          // upper bound on the nearest distance from last time's nearest segment; a segment whose bounding sphere is farther cannot be the nearest
          double ubD = INFINITY;
@@ -671,7 +696,8 @@ namespace RubberContact
 
 
    // ProbeTube's result with the other parts of the same tube pressing the ball: a nearest point in the middle of a segment (a local minimum of the distance along the tube)
-   inline void PatchTube(const BallSI &ball, const V3 *pts, const int n, const double rho, const V3 &c, const TubePre &pre, const double zero, TubeProbe &pr)
+   // segs (shared_finder P5): the segments to read, in index order (null: all)
+   inline void PatchTube(const BallSI &ball, const V3 *pts, const int n, const double rho, const V3 &c, const TubePre &pre, const double zero, TubeProbe &pr, const std::vector<int> *segs = nullptr)
    {
       if (!pr.overlap || pr.seg < 0 || pr.reff <= 0.0)
          return;
@@ -684,8 +710,10 @@ namespace RubberContact
       const double fitBest = fitOn(pr.seg, std::min(std::max(sb, 0.0), 1.0));
       FoldSum sum;
       bool any = false;
-      for (int i = 0; i + 1 < n; i++)
+      const int cnt = segs != nullptr ? (int)segs->size() : n - 1;
+      for (int k = 0; k < cnt; k++)
       {
+         const int i = segs != nullptr ? (*segs)[k] : k;
          if (i == pr.seg || pre.L2[i] <= 0.0)
             continue;
          const V3 dm = c - pre.mid[i];
@@ -1285,9 +1313,11 @@ namespace RubberContact
 
    // A tube (centreline pts, n points; a closed ring repeats its first point at the end, the two are one joint): the pieces are the segments' inside nearest points and the joints.
    // One peak: ProbeTube's result unchanged. More: the level form above, reff and the nearest point kept from the deepest (held reff, piece 2).
-   inline TubeProbe BarsTube(const BallSI &ball, const V3 *pts, const int n, const double rho, const V3 &c, const TubePre &pre, const double zero)
+   // segs, pr0 (shared_finder P5): the segments to read, in index order, and their probe (ProbeTube's result, given by the caller); null: all, probed here
+   inline TubeProbe BarsTube(const BallSI &ball, const V3 *pts, const int n, const double rho, const V3 &c, const TubePre &pre, const double zero, const std::vector<int> *segs = nullptr,
+                             const TubeProbe *pr0 = nullptr)
    {
-      TubeProbe pr = ProbeTube(ball, pts, n, rho, c, &pre);
+      TubeProbe pr = pr0 != nullptr ? *pr0 : ProbeTube(ball, pts, n, rho, c, &pre);
       if (!pr.overlap || pr.seg < 0 || pr.reff <= 0.0 || pr.delta <= zero || n < 3)
          return pr;
       const double S = ball.R + rho;
@@ -1316,8 +1346,10 @@ namespace RubberContact
          }
          return jointNode[j];
       };
-      for (int i = 0; i + 1 < n; i++)
+      const int cnt = segs != nullptr ? (int)segs->size() : n - 1;
+      for (int k = 0; k < cnt; k++)
       {
+         const int i = segs != nullptr ? (*segs)[k] : k;
          const V3 dm = c - pre.mid[i];
          const double lim = S - zero + pre.rad[i];
          if (dm.Dot(dm) > lim * lim)
@@ -1686,12 +1718,16 @@ namespace RubberContact
    }
 
    // the segments next to the nearest one are passed over: the nearest point runs onto them with no jump in the gap
-   inline double ArrivalTube(const BallSI &ball, const V3 *pts, const int n, const double rho, const TubePre &pre, const int nearest, const V3 &c, const V3 &v, const double a, const double hMax, const double touchM, const double arriveM)
+   // segs (shared_finder P5): the segments to read, in index order (null: all)
+   inline double ArrivalTube(const BallSI &ball, const V3 *pts, const int n, const double rho, const TubePre &pre, const int nearest, const V3 &c, const V3 &v, const double a, const double hMax, const double touchM, const double arriveM,
+                             const std::vector<int> *segs = nullptr)
    {
       double h = hMax;
       const double speed = v.Length(), S = ball.R + rho;
-      for (int i = 0; i + 1 < n; i++)
+      const int cnt = segs != nullptr ? (int)segs->size() : n - 1;
+      for (int k = 0; k < cnt; k++)
       {
+         const int i = segs != nullptr ? (*segs)[k] : k;
          if (std::abs(i - nearest) <= 1 || pre.L2[i] <= 0.0)
             continue;
          if ((c - pre.mid[i]).Length() - pre.rad[i] - S - touchM > speed * h + a * h * h)

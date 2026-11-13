@@ -300,6 +300,14 @@ private:
    HitObject *m_eventCarrier = nullptr;        // see SetEventCarrier
    std::vector<Vertex3Ds> m_pts; // closed loop, last = first
    RubberContact::TubePre m_tubePre;       // what ProbeTube precomputes from m_ptsSI
+   // shared_finder P5: each segment of the (static) centreline is a piece of this tube host, its box the segment's end points grown by the tube radius; one box tree over them
+   // (4 per leaf), built once at load. A ball's query finds the segments within its volume (SegsFor); the tube readers read that list in place of the whole tube. Cord bands keep the whole tube (P7).
+   std::vector<RubberSurface::FinderNode> m_segNodes;
+   std::vector<int> m_segOrder;
+   bool SegsOn() const;   // key on and not a cord band
+   void SegQuery(void *t, const RubberContact::V3 &c0, double cov) const;   // t: a TubeSegQ; every segment whose centreline lies within cov of c0, in index order
+   const std::vector<int> &SegsFor(const SurfaceContact &it, const RubberContact::V3 &c, double need, double *covAt = nullptr) const;   // the ball's segments, every one within need of c among them (re-queried if not)
+   RubberContact::TubeProbe ProbeSegs(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, double need, const std::vector<int> *&segs) const;   // ProbeTube's exact answer from the list
    std::vector<RubberContact::V3> m_ptsSI; // the same in metres (pivot-free world frame), for the solve
    double m_radiusSI = 0.0;                // tube radius, m
    float m_radius;               // tube radius, VPX units

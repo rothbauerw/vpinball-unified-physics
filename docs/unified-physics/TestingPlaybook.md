@@ -92,7 +92,7 @@ VPX_CONTACT_TRACE=1|2      contact engage / release / hit lines (1); also per-cy
 VPX_CONTACT_LOG=<csv>      every collision and resting contact of the first ball: object type and name.
 VPX_CONTACT_NEAR=x,y,r     rubber faces within r of (x, y), U, when the surface is built. Old name VPX_RING_NEAR.
 VPX_CONTACT_TIMING=<csv>   per-cycle cost of the contact system by stage. One file per process (every Play of an editor session).
-VPX_CONTACT_PROFILE=<n>    scoped timers of the contact system, a log table every n step calls (default 5000).     VPX_CHECK_PROFILE=1   one check's time split ("Check profile"), cut counters ("Finder P4b totals").
+VPX_CONTACT_PROFILE=<n>    scoped timers of the contact system, a log table every n step calls (default 5000).     VPX_CHECK_PROFILE=1   one check's time split ("Check profile"), cut, tube counters ("Finder P4b/P5 totals").
 VPX_PHYS_TIMING=<csv>      frame and iteration timing rows, written when a frame, gap or iteration passes its threshold (us):
                            VPX_PHYS_TIMING_FRAME_US, VPX_PHYS_TIMING_GAP_US, VPX_PHYS_TIMING_ITER_US.
 VPX_RUBBERS_LOG=1          a RubberSolve line when a rubber contact ends: in / out velocity, spin, dwell, peak force.
@@ -111,7 +111,7 @@ VPX_GROUP_CONTACT_TRACE=1  per-round depth, force, friction (first 3 energy step
 VPX_GROUP_ROUND_TRACE=1    per-round Newton trace with probe notes (group and hinge solves), printed only with an energy-step warning.
 VPX_GROUP_SEARCH_TRACE=1   the failing stop-search solve, per round, to stderr.     VPX_GROUP_STOP_TRACE=1   the first 12 stop checks of a cycle.
 VPX_GROUP_JAC_MODE=1       also a central-difference Jacobian, both logged; changes the last digits.     VPX_GROUP_JAC_WINDOW=t0-t1   its solves in that ms window.
-VPX_FINDER_CHECK=1         finder check: missed pieces within reach, face-table mismatches, playfield cut lists against the full scan (log, screen).     VPX_FINDER_TABLE=0   no face table (A/B, same result).
+VPX_FINDER_CHECK=1         finder check: missed pieces within reach, face-table mismatches, playfield cut lists and static tube readers against the full scan (log, screen).     VPX_FINDER_TABLE=0   no face table (A/B, same result).
 VPX_HINGE_NEAR_ALL=1       every near-piece list takes all pieces (A/B of the short list, same result expected).
 VPX_SNAPSHOT_TEST=1        after each contact step: restore the snapshot, step again, log any difference (=2 changes the result: see below).
 ```

@@ -262,28 +262,6 @@ namespace GroupStep
          h.curvDist = 0.0;
       }
    };
-   // A tube of radius rho round a polyline centreline (a post's rubber ring, a wall rubber): the engine's own probe (rubbercontact.h ProbeTube), with the centreline's
-   // precomputed bounds when given (built once by the owner: BuildTubePre over the nSeg + 1 points)
-   class TubeShape : public Shape
-   {
-   public:
-      static constexpr int kMaxPts = 129;
-      V3 pts[kMaxPts];
-      int nSeg = 0;                                   // segments: nSeg + 1 points
-      double rho = 0.0;
-      const RubberContact::TubePre *pre = nullptr;
-      void Probe(const V3 &c, double R, Hit &h) const override
-      {
-         RubberContact::BallSI b;
-         b.R = R;
-         const RubberContact::TubeProbe pr = RubberContact::ProbeTube(b, pts, nSeg + 1, rho, c, pre);
-         h.delta = pr.delta;
-         h.n = pr.normal;
-         h.reff = pr.reff;
-         h.curvDist = pr.dist;
-      }
-   };
-
    struct Ball
    {
       V3 c, v, w;            // centre, velocity, spin (m, m/s, rad/s)

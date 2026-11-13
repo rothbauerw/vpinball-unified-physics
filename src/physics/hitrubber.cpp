@@ -115,6 +115,25 @@ namespace
       RubberContact::V3 lo, hi;   // the object's box: its face tree's root, m
    };
 
+   // P5: one static tube's segments found by a ball's query (pieces of the tube host), in index order. cov: every segment whose centreline lies within cov of c0 is in segs (cov < 0: none yet)
+   struct TubeSegQ
+   {
+      const HitRubber *tube = nullptr;
+      uint64_t ver = ~0ull;      // the ball query's version it was made for (a new query or re-query of the ball makes it anew)
+      RubberContact::V3 c0;
+      double cov = -1.0;
+      std::vector<int> segs;
+   };
+
+   // P5 counters (VPX_CHECK_PROFILE=1 or VPX_FINDER_CHECK=1; diagnostics only), per reader (0 probe, 1 bars, 2 patch, 3 arrival): calls, segments in the tube, segments read, ticks; check calls,
+   // mismatches (an answer not bit-equal to the whole tube's), misses (a segment within the reader's reach not in the list); segment queries, re-queries; stock HitTest's segment loop reached
+   struct SegStats
+   {
+      uint64_t calls[4] = {}, inTube[4] = {}, tested[4] = {}, ticks[4] = {}, checks[4] = {}, mismatch[4] = {}, miss[4] = {};
+      uint64_t queries = 0, requery = 0, hitTestLoop = 0;
+   };
+   SegStats g_segStats;
+
    // P2a: one engaged ball's per-cycle query (design.md section 3), kept for the cycle; only the ball's own evaluations (one thread) write it after the gather
    struct FinderBallQ
    {
@@ -135,6 +154,7 @@ namespace
       std::vector<RubberContact::FaceTable> tab;   // P3a: per finder object, the ball's measurement table of its faces in per[k] (one per ball position)
       const HitBall *ball = nullptr;   // P3a: the ball (check mode's log)
       PlayfieldCuts::CutQuery cq;   // P4b: the playfield cuts found by the query, pieces of their playfield host (NearCuts reads them; playfieldcut.h)
+      std::vector<TubeSegQ> tq;     // P5: per static tube the ball reads, its segments found by the query (made at the tube's first read after each query, around c0 within the volume)
    };
 
    // the timing counters' histogram: 10 ns bins up to 200 us
@@ -584,6 +604,14 @@ namespace
    }
 }
 
+// shared_finder P5: segment i's box, its end points grown by the tube radius r (the tube's surface lies inside it)
+static void TubeSegBox(const std::vector<RubberContact::V3> &p, const double r, const int i, RubberContact::V3 &lo, RubberContact::V3 &hi)
+{
+   const RubberContact::V3 &a = p[i], &b = p[i + 1];
+   lo = RubberContact::V3(std::min(a.x, b.x) - r, std::min(a.y, b.y) - r, std::min(a.z, b.z) - r);
+   hi = RubberContact::V3(std::max(a.x, b.x) + r, std::max(a.y, b.y) + r, std::max(a.z, b.z) + r);
+}
+
 HitRubber::HitRubber(IEditable *editable, const std::vector<Vertex3Ds> &pts, const float radius, const RubberObjectSettings &settings, const std::filesystem::path &iniPath, const std::string &name)
    : ContactHost(editable, settings, iniPath, name, ""), m_pts(pts), m_radius(radius)
 {
@@ -593,6 +621,14 @@ HitRubber::HitRubber(IEditable *editable, const std::vector<Vertex3Ds> &pts, con
       m_ptsSI.emplace_back((double)p.x * U, (double)p.y * U, (double)p.z * U);
    m_radiusSI = (double)m_radius * U;
    RubberContact::BuildTubePre(m_tubePre, m_ptsSI.data(), (int)m_ptsSI.size());
+   {   // shared_finder P5: the segments' box tree (each box: the segment's end points grown by the tube radius), once at load
+      const int ns = std::max(0, (int)m_ptsSI.size() - 1);
+      m_segOrder.resize(ns);
+      for (int i = 0; i < ns; i++)
+         m_segOrder[i] = i;
+      if (ns > 0)
+         BuildTree(m_segNodes, m_segOrder, [this](const int i, RubberContact::V3 &lo, RubberContact::V3 &hi) { TubeSegBox(m_ptsSI, m_radiusSI, i, lo, hi); }, 0, ns, 4);
+   }
    // A straight span makes it a band. A rubber without one wraps its post all the way round: it is a ring, and a ball on it takes the ring's law (ModelStandards 2d), never stock.
    // Collidable off at load: a ring too. A decorative rubber or a script's animation pose: no ball touches it, so it pays for no cord or mover. Turned on later by a script, it has the ring's law.
    if (static_cast<Rubber *>(editable)->m_d.m_collidable)
@@ -1321,6 +1357,7 @@ float HitRubber::HitTest(const BallS &ball, const float dtime, CollisionEvent &c
       return -1.0f;   // the cord never meets the stock collision: the contact system takes the ball before it touches (CordNear; GroupStepDesign 15)
    if (ContactOwns(ball))
       return -1.0f;   // the contact model owns this ball until it is released
+   g_segStats.hitTestLoop++;   // P5 counter (diagnostics only): the stock swept test's segment loop below reached
 
    using RubberContact::V3;
    const size_t np = m_pts.size();
@@ -1581,6 +1618,147 @@ void HitRubber::Refresh(SurfaceContact &it, const double ballR, const double rea
    }
 }
 
+// ---- shared_finder P5: a static tube's segments found by the ball's query (runs/2026-11-11-finder/design.md sections 1-4) ----
+
+static bool SegProfOn() { return ContactProf::CheckOn() || FinderCheckOn(); }   // P5 counters (diagnostics only)
+
+// check mode: the segments within need of c (centreline distance, the readers' arithmetic) that the list does not hold
+static uint64_t SegMisses(const std::vector<RubberContact::V3> &pts, const RubberContact::TubePre &pre, const RubberContact::V3 &c, const double need, const std::vector<int> &segs)
+{
+   uint64_t m = 0;
+   for (int i = 0; i + 1 < (int)pts.size(); i++)
+   {
+      if (pre.L2[i] <= 0.0)
+         continue;
+      const double s = std::min(std::max((c - pts[i]).Dot(pre.t[i]) / pre.L2[i], 0.0), 1.0);
+      const RubberContact::V3 dv = c - (pts[i] + pre.t[i] * s);
+      if (dv.Length() <= need && !std::binary_search(segs.begin(), segs.end(), i))
+         m++;
+   }
+   return m;
+}
+
+bool HitRubber::SegsOn() const
+{
+   return g_finder.on && !CordModel();   // a cord band's centreline is not its surface (the cord moves): the whole tube, until P7
+}
+
+void HitRubber::SegQuery(void *const tv, const RubberContact::V3 &c0, const double cov) const
+{
+   TubeSegQ &t = *static_cast<TubeSegQ *>(tv);
+   t.c0 = c0;
+   t.cov = cov;
+   t.segs.clear();
+   // a segment whose centreline lies within cov of c0 has its box (the end points grown by the radius) within max(cov - radius, 0) of c0; 1 nm covers the rounding
+   const double r = std::max(cov - m_radiusSI, 0.0) + 1e-9;
+   QueryTree(m_segNodes, m_segOrder, [this](const int i, RubberContact::V3 &lo, RubberContact::V3 &hi) { TubeSegBox(m_ptsSI, m_radiusSI, i, lo, hi); }, c0, r * r, t.segs);
+   std::sort(t.segs.begin(), t.segs.end());   // index order (R9)
+   if (SegProfOn())
+      g_segStats.queries++;
+}
+
+// The ball's segments of this tube: made from its query (every segment within R + ext + reach of the surface from c0, as the cuts) at the first read after each query; a reader that needs
+// more than the list holds around c re-queries around c0 with need + 2 |c - c0| (design.md section 4's inside check; the factor 2 bounds repeats). No query: queried around c within need.
+// covAt: how far from c the list holds every segment (centreline distance).
+const std::vector<int> &HitRubber::SegsFor(const SurfaceContact &it, const RubberContact::V3 &c, const double need, double *const covAt) const
+{
+   FinderBallQ *const q = static_cast<FinderBallQ *>(it.finderQ);
+   TubeSegQ *t = nullptr;
+   if (q != nullptr && q->R > 0.0)
+   {
+      for (TubeSegQ &x : q->tq)
+         if (x.tube == this)
+         {
+            t = &x;
+            break;
+         }
+      if (t == nullptr)
+      {
+         q->tq.emplace_back();
+         t = &q->tq.back();
+         t->tube = this;
+      }
+      if (t->ver != q->ver)
+      {
+         SegQuery(t, q->c0, q->R + q->ext + q->reach + m_radiusSI);
+         t->ver = q->ver;
+      }
+   }
+   else
+   {
+      thread_local TubeSegQ none;   // no query for this item: queried around the ball at each read (counted as a re-query)
+      none.tube = this;
+      none.cov = -1.0;
+      t = &none;
+   }
+   const double stray = t->cov >= 0.0 ? (c - t->c0).Length() : 0.0;
+   if (t->cov < 0.0 || stray + need > t->cov)
+   {
+      if (t->cov >= 0.0)
+         SegQuery(t, t->c0, need + 2.0 * stray);
+      else
+         SegQuery(t, c, need);
+      if (SegProfOn())
+         g_segStats.requery++;
+   }
+   if (covAt != nullptr)
+      *covAt = t->cov - (c - t->c0).Length();
+   return t->segs;
+}
+
+// ProbeTube over the ball's list, exact: the nearest found lies within the list's reach of c, or the list is made again out to its distance (or, none found, a segment's), which then holds
+// the nearest wherever it is (today's answer beyond the reach included). segs: the list read last (it holds every segment within need of c).
+RubberContact::TubeProbe HitRubber::ProbeSegs(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, const double need, const std::vector<int> *&segs) const
+{
+   const int n = (int)m_ptsSI.size();
+   const double need0 = std::max(need, 1e-9);
+   double cov = 0.0;
+   segs = &SegsFor(it, c, need0, &cov);
+   RubberContact::TubeProbe pr = RubberContact::ProbeTube(bs, m_ptsSI.data(), n, m_radiusSI, c, &m_tubePre, segs);
+   bool exact = pr.seg >= 0 && pr.dist <= cov;
+   if (pr.seg < 0)   // none returned with a segment read: the ball's centre on the centreline (within 1e-12), as the whole tube gives
+      for (const int i : *segs)
+         if (m_tubePre.L2[i] > 0.0)
+         {
+            exact = true;
+            break;
+         }
+   if (!exact)
+   {
+      double ub = -1.0;
+      if (pr.seg >= 0)
+         ub = pr.dist;
+      else
+         for (int i = 0; i + 1 < n; i++)   // the first segment's distance bounds the nearest's (one segment measured, not a search)
+            if (m_tubePre.L2[i] > 0.0)
+            {
+               const double s = std::min(std::max((c - m_ptsSI[i]).Dot(m_tubePre.t[i]) / m_tubePre.L2[i], 0.0), 1.0);
+               ub = (c - (m_ptsSI[i] + m_tubePre.t[i] * s)).Length();
+               break;
+            }
+      if (ub >= 0.0)
+      {
+         segs = &SegsFor(it, c, std::max(ub * (1.0 + 1e-9) + 1e-9, need0), &cov);
+         pr = RubberContact::ProbeTube(bs, m_ptsSI.data(), n, m_radiusSI, c, &m_tubePre, segs);
+      }
+   }
+   if (FinderCheckOn())   // check mode: the whole tube's answer
+   {
+      const RubberContact::TubeProbe p0 = RubberContact::ProbeTube(bs, m_ptsSI.data(), n, m_radiusSI, c, &m_tubePre);
+      g_segStats.checks[0]++;
+      if (!SameProbe(p0, pr))
+      {
+         g_segStats.mismatch[0]++;
+         static int logged = 0;
+         if (logged++ < 20)
+            PLOGW << "Finder tube check: probe differs on " << Name() << " at c " << c.x << " " << c.y << " " << c.z << ": seg " << pr.seg << " vs " << p0.seg << ", dist " << pr.dist << " vs " << p0.dist;
+      }
+      if (p0.seg >= 0)
+         g_segStats.miss[0] += SegMisses(m_ptsSI, m_tubePre, c, p0.dist, *segs);
+   }
+   return pr;
+}
+
 RubberContact::TubeProbe HitRubber::Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const
 {
    if (m_surface != nullptr && !g_nearCmp && it.qFaces != nullptr && FinderCheckOn())   // P3b check mode: the near pass's answer against the whole query list's (diagnostics only)
@@ -1630,7 +1808,19 @@ RubberContact::TubeProbe HitRubber::Probe(const RubberContact::BallSI &bs, const
       }
       return RubberContact::ProbeTriangles(bs, m_surface->tris, *prL, m_set.edgeRadiusMm * 1e-3, c, nullptr, 0, 0.0, nullptr, pPr);   // (no carved hole: a ball inside a non-legacy kicker's circle is handed to the stock contact instead, see InPlayfieldHole; a carved hole let balls fall through a plane playfield)
    }
-   return RubberContact::ProbeTube(bs, m_ptsSI.data(), (int)m_ptsSI.size(), m_radiusSI, c, &m_tubePre);
+   const bool prof = SegProfOn() && !CordModel();   // P5 counters (static tubes; diagnostics only)
+   const uint64_t t0 = prof ? __rdtsc() : 0;
+   const int n = (int)m_ptsSI.size();
+   const std::vector<int> *segs = nullptr;
+   const RubberContact::TubeProbe pr = SegsOn() ? ProbeSegs(bs, it, c, 0.0, segs) : RubberContact::ProbeTube(bs, m_ptsSI.data(), n, m_radiusSI, c, &m_tubePre);
+   if (prof)
+   {
+      g_segStats.calls[0]++;
+      g_segStats.inTube[0] += n - 1;
+      g_segStats.tested[0] += segs != nullptr ? segs->size() : n - 1;
+      g_segStats.ticks[0] += __rdtsc() - t0;
+   }
+   return pr;
 }
 
 RubberContact::TubeProbe HitRubber::ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const
@@ -1679,7 +1869,35 @@ RubberContact::TubeProbe HitRubber::ProbePatch(const RubberContact::BallSI &bs, 
    {
       if (m_surface != nullptr)
          return RubberContact::BarsTriangles(bs, m_surface->tris, m_surface->vid, m_surface->nb, *prL, m_set.edgeRadiusMm * 1e-3, c, it.gs.zero, pPr, &m_surface->fold);   // P3b: the near pass's faces (bars only use faces within R)
-      return RubberContact::BarsTube(bs, m_ptsSI.data(), (int)m_ptsSI.size(), m_radiusSI, c, m_tubePre, it.gs.zero);
+      const bool prof = SegProfOn() && !CordModel();   // P5 counters (static tubes; diagnostics only)
+      const uint64_t t0 = prof ? __rdtsc() : 0;
+      const int n = (int)m_ptsSI.size();
+      const std::vector<int> *segs = nullptr;
+      RubberContact::TubeProbe pr;
+      if (SegsOn())   // P5: every bar and joint presses within S - zero of the ball's centre, so every segment holding one is in the list
+      {
+         const double need = bs.R + m_radiusSI - it.gs.zero;
+         const RubberContact::TubeProbe p0 = ProbeSegs(bs, it, c, need, segs);
+         pr = RubberContact::BarsTube(bs, m_ptsSI.data(), n, m_radiusSI, c, m_tubePre, it.gs.zero, segs, &p0);
+         if (FinderCheckOn())   // check mode: the whole tube's answer
+         {
+            const RubberContact::TubeProbe w = RubberContact::BarsTube(bs, m_ptsSI.data(), n, m_radiusSI, c, m_tubePre, it.gs.zero);
+            g_segStats.checks[1]++;
+            if (!SameProbe(w, pr))
+               g_segStats.mismatch[1]++;
+            g_segStats.miss[1] += SegMisses(m_ptsSI, m_tubePre, c, need, *segs);
+         }
+      }
+      else
+         pr = RubberContact::BarsTube(bs, m_ptsSI.data(), n, m_radiusSI, c, m_tubePre, it.gs.zero);
+      if (prof)
+      {
+         g_segStats.calls[1]++;
+         g_segStats.inTube[1] += n - 1;
+         g_segStats.tested[1] += segs != nullptr ? segs->size() : n - 1;
+         g_segStats.ticks[1] += __rdtsc() - t0;
+      }
+      return pr;
    }
    RubberContact::TubeProbe pr = Probe(bs, it, c);
    if (m_surface != nullptr)
@@ -1694,7 +1912,36 @@ RubberContact::TubeProbe HitRubber::ProbePatch(const RubberContact::BallSI &bs, 
          RubberContact::PatchTriangles(bs, m_surface->tris, *inL, c, it.gs.zero, pr, holes, nHoles, pIn);
    }
    else
-      RubberContact::PatchTube(bs, m_ptsSI.data(), (int)m_ptsSI.size(), m_radiusSI, c, m_tubePre, it.gs.zero, pr);
+   {
+      const bool prof = SegProfOn() && !CordModel();   // P5 counters (static tubes; diagnostics only)
+      const uint64_t t0 = prof ? __rdtsc() : 0;
+      const int n = (int)m_ptsSI.size();
+      const std::vector<int> *segs = nullptr;
+      if (SegsOn())   // P5: a part of the patch lies within S - zero of the ball's centre: every segment holding one is in the list
+      {
+         const double need = bs.R + m_radiusSI - it.gs.zero;
+         segs = &SegsFor(it, c, std::max(need, 1e-9));
+         RubberContact::TubeProbe w = pr;
+         RubberContact::PatchTube(bs, m_ptsSI.data(), n, m_radiusSI, c, m_tubePre, it.gs.zero, pr, segs);
+         if (FinderCheckOn())   // check mode: the whole tube's answer
+         {
+            RubberContact::PatchTube(bs, m_ptsSI.data(), n, m_radiusSI, c, m_tubePre, it.gs.zero, w);
+            g_segStats.checks[2]++;
+            if (!SameProbe(w, pr))
+               g_segStats.mismatch[2]++;
+            g_segStats.miss[2] += SegMisses(m_ptsSI, m_tubePre, c, need, *segs);
+         }
+      }
+      else
+         RubberContact::PatchTube(bs, m_ptsSI.data(), n, m_radiusSI, c, m_tubePre, it.gs.zero, pr);
+      if (prof)
+      {
+         g_segStats.calls[2]++;
+         g_segStats.inTube[2] += n - 1;
+         g_segStats.tested[2] += segs != nullptr ? segs->size() : n - 1;
+         g_segStats.ticks[2] += __rdtsc() - t0;
+      }
+   }
    return pr;
 }
 
@@ -1716,7 +1963,37 @@ double HitRubber::ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact
       return PlayfieldCuts::ArrivalS(this, bs, m_surface->tris, it.Faces(c), nearestSeg, c, v, a, hMax, touchM, arriveM, it.candR >= 0.0 ? it.candR : 1e30, ft, FinderCutsOf(it));
    if (m_surface != nullptr)
       return RubberContact::ArrivalTriangles(bs, m_surface->tris, it.Faces(c), nearestSeg, c, v, a, hMax, touchM, arriveM, fr);
-   return RubberContact::ArrivalTube(bs, m_ptsSI.data(), (int)m_ptsSI.size(), m_radiusSI, m_tubePre, nearestSeg, c, v, a, hMax, touchM, arriveM);
+   const bool prof = SegProfOn() && !CordModel();   // P5 counters (static tubes; diagnostics only)
+   const uint64_t t0 = prof ? __rdtsc() : 0;
+   const int n = (int)m_ptsSI.size();
+   const std::vector<int> *segs = nullptr;
+   double h;
+   if (SegsOn())
+   {
+      // P5: a segment farther than S + arriveM + |v| hMax + |a| hMax^2 from c leaves the step unchanged (ArrivalStep: its gap exceeds what the ball closes within hMax), so the list
+      // holding every segment within that is read in place of the whole tube
+      const double need = (bs.R + m_radiusSI + arriveM + v.Length() * hMax + std::abs(a) * hMax * hMax) * (1.0 + 1e-9) + 1e-9;
+      segs = &SegsFor(it, c, need);
+      h = RubberContact::ArrivalTube(bs, m_ptsSI.data(), n, m_radiusSI, m_tubePre, nearestSeg, c, v, a, hMax, touchM, arriveM, segs);
+      if (FinderCheckOn())   // check mode: the whole tube's answer
+      {
+         const double w = RubberContact::ArrivalTube(bs, m_ptsSI.data(), n, m_radiusSI, m_tubePre, nearestSeg, c, v, a, hMax, touchM, arriveM);
+         g_segStats.checks[3]++;
+         if (std::memcmp(&w, &h, sizeof(double)) != 0)
+            g_segStats.mismatch[3]++;
+         g_segStats.miss[3] += SegMisses(m_ptsSI, m_tubePre, c, need, *segs);
+      }
+   }
+   else
+      h = RubberContact::ArrivalTube(bs, m_ptsSI.data(), n, m_radiusSI, m_tubePre, nearestSeg, c, v, a, hMax, touchM, arriveM);
+   if (prof)
+   {
+      g_segStats.calls[3]++;
+      g_segStats.inTube[3] += n - 1;
+      g_segStats.tested[3] += segs != nullptr ? segs->size() : n - 1;
+      g_segStats.ticks[3] += __rdtsc() - t0;
+   }
+   return h;
 }
 
 // ---- Engine-stepped contact ----
@@ -2622,6 +2899,19 @@ static void FinderP4Log(const uint64_t cycles)
    PLOGI << "Finder P4b totals: " << cycles << " cycles (key " << (g_finder.on ? 1 : 0) << "); NearCuts calls " << c.calls << " (" << (double)c.calls / cyc << " per cycle), cuts tested per call "
          << (c.calls > 0 ? (double)c.tested / (double)c.calls : 0.0) << ", us per cycle " << (double)c.ticks * nsPerTick * 1e-3 / cyc << ", re-queries " << c.requery << "; cut queries " << c.queries
          << ", us per cycle " << (double)c.queryTicks * nsPerTick * 1e-3 / cyc << "; check calls " << c.checks << ", mismatches " << c.mismatch << ", misses " << c.miss;
+   // P5: per tube reader (probe, bars, patch, arrival): calls, segments in the tube per call, segments read per call (key 0: the whole tube), us per cycle; check calls, mismatches, misses
+   const SegStats &t = g_segStats;
+   static const char *const names[4] = { "probe", "bars", "patch", "arrival" };
+   std::ostringstream o;
+   o << "Finder P5 totals: " << cycles << " cycles (key " << (g_finder.on ? 1 : 0) << ")";
+   for (int k = 0; k < 4; k++)
+   {
+      const double nc = (double)std::max<uint64_t>(t.calls[k], 1);
+      o << "; " << names[k] << " calls " << t.calls[k] << ", segs in tube " << (double)t.inTube[k] / nc << ", read " << (double)t.tested[k] / nc << ", us per cycle " << (double)t.ticks[k] * nsPerTick * 1e-3 / cyc
+        << ", checks " << t.checks[k] << " mismatches " << t.mismatch[k] << " misses " << t.miss[k];
+   }
+   o << "; segment queries " << t.queries << ", re-queries " << t.requery << "; stock HitTest segment loop " << t.hitTestLoop;
+   PLOGI << o.str();
 }
 
 void HitRubber::FinderQuery(const HitBall *const ball, const RubberContact::V3 &c, const RubberContact::V3 &v, const double ballR, const double dt)
