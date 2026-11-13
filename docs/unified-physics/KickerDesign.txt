@@ -30,7 +30,9 @@ Virtual kicker (F 9-10):
     arm's drive work, booked. This puts in the unified law what stock does for its locked ball (hitball.cpp: infinite mass). History: the magnets' held form is an energy
     term, not a contact (K3c); a reset hold (ordinary ball in the cycle, put back at its end) let a resting neighbour sink 0.1 mm in 150 ms (K4) and keeping the put-back's
     depth would store energy made by a teleport.
- i. Capture zeroes the parked ball's speed and spin (energy only leaves); Kick restores motion as the drive in e.
+ i. Capture zeroes the parked ball's speed and spin and places it at the kicker's centre at stock's hold height, as stock does (user 2026-11-13, replacing 'park where it
+    entered': script offsets and trough layouts assume the centre). The placement goes through the first-sight rule (NotePlaced), so an overlap it makes stores nothing; the
+    capture books its drive work (kinetic energy out, height change). Kick restores motion as the drive in e.
 Stock is not deleted (user 2026-11-12): on the unified path the new kicker replaces it; with unified = 0 the stock kicker runs unchanged. Once accepted, the unified path's
 own kicker workarounds go: the g_playfieldHoles exclusion and its hand-over to stock, the m_lockedInKicker skips inside the contact system (PairEligible, contactsystem.cpp
 skips), the stock counter's kicker rows. KickerHitCircle, collide.cpp, quadtree.cpp and hitball.cpp's frozen ball stay for stock.

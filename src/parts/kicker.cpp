@@ -215,8 +215,8 @@ bool Kicker::PhysicalSetup(PhysicsEngine *const physics)
 
 // The virtual kicker (KickerDesign.txt 1g-1i, 4b, 6c; Requirements F 9-10), on the unified engine with [Features] kickers = 1 and type virtual (the default): a ball store. No KickerHitCircle,
 // no playfield hole, no m_lockedInKicker. A sensing zone, the stock hit circle's (radius with the legacy factor, height from the surface to the surface + HitHeight), tests the ball's centre on
-// each step's chord as a None trigger's zone does (ContactSystem::NoneZones). An empty, enabled kicker parks the entering ball where it is at the end of that step (Park: the capture,
-// speed and spin to 0, energy out, booked as a loss, 1i); from then on it is a held ball (KickerHold, design 1h): infinite mass in the shared pair law, not stepped. Hit is fired after the step.
+// each step's chord as a None trigger's zone does (ContactSystem::NoneZones). An empty, enabled kicker parks the entering ball at its centre at stock's hold height at the end of that step
+// (Park: the capture, speed and spin to 0, the energy change booked, 1i); from then on it is a held ball (KickerHold, design 1h): infinite mass in the shared pair law, not stepped. Hit is fired after the step.
 // A ball entering a full kicker is not caught (not listed, no Hit, as stock). Kick (4b): today's kick, angle and inclination in degrees; Unhit when the kicked ball's centre leaves the zone.
 void Kicker::VirtualSetup(PhysicsEngine *const physics, const bool fromIni)
 {
@@ -231,12 +231,13 @@ void Kicker::VirtualSetup(PhysicsEngine *const physics, const bool fromIni)
          << m_d.m_fallThrough << " (not used: the ball is parked), enabled " << m_d.m_enabled << "; a parked ball is held (infinite mass, not stepped)";
 }
 
-bool Kicker::Park(HitBall *const ball, const Vertex3Ds &at)
+bool Kicker::Park(HitBall *const ball)
 {
    if (!m_virtual || !m_d.m_enabled || m_heldBall != nullptr)
       return false;   // full, or disabled (as stock's hit circle): not caught
    m_heldBall = m_lastHeldBall = ball;
-   m_parkPlace = at;
+   const float height = m_ptable->GetSurfaceHeight(m_d.m_szSurface, m_d.m_vCenter.x, m_d.m_vCenter.y);
+   m_parkPlace = Vertex3Ds(m_d.m_vCenter.x, m_d.m_vCenter.y, height + ball->m_d.m_radius);   // stock's hold place (its hit circle's zlow + the ball's radius), as CreateBall's
    m_parkMovedNoted = false;
    Capture(ball);
    return true;
@@ -261,21 +262,24 @@ namespace
                                            // share of gravity in a cycle, 0.3 - 1.5 uJ measured, K4 run A) only add to the totals
 }
 
-// The capture (design 1i): the ball is parked where it is at the end of the step in which its centre entered the zone (no move back to the crossing: no snap), its speed and spin to 0, once.
-// The energy it had (kinetic and spin) leaves: booked between cycles as a loss (ContactSystem::NoteDriveWork, negative). Its surface contact ends (a held ball has none). Nothing moves, so
-// nothing is a placement. From then on nothing moves it: it is a held ball (KickerHold, design 1h). The Hit keeps the chord's crossing time (NoneZones::Chord).
+// The capture (design 1i): at the end of the step in which its centre entered the zone, the ball is placed at the kicker's centre at stock's hold height (as stock: script offsets and
+// trough layouts assume it), its speed and spin to 0, once. The change of its energy (kinetic, spin and height) is booked between cycles as the capture's drive work
+// (ContactSystem::NoteDriveWork). The move is a placement (NotePlaced: the first-sight rule, so an overlap it makes stores nothing). Its surface contact ends (a held ball has none).
+// From then on nothing moves it: it is a held ball (KickerHold, design 1h). The Hit keeps the chord's crossing time (NoneZones::Chord).
 void Kicker::Capture(HitBall *const b)
 {
    const double e = BallEnergyJ(b, m_parkPlace);   // (the place at rest has 0)
    const char *const name = TestDriver::BallName(b);
-   PLOGI << "Kicker " << GetName() << ": parks ball " << (name != nullptr ? name : "") << " where it is at the end of the step its centre entered the zone, (" << m_parkPlace.x << ", " << m_parkPlace.y
-         << ", " << m_parkPlace.z << ") (" << (b->m_d.m_pos - m_parkPlace).Length() * ContactSystem::kMetresPerUnit * 1e3 << " mm from the ball: 0 expected), speed " << b->m_d.m_vel.Length() * ContactSystem::kVelocityScale
+   PLOGI << "Kicker " << GetName() << ": parks ball " << (name != nullptr ? name : "") << " at its centre (" << m_parkPlace.x << ", " << m_parkPlace.y << ", " << m_parkPlace.z << "), moved "
+         << (b->m_d.m_pos - m_parkPlace).Length() * ContactSystem::kMetresPerUnit * 1e3 << " mm, speed " << b->m_d.m_vel.Length() * ContactSystem::kVelocityScale
          << " m/s and spin " << b->m_angularmomentum.Length() / b->Inertia() / 0.01 << " rad/s set to 0, t=" << (g_pplayer != nullptr ? g_pplayer->m_time_msec : 0u);
    ContactSystem::Release(b, "kicker (held ball)");
+   b->m_d.m_pos = m_parkPlace;
+   ContactSystem::NotePlaced(b);
    b->m_d.m_vel.SetZero();
    b->m_angularmomentum.SetZero();
    ContactSystem::DropKeptDoubles(b);   // the kicker wrote its state: the group's kept copy of the moving ball no longer describes it
-   ContactSystem::NoteDriveWork(b, -e, "capture (virtual kicker, speed and spin to 0)");
+   ContactSystem::NoteDriveWork(b, -e, "capture (virtual kicker, placed at its centre, speed and spin to 0)");
 }
 
 void Kicker::CheckParked()

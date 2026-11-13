@@ -197,8 +197,9 @@ Agreed with the user 2026-11-12, one item at a time (draft and tests: runs/2026-
 9. Two kicker types. Physical (items 1-7): always has its cup and no Enabled setting (nothing to switch off on a real part). Virtual: a ball store, discouraged, for subways, scripted
    locks and holders; VPX's legacy kicker option maps to it. Default: virtual; a kicker is physical only where the table's physics ini says so (user 2026-11-12, after K3: script
    kick speeds tuned for stock's lift trap the ball in a real cup, e.g. Gorgar's 0.43 m/s never leaves the Sys7 cup).
-10. Virtual kicker: a sensing zone (kicker circle, height range) tests the ball centre each cycle. An empty kicker parks the entering ball where it is, speed and spin zeroed (energy only
-   leaves), no snap, no lift; Hit fires after the step. Other balls meet a parked ball through the shared ball-ball law as a ball of infinite mass that forces do not move (user 2026-11-13,
+10. Virtual kicker: a sensing zone (kicker circle, height range) tests the ball centre each cycle. An empty kicker parks the entering ball at its centre at stock's hold height, as stock
+   does (user 2026-11-13: scripts' kick offsets and trough layouts assume the centre; parking where it entered left a stress v2 trough ball 4.7 mm inside TroughRamp), speed and spin
+   zeroed, the capture's drive work booked (kinetic and height change); Hit fires after the step. Other balls meet a parked ball through the shared ball-ball law as a ball of infinite mass that forces do not move (user 2026-11-13,
    after a reset hold let a resting neighbour sink); a second ball entering a full kicker is not caught. Kick releases it at its parked place plus the script's offset with the kick's speed, angle and scatter (the only energy in); an offset that starts the ball inside something
    falls under the overlap rule (no stored energy reaches the ball). Unhit when the kicked ball's centre leaves the zone. CreateBall makes a parked ball, DestroyBall removes it.
    Limit: a parked ball floats where it was caught (even mid-air), the reason it is discouraged.

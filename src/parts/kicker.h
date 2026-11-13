@@ -98,9 +98,9 @@ public:
    bool IsPhysical() const { return m_physical; }
    bool IsConverted() const { return m_physical || m_physicalRefused || m_virtual; }   // on the unified kicker path (no stock kicker code; stock counter, design 7f)
    // Virtual kicker (unified engine, [Features] kickers = 1, type virtual, the default; KickerDesign.txt 1g-1i, 4b; Requirements F 10): its sensing zone (ContactSystem::NoneZones) calls these.
-   bool Park(HitBall *ball, const Vertex3Ds &at);   // a ball's centre entered the zone; 'at' = where the ball is at that step's end: an empty, enabled kicker parks it there (true: listed, Hit); else false (not caught)
+   bool Park(HitBall *ball);   // a ball's centre entered the zone: an empty, enabled kicker parks it at its centre at stock's hold height (true: listed, Hit); else false (not caught)
    bool Parked(const HitBall *ball) const { return m_virtual && ball != nullptr && m_heldBall == ball; }   // the parked ball: held, no Unhit until it is kicked
-   void Capture(HitBall *ball);                      // Park: the capture (design 1i): parked where it is, speed and spin to 0, the energy booked as a loss; no surface contact
+   void Capture(HitBall *ball);                      // Park: the capture (design 1i): placed at the centre at stock's hold height, speed and spin to 0, the energy change booked; no surface contact
    void CheckParked();                               // KickerHold::CycleEnd: the parked ball still at its place, at rest (nothing moves a held ball): a fault said once if not
    bool IsVirtual() const { return m_virtual; }
    HitBall *HeldBall() const { return m_heldBall; }

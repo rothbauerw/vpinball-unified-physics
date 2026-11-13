@@ -491,7 +491,7 @@ void ContactSystem::NoneZones::Judge(const Zone &z, HitBall *const b, const bool
    const int i = FindIndexOf(vol, Owner(z));
    if (in && i < 0)
    {
-      if (z.virt && !z.kicker->Park(b, at))
+      if (z.virt && !z.kicker->Park(b))
          return;   // a full or disabled virtual kicker: not caught, not listed, no Hit (as stock)
       vol.push_back(Owner(z));
       m_events.push_back({ t, z.trigger, b, true, z.kicker });
