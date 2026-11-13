@@ -43,7 +43,12 @@ namespace Magnets
    const std::vector<FormTerm> &PairFormTerms();
    bool HasPairForm(const HitBall *hb);
    // adds the velocity change over one physics step (VPU/VPT) of a ball at pos (U) with radius (U) and mass (VPX mass units) to dv. heldOnly: the magnets whose pull the group step holds for the cycle (not core_model = cells: CellPulls)
-   void AddVelocityIncrement(const float pos[3], float radius, float mass, float dv[3], bool heldOnly = false);
+   // aircoreInStep ([Features] aircore_in_step, with heldOnly): the air-core coils are left out too, the group step reads them at the step's midpoint (AircoreForce)
+   void AddVelocityIncrement(const float pos[3], float radius, float mass, float dv[3], bool heldOnly = false, bool aircoreInStep = false);
+   // The air-core coils' pull on a solid steel ball (7800 kg/m3) of radius radiusU (U) centred at pos (U), summed over the coils with current: F (N, table frame) and, when S is
+   // given, its slope S[i][j] = dF_i / dpos_j per metre of the centre's move. The law of AddVelocityIncrement's air-core branch (one shared function); a ball of Ball.Mass m
+   // and steel mass M_s = 7800 V m feels F x (its mass / M_s), as there.
+   void AircoreForce(const double pos[3], double radiusU, double F[3], double S[3][3]);
    // A cells magnet's pull as the group step takes it, a stored energy of the ball's place (magnetcore.h Model::Energy): its tables, its pole face (m), its axis, the coil's current held for this physics step and the one
    // before it (a change between them is the coil's work). Every cells magnet with a current in either. StepNumber: counts the physics steps.
    struct CellPull { const MagnetCore::Model *core = nullptr; double o[3] = { 0, 0, 0 }, n[3] = { 0, 0, 1 }, amps = 0, ampsBefore = 0; };

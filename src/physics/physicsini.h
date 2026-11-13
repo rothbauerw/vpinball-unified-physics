@@ -48,6 +48,8 @@ namespace PhysicsIni
       bool turntables = true;     // turntables ([Turntable:<name>] sections); off = none
       bool playfieldCuts = true;  // playfield_cuts: holes cut in the playfield ([PlayfieldCut:<name>] sections, playfieldcut.h; the slot under a wire switch); off = every cut ignored, the playfield solid (on while tested, rule 6)
       bool freeFlight = true;     // free_flight (on while tested, rule 6; runs/2026-11-12-freeflight/log.md): 1 = every ball the contact system does not hold is still stepped by it each cycle, as a body with no contacts (its gravity, nudge and magnets in the substeps), so no ball is ever moved by the stock flight (pos += time x end velocity); 0 = such a ball is moved by stock as before
+      bool aircoreInStep = true;  // aircore_in_step (on while tested, rule 6; runs/2026-11-13-aircore-ff/design.md): 1 = an air-core coil's pull on a ball in the contact system's step is read at the
+                                  // step's midpoint in every evaluation (Magnets::AircoreForce, its slope in Newton's Jacobian); 0 = held at the cycle-start place for the whole cycle (Ball::fExt), as today
       bool seatEditorBalls = true; // seat_editor_balls (on while tested, rule 6; runs/2026-11-13-editor-balls): 1 = at play start each ball placed in the table editor is moved out of any surface it overlaps
                                   // (playfield, walls, ramps, primitives, rubbers, moving parts at rest; not other balls) by the shortest move, the no-past seating (ContactSystem::PushOutAtStart); 0 = left where it was placed, as today
       bool kickers = true;        // kickers (on while tested, rule 6; KickerDesign.txt): 1 = a kicker of type physical ([Kicker:<name>] type; default virtual) is a cup of the
@@ -168,6 +170,8 @@ namespace PhysicsIni
             f.playfieldCuts = on;
          else if (key == "free_flight")
             f.freeFlight = on;
+         else if (key == "aircore_in_step")
+            f.aircoreInStep = on;
          else if (key == "hit_speed")
             f.hitSpeed = on;
          else if (key == "kickers")
@@ -190,7 +194,7 @@ namespace PhysicsIni
       if (!ContactSystem::Unified())
       {
          f.flippers = f.flipperRubber = f.rubbers = f.playfieldContact = f.surfaceRubbers = f.hardSurfaces = f.proximityEngage = f.hinges = f.triggers = false;
-         f.bands = f.slings = f.contact = f.magnets = f.turntables = f.playfieldCuts = f.hitSpeed = f.freeFlight = f.kickers = f.seatEditorBalls = false;
+         f.bands = f.slings = f.contact = f.magnets = f.turntables = f.playfieldCuts = f.hitSpeed = f.freeFlight = f.aircoreInStep = f.kickers = f.seatEditorBalls = false;
          return f;
       }
       if (!file.empty())

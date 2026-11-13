@@ -1359,7 +1359,121 @@ namespace Magnets
       return g_magnets.empty() ? 0.0 : g_magnets.front().eddySigma * g_magnets.front().eddyScale;
    }
 
-   void AddVelocityIncrement(const float pos[3], float radiusU, float mass, float dv[3], const bool heldOnly)
+   // Air-core coil m's pull on a ball centred at (px, py, pz) (m, from the coil centre) with radius a (m): the one law of AddVelocityIncrement and AircoreForce.
+   // F = I^2 sum_l a^(2l+1) grad Q_l (the ball's energy to order 4, see BuildAircoreTable), bilinear in the cell; z mirrors about the centre.
+   // k = I^2 x the ball's saturation; G = the force per k on a solid steel ball (table frame), so the force is k G. dP (when given): the slope d(k G_i) / d p_j (N/m), the
+   // derivative of the same bilinear read (the same four nodes, saturation included) turned from (z along the axis, r) into x, y, z as the cells field's Hessian is
+   // (contactsystem.cpp PullField::At); it jumps at the 1 mm cell edges. False: no force (beyond the table).
+   static bool AircorePull(const Magnet &m, const double px, const double py, const double pz, const double a, double &k, double G[3], double (*const dP)[3])
+   {
+      const double zc = px * m.nx + py * m.ny + pz * m.nz;
+      const double rx = px - zc * m.nx, ry = py - zc * m.ny, rz = pz - zc * m.nz, rr = std::sqrt(rx * rx + ry * ry + rz * rz);
+      const double fz = std::fabs(zc) / TH, fr = rr / TH;
+      if (fz >= TN - 1 || fr >= TN - 1)
+         return false;
+      const int iz = (int)fz, ir = (int)fr;
+      const double wz = fz - iz, wr = fr - ir;
+      double v[AC_NF], vz[AC_NF], vr[AC_NF];   // the read, and its slopes along |z| and r (per m: only with dP)
+      for (int q = 0; q < AC_NF; ++q)
+      {
+         const float *t00 = &m.tab[((size_t)iz * TN + ir) * AC_NF + q], *t01 = t00 + AC_NF, *t10 = t00 + (size_t)TN * AC_NF, *t11 = t10 + AC_NF;
+         v[q] = (1 - wz) * ((1 - wr) * *t00 + wr * *t01) + wz * ((1 - wr) * *t10 + wr * *t11);
+         if (dP != nullptr)
+         {
+            vz[q] = ((1 - wr) * ((double)*t10 - (double)*t00) + wr * ((double)*t11 - (double)*t01)) / TH;
+            vr[q] = ((1 - wz) * ((double)*t01 - (double)*t00) + wz * ((double)*t11 - (double)*t10)) / TH;
+         }
+      }
+      const double i2 = m.amps * m.amps;
+      // The series holds while the ball is clear of the winding. A ball inside the winding block (nothing solid stops it there) keeps the dipole term only.
+      int orders = AC_L;
+      if (WindingGap(m, zc, rr) < a)
+      {
+         orders = 1;
+         if (!m.overlapWarned)
+         {
+            m.overlapWarned = true;
+            const std::string msg = "Magnet " + m.name + ": a ball is inside the air-core winding (no tube or track keeps it out); its pull there uses the dipole term only. Give the coil a tube or the ball a track.";
+            PLOGW << msg;
+            if (g_pplayer && g_pplayer->m_liveUI)
+               g_pplayer->m_liveUI->PushNotification(msg, 8000);
+         }
+      }
+      double gz = 0, gr = 0, a2l1 = a * a * a;
+      double gzz = 0, gzr = 0, grz = 0, grr = 0;   // their slopes: d gz / d|z|, d gz / dr, d gr / d|z|, d gr / dr (only with dP)
+      for (int l = 0; l < orders; ++l, a2l1 *= a * a)
+      {
+         gz += a2l1 * v[2 * l];
+         gr += a2l1 * v[2 * l + 1];
+         if (dP != nullptr)
+         {
+            gzz += a2l1 * vz[2 * l];
+            gzr += a2l1 * vr[2 * l];
+            grz += a2l1 * vz[2 * l + 1];
+            grr += a2l1 * vr[2 * l + 1];
+         }
+      }
+      // ball saturation: the moment is capped at Ms (M = 3H below it); applied to the whole response, exact for the dipole term
+      const double B = std::sqrt(v[2 * AC_L] * v[2 * AC_L] + v[2 * AC_L + 1] * v[2 * AC_L + 1]) * std::fabs(m.amps);
+      const bool saturated = 3 * B > MU0 * m.msAm;
+      const double sat = saturated ? MU0 * m.msAm / (3 * B) : 1.0;
+      k = i2 * sat;
+      const double Fz = zc < 0 ? -gz : gz, ur = rr > 1e-9 ? 1.0 / rr : 0.0;
+      G[0] = Fz * m.nx + gr * rx * ur;
+      G[1] = Fz * m.ny + gr * ry * ur;
+      G[2] = Fz * m.nz + gr * rz * ur;
+      if (dP != nullptr)
+      {
+         // in (zc signed along the axis, rr): Pz = k Fz along n, Pr = k gr along the radial direction u; d|zc| / dzc = sg
+         const double sg = zc < 0 ? -1.0 : 1.0;
+         double kz = 0.0, kr = 0.0;   // dk / dzc, dk / drr: k = I^2 Ms mu0 / (3 B) when saturated
+         if (saturated)
+         {
+            const double bz = v[2 * AC_L], br = v[2 * AC_L + 1], bn = std::sqrt(bz * bz + br * br);
+            const double dBz = sg * std::fabs(m.amps) * (bz * vz[2 * AC_L] + br * vz[2 * AC_L + 1]) / bn, dBr = std::fabs(m.amps) * (bz * vr[2 * AC_L] + br * vr[2 * AC_L + 1]) / bn;
+            kz = -k / B * dBz;
+            kr = -k / B * dBr;
+         }
+         const double Pr = k * gr;
+         const double Pzz = kz * Fz + k * gzz, Pzr = kr * Fz + k * sg * gzr, Prz = kz * gr + k * sg * grz, Prr = kr * gr + k * grr;
+         const double across = rr > 1e-9 ? Pr / rr : Prr;   // the turn of the radial direction round the axis
+         const double n[3] = { m.nx, m.ny, m.nz }, u[3] = { rx * ur, ry * ur, rz * ur };
+         for (int i = 0; i < 3; i++)
+            for (int j = 0; j < 3; j++)
+               dP[i][j] = n[i] * (Pzz * n[j] + Pzr * u[j]) + u[i] * (Prz * n[j] + Prr * u[j]) + across * ((i == j ? 1.0 : 0.0) - n[i] * n[j] - u[i] * u[j]);
+      }
+      return true;
+   }
+
+   void AircoreForce(const double pos[3], const double radiusU, double F[3], double S[3][3])
+   {
+      F[0] = F[1] = F[2] = 0.0;
+      if (S != nullptr)
+         for (int i = 0; i < 3; i++)
+            S[i][0] = S[i][1] = S[i][2] = 0.0;
+      if (!g_anyCurrent)
+         return;
+      for (const Magnet &m : g_magnets)
+      {
+         if (!m.aircore || m.amps == 0)
+            continue;
+         const double px = VPUTOM(pos[0] - m.x), py = VPUTOM(pos[1] - m.y), pz = VPUTOM(pos[2] - m.z);   // ball relative to the coil centre, m
+         if (!m.core && px * px + py * py + pz * pz > REACH * REACH)
+            continue;
+         double k, G[3], dP[3][3];
+         if (!AircorePull(m, px, py, pz, VPUTOM(radiusU), k, G, S != nullptr ? dP : nullptr))
+            continue;
+         for (int i = 0; i < 3; i++)
+         {
+            F[i] += k * G[i];
+            if (S != nullptr)
+               for (int j = 0; j < 3; j++)
+                  S[i][j] += dP[i][j];
+         }
+      }
+   }
+
+   void AddVelocityIncrement(const float pos[3], float radiusU, float mass, float dv[3], const bool heldOnly, const bool aircoreInStep)
    {
       if (!g_anyCurrent)
          return;
@@ -1372,49 +1486,16 @@ namespace Magnets
             continue;
          if (m.aircore)
          {
-            // Air-core coil: F = I^2 sum_l a^(2l+1) grad Q_l (the ball's energy to order 4, see BuildAircoreTable), bilinear in the cell; z mirrors about the centre.
-            const double zc = px * m.nx + py * m.ny + pz * m.nz;
-            const double rx = px - zc * m.nx, ry = py - zc * m.ny, rz = pz - zc * m.nz, rr = std::sqrt(rx * rx + ry * ry + rz * rz);
-            const double fz = std::fabs(zc) / TH, fr = rr / TH;
-            if (fz >= TN - 1 || fr >= TN - 1)
+            if (heldOnly && aircoreInStep)
+               continue;   // ([Features] aircore_in_step) the group step reads it at the step's midpoint: AircoreForce
+            const double a = VPUTOM(radiusU);
+            double k, G[3];
+            if (!AircorePull(m, px, py, pz, a, k, G, nullptr))
                continue;
-            const int iz = (int)fz, ir = (int)fr;
-            const double wz = fz - iz, wr = fr - ir;
-            double v[AC_NF];
-            for (int q = 0; q < AC_NF; ++q)
-            {
-               const float *t00 = &m.tab[((size_t)iz * TN + ir) * AC_NF + q], *t01 = t00 + AC_NF, *t10 = t00 + (size_t)TN * AC_NF, *t11 = t10 + AC_NF;
-               v[q] = (1 - wz) * ((1 - wr) * *t00 + wr * *t01) + wz * ((1 - wr) * *t10 + wr * *t11);
-            }
-            const double a = VPUTOM(radiusU), i2 = m.amps * m.amps;
-            // The series holds while the ball is clear of the winding. A ball inside the winding block (nothing solid stops it there) keeps the dipole term only.
-            int orders = AC_L;
-            if (WindingGap(m, zc, rr) < a)
-            {
-               orders = 1;
-               if (!m.overlapWarned)
-               {
-                  m.overlapWarned = true;
-                  const std::string msg = "Magnet " + m.name + ": a ball is inside the air-core winding (no tube or track keeps it out); its pull there uses the dipole term only. Give the coil a tube or the ball a track.";
-                  PLOGW << msg;
-                  if (g_pplayer && g_pplayer->m_liveUI)
-                     g_pplayer->m_liveUI->PushNotification(msg, 8000);
-               }
-            }
-            double gz = 0, gr = 0, a2l1 = a * a * a;
-            for (int l = 0; l < orders; ++l, a2l1 *= a * a)
-            {
-               gz += a2l1 * v[2 * l];
-               gr += a2l1 * v[2 * l + 1];
-            }
-            // ball saturation: the moment is capped at Ms (M = 3H below it); applied to the whole response, exact for the dipole term
-            const double B = std::sqrt(v[2 * AC_L] * v[2 * AC_L] + v[2 * AC_L + 1] * v[2 * AC_L + 1]) * std::fabs(m.amps);
-            const double sat = 3 * B > MU0 * m.msAm ? MU0 * m.msAm / (3 * B) : 1.0;
-            const double s = i2 * sat / (7800.0 * 4.0 / 3.0 * PI * a * a * a * std::max(0.001f, mass)) * MS2TOVPUVPT2(1.0f) * PHYS_FACTOR;
-            const double Fz = zc < 0 ? -gz : gz, ur = rr > 1e-9 ? 1.0 / rr : 0.0;
-            dv[0] += (float)(s * (Fz * m.nx + gr * rx * ur));
-            dv[1] += (float)(s * (Fz * m.ny + gr * ry * ur));
-            dv[2] += (float)(s * (Fz * m.nz + gr * rz * ur));
+            const double s = k / (7800.0 * 4.0 / 3.0 * PI * a * a * a * std::max(0.001f, mass)) * MS2TOVPUVPT2(1.0f) * PHYS_FACTOR;
+            dv[0] += (float)(s * G[0]);
+            dv[1] += (float)(s * G[1]);
+            dv[2] += (float)(s * G[2]);
             continue;
          }
          if (m.core)
