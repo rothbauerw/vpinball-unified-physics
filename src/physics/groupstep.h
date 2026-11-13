@@ -153,6 +153,15 @@ namespace GroupStep
       virtual ~BallField() = default;
       virtual double Eval(const V3 &c, double R, V3 *grad, M3 *hess) const = 0;
    };
+   // A force on the balls that depends on the ball's place but is not the slope of a stored energy the group can read (an air-core coil's pull from its force table): per unit of
+   // the ball's Ball::forceScale, read at the step's midpoint in every evaluation; a drive, its work (midpoint force . move) counted. Fixed for the cycle; it owns no state of a step.
+   // slope: dF/dc (N/m, row i = force component i), when wanted
+   class BallForce
+   {
+   public:
+      virtual ~BallForce() = default;
+      virtual V3 At(const V3 &c, double R, M3 *slope) const = 0;
+   };
 
    // ---- surfaces ----
    // What a surface reports for a ball centre: the signed depth (> 0 = squashed; the ball's radius plus a tube's radius minus the distance), the normal (surface -> ball
@@ -269,6 +278,7 @@ namespace GroupStep
       double m = 0.080, R = 25.0 * 0.53975e-3;
       V3 fExt;               // a held outside force (a magnet not on a field, the magnets' ball-pair force, a part not yet moved over): a drive, its work counted
       double fieldScale = 0.0;   // how much of the group's fields it feels (Group::field); 0 = none
+      double forceScale = 0.0;   // how much of the group's ball forces it feels (Group::force); 0 = none (a held ball: none)
       double brakeRate = 0.0;    // a viscous brake on its spin across an axis (the eddy currents in a coil's field), 1/s; 0 = none. The caller's, held for the cycle
       V3 brakeAxis;              // the axis (unit): a spin about it is not braked
       // held (KickerDesign 1h): a ball a kicker holds (parked) or carries (the arm) has infinite mass: forces do not move it (inverse mass and inertia 0), its move is given: velocity v
@@ -1136,7 +1146,7 @@ namespace GroupStep
       // The start of a use (an island's steps, a part's steps alone): no ball, shape or part yet, and nothing an earlier use wrote can be read
       void BeginUse()
       {
-         nb = ns = ni = np = nf = nform = 0;
+         nb = ns = ni = np = nf = nbf = nform = 0;
          WipeUseWork();
       }
       // VPX_GROUP_PHASE_TIMING=<file> (a diagnostic, read once; unset = off: no clock is read, nothing changes): one row per step, the wall time in each phase,
@@ -1194,9 +1204,10 @@ namespace GroupStep
 
       Settings set;
       Books books;
-      int nb = 0, ns = 0, ni = 0, np = 0, nf = 0;
+      int nb = 0, ns = 0, ni = 0, np = 0, nf = 0, nbf = 0;
       Buf<Ball> ball;
       AddedList<const BallField *> field;   // the position energies on the balls: one energy, each ball's difference over its move exact
+      AddedList<const BallForce *> force;   // the place-dependent forces on the balls (BallForce): read at the midpoint, a drive
       // the magnets' ball-pair form (pairform.h, 2026-11-03): a stored energy E = -sum g q of the balls' places, fixed for the cycle; a and b index the group's balls
       // (b < 0: the other ball held at the term's o, outside this group). Its work over a move is the exact difference (discrete gradient), as the fields'
       Buf<PairForm::Term> form;
@@ -1235,6 +1246,26 @@ namespace GroupStep
       {
          field.b.Grow((size_t)nf + 1);
          field.b[nf++] = f;
+      }
+      void AddForce(const BallForce *const f)
+      {
+         force.b.Grow((size_t)nbf + 1);
+         force.b[nbf++] = f;
+      }
+      // The ball's place-dependent forces at its centre c (per BallForce, times its forceScale); their slope added into slope when wanted
+      V3 BallForceAt(const Ball &b, const V3 &c, M3 *const slope = nullptr) const
+      {
+         V3 f;
+         for (int k = 0; k < nbf; k++)
+         {
+            M3 s;
+            f = f + force[k]->At(c, b.R, slope != nullptr ? &s : nullptr) * b.forceScale;
+            if (slope != nullptr)
+               for (int i = 0; i < 3; i++)
+                  for (int j = 0; j < 3; j++)
+                     slope->a[i][j] += b.forceScale * s.a[i][j];
+         }
+         return f;
       }
       void AddForm(const PairForm::Term &t)
       {
@@ -1622,6 +1653,8 @@ namespace GroupStep
          for (int i = 0; i < nb; i++)
          {
             fNet[i] = (set.g * ball[i].m) + ball[i].fExt;
+            if (nbf > 0 && ball[i].forceScale != 0.0)
+               fNet[i] = fNet[i] + BallForceAt(ball[i], ball[i].c);
             if (nf > 0 && ball[i].fieldScale != 0.0)
             {
                V3 gf;
@@ -2810,6 +2843,19 @@ namespace GroupStep
          driveW = 0.0;
          for (int i = 0; i < nb; i++)
             driveW += ball[i].fExt.Dot(dc[i]);
+         // the place-dependent forces (BallForce): read at the midpoint, a drive as fExt is (its work the midpoint force times the move); its slope in the Jacobian
+         for (int i = 0; nbf > 0 && i < nb; i++)
+            if (ball[i].forceScale != 0.0)
+            {
+               M3 sf;
+               const V3 f = BallForceAt(ball[i], bm[i].c, J ? &sf : nullptr);
+               F[i] = F[i] + f;
+               driveW += f.Dot(dc[i]);
+               if (impOn)
+                  impX[i] = impX[i] + f;   // (test tooling: booked with fExt, the held drive it replaces)
+               if (J)
+                  AddBlock(J, 6 * i, 6 * i, sf, -0.5 * h);   // (R = inertia - F h; the midpoint moves half as far as the end)
+            }
          // the spin brake: on the mid-step spin across its axis, so it can only take energy, and that energy is what Accept books
          for (int i = 0; i < nb; i++)
             if (ball[i].brakeRate > 0.0)

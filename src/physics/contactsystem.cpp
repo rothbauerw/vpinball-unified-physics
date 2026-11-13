@@ -49,6 +49,7 @@ namespace ContactSystem
    static bool s_unified = false, s_unifiedSet = false;
    static bool s_freeFlight = false, s_proximity = false;   // [Features] free_flight and proximity_engage of this table: read at each table load (SetTable), not once per process
    static bool s_seatEditorBalls = false;   // [Features] seat_editor_balls of this table (physicsini.h), read likewise; off with the unified engine off
+   static bool s_aircoreInStep = false;     // [Features] aircore_in_step of this table (physicsini.h), read likewise: 1 = an air-core coil's pull is read at each step's midpoint (AircorePullForce, CordIsland); 0 = held for the cycle as before
 
    void SetTable(const std::filesystem::path &tableFile)
    {
@@ -62,11 +63,15 @@ namespace ContactSystem
       s_unifiedSet = true;
       s_freeFlight = s_unified && f.freeFlight;
       s_seatEditorBalls = s_unified && f.seatEditorBalls;
+      s_aircoreInStep = s_unified && f.aircoreInStep;
       const char *const px = getenv("VPX_PROXIMITY");   // (diagnostic override, TestingPlaybook)
       s_proximity = s_unified && (px != nullptr ? atoi(px) != 0 : f.proximityEngage);
       ContactSettings::StartPlay(tableFile);   // (after the switch above: the settings ask it)
       if (s_unified)
+      {
          PLOGI << "Contact system: unified engine on (" << file.string() << "; dev fallback: stock hit search still runs for object types not yet converted)";
+         PLOGI << "Contact system: [Features] aircore_in_step = " << (s_aircoreInStep ? 1 : 0) << (s_aircoreInStep ? " (an air-core coil's pull read at each step's midpoint)" : " (an air-core coil's pull held for the cycle)");
+      }
       else
          PLOGI << "Contact system: stock VPX physics, every new model off (" << (file.empty() ? std::string("no physics ini") : file.string() + " has no [Features] unified = 1") << ")";
    }
@@ -1242,6 +1247,26 @@ struct ContactSystemImpl
       }
    };
 
+   // [Features] aircore_in_step: the air-core coils' pull on the group's balls, read where the ball is in the step (Magnets::AircoreForce, the law of AddVelocityIncrement's
+   // air-core branch), the coils' current held for the cycle. Per unit of Ball::forceScale (the ball's mass over the steel mass the magnets use), in the units fExt's held
+   // increment is turned into (VPU/VPT per physics step -> m/s2): the same force as the held one at the same place.
+   class AircorePullForce final : public GroupStep::BallForce
+   {
+   public:
+      V3 At(const V3 &c, const double R, GroupStep::M3 *const slope) const override
+      {
+         static const double kUnits = (double)MS2TOVPUVPT2(1.0f) * PHYS_FACTOR * VS / PHYSICS_STEPTIME_S;   // (fExt's chain: the increment's units back to SI, 1 to float rounding)
+         const double pos[3] = { c.x / U, c.y / U, c.z / U };
+         double F[3], S[3][3];
+         Magnets::AircoreForce(pos, R / U, F, slope != nullptr ? S : nullptr);
+         if (slope != nullptr)
+            for (int i = 0; i < 3; i++)
+               for (int j = 0; j < 3; j++)
+                  slope->a[i][j] = kUnits * S[i][j];
+         return V3(F[0], F[1], F[2]) * kUnits;
+      }
+   };
+
    // ring: the island has no cord (IslandOnRing). Returns false when a step of such an island could not be solved: nothing has been written, and the cycle is retaken on the old loop, the contact
    // system's own (GroupStepDesign 14.3; never stock, no hold). A cord island keeps its own rule (15.3) and returns true. So does an island with a part on the group step (a bat), which has no old
    // loop to go to: what is left of the cycle is lost, no energy can appear.
@@ -1264,6 +1289,9 @@ struct ContactSystemImpl
          pulls.back().p = cp;
          g.AddField(&pulls.back());
       }
+      static const AircorePullForce aircorePull;
+      if (ContactSystem::s_aircoreInStep && Magnets::Active())
+         g.AddForce(&aircorePull);
       cy.cs->ToStep(g.set);   // the engine's step settings and floor, as a part alone gets them (GroupStep::EngineSettings)
       g.set.pair = cy.rpBall;
       if (ring)   // (cy.rpBall holds the old loop's halved modulus, and the group halves it for a pair itself; its rolling resistance is on the pair's radius, R / 2)
@@ -1351,13 +1379,15 @@ struct ContactSystemImpl
          b.brakeAxis = w.eddyDir;
          // a cells magnet's pull: a stored energy of the ball's place; on the body it is the same acceleration as AddVelocityIncrement's (m / the steel mass it uses)
          b.fieldScale = g.nf > 0 && w.pb->m_magnetic && !w.held ? b.m / (7800.0 * 4.0 / 3.0 * M_PI * b.R * b.R * b.R * std::max(0.001f, w.pb->m_d.m_mass)) : 0.0;   // (a held ball: no fields)
-         if (w.magAcc > 0.0)   // what stays held for the cycle: the other balls' part, the magnets not on a field: a drive
+         // [Features] aircore_in_step: an air-core coil's pull read at the step's midpoint (AircorePullForce), the same scale (a held ball: none; a ball whose magnets are off this cycle: none)
+         b.forceScale = g.nbf > 0 && w.magnetsOn && !w.held ? b.m / (7800.0 * 4.0 / 3.0 * M_PI * b.R * b.R * b.R * std::max(0.001f, w.pb->m_d.m_mass)) : 0.0;
+         if (w.magAcc > 0.0)   // what stays held for the cycle: the other balls' part, the magnets not on a field (nor, with aircore_in_step, the air-core coils): a drive
          {
             const float mp[3] = { w.pb->m_d.m_pos.x, w.pb->m_d.m_pos.y, w.pb->m_d.m_pos.z };
             // the other balls' part: a stored energy of place when the solve gave a form (pairform.h, 2026-11-03, added below), else held as before (the dipoles)
             const bool form = Magnets::HasPairForm(w.pb);
             float mdv[3] = { form ? 0.f : w.pb->m_magPair[0], form ? 0.f : w.pb->m_magPair[1], form ? 0.f : w.pb->m_magPair[2] };
-            Magnets::AddVelocityIncrement(mp, w.pb->m_d.m_radius, w.pb->m_d.m_mass, mdv, true);
+            Magnets::AddVelocityIncrement(mp, w.pb->m_d.m_radius, w.pb->m_d.m_mass, mdv, true, ContactSystem::s_aircoreInStep);
             b.fExt = V3(mdv[0] * VS, mdv[1] * VS, mdv[2] * VS) * (b.m / PHYSICS_STEPTIME_S);
          }
          if (w.band != nullptr && std::find(cords.begin(), cords.end(), w.band) == cords.end())
