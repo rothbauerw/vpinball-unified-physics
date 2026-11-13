@@ -4,6 +4,7 @@
 #include "hitball.h"
 #include "physics/stockcount.h"
 #include "physics/contactsurfacehost.h"
+#include "physics/contactsystem.h"
 #include "physics/kickerarm.h"
 #include "physics/hitflipper.h"
 #include "parts/ball.h"
@@ -34,6 +35,7 @@ HitBall::~HitBall()
 {
    if (m_bandOwner != nullptr || m_contact != nullptr)
       HitRubberBandBallDeleted(this); // first: the contact lets go of this ball's bat (unified: the bat may hold other balls too)
+   ContactSystem::DropKeptDoubles(this);   // a new ball created at this address must not take this ball's kept copy
    delete m_d.m_vpVolObjs;
 }
 
@@ -733,6 +735,7 @@ void HitBall::UpdateVelocities()
          m_d.m_vel.y *= 0.5f;
          m_d.m_vel += Vertex3Ds(max(-10.0f, min(10.0f, (ballControl->GetDraggedBallTarget().x - m_d.m_pos.x) * (float)(1. / 10.))),
             max(-10.0f, min(10.0f, (ballControl->GetDraggedBallTarget().y - m_d.m_pos.y) * (float)(1. / 10.))), -2.0f);
+         ContactSystem::DropKeptDoubles(this);   // the drag wrote the ball's velocity: the group step's kept copy no longer describes it
       }
       else
       {

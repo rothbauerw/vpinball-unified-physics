@@ -44,7 +44,8 @@ void NotePlaced(const HitBall *ball);   // a script or the driver put this ball 
    // A drive acted on this ball between cycles (a kicker's kick, KickerDesign 3c): its work, J (kinetic energy after minus before; negative = taken), what: the drive. Booked as drive work:
    // a log line and the run's total of such work (no step's books hold it: the next cycle's energy check starts from the ball as the drive left it).
    void NoteDriveWork(const HitBall *ball, double joules, const char *what);
-   // A part wrote this ball's state itself, outside any step (a kicker's capture, kick or arm path): the ball's kept doubles (the exact copy of the state the last group step wrote) no longer
+   // A part wrote this ball's state itself, outside any step (a kicker's capture, kick or arm path, a script's VelX / AngMomX setters, the debug drag, the test driver's spin), or the ball is
+   // destroyed (a new ball may get its address): the ball's kept doubles (the exact copy of the state the last group step wrote) no longer
    // describe it and go. Left, the group path would add their old velocity's residual back while the ball's float place still matched (a parked ball kept 2e-9 m/s, runs/2026-11-12-kicker-cup K5a T1).
    // The next group step that holds the ball keeps a new copy.
    void DropKeptDoubles(const HitBall *ball);

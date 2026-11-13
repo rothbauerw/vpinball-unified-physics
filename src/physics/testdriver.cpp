@@ -377,6 +377,7 @@ namespace TestDriver
                const float vel0[3] = { hb.m_d.m_vel.x, hb.m_d.m_vel.y, hb.m_d.m_vel.z }, L0[3] = { hb.m_angularmomentum.x, hb.m_angularmomentum.y, hb.m_angularmomentum.z };
                const float L = hb.Inertia() * (float)DEFAULT_STEPTIME_S / (hb.m_d.m_radius * 0.53975e-3f) / (float)kMps;   // (spin = z x v / R; angular momentum = spin x the engine's inertia x its time unit; v in U per 10 ms over kMps)
                hb.m_angularmomentum = Vertex3Ds(-hb.m_d.m_vel.y * L, hb.m_d.m_vel.x * L, 0.f);
+               ContactSystem::DropKeptDoubles(&hb);   // the driver wrote the ball's spin: the group step's kept copy no longer describes it
                AddBallChange(&hb, "driver", vel0, L0);
             }
             else
