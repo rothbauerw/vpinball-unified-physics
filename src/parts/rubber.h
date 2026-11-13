@@ -151,7 +151,7 @@ private:
    float m_bandPeakShift = 0.f;        // largest shift of a ring during the current animation, for the log
    int m_bandFrames = 0;
    void ApplyBandDeformation(Vertex3D_NoTex2 *buf);   // after UpdateRubber has transformed the vertices: move the rings of a deflected band
-   class HitRubber *m_pBand = nullptr; // the force-model collider while playing (null when this rubber is not a force-model rubber)
+   class ContactSurfaceHost *m_pBand = nullptr; // the force-model collider while playing (null when this rubber is not a force-model rubber)
    vector<Vertex3D_NoTex2> m_vertices;
    vector<WORD> m_ringIndices;
 
@@ -207,7 +207,7 @@ public:
    STDMETHOD(put_PhysicsMaterial)(/*[in]*/ BSTR newVal);
    STDMETHOD(get_OverwritePhysics)(/*[out, retval]*/ VARIANT_BOOL *pVal);
 
-   // band state, read from the physics (see HitRubber::GetBandInfo)
+   // band state, read from the physics (see ContactSurfaceHost::GetBandInfo)
    STDMETHOD(get_BandActive)(/*[out, retval]*/ VARIANT_BOOL *pVal);
    STDMETHOD(get_BandSpan)(/*[out, retval]*/ int *pVal);
    STDMETHOD(get_BandDeflection)(/*[out, retval]*/ float *pVal);
@@ -223,7 +223,7 @@ public:
    STDMETHOD(get_BandHitSpan)(/*[out, retval]*/ int *pVal);
    STDMETHOD(get_BandHitPosition)(/*[out, retval]*/ float *pVal);
    STDMETHOD(get_BandHitRubberPosition)(/*[out, retval]*/ float *pVal);
-   // sling state and enable, see HitRubber::GetSlingInfo
+   // sling state and enable, see ContactSurfaceHost::GetSlingInfo
    STDMETHOD(get_SlingEnabled)(/*[out, retval]*/ VARIANT_BOOL *pVal);
    STDMETHOD(put_SlingEnabled)(/*[in]*/ VARIANT_BOOL newVal);
    STDMETHOD(SlingTrigger)();

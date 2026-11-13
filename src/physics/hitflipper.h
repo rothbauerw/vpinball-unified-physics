@@ -13,7 +13,7 @@ class Flipper;
 #include <memory>
 #include <string>
 
-class HitRubber;
+class ContactSurfaceHost;
 class ContactHost;
 class ContactPartHost;
 class HitFlipper;

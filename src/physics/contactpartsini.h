@@ -86,7 +86,7 @@ namespace PartsIni
          else if (k == "steel_e_gpa") s.steelEGpa = v;
          else if (k == "release_gap_mm") {}   // the part host reads it (ContactHost::LoadHardSurfaceSettings)
          else if (k == "hit_window_deg") s.hitWindowDeg = v;
-         else if (k == "rubber") {}   // the opt-out key (HitRubber::HingeWanted)
+         else if (k == "rubber") {}   // the opt-out key (ContactSurfaceHost::HingeWanted)
          else if (ContactHost::IsSurfaceKey(k)) {}   // the surface material's (ContactHost::LoadHardSurfaceSettings reads it)
          else PLOGW << "Gate " << name << ": unknown key '" << k << "' ignored";
       });

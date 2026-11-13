@@ -867,7 +867,7 @@ namespace RubberContact
       bool check = false;
       uint64_t fills = 0, reads = 0, mism = 0;   // faces measured, table reads, check-mode mismatches (summed by the owner)
       int lastMismJ = -1;
-      uint64_t cyc = ~0ull;   // the counters: the cycle of the last contact check and the checks in it (hitrubber.cpp TabCheck)
+      uint64_t cyc = ~0ull;   // the counters: the cycle of the last contact check and the checks in it (contactsurfacehost.cpp TabCheck)
       uint32_t nCyc = 0;
       bool count = false;    // P3a's per-read counters (fills, reads): check or profile mode only
       bool direct = false;   // VPX_FINDER_TABLE=0 (diagnostics only, results equal): the loops measure every face directly (the near pass still keeps its own measurements here)

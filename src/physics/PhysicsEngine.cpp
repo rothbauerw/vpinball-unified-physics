@@ -24,7 +24,7 @@ void ContactTraceBall(const char *stage, const HitBall *pb, bool items, int isla
 
 #include "utils/ushock_output.h"
 
-#include "physics/hitrubber.h"
+#include "physics/contactsurfacehost.h"
 #include "physics/kickerarm.h"
 #include "physics/physicsini.h"
 #include <unordered_set>
@@ -74,7 +74,7 @@ PhysicsEngine::PhysicsEngine(PinTable *const table)
       PLOGW << "Physics: surface hosts left over from the previous table (a leak, the game will slow down with each restart): " << m_leftoverHosts;
    else
       PLOGI << "Physics: no surface hosts left over from the previous table";
-   HitRubber::ClearPlayfieldHoles();   // the kickers add theirs in PhysicSetup, below
+   ContactSurfaceHost::ClearPlayfieldHoles();   // the kickers add theirs in PhysicSetup, below
 
    // Collect all hit objects
    const FRect3D tableBounds = table->GetBoundingBox();
@@ -93,7 +93,7 @@ PhysicsEngine::PhysicsEngine(PinTable *const table)
    m_hitoctree.EndReset();
    m_hitoctree.Finalize();
    m_pendingHitObjects = nullptr;
-   HitRubber::FinderBuild(true);   // shared_finder: the index over every static mesh host, at load (every host, the implicit playfield's included, exists here)
+   ContactSurfaceHost::FinderBuild(true);   // shared_finder: the index over every static mesh host, at load (every host, the implicit playfield's included, exists here)
    #if !defined(NDEBUG) && defined(PRINT_DEBUG_COLLISION_TREE)
       m_hitoctree.DumpTree(0);
    #endif
@@ -379,16 +379,16 @@ void PhysicsEngine::AddCabinetBoundingHitShapes(PinTable *const table)
    // the playfield on the force model (vpx_physics.ini, [Features] playfield_contact = 1, material in [Playfield]): a surface host the plane's collide and contact hand the ball to
    if (m_playfieldHost == nullptr && g_pplayer != nullptr && g_pplayer->m_implicitPlayfieldMesh != nullptr) // (the engine can run without a player) an explicit playfield primitive is its own host (Primitive::PhysicSetup)
    {
-      const std::filesystem::path ini = HitRubber::IniPathFor(table->m_filename);
+      const std::filesystem::path ini = ContactSurfaceHost::IniPathFor(table->m_filename);
       RubberObjectSettings ps;
-      if (HitRubber::LoadPlayfieldSettings(ps, ini, (double)m_hitPlayfield.m_friction))
+      if (ContactSurfaceHost::LoadPlayfieldSettings(ps, ini, (double)m_hitPlayfield.m_friction))
       {
          // as far as a ball can fly: stock's plane has no limit, and a ball outside these faces would be engaged and released every cycle with no force and fall through
          const float x0 = table->m_left - 100000.f, x1 = table->m_right + 100000.f, y0 = table->m_top - 100000.f, y1 = table->m_bottom + 100000.f;
          auto faces = std::make_shared<RubberSurface>();
          faces->Add(Vertex3Ds(x0, y0, 0.f), Vertex3Ds(x1, y0, 0.f), Vertex3Ds(x1, y1, 0.f));
          faces->Add(Vertex3Ds(x0, y0, 0.f), Vertex3Ds(x1, y1, 0.f), Vertex3Ds(x0, y1, 0.f));
-         m_playfieldHost = new HitRubber(table, faces, ps, ini, "playfield", "playfield");
+         m_playfieldHost = new ContactSurfaceHost(table, faces, ps, ini, "playfield", "playfield");
          m_playfieldHost->m_tableMu = (double)m_hitPlayfield.m_friction;
          m_playfieldHost->CalcHitBBox();
          m_hitPlayfield.m_surfaceHost = m_playfieldHost;
@@ -402,7 +402,7 @@ void PhysicsEngine::AddCabinetBoundingHitShapes(PinTable *const table)
    Turntables::Setup(this, table, m_vmover, m_ownedHosts);   // discs set into the playfield (the holes are read by the playfield host)
    PlayfieldCuts::Setup(this, table);                        // holes cut in the playfield: exact rims read by the playfield host's probe (after the playfield host, whose height they read)
    {
-      const std::filesystem::path ini = HitRubber::IniPathFor(table->m_filename);
+      const std::filesystem::path ini = ContactSurfaceHost::IniPathFor(table->m_filename);
       const PhysicsIni::Features feat = PhysicsIni::Active(ini);
       m_hitSpeedEvents = feat.hitSpeed;
       m_hitSpeedMin = std::max(0.f, feat.hitSpeedMin);
@@ -1157,7 +1157,7 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
          {
             static int rows = 0;
             uint64_t fChecks = 0, fFills = 0, fReads = 0;   // shared_finder P3a: contact checks with a measurement table, faces measured, table reads since the last row (key on)
-            HitRubber::FinderTabTake(fChecks, fFills, fReads);
+            ContactSurfaceHost::FinderTabTake(fChecks, fFills, fReads);
             fprintf(ctLog, "%u,%llu,%llu,%llu,%d,%d,%d,%d,%d,%d,%d,%d,%llu,%u,%u,%u,%llu,%llu,%llu,%llu,%llu\n", g_pplayer->m_time_msec, (unsigned long long)(ctT1 - ctT0), (unsigned long long)(ctT2 - ctT1), (unsigned long long)ctNear, cs.bodies, cs.islands, cs.substeps, cs.bats, cs.maxSteps, cs.gatherUs, cs.substepUs, cs.writeUs, (unsigned long long)s_ctMagUs, ContactSystem::LastSaveUs(), s_ctReplays, s_ctReplayUs, (unsigned long long)fChecks, (unsigned long long)fFills, (unsigned long long)fReads, (unsigned long long)ContactProf::CD().rowBarsN, (unsigned long long)ContactProf::CD().rowBars);   // bars_n, bars_ticks: mc-cost profile (VPX_CHECK_PROFILE only, else 0)
                ContactProf::CD().rowBarsN = ContactProf::CD().rowBars = 0;
             s_ctReplays = s_ctReplayUs = 0;

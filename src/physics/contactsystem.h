@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-class HitRubber;
+class ContactSurfaceHost;
 class ContactHost;
 class HitBall;
 struct BallS;
@@ -93,8 +93,8 @@ void NotePlaced(const HitBall *ball);   // a script or the driver put this ball 
    bool Engage(ContactHost *host, HitBall *pb, const char *how);   // the ball is on this surface's law from now on, whatever holds it; false only for the playfield over a kicker's hole
    void ShoveKeepsOthers(const HitBall *pb, Vertex3Ds &delta);   // a position move of a held ball, VPX units: what would press it deeper into a surface of its contact is taken back
    void SeatKeepsOthers(const HitBall *pb, const ContactSurface *self, const RubberContact::BallSI &bs, const RubberContact::V3 &c0, RubberContact::V3 &c);   // a seat may not press the ball into another surface of its contact
-   bool EngageBand(HitRubber *band, HitBall *pb);               // a band takes the ball: its nodes join the ball's contact (the ball stays in the other contacts it has)
-   void StepCordAlone(HitRubber *band);   // a cord with no ball on it this cycle (its plate moving by itself, a ball just gone), for the engine's current sub-interval (SubIntervalS)
+   bool EngageBand(ContactSurfaceHost *band, HitBall *pb);               // a band takes the ball: its nodes join the ball's contact (the ball stays in the other contacts it has)
+   void StepCordAlone(ContactSurfaceHost *band);   // a cord with no ball on it this cycle (its plate moving by itself, a ball just gone), for the engine's current sub-interval (SubIntervalS)
    void Release(HitBall *ball, const char *why);                  // no-op if the contact system does not hold the ball
    void ReleaseHost(ContactHost *host);                            // the host is destroyed
    bool Holds(const HitBall *ball);

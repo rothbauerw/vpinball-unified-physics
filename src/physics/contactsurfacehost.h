@@ -79,7 +79,7 @@ struct BandBall
    RubberContact::V3 vin;                // its velocity at engagement
 };
 
-// The faces of a wall or primitive flagged as rubber, in the world frame (metres). Owned by the HitRubber that hosts the object's contact.
+// The faces of a wall or primitive flagged as rubber, in the world frame (metres). Owned by the ContactSurfaceHost that hosts the object's contact.
 struct RubberSurface
 {
    std::vector<RubberContact::SurfaceTri> tris;
@@ -93,7 +93,7 @@ struct RubberSurface
    std::vector<std::array<int8_t, 3>> fold;
    std::map<std::array<uint32_t, 3>, int> weld;   // vertex bits -> id, while faces are added
    int Link();   // builds nb from vid (once, after the last Add); returns the number of edges on more than two faces (each links its first pair only)
-   // shared_finder (to-do 1.34, piece P1; runs/2026-11-11-finder/design.md sections 1-2): the finder's index over these faces, built once before the first cycle (HitRubber::FinderBuild).
+   // shared_finder (to-do 1.34, piece P1; runs/2026-11-11-finder/design.md sections 1-2): the finder's index over these faces, built once before the first cycle (ContactSurfaceHost::FinderBuild).
    // Each face's tight box is SurfaceTri lo / hi (the triangle's corners; rounding zero for a mesh). In P1 only check mode (VPX_FINDER_CHECK=1) reads the index.
    struct FinderNode
    {
@@ -114,7 +114,7 @@ class FlipperMoverObject;
 struct BallContact
 {
    class ContactHost *host = nullptr;   // the surface or part that engaged the ball (its settings drive the step)
-   class HitRubber *band = nullptr;       // a band that holds this ball (its BandBall is in band->m_engaged); null = none
+   class ContactSurfaceHost *band = nullptr;       // a band that holds this ball (its BandBall is in band->m_engaged); null = none
    HitBall *ball = nullptr;
    std::vector<SurfaceContact> items;
    RubberContact::V3 vin, win;           // velocity (m/s) and spin (rad/s) at engagement
@@ -132,7 +132,7 @@ struct BallContact
    bool seatPending = false;             // ring_model: found inside a rubber at engagement and not seated: the group counts it from zero; the old loop seats it if the island goes there (14.5)
 };
 
-class HitRubber;
+class ContactSurfaceHost;
 namespace PlayfieldCuts { struct CutQuery; }
 
 // Shared with the contact system (contactsystem.cpp)
@@ -157,25 +157,25 @@ class Primitive;
 class BandMover final : public MoverObject
 {
 public:
-   explicit BandMover(HitRubber *owner) : m_owner(owner) {}
+   explicit BandMover(ContactSurfaceHost *owner) : m_owner(owner) {}
    bool AddToList() const override;
    void UpdateDisplacements(const float) override {}
    void UpdateVelocities() override {}
    void PreUpdateDisplacements(const float dtime) override;
 
 private:
-   HitRubber *m_owner;
+   ContactSurfaceHost *m_owner;
 };
 
-class HitRubber final : public ContactHost
+class ContactSurfaceHost final : public ContactHost
 {
 public:
    // pts: closed centreline (first vertex NOT repeated), VPX units, world frame; radius: tube radius in VPX units
-   HitRubber(IEditable *editable, const std::vector<Vertex3Ds> &pts, float radius, const RubberObjectSettings &settings, const std::filesystem::path &iniPath, const std::string &name);
+   ContactSurfaceHost(IEditable *editable, const std::vector<Vertex3Ds> &pts, float radius, const RubberObjectSettings &settings, const std::filesystem::path &iniPath, const std::string &name);
    // The host of a wall or primitive flagged as rubber: no collider of its own (the object's stock colliders detect the ball and call SurfaceCollide);
    // it holds the faces, the settings and steps the contact. kind: "wall" or "primitive".
-   HitRubber(IEditable *editable, std::shared_ptr<RubberSurface> surface, const RubberObjectSettings &settings, const std::filesystem::path &iniPath, const std::string &name, const char *kind);
-   ~HitRubber() override;
+   ContactSurfaceHost(IEditable *editable, std::shared_ptr<RubberSurface> surface, const RubberObjectSettings &settings, const std::filesystem::path &iniPath, const std::string &name, const char *kind);
+   ~ContactSurfaceHost() override;
    // The height (VPX units) of the highest upward-facing face of this surface at table point (x, y); false if there is none there. Used to seat a turntable in the playfield.
    bool SurfaceHeightAt(double xU, double yU, double &zU) const override;
    // ContactSurface
@@ -270,7 +270,7 @@ private:
    void BandReleaseAll(const char *why);
    void BandAdvance(const float dtime);
    // The cord in the group step (cordband.h; docs/unified-physics/GroupStepDesign.txt 8, 11): the contact system steps it with its balls
-   HitRubber *BandHost() override { return this; }
+   ContactSurfaceHost *BandHost() override { return this; }
    bool CordOn() const { return m_cord != nullptr; }
    bool CordModel() const { return m_set.band && m_bandPosts.size() >= 2; }   // this band runs on the cord: the contact system takes its balls (CordNear), no stock collision
    CordBand *Cord() const { return m_cord.get(); }

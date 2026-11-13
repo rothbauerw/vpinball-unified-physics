@@ -852,7 +852,7 @@ public:
          }
    }
    void AfterRestore() override { phiQ = phi; }
-   // ---- what the engine's cord path asks of a band (cordband.h, contactsystem.cpp, hitrubber.cpp) ----
+   // ---- what the engine's cord path asks of a band (cordband.h, contactsystem.cpp, contactsurfacehost.cpp) ----
    struct Circle { double x = 0.0, y = 0.0, r = 0.0; bool twin = false; };   // r: the cord centre's radius round it
    struct SwitchSpec { double x = 0.0, y = 0.0, bx = 0.0, by = 0.0; bool coil = false; };
    static constexpr int kMaxSwitches = 8;

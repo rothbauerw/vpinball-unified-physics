@@ -13,7 +13,7 @@ static std::mutex mtx;
 #include "parts/Collection.h"
 #include "parts/hittarget.h"
 #include "physics/PhysicsEngine.h"
-#include "physics/hitrubber.h"
+#include "physics/contactsurfacehost.h"
 
 float c_hardScatter = 0.0f;
 

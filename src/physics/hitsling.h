@@ -5,7 +5,7 @@
 #include "physics/coilmodel.h"
 
 // Slingshot kicker plate: the plate (pivoted lever arm), the link to the coil's plunger, the return spring, the stops, the single-winding coil and the
-// driver that makes the coil pulse. No VPX objects here: HitRubber (hitrubber.cpp) gives it the band displacement at the switches and takes the plate angle.
+// driver that makes the coil pulse. No VPX objects here: ContactSurfaceHost (contactsurfacehost.cpp) gives it the band displacement at the switches and takes the plate angle.
 //
 // The mechanics are those of the model flipper (coilmodel.h): the plate is "the flipper" (its inertia i_bat + i_crank about the pivot, angle phi from
 // rest toward the coil stop), the coil pulls a plunger that drives the plate through a slider-crank link with pin slop. The circuit is one winding with the

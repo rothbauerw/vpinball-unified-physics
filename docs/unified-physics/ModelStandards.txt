@@ -10,7 +10,7 @@ a. First write what the model must do (requirements), apart from how it's modell
    They live in docs/unified-physics/Requirements.txt, one section per model, agreed items only; a draft stays in its run folder until agreed.
 b. Then name the closest existing model and read its files:
       moving part with its own bodies  -> jet bumper (bumpergroup.h, contactbumperpart.h) and gate/spinner (hingegroup.h, contacthingepart.h): the group step path (2a)
-      static surface                   -> contactsurface.h, hitrubber.cpp (hard surfaces, ramps)
+      static surface                   -> contactsurface.h, contactsurfacehost.cpp (hard surfaces, ramps)
       ball contact law                 -> rubbercontact.h ContactCore (Hertz + damping + friction + twist)
 c. Read section 6 (known traps) of this file.
 d. Then write the design in docs/unified-physics/<Model>Design.txt: the physical laws, the bodies and their stiffest internal contact, the cost estimate, what it breaks (rule 7),
@@ -89,7 +89,7 @@ e. Every test run writes its pass/fail report to disk the day it runs.
 - A duplicate ini key silently won: magnet ball_interaction.
 - Long steps create energy: bumper replay at a 100 us step launches at 10.6 m/s vs about 0.5 m/s at 1 us. Catches it: 5a step sweep (energy may not rise).
 - A fix went into one copy of a copied rule (parts use a fixed 9.81 m/s2, the core uses gravity plus nudge). Catches it: none yet (2c removes the copies).
-- Comment and code disagree (hitrubber.h:57 says rest factor 0.2, hitrubber.cpp sets 0.8). Catches it: none yet.
+- Comment and code disagree (contactsurfacehost.h says rest factor 0.2, contactsurfacehost.cpp sets 0.8). Catches it: none yet.
 - A matrix run left no report and was missed. Catches it: 5e.
 - A new model kept a route to stock: a failed solve on the cord band set a stock cooldown, ball 1.04 -> 6.15 m/s in play while the offline proof stayed exact. Catches it: none yet.
 - A solver's first guess kept between steps: a step taken again from a snapshot differed in the last digits (117 of 2001 steps). Catches it: the snapshot self-test (5b).

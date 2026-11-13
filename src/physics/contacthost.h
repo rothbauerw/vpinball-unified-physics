@@ -5,7 +5,7 @@
 // It holds what every host needs and nothing about a kind of object: the collision box and the Collidable switch (HitObject), the name and kind, the contact
 // settings and their reload from the table's physics ini, the list the contact system walks (Registry), and the entry points through which a stock collider or
 // the engine's contact pass hands a ball to the contact system (SurfaceCollide, SlowContact).
-// Two kinds derive from it: HitRubber (hitrubber.h: rubber posts and walls, the faces of walls, primitives, ramps and the playfield, bands and slings) and
+// Two kinds derive from it: ContactSurfaceHost (contactsurfacehost.h: rubber posts and walls, the faces of walls, primitives, ramps and the playfield, bands and slings) and
 // ContactPartHost (contactparthost.h: a moving part of the contact system, with the table part's own adapter for its pose and events).
 
 #include <chrono>
@@ -48,7 +48,7 @@ struct RubberObjectSettings
 
    // Band (a rubber stretched between posts): the posts and free spans are found at load (logged); a ball on a span deflects it (cordfixed.h: the fixed-height cord)
    bool band = false;             // this rubber is a band: found from its shape at load (DetectBand), not an ini key
-   double bandRingIn = 0.0;       // the ring's inner diameter, inches: the stretch at rest comes from it and the posts; 0 = the standard size that gives a tension within the range (HitRubber::CordRing)
+   double bandRingIn = 0.0;       // the ring's inner diameter, inches: the stretch at rest comes from it and the posts; 0 = the standard size that gives a tension within the range (ContactSurfaceHost::CordRing)
    double bandSectionMm = 0.0;     // the cord's section (its diameter), mm, for physics and drawing; 0 = the rubber's Thickness in the editor
    double bandStretchAlpha = 0.09; // Hunt-Crossley on the cord's stretch, s/m: half the ring's 0.18, for half its drop-off with speed. Fitted to the user's best guess (about 0.8 at 3 m/s), not measured
    double bandTwistScale = 1.0;    // the twist spring against its calculated stiffness (kT / 6)
@@ -77,7 +77,7 @@ public:
    ContactHost(IEditable *editable, const RubberObjectSettings &settings, const std::filesystem::path &iniPath, const std::string &name, const char *kind);
    ~ContactHost() override;
 
-   virtual class HitRubber *BandHost() { return nullptr; }   // a rubber: itself
+   virtual class ContactSurfaceHost *BandHost() { return nullptr; }   // a rubber: itself
 
    // every live host, so a solve can include the surfaces near the ball
    static std::vector<ContactHost *> &Registry();

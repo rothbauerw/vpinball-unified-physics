@@ -2,7 +2,7 @@
 
 #include "core/stdafx.h"
 #include "kicker.h"
-#include "physics/hitrubber.h"
+#include "physics/contactsurfacehost.h"
 
 #include "core/VPApp.h"
 #include "math/matrix.h"
@@ -193,7 +193,7 @@ bool Kicker::PhysicalSetup(PhysicsEngine *const physics)
    constexpr double kE = 0.3, kMu = 0.3;
    RubberObjectSettings rs;
    ContactHost::LoadHardSurfaceSettings(rs, ini, "kicker", name, kE, kMu);
-   HitRubber *const host = new HitRubber(this, faces, rs, ini, name, "kicker");
+   ContactSurfaceHost *const host = new ContactSurfaceHost(this, faces, rs, ini, name, "kicker");
    host->SetHardSurface(kE, kMu);
    host->m_elasticity = (float)kE;
    host->SetFriction((float)kMu);
@@ -476,7 +476,7 @@ void Kicker::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    {
       KickerHitCircle *const phitcircle = new KickerHitCircle(this, m_d.m_vCenter, radius, height, height + m_d.m_hit_height); // height of kicker hit cylinder
       if (!m_d.m_legacyMode)
-         HitRubber::AddPlayfieldHole(m_d.m_vCenter.x, m_d.m_vCenter.y, m_d.m_radius);   // a non-legacy kicker is a hole in the playfield (a playfield on the force model has no floor in it)
+         ContactSurfaceHost::AddPlayfieldHole(m_d.m_vCenter.x, m_d.m_vCenter.y, m_d.m_radius);   // a non-legacy kicker is a hole in the playfield (a playfield on the force model has no floor in it)
       if (!m_d.m_legacyMode)
       {
          const float rad = phitcircle->radius * 0.8f;

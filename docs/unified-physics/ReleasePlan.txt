@@ -80,7 +80,7 @@ hitball.cpp (+287 -70)
   Mixed, harder: ApplyFriction has about 13 small hunks (+~55 -~40) edited inside the stock friction routine; HandleStaticContact, Collide3DWall, UpdateVelocities
     (+20 -8, BallMoverObject) too. These change stock behaviour in place; they can only move by replacing the stock call with a redirect to our routine.
 rubber.cpp (+270 -4)
-  Model code, can move: PhysicSetup +95 (rubber force model setup from the ini) -> a helper in hitrubber.cpp; script getters +61 ("band state for scripts") and
+  Model code, can move: PhysicSetup +95 (rubber force model setup from the ini) -> a helper in contactsurfacehost.cpp; script getters +61 ("band state for scripts") and
     mesh deformation +56 + GetSurfaceHeight +21 -> their own file (rubberband.cpp). After that rubber.cpp keeps about 40 lines of hooks.
 
 Rough size of what could move into our own files: at most 998 of the 1,593 added lines in these four files (457 + 111 + 49 + 148 + 95 + 61 + 56 + 21; an upper bound, entanglement not checked).

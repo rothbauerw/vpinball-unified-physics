@@ -108,7 +108,7 @@ review in to-do N11.
 
 15. A hard step, with no stock
    15.1 A ball joins the cord before it touches. Today a band is left out of the near pass (contactsystem.cpp: o->m_set.band), so a ball joins only when the stock hit test finds it. CordNear takes it when it can reach the cord within two cycles, or lies within the release gap, every ball included, one held for the playfield too. The bench starts the group before touch and books no gain at the join; the engine starts it at the hit and gains (53 of 134 joining cycles on Gorgar rose, MEASURED; that the late start is why is INFERRED, to be tested).
-   15.2 No stock for a cord. HitRubber::HitTest returns no hit for a band on the cord, so Collide, its stock impulse, the cooldown, the seat refusal and the give-way to a flipper cannot be reached. Routes 1 - 4 of 12.2 go for a cord. A ball near a flipper now stays with the cord: the group treats that flipper as still.
+   15.2 No stock for a cord. ContactSurfaceHost::HitTest returns no hit for a band on the cord, so Collide, its stock impulse, the cooldown, the seat refusal and the give-way to a flipper cannot be reached. Routes 1 - 4 of 12.2 go for a cord. A ball near a flipper now stays with the cord: the group treats that flipper as still.
    15.3 A hard step. A step that cannot be solved no longer lets the ball fly on. The balls stay as they are for the rest of the cycle (time lost, at most 1 ms a cycle, no energy can appear) and the next cycle tries again. On screen once (rule 8). If it fails 20 cycles in a row the cord lets go, which only takes energy away (a net, not the fix).
    15.4 The band's Hit event, fired by Collide until now, comes from the cycle a ball first comes onto the cord (closing speed along the cord's push), after the step.
 

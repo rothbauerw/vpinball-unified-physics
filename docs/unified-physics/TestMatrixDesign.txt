@@ -187,7 +187,7 @@ Open: bands have no SaveState, so their rows run without the snapshot self-test 
 ----------------------------------------------------
 Offline-ready today (no VPX types in the file, checked 2026-10-27): rubbercontact.h (contact law), contactbumper.h / contactbumperpart.h (jet bumpers),
 contacthingebody.h / contacthingepart.h (gates, spinners), magnetcore.cpp / magnetballs.cpp (magnets).
-Not offline-ready (VPX types): hitflippermodel.cpp and contactbat.cpp (flippers), hitrubber.cpp (bands, slings), turntable.cpp, contactsystem.cpp (the shared loop).
+Not offline-ready (VPX types): hitflippermodel.cpp and contactbat.cpp (flippers), contactsurfacehost.cpp (bands, slings), turntable.cpp, contactsystem.cpp (the shared loop).
 Offline tests prove a model and its contact law; only engine runs prove the shared loop.
 
 1. One shared offline bench replaces the separate benches in runs/ (2026-10-14-hinge, 2026-10-26-bumper, 2026-10-27-replay, 2026-10-27-stopimpact). It runs every

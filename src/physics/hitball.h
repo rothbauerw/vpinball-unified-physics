@@ -90,7 +90,7 @@ public:
    Vertex3Ds m_oldVel;       // hack for kicker hole handling only
 
    bool m_rubberAdvanced = false;               // the rubber model already moved this ball for the current cycle (UpdateDisplacements skips the straight-line move)
-   class HitRubber *m_bandOwner = nullptr;      // band rubber whose engine-stepped contact currently drives this ball (null = none)
+   class ContactSurfaceHost *m_bandOwner = nullptr;      // band rubber whose engine-stepped contact currently drives this ball (null = none)
    Vertex3Ds m_nearPos;                                 // proximity engagement: where the registry was last scanned for this ball, and how far it may move before the next scan (VPX units, the nearest surface box less a margin); < 0 = scan
    float m_nearSafeU = -1.f;
    uint32_t m_nearMs = 0;
@@ -130,6 +130,6 @@ private:
    Vertex3Ds m_oldpos[MAX_BALL_TRAIL_POS]; // used for killing spin (see C_BALL_SPIN_HACK) and for ball trails
 };
 
-// Unified engine (hitrubber.cpp)
+// Unified engine (contactsurfacehost.cpp)
 bool HitRubberContactPairModel(const HitBall *a, const BallS &b); // both balls are contact-held and ball contact is on
 bool HitRubberContactHolds(const HitBall *ball);                  // a force-model contact (a post, the playfield) is stepping this ball

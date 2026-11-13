@@ -2,7 +2,7 @@
 
 #include "core/stdafx.h"
 #include "physics/playfieldcut.h"
-#include "physics/hitrubber.h"
+#include "physics/contactsurfacehost.h"
 #include "physics/physicsini.h"
 #include "physics/contactsystem.h"
 #include "physics/contactprof.h"
@@ -1274,9 +1274,9 @@ namespace
          if (!valid || stray + reachM > cq->r)
          {
             if (valid)
-               HitRubber::FinderCuts(*cq, cq->c0, reachM + 2.0 * stray);
+               ContactSurfaceHost::FinderCuts(*cq, cq->c0, reachM + 2.0 * stray);
             else
-               HitRubber::FinderCuts(*cq, c, reachM);
+               ContactSurfaceHost::FinderCuts(*cq, c, reachM);
             if (prof)
                g_cutStats.requery++;
          }
@@ -1386,7 +1386,7 @@ namespace
    }
 
    // A [PlayfieldCut:<name>] shape = groove: its keys (playfieldcut.h), its playfield host and the groove's numbers; R a standard ball for the logged paper numbers
-   void SetupGroove(const CutKeys &k, const std::vector<HitRubber *> &pf, const double R)
+   void SetupGroove(const CutKeys &k, const std::vector<ContactSurfaceHost *> &pf, const double R)
    {
       const std::string where = "Playfield cut " + k.name + ": ";
       if (k.widthSet)
@@ -1400,9 +1400,9 @@ namespace
          Notice(o.str());
          lengthMm = lim;
       }
-      HitRubber *host = nullptr;   // the highest playfield surface at the plunger end
+      ContactSurfaceHost *host = nullptr;   // the highest playfield surface at the plunger end
       double zU = 0.0;
-      for (HitRubber *const h : pf)
+      for (ContactSurfaceHost *const h : pf)
       {
          double z;
          if (h->SurfaceHeightAt(k.x, k.y, z) && (host == nullptr || z > zU))
@@ -1474,7 +1474,7 @@ namespace
    }
 
    // A [PlayfieldCut:<name>] shape = rectangle: its keys (playfieldcut.h), its playfield host and its numbers; R a standard ball for the logged paper numbers
-   void SetupRect(const CutKeys &k, const std::vector<HitRubber *> &pf, const double R)
+   void SetupRect(const CutKeys &k, const std::vector<ContactSurfaceHost *> &pf, const double R)
    {
       const std::string where = "Playfield cut " + k.name + ": ";
       if (!k.widthSet || k.widthMm <= 0.0 || k.lengthMm <= 0.0)
@@ -1491,9 +1491,9 @@ namespace
          Notice(o.str());
          cornerMm = std::clamp(k.cornerMm, 0.0, cMax);
       }
-      HitRubber *host = nullptr;   // the highest playfield surface at the centre
+      ContactSurfaceHost *host = nullptr;   // the highest playfield surface at the centre
       double zU = 0.0;
-      for (HitRubber *const h : pf)
+      for (ContactSurfaceHost *const h : pf)
       {
          double z;
          if (h->SurfaceHeightAt(k.x, k.y, z) && (host == nullptr || z > zU))
@@ -1804,10 +1804,10 @@ namespace PlayfieldCuts
          PLOGI << "Playfield cuts: " << cuts.size() << " [PlayfieldCut:<name>] section(s) ignored: [Features] playfield_cuts = 0";
          return;
       }
-      std::vector<HitRubber *> pf;   // the playfield's hosts (the plane's, or a playfield_mesh primitive's): a host with faces has a height under the cut
+      std::vector<ContactSurfaceHost *> pf;   // the playfield's hosts (the plane's, or a playfield_mesh primitive's): a host with faces has a height under the cut
       for (ContactHost *const h : ContactHost::AllHosts())
          if (h->IsPlayfieldKind())
-            if (HitRubber *const r = dynamic_cast<HitRubber *>(h); r != nullptr)
+            if (ContactSurfaceHost *const r = dynamic_cast<ContactSurfaceHost *>(h); r != nullptr)
                pf.push_back(r);
       if (pf.empty())
       {
@@ -1851,9 +1851,9 @@ namespace PlayfieldCuts
             Notice(o.str());
             widthMm = lim;
          }
-         HitRubber *host = nullptr;
+         ContactSurfaceHost *host = nullptr;
          double zU = 0.0;
-         for (HitRubber *const h : pf)
+         for (ContactSurfaceHost *const h : pf)
          {
             double z;
             if (h->SurfaceHeightAt(k.x, k.y, z) && (host == nullptr || z > zU))
@@ -1911,7 +1911,7 @@ namespace PlayfieldCuts
 
    bool Any(const ContactSurface *const host)
    {
-      if (!HitRubber::FinderDrives())   // shared_finder = 0: today's scan
+      if (!ContactSurfaceHost::FinderDrives())   // shared_finder = 0: today's scan
          return std::any_of(g_rims.begin(), g_rims.end(), [&](const Rim &m) { return m.host == host; });
       if (g_anyVer != g_rimsVer)   // P4b: the hosts holding cuts, once per Setup
       {
@@ -1942,7 +1942,7 @@ namespace PlayfieldCuts
       static std::vector<RimHit> hits;
       static std::vector<RimHump> humps;
       NearCuts(host, c, reachM, cuts, cq);
-      // shared_finder P3b: the near pass's faces within R (HitRubber::FinderTable), in load order with their query-list positions; the probe with none within R reads the whole list with the
+      // shared_finder P3b: the near pass's faces within R (ContactSurfaceHost::FinderTable), in load order with their query-list positions; the probe with none within R reads the whole list with the
       // box bound (its nearest wherever it is, as today). A turntable's hole (nHoles) moves a face's nearest point, so there the whole list as P3a.
       const bool nearOn = ft != nullptr && ft->useNear && nHoles == 0;
       const std::vector<int> &in = nearOn ? ft->inI : faces;

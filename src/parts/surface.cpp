@@ -13,7 +13,7 @@
 #include "renderer/Renderer.h"
 #include "renderer/Shader.h"
 #include "renderer/trace.h"
-#include "physics/hitrubber.h"
+#include "physics/contactsurfacehost.h"
 #include "physics/contactsystem.h"
 #include "renderer/VertexBuffer.h"
 #include "utils/objloader.h"
@@ -189,11 +189,11 @@ void Surface::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    // rubber force model (vpx_physics.ini, [Wall:<name>] rubber = 1): the stock colliders below still detect the ball, but a host steps the contact on the wall's faces
    std::shared_ptr<RubberSurface> rubberFaces;
    RubberObjectSettings rubberSettings;
-   const std::filesystem::path rubberIni = HitRubber::IniPathFor(m_ptable->m_filename);
+   const std::filesystem::path rubberIni = ContactSurfaceHost::IniPathFor(m_ptable->m_filename);
    bool hardSurface = false;   // unified engine: a wall without the rubber flag is a hard surface of the contact model
-   if (!isUI && HitRubber::LoadSurfaceSettings(rubberSettings, rubberIni, "wall", GetName()))
+   if (!isUI && ContactSurfaceHost::LoadSurfaceSettings(rubberSettings, rubberIni, "wall", GetName()))
       rubberFaces = std::make_shared<RubberSurface>();
-   else if (!isUI && ContactSystem::Unified() && HitRubber::HardSurfaceWanted(rubberIni, "wall", GetName()))
+   else if (!isUI && ContactSystem::Unified() && ContactSurfaceHost::HardSurfaceWanted(rubberIni, "wall", GetName()))
    {
       rubberFaces = std::make_shared<RubberSurface>();
       hardSurface = true;
@@ -253,11 +253,11 @@ void Surface::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       if (hardSurface)   // the settings need the elasticity and friction the colliders were given (the material, the table override)
       {
          const HitObject *const first = collidersBefore < m_vhoCollidable.size() ? m_vhoCollidable[collidersBefore] : nullptr;
-         HitRubber::LoadHardSurfaceSettings(rubberSettings, rubberIni, "wall", GetName(), HitRubber::HardSurfaceE(first), first != nullptr ? first->m_friction : 0.3);
+         ContactSurfaceHost::LoadHardSurfaceSettings(rubberSettings, rubberIni, "wall", GetName(), ContactSurfaceHost::HardSurfaceE(first), first != nullptr ? first->m_friction : 0.3);
       }
-      HitRubber *const host = new HitRubber(this, rubberFaces, rubberSettings, rubberIni, GetName(), "wall");
+      ContactSurfaceHost *const host = new ContactSurfaceHost(this, rubberFaces, rubberSettings, rubberIni, GetName(), "wall");
       if (hardSurface && collidersBefore < m_vhoCollidable.size())
-         host->SetHardSurface(HitRubber::HardSurfaceE(m_vhoCollidable[collidersBefore]), m_vhoCollidable[collidersBefore]->m_friction);
+         host->SetHardSurface(ContactSurfaceHost::HardSurfaceE(m_vhoCollidable[collidersBefore]), m_vhoCollidable[collidersBefore]->m_friction);
       if (collidersBefore < m_vhoCollidable.size())
          host->SetEventCarrier(m_vhoCollidable[collidersBefore]);
       for (size_t i = collidersBefore; i < m_vhoCollidable.size(); i++)

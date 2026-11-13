@@ -5,7 +5,7 @@
 
 #include "core/stdafx.h"
 #include "rubber.h"
-#include "physics/hitrubber.h"
+#include "physics/contactsurfacehost.h"
 #include <chrono>
 
 
@@ -79,7 +79,7 @@ STDMETHODIMP Rubber::SlingTrigger()
    return S_OK;
 }
 
-// The rings of the mesh follow the deflected band (HitRubber::BandDeformAt): each ring is shifted and turned about its centre, normals turn with it.
+// The rings of the mesh follow the deflected band (ContactSurfaceHost::BandDeformAt): each ring is shifted and turned about its centre, normals turn with it.
 void Rubber::ApplyBandDeformation(Vertex3D_NoTex2 *buf)
 {
    const int S = m_numSegments;

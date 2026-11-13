@@ -53,7 +53,7 @@ namespace ContactProf
    void Cycle();                             // one physics cycle began
    void Split(int cause, bool staticTime, const char *what);   // a cycle was cut short at a hit: the type of the object that ended the sub-step (100 = a flipper stop, 200 = the static-time clamp)
 }
-// P3a profile (diagnostics only, VPX_CHECK_PROFILE=1; runs/2026-11-12-finder-P3a-profile): where one contact check's time goes. A check is the outermost of HitRubber's Probe / ProbePatch / ArrivalS;
+// P3a profile (diagnostics only, VPX_CHECK_PROFILE=1; runs/2026-11-12-finder-P3a-profile): where one contact check's time goes. A check is the outermost of ContactSurfaceHost's Probe / ProbePatch / ArrivalS;
 // its time splits into the inside check (FinderInside), the table lookup and Begin (FinderTable), the face loops (each loop timed whole: reads and fills together) and the rest. Per-check sums
 // of time, faces measured (fills) and table reads give a least-squares fit time = a + b fills + c reads. Checks are counted by the calling stage (Stage, set by the callers).
 namespace ContactProf
@@ -117,11 +117,11 @@ namespace ContactProf
          else { d.loopOut += dt; d.loopFacesOut += nf; }
       }
    };
-   void CheckDump(uint64_t cycles, double nsPerTick);   // hitrubber.cpp
+   void CheckDump(uint64_t cycles, double nsPerTick);   // contactsurfacehost.cpp
    struct ObjBars   // mc-cost profile (diagnostics only): one object's BarsTriangles ticks, calls, candidates and nodes
    {
       uint64_t t = 0, n = 0, cand = 0, nodes = 0, full = 0;   // full: cut B, calls that ran the full law
    };
-   ObjBars *ObjBarsOf(void *objStats);   // hitrubber.cpp: the per-object entry behind a FaceTable's objStats (nullptr if none)
+   ObjBars *ObjBarsOf(void *objStats);   // contactsurfacehost.cpp: the per-object entry behind a FaceTable's objStats (nullptr if none)
 }
 #define CPROF(id) ContactProf::Scope cprofScope_##id(ContactProf::id)

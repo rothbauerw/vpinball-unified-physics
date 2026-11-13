@@ -2,7 +2,7 @@
 
 #include "core/stdafx.h"
 #include "ball.h"
-#include "physics/hitrubber.h"
+#include "physics/contactsurfacehost.h"
 #include "physics/contactsystem.h"
 
 #include "core/VPApp.h"

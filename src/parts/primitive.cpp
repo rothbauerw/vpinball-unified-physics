@@ -13,7 +13,7 @@
 #include "renderer/RenderCommand.h"
 #include "renderer/Shader.h"
 #include "renderer/trace.h"
-#include "physics/hitrubber.h"
+#include "physics/contactsurfacehost.h"
 #include "physics/contactsystem.h"
 #include "parts/playfieldcutdraw.h"
 #include "utils/objloader.h"
@@ -199,16 +199,16 @@ void Primitive::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    // rubber force model (vpx_physics.ini, [Primitive:<name>] rubber = 1): the stock colliders below still detect the ball, but a host steps the contact on these faces
    std::shared_ptr<RubberSurface> rubberFaces;
    RubberObjectSettings rubberSettings;
-   const std::filesystem::path rubberIni = HitRubber::IniPathFor(m_ptable->m_filename);
+   const std::filesystem::path rubberIni = ContactSurfaceHost::IniPathFor(m_ptable->m_filename);
    // the playfield primitive takes the [Playfield] material ([Features] playfield_contact = 1), any other primitive its own [Primitive:<name>] rubber = 1
-   const bool playfieldModel = !isUI && m_useAsPlayfield && HitRubber::LoadPlayfieldSettings(rubberSettings, rubberIni, m_ptable->m_overridePhysics ? m_ptable->m_fOverrideContactFriction : m_ptable->m_friction);
+   const bool playfieldModel = !isUI && m_useAsPlayfield && ContactSurfaceHost::LoadPlayfieldSettings(rubberSettings, rubberIni, m_ptable->m_overridePhysics ? m_ptable->m_fOverrideContactFriction : m_ptable->m_friction);
    if (playfieldModel)
       PLOGI << "Primitive " << GetName() << ": the playfield's law, mu " << rubberSettings.mu << " (table friction " << m_ptable->m_friction << ", override physics " << m_ptable->m_overridePhysics
             << (m_ptable->m_overridePhysics ? ", override friction " + std::to_string(m_ptable->m_fOverrideContactFriction) : std::string()) << ")";
    bool hardSurface = false;   // unified engine: a primitive without the rubber flag is a hard surface of the contact model
-   if (playfieldModel || (!isUI && !m_useAsPlayfield && HitRubber::LoadSurfaceSettings(rubberSettings, rubberIni, "primitive", GetName())))
+   if (playfieldModel || (!isUI && !m_useAsPlayfield && ContactSurfaceHost::LoadSurfaceSettings(rubberSettings, rubberIni, "primitive", GetName())))
       rubberFaces = std::make_shared<RubberSurface>();
-   else if (!isUI && !m_useAsPlayfield && ContactSystem::Unified() && HitRubber::HardSurfaceWanted(rubberIni, "primitive", GetName()))
+   else if (!isUI && !m_useAsPlayfield && ContactSystem::Unified() && ContactSurfaceHost::HardSurfaceWanted(rubberIni, "primitive", GetName()))
    {
       rubberFaces = std::make_shared<RubberSurface>();
       hardSurface = true;
@@ -343,11 +343,11 @@ void Primitive::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       if (hardSurface)
       {
          const HitObject *const first = collidersBefore < m_vhoCollidable.size() ? m_vhoCollidable[collidersBefore] : nullptr;
-         HitRubber::LoadHardSurfaceSettings(rubberSettings, rubberIni, "primitive", GetName(), HitRubber::HardSurfaceE(first), first != nullptr ? first->m_friction : 0.3);
+         ContactSurfaceHost::LoadHardSurfaceSettings(rubberSettings, rubberIni, "primitive", GetName(), ContactSurfaceHost::HardSurfaceE(first), first != nullptr ? first->m_friction : 0.3);
       }
-      HitRubber *const host = new HitRubber(this, rubberFaces, rubberSettings, rubberIni, GetName(), playfieldModel ? "playfield" : "primitive");
+      ContactSurfaceHost *const host = new ContactSurfaceHost(this, rubberFaces, rubberSettings, rubberIni, GetName(), playfieldModel ? "playfield" : "primitive");
       if (hardSurface && collidersBefore < m_vhoCollidable.size())
-         host->SetHardSurface(HitRubber::HardSurfaceE(m_vhoCollidable[collidersBefore]), m_vhoCollidable[collidersBefore]->m_friction);
+         host->SetHardSurface(ContactSurfaceHost::HardSurfaceE(m_vhoCollidable[collidersBefore]), m_vhoCollidable[collidersBefore]->m_friction);
       if (playfieldModel)
          host->m_tableMu = m_ptable->m_overridePhysics ? m_ptable->m_fOverrideContactFriction : m_ptable->m_friction;
       if (collidersBefore < m_vhoCollidable.size())

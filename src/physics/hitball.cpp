@@ -3,7 +3,7 @@
 #include "core/stdafx.h"
 #include "hitball.h"
 #include "physics/stockcount.h"
-#include "physics/hitrubber.h"
+#include "physics/contactsurfacehost.h"
 #include "physics/kickerarm.h"
 #include "physics/hitflipper.h"
 #include "parts/ball.h"

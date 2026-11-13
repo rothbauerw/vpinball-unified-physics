@@ -21,7 +21,7 @@
 #include "physics/contactsettings.h"
 #include "physics/contactsystem.h"
 #include "physics/contactwireswitch.h"
-#include "physics/hitrubber.h"
+#include "physics/contactsurfacehost.h"
 #include "physics/physicsini.h"
 #include "physics/testdriver.h"
 #include "core/player.h"

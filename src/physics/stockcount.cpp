@@ -11,7 +11,7 @@
 #include "physics/contacthost.h"
 #include "physics/contactsystem.h"
 #include "physics/hitball.h"
-#include "physics/hitrubber.h"
+#include "physics/contactsurfacehost.h"
 #include "physics/testdriver.h"
 #include "parts/ball.h"
 #include "parts/trigger.h"

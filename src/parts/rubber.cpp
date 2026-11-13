@@ -18,7 +18,7 @@
 #include "renderer/Shader.h"
 #include "renderer/trace.h"
 #include "utils/objloader.h"
-#include "physics/hitrubber.h"
+#include "physics/contactsurfacehost.h"
 #include "physics/contactsettings.h"
 
 
@@ -450,8 +450,8 @@ void Rubber::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    {
       RubberObjectSettings rs;
       const std::string name = GetName();
-      const std::filesystem::path ini = HitRubber::IniPathFor(m_ptable->m_filename);
-      if (HitRubber::LoadSettings(rs, ini, name) && rs.contact)
+      const std::filesystem::path ini = ContactSurfaceHost::IniPathFor(m_ptable->m_filename);
+      if (ContactSurfaceHost::LoadSettings(rs, ini, name) && rs.contact)
       {
          constexpr int segmentsPerRing = 6;
          std::vector<Vertex3Ds> centre;
@@ -462,7 +462,7 @@ void Rubber::PhysicSetup(PhysicsEngine* physics, const bool isUI)
                sum += Vertex3Ds(m_vertices[i + j].x, m_vertices[i + j].y, m_vertices[i + j].z);
             centre.push_back(sum / (float)segmentsPerRing);
          }
-         HitRubber *const hr = centre.size() >= 3 ? new HitRubber(this, centre, (float)m_d.m_thickness * 0.5f, rs, ini, name) : nullptr;
+         ContactSurfaceHost *const hr = centre.size() >= 3 ? new ContactSurfaceHost(this, centre, (float)m_d.m_thickness * 0.5f, rs, ini, name) : nullptr;
          if (hr != nullptr && hr->FeatureOff())
             delete hr;
          else if (hr != nullptr)

@@ -16,7 +16,7 @@
 
 #include "imgui/imgui.h"
 #include "parts/ball.h"
-#include "physics/hitrubber.h"
+#include "physics/contactsurfacehost.h"
 #include "physics/cordband.h"
 #include "physics/carvedholes.h"
 #include "physics/playfieldcut.h"
@@ -67,7 +67,7 @@ namespace
    }
 }
 
-bool HitRubber::SurfaceHeightAt(const double xU, const double yU, double &zU) const
+bool ContactSurfaceHost::SurfaceHeightAt(const double xU, const double yU, double &zU) const
 {
    if (m_surface == nullptr)
       return false;
@@ -111,14 +111,14 @@ namespace
 
    struct FinderObj
    {
-      const HitRubber *host;
+      const ContactSurfaceHost *host;
       RubberContact::V3 lo, hi;   // the object's box: its face tree's root, m
    };
 
    // P5: one static tube's segments found by a ball's query (pieces of the tube host), in index order. cov: every segment whose centreline lies within cov of c0 is in segs (cov < 0: none yet)
    struct TubeSegQ
    {
-      const HitRubber *tube = nullptr;
+      const ContactSurfaceHost *tube = nullptr;
       uint64_t ver = ~0ull;      // the ball query's version it was made for (a new query or re-query of the ball makes it anew)
       RubberContact::V3 c0;
       double cov = -1.0;
@@ -377,12 +377,12 @@ namespace
    struct TabCheck   // P3a: one contact check's counters (the outermost of nested calls: ProbePatch calls Probe)
    {
       RubberContact::FaceTable *const ft;
-      const HitRubber *const host;
+      const ContactSurfaceHost *const host;
       const SurfaceContact &it;
       const RubberContact::V3 c;
       bool outer = false;
       uint64_t tk = 0, f0 = 0, r0 = 0, m0 = 0, ef0 = 0, er0 = 0, em0 = 0, cb0 = 0;
-      TabCheck(RubberContact::FaceTable *t, const HitRubber *h, const SurfaceContact &i, const RubberContact::V3 &cc) : ft(t), host(h), it(i), c(cc)
+      TabCheck(RubberContact::FaceTable *t, const ContactSurfaceHost *h, const SurfaceContact &i, const RubberContact::V3 &cc) : ft(t), host(h), it(i), c(cc)
       {
          if (ft == nullptr)
             return;
@@ -597,7 +597,7 @@ namespace
    {
       if (meshHost && g_finder.built)
       {
-         HitRubber::FinderTotals(true);
+         ContactSurfaceHost::FinderTotals(true);
          FinderReport();
          g_finder.Reset();
       }
@@ -612,7 +612,7 @@ static void TubeSegBox(const std::vector<RubberContact::V3> &p, const double r, 
    hi = RubberContact::V3(std::max(a.x, b.x) + r, std::max(a.y, b.y) + r, std::max(a.z, b.z) + r);
 }
 
-HitRubber::HitRubber(IEditable *editable, const std::vector<Vertex3Ds> &pts, const float radius, const RubberObjectSettings &settings, const std::filesystem::path &iniPath, const std::string &name)
+ContactSurfaceHost::ContactSurfaceHost(IEditable *editable, const std::vector<Vertex3Ds> &pts, const float radius, const RubberObjectSettings &settings, const std::filesystem::path &iniPath, const std::string &name)
    : ContactHost(editable, settings, iniPath, name, ""), m_pts(pts), m_radius(radius)
 {
    if (!m_pts.empty())
@@ -644,13 +644,13 @@ HitRubber::HitRubber(IEditable *editable, const std::vector<Vertex3Ds> &pts, con
    }
 }
 
-bool HitRubber::FeatureOff() const
+bool ContactSurfaceHost::FeatureOff() const
 {
    const PhysicsIni::Features feat = PhysicsIni::Active(m_ini);
    return m_set.band ? !feat.bands : !feat.rubbers;
 }
 
-float HitRubber::BandSectionU() const
+float ContactSurfaceHost::BandSectionU() const
 {
    return m_set.band && m_set.bandSectionMm > 0.0 ? (float)(m_set.bandSectionMm * 1e-3 / U) : 0.f;
 }
@@ -751,7 +751,7 @@ int RubberSurface::Link()
    return over;
 }
 
-HitRubber::HitRubber(IEditable *editable, std::shared_ptr<RubberSurface> surface, const RubberObjectSettings &settings, const std::filesystem::path &iniPath, const std::string &name,
+ContactSurfaceHost::ContactSurfaceHost(IEditable *editable, std::shared_ptr<RubberSurface> surface, const RubberObjectSettings &settings, const std::filesystem::path &iniPath, const std::string &name,
                      const char *kind)
    : ContactHost(editable, settings, iniPath, name, kind), m_surface(std::move(surface)), m_radius(0.f)
 {
@@ -761,7 +761,7 @@ HitRubber::HitRubber(IEditable *editable, std::shared_ptr<RubberSurface> surface
       m_linkOver = m_surface->Link();
 }
 
-HitRubber::~HitRubber()
+ContactSurfaceHost::~ContactSurfaceHost()
 {
    FinderClose(m_surface != nullptr);   // the shared finder's index belongs to the table being closed
    // A ball can outlive its physics engine (a script still references it when the table closes): it must not keep a pointer to a band that is gone (the contact system lets
@@ -774,12 +774,12 @@ HitRubber::~HitRubber()
 static std::vector<RubberContact::SurfaceHole> g_playfieldHoles;   // metres
 bool PlayfieldHolesExist() { return !g_playfieldHoles.empty(); }
 
-void HitRubber::AddPlayfieldHole(const float x, const float y, const float r)
+void ContactSurfaceHost::AddPlayfieldHole(const float x, const float y, const float r)
 {
    g_playfieldHoles.push_back({ (double)x * U, (double)y * U, (double)r * U });
 }
 
-void HitRubber::ClearPlayfieldHoles()
+void ContactSurfaceHost::ClearPlayfieldHoles()
 {
    g_playfieldHoles.clear();
    CarvedHoles::Clear();   // the turntables' and the physical kickers' holes (carvedholes.cpp; the kickers add theirs in PhysicSetup, the turntables in Turntables::Setup, both after this)
@@ -802,7 +802,7 @@ bool InPlayfieldHole(const Vertex3Ds &pos)
 // A VPX rubber stores only a closed centreline, so the posts are recovered from it: a vertex whose local bend radius is below
 // band_curve_radius_mm is on a post wrap, a run of such vertices is one post (a circle is fitted to it), and the straight runs between
 // consecutive posts are the spans. band_posts = "x,y,r | ..." replaces the fit with given circles (vertices within 15% of r of a circle are on it).
-void HitRubber::DetectBand()
+void ContactSurfaceHost::DetectBand()
 {
    m_bandPosts.clear();
    m_bandSpans.clear();
@@ -986,7 +986,7 @@ void HitRubber::DetectBand()
 
 // ---------------------------------------------------------------------------
 // Sling: the plate and the switch blades are the table's own primitives. Nothing is written to the table file; the plate's pose is changed in memory.
-void HitRubber::SlingAttach(Primitive *const plate, const std::vector<Primitive *> &switches)
+void ContactSurfaceHost::SlingAttach(Primitive *const plate, const std::vector<Primitive *> &switches)
 {
    if (m_bandSpans.empty())
       return;   // a ring (see the constructor): nothing to put a plate behind
@@ -1019,7 +1019,7 @@ void HitRubber::SlingAttach(Primitive *const plate, const std::vector<Primitive 
    SlingPlace();
 }
 
-void HitRubber::SlingPlace() const
+void ContactSurfaceHost::SlingPlace() const
 {
    Primitive *const pl = m_slingPlate;
    if (pl == nullptr || m_bandSpans.empty())
@@ -1199,7 +1199,7 @@ void HitRubber::SlingPlace() const
 }
 
 // Switch blades behind the band that only the script reads: collision off, the span they sense and the side they are on found from where they stand.
-void HitRubber::BandSwitchesAttach(const std::vector<Primitive *> &blades)
+void ContactSurfaceHost::BandSwitchesAttach(const std::vector<Primitive *> &blades)
 {
    if (m_bandSpans.empty())
       return;
@@ -1216,7 +1216,7 @@ void HitRubber::BandSwitchesAttach(const std::vector<Primitive *> &blades)
    PLOGI << "Band " << m_name << ": " << blades.size() << " switch blades for the script, " << m_switches.size() << " in all, collision off on them";
 }
 
-void HitRubber::SwitchPlace(BandSwitch &sw) const
+void ContactSurfaceHost::SwitchPlace(BandSwitch &sw) const
 {
    const int n = (int)m_pts.size() - 1;
    if (n < 4 || m_bandSpans.empty())
@@ -1268,7 +1268,7 @@ void HitRubber::SwitchPlace(BandSwitch &sw) const
 }
 
 // The blades follow the band: pushed back toward a blade, the blade slides with it; when the band stretches toward the ball the blade stays at its resting place.
-void HitRubber::SwitchesFinish()
+void ContactSurfaceHost::SwitchesFinish()
 {
    for (BandSwitch &sw : m_switches)
    {
@@ -1284,7 +1284,7 @@ void HitRubber::SwitchesFinish()
 }
 
 // the table's primitives follow the plate and the switches
-void HitRubber::SlingFinish()
+void ContactSurfaceHost::SlingFinish()
 {
    m_slingInfo.enabled = m_slingEnabled;
    m_slingInfo.plateAngleDeg = (float)m_plate.PhiDeg();
@@ -1302,7 +1302,7 @@ void HitRubber::SlingFinish()
    SwitchesFinish();
 }
 
-void HitRubber::CalcHitBBox()
+void ContactSurfaceHost::CalcHitBBox()
 {
    if (m_surface != nullptr)
    {
@@ -1350,7 +1350,7 @@ void HitRubber::CalcHitBBox()
       PLOGI << "RubberGeom " << m_name << " ring x " << x0 << " " << x1 << " y " << y0 << " " << y1 << " z " << z0 << " " << z1 << " radius " << m_radius << " points " << m_pts.size();
 }
 
-float HitRubber::HitTest(const BallS &ball, const float dtime, CollisionEvent &coll) const
+float ContactSurfaceHost::HitTest(const BallS &ball, const float dtime, CollisionEvent &coll) const
 {
    if (!m_enabled || m_pts.size() < 2)
       return -1.0f;
@@ -1491,7 +1491,7 @@ static void FixedCordValues(CordFixed::Part &p, const RubberObjectSettings &s)
    p.SetPatchLaw(p.ringRp);
 }
 
-void HitRubber::Reload() const
+void ContactSurfaceHost::Reload() const
 {
    RubberObjectSettings s;
    if (m_surface != nullptr && m_surfaceKind == "playfield")
@@ -1520,7 +1520,7 @@ void HitRubber::Reload() const
    m_set.contact = true;
    SlingPlace();
    if (m_plateConfigured)
-      const_cast<HitRubber *>(this)->m_plate.Configure(m_set.sling, false);
+      const_cast<ContactSurfaceHost *>(this)->m_plate.Configure(m_set.sling, false);
    PLOGI << "Rubber settings for " << m_name << " reloaded from " << m_ini.string() << ": alpha " << s.alphaSPerM << ", mu " << s.mu << ", tan delta " << s.tanDelta;
    if (m_cord != nullptr)
    {
@@ -1531,7 +1531,7 @@ void HitRubber::Reload() const
 
 static constexpr float kFlipperHorizonVpt = 1.0f;   // trace only: VPX time units (1 VPT = 10 ms) a bat is looked ahead for in the flip_clear numbers
 
-void HitRubber::Collide(const CollisionEvent &coll)
+void ContactSurfaceHost::Collide(const CollisionEvent &coll)
 {
    HitBall *const pball = coll.m_ball;
    const Vertex3Ds &n = coll.m_hitnormal;
@@ -1557,21 +1557,21 @@ void HitRubber::Collide(const CollisionEvent &coll)
    }
 }
 
-HitObject *HitRubber::HitEventObject() const
+HitObject *ContactSurfaceHost::HitEventObject() const
 {
    if (m_surface != nullptr)
       return m_eventCarrier;
-   return m_set.band ? nullptr : const_cast<HitRubber *>(this);   // a rubber post / ring fires its own hit event (Collide above)
+   return m_set.band ? nullptr : const_cast<ContactSurfaceHost *>(this);   // a rubber post / ring fires its own hit event (Collide above)
 }
 
-double HitRubber::LayerM() const
+double ContactSurfaceHost::LayerM() const
 {
    if (m_set.layerMm > 0.0 || m_surface != nullptr)
       return ContactHost::LayerM();
    return 2.0 * m_radiusSI;
 }
 
-void HitRubber::Refresh(SurfaceContact &it, const double ballR, const double reachM, const RubberContact::V3 &c) const
+void ContactSurfaceHost::Refresh(SurfaceContact &it, const double ballR, const double reachM, const RubberContact::V3 &c) const
 {
    if (m_surface == nullptr)
       return;
@@ -1639,12 +1639,12 @@ static uint64_t SegMisses(const std::vector<RubberContact::V3> &pts, const Rubbe
    return m;
 }
 
-bool HitRubber::SegsOn() const
+bool ContactSurfaceHost::SegsOn() const
 {
    return g_finder.on && !CordModel();   // a cord band's centreline is not its surface (the cord moves): the whole tube, until P7
 }
 
-void HitRubber::SegQuery(void *const tv, const RubberContact::V3 &c0, const double cov) const
+void ContactSurfaceHost::SegQuery(void *const tv, const RubberContact::V3 &c0, const double cov) const
 {
    TubeSegQ &t = *static_cast<TubeSegQ *>(tv);
    t.c0 = c0;
@@ -1661,7 +1661,7 @@ void HitRubber::SegQuery(void *const tv, const RubberContact::V3 &c0, const doub
 // The ball's segments of this tube: made from its query (every segment within R + ext + reach of the surface from c0, as the cuts) at the first read after each query; a reader that needs
 // more than the list holds around c re-queries around c0 with need + 2 |c - c0| (design.md section 4's inside check; the factor 2 bounds repeats). No query: queried around c within need.
 // covAt: how far from c the list holds every segment (centreline distance).
-const std::vector<int> &HitRubber::SegsFor(const SurfaceContact &it, const RubberContact::V3 &c, const double need, double *const covAt) const
+const std::vector<int> &ContactSurfaceHost::SegsFor(const SurfaceContact &it, const RubberContact::V3 &c, const double need, double *const covAt) const
 {
    FinderBallQ *const q = static_cast<FinderBallQ *>(it.finderQ);
    TubeSegQ *t = nullptr;
@@ -1709,7 +1709,7 @@ const std::vector<int> &HitRubber::SegsFor(const SurfaceContact &it, const Rubbe
 
 // ProbeTube over the ball's list, exact: the nearest found lies within the list's reach of c, or the list is made again out to its distance (or, none found, a segment's), which then holds
 // the nearest wherever it is (today's answer beyond the reach included). segs: the list read last (it holds every segment within need of c).
-RubberContact::TubeProbe HitRubber::ProbeSegs(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, const double need, const std::vector<int> *&segs) const
+RubberContact::TubeProbe ContactSurfaceHost::ProbeSegs(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, const double need, const std::vector<int> *&segs) const
 {
    const int n = (int)m_ptsSI.size();
    const double need0 = std::max(need, 1e-9);
@@ -1760,7 +1760,7 @@ RubberContact::TubeProbe HitRubber::ProbeSegs(const RubberContact::BallSI &bs, c
    return pr;
 }
 
-RubberContact::TubeProbe HitRubber::Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const
+RubberContact::TubeProbe ContactSurfaceHost::Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const
 {
    if (m_surface != nullptr && !g_nearCmp && it.qFaces != nullptr && FinderCheckOn())   // P3b check mode: the near pass's answer against the whole query list's (diagnostics only)
    {
@@ -1824,7 +1824,7 @@ RubberContact::TubeProbe HitRubber::Probe(const RubberContact::BallSI &bs, const
    return pr;
 }
 
-RubberContact::TubeProbe HitRubber::ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const
+RubberContact::TubeProbe ContactSurfaceHost::ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const
 {
    if (m_surface != nullptr && !g_nearCmp && it.qFaces != nullptr && FinderCheckOn())   // P3b check mode: as Probe
    {
@@ -1946,7 +1946,7 @@ RubberContact::TubeProbe HitRubber::ProbePatch(const RubberContact::BallSI &bs, 
    return pr;
 }
 
-double HitRubber::ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, const int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, const double a, const double hMax, const double touchM, const double arriveM) const
+double ContactSurfaceHost::ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, const int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, const double a, const double hMax, const double touchM, const double arriveM) const
 {
    CheckProfScope checkProf(2);   // P3a profile (diagnostics only)
    const bool finderCheck = m_surface != nullptr && g_finderDepth == 0 && FinderCheckOn();   // check mode (as Probe)
@@ -2017,7 +2017,7 @@ bool PairEligible(const HitBall *x)
    return !x->m_d.m_lockedInKicker && (ContactSystem::Unified() || x->m_bandOwner == nullptr);
 }
 
-bool HitRubber::ContactPairModel(const HitBall *a, const BallS &b)
+bool ContactSurfaceHost::ContactPairModel(const HitBall *a, const BallS &b)
 {
    if (!ContactSettings::Get().ballContact || !PairEligible(a))
       return false;
@@ -2031,7 +2031,7 @@ bool HitRubber::ContactPairModel(const HitBall *a, const BallS &b)
 
 bool HitRubberContactPairModel(const HitBall *a, const BallS &b)
 {
-   return HitRubber::ContactPairModel(a, b);
+   return ContactSurfaceHost::ContactPairModel(a, b);
 }
 
 // ---- A band's mover: the contact system steps the cord with its balls; once per cycle the cord steps alone if no ball did, and finishes up ----
@@ -2063,12 +2063,12 @@ void HitRubberBandBallDeleted(HitBall *ball)
    ContactSystem::Release(ball, "ball deleted");
 }
 
-bool HitRubber::BandWants(const HitBall *ball) const
+bool ContactSurfaceHost::BandWants(const HitBall *ball) const
 {
    return m_set.band && ball->m_bandOwner == nullptr;   // a contact (the playfield's, above all) is handed over to the band. No cooling down and no giving way to a flipper: there is no stock collision to leave the ball to
 }
 
-bool HitRubber::BandEngage(HitBall *const pb)
+bool ContactSurfaceHost::BandEngage(HitBall *const pb)
 {
    if (!BandWants(pb))
       return false;
@@ -2084,7 +2084,7 @@ bool HitRubber::BandEngage(HitBall *const pb)
    return true;
 }
 
-void HitRubber::BandRelease(HitBall *const ball, const char *why)
+void ContactSurfaceHost::BandRelease(HitBall *const ball, const char *why)
 {
    size_t i = 0;
    while (i < m_engaged.size() && m_engaged[i].ball != ball)
@@ -2107,13 +2107,13 @@ void HitRubber::BandRelease(HitBall *const ball, const char *why)
       static_cast<Rubber *>(m_editable)->FireVoidEventParm(DISPID_RubberEvents_BandHit, m_info.peakMm);   // the script handler may do anything: nothing of ours is in flight
 }
 
-void HitRubber::BandReleaseAll(const char *why)
+void ContactSurfaceHost::BandReleaseAll(const char *why)
 {
    while (!m_engaged.empty())
       BandRelease(m_engaged.back().ball, why);
 }
 
-void HitRubber::BandAdvance(const float dtime)
+void ContactSurfaceHost::BandAdvance(const float dtime)
 {
    CordEnsure();
    if (!CordOn())
@@ -2125,7 +2125,7 @@ void HitRubber::BandAdvance(const float dtime)
 }
 
 // ---- The cord in the group step (docs/unified-physics/GroupStepDesign.txt 8, 11) ----
-void HitRubber::CordEnsure()
+void ContactSurfaceHost::CordEnsure()
 {
    if (m_cord != nullptr || !m_set.band || m_bandPosts.size() < 2)
       return;
@@ -2369,7 +2369,7 @@ void HitRubber::CordEnsure()
 
 // The ring on this loop: band_ring_in, or the standard size (3/4 in, then 1 in and up in 1/4 in steps) whose tension on the loop is nearest the middle of 35 - 60 N, among the sizes within that range.
 // None within it: the size whose tension is nearest to the range, and the log says so. Tension = EA (loop / ring's centreline - 1), the cord's own law; the ring's centreline is pi (inner diameter + section).
-double HitRubber::CordRing(const double loopM, const double rcM, const double EA) const
+double ContactSurfaceHost::CordRing(const double loopM, const double rcM, const double EA) const
 {
    if (m_set.bandRingIn > 0.0)
       return m_set.bandRingIn;
@@ -2396,7 +2396,7 @@ double HitRubber::CordRing(const double loopM, const double rcM, const double EA
    return nearest;
 }
 
-void HitRubber::CordBegin()
+void ContactSurfaceHost::CordBegin()
 {
    CordFixed::Part &p = *m_cord->fixed;
    if (!m_slingEnabled)
@@ -2411,7 +2411,7 @@ void HitRubber::CordBegin()
       p.CycleBegin();
 }
 
-void HitRubber::CordFinish(const float /*dtime*/)
+void ContactSurfaceHost::CordFinish(const float /*dtime*/)
 {
    for (const auto &h : m_cord->hits)   // the script's Hit event, as Collide fires it for a stock hit
       if (m_obj && m_fe && h.second >= m_threshold)
@@ -2454,7 +2454,7 @@ void HitRubber::CordFinish(const float /*dtime*/)
       SwitchesFinish();
 }
 
-void HitRubber::CordSolveFailed(const char *why)
+void ContactSurfaceHost::CordSolveFailed(const char *why)
 {
    PLOGW << "Band " << m_name << ": " << why;
    if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
@@ -2465,13 +2465,13 @@ void HitRubber::CordSolveFailed(const char *why)
 }
 
 // The mesh animation: where the rendered tube goes when the band is deflected: the cord's own path, at its own height (the ring of the mesh centred at c shifts and turns).
-bool HitRubber::BandFixedActive() const { return m_cord != nullptr && m_cord->fixed->DrawActive(); }
-void HitRubber::BandFixedDrawPrepare() const
+bool ContactSurfaceHost::BandFixedActive() const { return m_cord != nullptr && m_cord->fixed->DrawActive(); }
+void ContactSurfaceHost::BandFixedDrawPrepare() const
 {
    if (m_cord != nullptr)
       m_cord->fixed->DrawPrepare();
 }
-bool HitRubber::BandDeformAt(const Vertex3Ds &c, Vertex3Ds &shift, float rot[9]) const
+bool ContactSurfaceHost::BandDeformAt(const Vertex3Ds &c, Vertex3Ds &shift, float rot[9]) const
 {
    double sx, sy, ca, sa;
    if (m_cord == nullptr || !m_cord->fixed->DrawAt((double)c.x * U, (double)c.y * U, sx, sy, ca, sa))
@@ -2483,14 +2483,14 @@ bool HitRubber::BandDeformAt(const Vertex3Ds &c, Vertex3Ds &shift, float rot[9])
    return true;
 }
 
-void HitRubber::Contact(CollisionEvent &coll, const float dtime)
+void ContactSurfaceHost::Contact(CollisionEvent &coll, const float dtime)
 {
    if (SlowContact(coll.m_ball))
       return;   // a post rubber: the force model carries the resting or slow touch
    HitObject::Contact(coll, dtime);
 }
 
-void HitRubber::DrawUI(std::function<Vertex2D(Vertex3Ds)> project, ImDrawList *drawList, bool fill) const
+void ContactSurfaceHost::DrawUI(std::function<Vertex2D(Vertex3Ds)> project, ImDrawList *drawList, bool fill) const
 {
    if (!m_enabled)
       return;
@@ -2503,7 +2503,7 @@ void HitRubber::DrawUI(std::function<Vertex2D(Vertex3Ds)> project, ImDrawList *d
          drawList->AddLine(ImVec2(p0.x, p0.y), ImVec2(p1.x, p1.y), lCol);
    }
 }
-void HitRubber::FinderBuild(const bool atLoad)
+void ContactSurfaceHost::FinderBuild(const bool atLoad)
 {
    FinderIndex &g = g_finder;
    if (atLoad && g.built)
@@ -2514,11 +2514,11 @@ void HitRubber::FinderBuild(const bool atLoad)
    if (g.built)
       return;
    g.built = true;
-   std::vector<HitRubber *> hosts;
+   std::vector<ContactSurfaceHost *> hosts;
    int skipped = 0;
    for (ContactHost *const o : ContactHost::Registry())
    {
-      HitRubber *const h = dynamic_cast<HitRubber *>(o);
+      ContactSurfaceHost *const h = dynamic_cast<ContactSurfaceHost *>(o);
       if (h == nullptr || h->m_surface == nullptr || h->m_surface->tris.empty())
          continue;
       if (h->m_surfaceKind != "playfield" && h->m_surfaceKind != "wall" && h->m_surfaceKind != "ramp" && h->m_surfaceKind != "primitive" && h->m_surfaceKind != "kicker")
@@ -2555,7 +2555,7 @@ void HitRubber::FinderBuild(const bool atLoad)
    std::string slowest;
    size_t faces = 0, l2Nodes = 0, bytes = 0, slowestFaces = 0;
    int pieces = 0, disabled = 0;
-   for (HitRubber *const h : hosts)
+   for (ContactSurfaceHost *const h : hosts)
    {
       const auto a = std::chrono::steady_clock::now();
       RubberSurface &s = *h->m_surface;
@@ -2624,7 +2624,7 @@ void HitRubber::FinderBuild(const bool atLoad)
          << (atLoad ? "; at load" : "; at the first cycle (the load call did not run)") << (FinderCheckOn() ? "; check mode on (VPX_FINDER_CHECK)" : "");
 }
 
-void HitRubber::FinderCheck(const SurfaceContact &it, const RubberContact::V3 &c, const double ballR, const int evalKind) const
+void ContactSurfaceHost::FinderCheck(const SurfaceContact &it, const RubberContact::V3 &c, const double ballR, const int evalKind) const
 {
    if (!g_finder.built)
       FinderBuild();   // (an evaluation before the first cycle's gather)
@@ -2706,7 +2706,7 @@ void HitRubber::FinderCheck(const SurfaceContact &it, const RubberContact::V3 &c
    }
 }
 
-void HitRubber::FinderCheckGather(const HitBall *ball, const std::vector<SurfaceContact> &items, const RubberContact::V3 &c, const double ballR, const bool inPlayfieldHole)
+void ContactSurfaceHost::FinderCheckGather(const HitBall *ball, const std::vector<SurfaceContact> &items, const RubberContact::V3 &c, const double ballR, const bool inPlayfieldHole)
 {
    if (!g_finder.built)
       FinderBuild();   // (an evaluation before the first cycle's gather)
@@ -2723,7 +2723,7 @@ void HitRubber::FinderCheckGather(const HitBall *ball, const std::vector<Surface
    for (int k = 0; k < (int)g.objs.size(); k++)
    {
       const FinderObj &ob = g.objs[k];
-      const HitRubber *const h = ob.host;
+      const ContactSurfaceHost *const h = ob.host;
       if (!h->m_enabled || !h->m_set.contact || h->m_set.band || (inPlayfieldHole && h->m_surfaceKind == "playfield"))
          continue;   // (as the gather: a disabled object, one off the contact model, and the playfield over a kicker's hole are left out there on purpose)
       if (BoxD2(ob.lo, ob.hi, c) > r2)
@@ -2764,7 +2764,7 @@ void HitRubber::FinderCheckGather(const HitBall *ball, const std::vector<Surface
    if (q != nullptr)
       for (int k = 0; k < (int)g.objs.size(); k++)
       {
-         const HitRubber *const h = g.objs[k].host;
+         const ContactSurfaceHost *const h = g.objs[k].host;
          if (std::none_of(items.begin(), items.end(), [h](const SurfaceContact &it) { return it.r == static_cast<const ContactSurface *>(h); }) || std::binary_search(q->objs.begin(), q->objs.end(), k))
             continue;
          const std::vector<RubberContact::SurfaceTri> &tris = h->m_surface->tris;
@@ -2796,7 +2796,7 @@ void HitRubber::FinderCheckGather(const HitBall *ball, const std::vector<Surface
 
 // ---- The shared finder, piece P2a: the per-cycle query (design.md sections 3 and 4), run beside today's gathers; nothing in the engine reads it yet ----
 
-void HitRubber::FinderRun(void *const qv, const double r)
+void ContactSurfaceHost::FinderRun(void *const qv, const double r)
 {
    FinderIndex &g = g_finder;
    FinderBallQ &q = *static_cast<FinderBallQ *>(qv);
@@ -2815,7 +2815,7 @@ void HitRubber::FinderRun(void *const qv, const double r)
    std::sort(hit.begin(), hit.end());   // load order (R9)
    for (const int k : hit)
    {
-      const HitRubber *const h = g.objs[k].host;
+      const ContactSurfaceHost *const h = g.objs[k].host;
       if (!h->m_enabled)
          continue;   // not collidable now: skipped by its flag
       const RubberSurface &s = *h->m_surface;
@@ -2837,7 +2837,7 @@ void HitRubber::FinderRun(void *const qv, const double r)
 
 static bool CutProfOn() { return ContactProf::CheckOn() || FinderCheckOn(); }   // P4b counters (diagnostics only)
 
-void HitRubber::FinderCuts(PlayfieldCuts::CutQuery &cq, const RubberContact::V3 &c0, const double r)
+void ContactSurfaceHost::FinderCuts(PlayfieldCuts::CutQuery &cq, const RubberContact::V3 &c0, const double r)
 {
    FinderIndex &g = g_finder;
    const bool prof = CutProfOn();
@@ -2869,7 +2869,7 @@ void HitRubber::FinderCuts(PlayfieldCuts::CutQuery &cq, const RubberContact::V3 
    }
 }
 
-PlayfieldCuts::CutQuery *HitRubber::FinderCutsOf(const SurfaceContact &it)
+PlayfieldCuts::CutQuery *ContactSurfaceHost::FinderCutsOf(const SurfaceContact &it)
 {
    if (!g_finder.on)
       return nullptr;   // key off: the scan
@@ -2915,7 +2915,7 @@ static void FinderP4Log(const uint64_t cycles)
    PLOGI << o.str();
 }
 
-void HitRubber::FinderQuery(const HitBall *const ball, const RubberContact::V3 &c, const RubberContact::V3 &v, const double ballR, const double dt)
+void ContactSurfaceHost::FinderQuery(const HitBall *const ball, const RubberContact::V3 &c, const RubberContact::V3 &v, const double ballR, const double dt)
 {
    FinderIndex &g = g_finder;
    if (!g.on)
@@ -2955,7 +2955,7 @@ void HitRubber::FinderQuery(const HitBall *const ball, const RubberContact::V3 &
       g.qObjNs.Add(ns / (double)q.objs.size());
 }
 
-void HitRubber::FinderInside(const SurfaceContact &it, const RubberContact::V3 &c) const
+void ContactSurfaceHost::FinderInside(const SurfaceContact &it, const RubberContact::V3 &c) const
 {
    const ContactProf::Ticks profInside(ContactProf::CD().inside);   // P3a profile (diagnostics only)
    FinderBallQ *const q = static_cast<FinderBallQ *>(it.finderQ);
@@ -2975,7 +2975,7 @@ void HitRubber::FinderInside(const SurfaceContact &it, const RubberContact::V3 &
    q->reqNs += std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count();
 }
 
-RubberContact::FaceTable *HitRubber::FinderTable(const SurfaceContact &it, const RubberContact::V3 &c) const
+RubberContact::FaceTable *ContactSurfaceHost::FinderTable(const SurfaceContact &it, const RubberContact::V3 &c) const
 {
    const ContactProf::Ticks profBegin(ContactProf::CD().begin);   // P3a profile (diagnostics only)
    FinderBallQ *const q = static_cast<FinderBallQ *>(it.finderQ);
@@ -3032,7 +3032,7 @@ RubberContact::FaceTable *HitRubber::FinderTable(const SurfaceContact &it, const
    return &t;
 }
 
-void HitRubber::FinderTabTake(uint64_t &checks, uint64_t &fills, uint64_t &reads)
+void ContactSurfaceHost::FinderTabTake(uint64_t &checks, uint64_t &fills, uint64_t &reads)
 {
    checks = g_tab.rowChecks;
    fills = g_tab.rowFills;
@@ -3040,7 +3040,7 @@ void HitRubber::FinderTabTake(uint64_t &checks, uint64_t &fills, uint64_t &reads
    g_tab.rowChecks = g_tab.rowFills = g_tab.rowReads = 0;
 }
 
-void HitRubber::FinderTotals(const bool force)
+void ContactSurfaceHost::FinderTotals(const bool force)
 {
    FinderIndex &g = g_finder;
    if (!force)
@@ -3102,12 +3102,12 @@ void HitRubber::FinderTotals(const bool force)
 
 // ---- The shared finder, piece P2b: the query finds every static mesh contact ([Features] shared_finder = 1) ----
 
-bool HitRubber::FinderDrives()
+bool ContactSurfaceHost::FinderDrives()
 {
    return g_finder.on;
 }
 
-void HitRubber::FinderQueryAt(const HitBall *const ball, const RubberContact::V3 &c, const double ballR, const double extM)
+void ContactSurfaceHost::FinderQueryAt(const HitBall *const ball, const RubberContact::V3 &c, const double ballR, const double extM)
 {
    FinderIndex &g = g_finder;
    if (!g.on)
@@ -3121,7 +3121,7 @@ void HitRubber::FinderQueryAt(const HitBall *const ball, const RubberContact::V3
    g.queriesAt++;
 }
 
-void HitRubber::FinderBindOne(const HitBall *const ball, SurfaceContact &it)
+void ContactSurfaceHost::FinderBindOne(const HitBall *const ball, SurfaceContact &it)
 {
    FinderIndex &g = g_finder;
    if (!g.on)
@@ -3139,7 +3139,7 @@ void HitRubber::FinderBindOne(const HitBall *const ball, SurfaceContact &it)
    it.candR = q.R + q.reach;   // how far the list reaches from the query's centre (>= 0: a list is held; the cuts read it as their reach)
 }
 
-void HitRubber::FinderBind(const HitBall *const ball, std::vector<SurfaceContact> &items, const bool cycleItems)
+void ContactSurfaceHost::FinderBind(const HitBall *const ball, std::vector<SurfaceContact> &items, const bool cycleItems)
 {
    if (!g_finder.on)
       return;
@@ -3148,7 +3148,7 @@ void HitRubber::FinderBind(const HitBall *const ball, std::vector<SurfaceContact
    g_finder.balls[ball].items = cycleItems ? &items : nullptr;
 }
 
-void HitRubber::FinderHosts(const HitBall *const ball, std::vector<ContactHost *> &out)
+void ContactSurfaceHost::FinderHosts(const HitBall *const ball, std::vector<ContactHost *> &out)
 {
    out.clear();
    FinderIndex &g = g_finder;
@@ -3156,7 +3156,7 @@ void HitRubber::FinderHosts(const HitBall *const ball, std::vector<ContactHost *
       return;
    const FinderBallQ &q = g.balls[ball];
    for (const int k : q.objs)
-      out.push_back(const_cast<HitRubber *>(g.objs[k].host));
+      out.push_back(const_cast<ContactSurfaceHost *>(g.objs[k].host));
 }
 
 // P3a profile (diagnostics only, VPX_CHECK_PROFILE=1): one log line "Check profile" with the split of a contact check's time and the fit time = a + b fills + c reads

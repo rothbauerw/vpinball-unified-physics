@@ -12,7 +12,7 @@
 #include "renderer/Shader.h"
 #include "renderer/Texture.h"
 #include "renderer/trace.h"
-#include "physics/hitrubber.h"
+#include "physics/contactsurfacehost.h"
 #include "physics/contactsystem.h"
 #include "utils/objloader.h"
 #include "physics/contactsettings.h"

@@ -16,7 +16,7 @@
 #include "physics/hitball.h"
 #include "physics/hitflipper.h"
 #include "ui/live/LiveUI.h"
-#include "physics/hitrubber.h"
+#include "physics/contactsurfacehost.h"
 #include "physics/physicsini.h"
 #include "physics/PhysicsEngine.h"
 
@@ -268,7 +268,7 @@ bool ContactHost::LoadSettings(RubberObjectSettings &s, const std::filesystem::p
    if (!ContactSystem::Unified())
       return false;   // stock engine: stock rubbers
    // the rubber model is on for every rubber the [Features] allow (no file: every model on with its defaults; a rubber says contact = 0 to opt out).
-   // Whether it is a band or a ring is found from its shape (HitRubber::DetectBand), which also takes the [Features] rubbers / bands switch for that kind
+   // Whether it is a band or a ring is found from its shape (ContactSurfaceHost::DetectBand), which also takes the [Features] rubbers / bands switch for that kind
    const PhysicsIni::Features feat = PhysicsIni::Active(file);
    s.contact = true;
    ApplySection(s, file, "rubbers", name);

@@ -11,7 +11,7 @@
 #include "parts/ball.h"
 #include "parts/flipper.h"
 #include "contactsystem.h"
-#include "hitrubber.h"
+#include "contactsurfacehost.h"
 #include "kickerarm.h"
 #include "contactparthost.h"
 #include "hitball.h"
@@ -164,7 +164,7 @@ struct ContactSystemImpl
       double eddyRate = -1.0;   // eddy-current braking of the spin across the coil field, 1/s: evaluated once per cycle (negative = not yet); eddyDir = the field direction
       V3 eddyDir;
       double eStart = 0.0, eScale = 0.0;   // the energy check: the ball's energy at the cycle's start, and what the allowance is a share of
-      HitRubber *band = nullptr;   // a band that holds the ball (the group step takes the whole island)
+      ContactSurfaceHost *band = nullptr;   // a band that holds the ball (the group step takes the whole island)
       bool held = false;           // a ball a kicker holds (parked) or carries (KickerDesign 1h): infinite mass in the pair law, its velocity given (v), no gravity, spin 0
       V3 heldA;                    // its given acceleration, m/s2 (the arm's path's centripetal pull; 0 parked)
    };
@@ -288,8 +288,8 @@ struct ContactSystemImpl
    static void GatherBalls(Cycle &cy)
    {
       CPROF(GatherBalls);
-      HitRubber::FinderBuild();   // shared_finder: the index over every static mesh, once before the first cycle (P1: only check mode reads it)
-      HitRubber::FinderTotals(false);   // shared_finder P2a: counts the cycle; the query's totals once a second of table time
+      ContactSurfaceHost::FinderBuild();   // shared_finder: the index over every static mesh, once before the first cycle (P1: only check mode reads it)
+      ContactSurfaceHost::FinderTotals(false);   // shared_finder P2a: counts the cycle; the query's totals once a second of table time
       const double dt = cy.dt;
       for (auto eit = g_engaged.begin(); eit != g_engaged.end();)
       {
@@ -313,11 +313,11 @@ struct ContactSystemImpl
             w.o = o;
             w.e = &e;
             LoadBody(w, pb);
-            const bool finder = HitRubber::FinderDrives();   // shared_finder P2b (key on): the cycle's query finds the ball's static mesh surfaces
+            const bool finder = ContactSurfaceHost::FinderDrives();   // shared_finder P2b (key on): the cycle's query finds the ball's static mesh surfaces
             if (finder)
             {
                LoadState(w);
-               HitRubber::FinderQuery(pb, w.c, w.v, w.bs.R, dt);   // the per-cycle query (design.md section 3), before the gather that reads it
+               ContactSurfaceHost::FinderQuery(pb, w.c, w.v, w.bs.R, dt);   // the per-cycle query (design.md section 3), before the gather that reads it
             }
             {
                CPROF(Regather);
@@ -330,7 +330,7 @@ struct ContactSystemImpl
             }
             if (!finder)
                LoadState(w);
-            HitRubber::FinderBind(pb, e.items, true);   // shared_finder (key on): each static mesh item reads its faces from the ball's query (its Refresh below does nothing)
+            ContactSurfaceHost::FinderBind(pb, e.items, true);   // shared_finder (key on): each static mesh item reads its faces from the ball's query (its Refresh below does nothing)
             w.band = e.band;
             Sources::Begin(w, dt);
             {
@@ -338,7 +338,7 @@ struct ContactSystemImpl
                for (SurfaceContact &it : e.items)
                   it.r->Refresh(it, w.bs.R, 2.0 * w.v.Length() * dt + 0.005, w.c);   // a surface: the faces the ball can reach this cycle
             }
-            HitRubber::FinderCheckGather(pb, e.items, w.c, w.bs.R, PlayfieldHolesExist() && InPlayfieldHole(pb->m_d.m_pos));   // check mode only (VPX_FINDER_CHECK=1)
+            ContactSurfaceHost::FinderCheckGather(pb, e.items, w.c, w.bs.R, PlayfieldHolesExist() && InPlayfieldHole(pb->m_d.m_pos));   // check mode only (VPX_FINDER_CHECK=1)
             cy.bodies.push_back(std::move(w));
          }
       }
@@ -1281,7 +1281,7 @@ struct ContactSystemImpl
       balls.resize(isl.members.size());
       cause.resize(isl.members.size());
       g.Size((int)isl.members.size());
-      std::vector<HitRubber *> cords;
+      std::vector<ContactSurfaceHost *> cords;
       static std::vector<ContactMovingPart *> parts;   // the moving parts on the group in this island
       parts.clear();
       static std::vector<const ContactMovingPart *> partsIn;
@@ -1465,7 +1465,7 @@ struct ContactSystemImpl
          g.AddForm(t);
       }
       const int nSurf = g.ns;   // the surfaces' shapes; after them each cord's posts (rubbers on posts: GroupStepDesign 13)
-      for (HitRubber *const c : cords)
+      for (ContactSurfaceHost *const c : cords)
       {
          CordFollow(*c->Cord(), g.ball, balls.data(), g.nb);
          g.AddPart(c->Cord()->fixed.get());
@@ -1503,7 +1503,7 @@ struct ContactSystemImpl
             }
             break;
          }
-      for (HitRubber *const c : cords)
+      for (ContactSurfaceHost *const c : cords)
          c->Cord()->fixed->RestorePostItems(g);
       // what a touch keeps between cycles: the shear spring's stretch
       for (int k = 0; k < g.ni; k++)
@@ -1652,7 +1652,7 @@ struct ContactSystemImpl
       // for a test run (VPX_CORD_ENERGY): the group's own books over the cycle, stored energy included, told at each new largest rise
       static const bool cordEnergy = std::getenv("VPX_CORD_ENERGY") != nullptr;
       const bool cordEnergyOn = cordEnergy && !cords.empty();
-      for (HitRubber *const c : cords)
+      for (ContactSurfaceHost *const c : cords)
          c->ReloadIfChanged();   // as a ring: the file is looked at while a ball is on it
       const double cordE0 = cordEnergyOn ? g.Energy() : 0.0;
       // a part's books (always on, rule 8): the group's energy across the cycle against what its drives did and its losses took
@@ -1668,7 +1668,7 @@ struct ContactSystemImpl
                   names.push_back(static_cast<const SurfaceShape *>(g.shape[s])->r->Name());
                   break;
                }
-         for (HitRubber *const c : cords)
+         for (ContactSurfaceHost *const c : cords)
             names.push_back(c->Name());
          return names;
       };
@@ -2016,7 +2016,7 @@ struct ContactSystemImpl
          kept.ra = gi.ra;
          kept.zero = gi.dZero;
       }
-      for (HitRubber *const c : cords)
+      for (ContactSurfaceHost *const c : cords)
       {
          CordBand &cb = *c->Cord();
          std::vector<HitBall *> &on = cb.onCord;
@@ -2066,7 +2066,7 @@ struct ContactSystemImpl
                snprintf(s, sizeof s, " ball%d v (%.4f %.4f %.4f) w (%.2f %.2f %.2f)", i, g.ball[i].v.x, g.ball[i].v.y, g.ball[i].v.z, g.ball[i].w.x, g.ball[i].w.y, g.ball[i].w.z);
                how += s;
             }
-            for (HitRubber *const c : cords)
+            for (ContactSurfaceHost *const c : cords)
             {
                const CordFixed::Part &p = *c->Cord()->fixed;
                snprintf(s, sizeof s, " cord %s plate %.3f omega %.3f on0 %d", c->Name().c_str(), p.phi * 57.29578, p.omega, p.OnCord(0) ? 1 : 0);
@@ -2079,7 +2079,7 @@ struct ContactSystemImpl
          // A hard step (GroupStepDesign 15): the balls stay as they are for the rest of the cycle and the next cycle tries again from the same state: time is lost, no energy can appear,
          // and nothing goes to stock. If it will not solve for kHeldCycles in a row the cord lets the balls go, which only takes energy away.
          constexpr int kHeldCycles = 20;
-         for (HitRubber *const c : cords)
+         for (ContactSurfaceHost *const c : cords)
          {
             CordBand &cb = *c->Cord();
             if (!cb.warnedHeld)
@@ -2097,7 +2097,7 @@ struct ContactSystemImpl
          }
       }
       else
-         for (HitRubber *const c : cords)
+         for (ContactSurfaceHost *const c : cords)
          {
             c->Cord()->heldCycles = 0;
          }
@@ -2134,7 +2134,7 @@ struct ContactSystemImpl
    }
 
    // a cord with no ball this cycle: a plate moving by itself, or the path letting go of a ball just gone (GroupStepDesign 8 point 5); dt: seconds
-   static void CordAlone(HitRubber *const band, const double dt)
+   static void CordAlone(ContactSurfaceHost *const band, const double dt)
    {
       CordBand &cb = *band->Cord();
       if (dt <= 0.0)
@@ -2719,7 +2719,7 @@ void ContactSystemImpl::CordNear(const double dt)
       const V3 v((double)pb->m_d.m_vel.x * VS, (double)pb->m_d.m_vel.y * VS, (double)pb->m_d.m_vel.z * VS);
       for (ContactHost *const o : ContactHost::Registry())
       {
-         HitRubber *const band = o->m_set.band && o->m_enabled ? o->BandHost() : nullptr;
+         ContactSurfaceHost *const band = o->m_set.band && o->m_enabled ? o->BandHost() : nullptr;
          if (band == nullptr || !band->CordModel())
             continue;
          // a plate on its way out carries the cord this far past its rest line (as the release rule): band_plate_reach, the plate's stroke at the cord (CordFixed::PlateReachM); otherwise 30 mm
@@ -2785,7 +2785,7 @@ void ContactSystemImpl::EngageNear(const double dt)
       // Verlet: the last scan found every surface farther than m_nearSafeU from where the ball was then (box distance less the radius and a margin); until the ball has
       // travelled that far, less what it can cross in two cycles, there is nothing to find
       // shared_finder P2b (key on): the static mesh hosts are tested every cycle from the ball's query (radius R + the reach below), the Verlet skip covers only the others
-      const bool finder = HitRubber::FinderDrives();
+      const bool finder = ContactSurfaceHost::FinderDrives();
       const bool skipOthers = pb->m_nearSafeU >= 0.f && nowMs - pb->m_nearMs < 10 && std::sqrt((double)(pos - pb->m_nearPos).LengthSquared()) + travelM / U < (double)pb->m_nearSafeU;
       if (skipOthers && !finder)
          continue;
@@ -2800,8 +2800,8 @@ void ContactSystemImpl::EngageNear(const double dt)
       hosts.clear();
       if (finder)
       {
-         HitRubber::FinderQueryAt(pb, c, bs.R, travelM + 0.005);   // as the Refresh below asked of each mesh: the faces within R + 2 x speed x 1 ms + 5 mm (a static surface: no bound of its own)
-         HitRubber::FinderHosts(pb, hosts);
+         ContactSurfaceHost::FinderQueryAt(pb, c, bs.R, travelM + 0.005);   // as the Refresh below asked of each mesh: the faces within R + 2 x speed x 1 ms + 5 mm (a static surface: no bound of its own)
+         ContactSurfaceHost::FinderHosts(pb, hosts);
       }
       if (!skipOthers)
          for (ContactHost *const o : ContactHost::Registry())
@@ -2831,7 +2831,7 @@ void ContactSystemImpl::EngageNear(const double dt)
          if (mesh)
          {
             itq.r = o;
-            HitRubber::FinderBindOne(pb, itq);
+            ContactSurfaceHost::FinderBindOne(pb, itq);
          }
          auto ce = cache.end();
          if (!mesh)
@@ -2974,13 +2974,13 @@ bool ContactSystemImpl::EngageImpl(ContactHost *const host, HitBall *const pb, c
       const float reach = pb->m_d.m_radius + 20.0f;   // VPX units: the ball radius plus what it can travel during a hit
       // shared_finder P2b (key on): the static mesh hosts other than the one that found the ball come from a query at the engagement, radius R + 20 U (the reach above, to a face
       // instead of the host's box); kept in the registry's order
-      const bool finder = HitRubber::FinderDrives();
+      const bool finder = ContactSurfaceHost::FinderDrives();
       thread_local std::vector<ContactHost *> hosts;
       hosts.clear();
       if (finder)
       {
-         HitRubber::FinderQueryAt(pb, c, bs.R, 20.0 * U);
-         HitRubber::FinderHosts(pb, hosts);
+         ContactSurfaceHost::FinderQueryAt(pb, c, bs.R, 20.0 * U);
+         ContactSurfaceHost::FinderHosts(pb, hosts);
       }
       for (ContactHost *const o : ContactHost::Registry())
          if (!finder || o->FinderObjIndex() < 0 || o == host)
@@ -3015,7 +3015,7 @@ bool ContactSystemImpl::EngageImpl(ContactHost *const host, HitBall *const pb, c
          it.touching = o == host && std::strcmp(how, "near") != 0;   // the stock collider that found the ball fires its own hit event; a surface found by proximity gets its event from the first touch
          rb.items.push_back(it);
       }
-      HitRubber::FinderBind(pb, rb.items, false);   // key on: the mesh items read the engagement query's faces (their Refresh below does nothing; the inside check re-queries as the seat moves the ball)
+      ContactSurfaceHost::FinderBind(pb, rb.items, false);   // key on: the mesh items read the engagement query's faces (their Refresh below does nothing; the inside check re-queries as the seat moves the ball)
    }
    // The ball starts the engagement touching or a little inside the rubber (the hit was found within a step). Go back to the instant it first touched: along its
    // own velocity, by depth / closing speed, at most one physics step; if it is not closing (pushed in by something else), seat it at touching distance along the normal.
@@ -3149,12 +3149,12 @@ void ContactSystemImpl::Release(HitBall *const ball, const char *why)
    g_engaged.erase(itE);
 }
 
-void ContactSystem::StepCordAlone(HitRubber *const band)
+void ContactSystem::StepCordAlone(ContactSurfaceHost *const band)
 {
    ContactSystemImpl::CordAlone(band, g_subS);
 }
 
-bool ContactSystem::EngageBand(HitRubber *const band, HitBall *const pb)
+bool ContactSystem::EngageBand(ContactSurfaceHost *const band, HitBall *const pb)
 {
    BallContact *e = pb->m_contact;
    if (e != nullptr && e->band != nullptr && e->band != band)
@@ -3185,7 +3185,7 @@ void ContactSystemImpl::Regather(BallContact &e, const Vertex3Ds &pos, const flo
       // shared_finder P2b (design.md section 3): the static mesh hosts every cycle from the ball's query (a face within R + reach), the others from the Verlet list below as today;
       // kept in the registry's order, as the registry loop gave them
       thread_local std::vector<ContactHost *> found;
-      HitRubber::FinderHosts(e.ball, found);
+      ContactSurfaceHost::FinderHosts(e.ball, found);
       for (ContactHost *const o : found)
       {
          if (!o->m_set.contact)
@@ -3280,7 +3280,7 @@ bool ContactSystem::Engage(ContactHost *const host, HitBall *const pb, const cha
       it.hLayer = host->LayerM();
       it.st.Reset();
       it.touching = true;   // the collider that found the ball fires its own hit event
-      HitRubber::FinderBindOne(pb, it);   // shared_finder (key on): its faces from the ball's query of this cycle (the inside check re-queries if the ball is outside it)
+      ContactSurfaceHost::FinderBindOne(pb, it);   // shared_finder (key on): its faces from the ball's query of this cycle (the inside check re-queries if the ball is outside it)
       items.push_back(std::move(it));
    }
    return true;

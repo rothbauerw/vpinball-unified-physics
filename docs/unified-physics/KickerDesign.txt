@@ -1,6 +1,6 @@
 KICKER DESIGN  (all 7 sections approved by the user 2026-11-12; requirements: Requirements.txt section F)
 ==========================================================================================================
-Closest existing models (ModelStandards 1b): static surface = a wall's hard-surface host (parts/surface.cpp ~235-270: RubberSurface faces -> HitRubber host, BarsTriangles probe);
+Closest existing models (ModelStandards 1b): static surface = a wall's hard-surface host (parts/surface.cpp ~235-270: RubberSurface faces -> ContactSurfaceHost, BarsTriangles probe);
 the hole = the turntable's CarvedHole (rubbercontact.h ~803, playfield faces inside it do not press); the sensing = trigger None zones (physics/nonezones.h, parts/trigger.cpp
 455-620: centre test on the chord, events queued and fired after the step); a held ball = the magnets' pair form with the other ball held (pairform.h kind 0, b < 0).
 Lead log: runs/2026-11-12-lead/log.md. Tests so far: runs/2026-11-12-kicker-cup.
@@ -41,7 +41,7 @@ skips), the stock counter's kicker rows. KickerHitCircle, collide.cpp, quadtree.
  a. The kicker has no internal contacts (no stops, pins or blades: F 3), so its stiffest contact is the ball on the cup, a hard surface like a ball on a wall. Its step comes
     from the shared step rule (ModelStandards 2c); the kicker states no step facts of its own.
  b. Several pressed faces at once (two ledges, a ring of faces): one Hertz bar per pressed face (multi_contact, on for every static host except the playfield,
-    hitrubber.cpp:1671). A ball resting across a fold between two faces is the trap 'no root at a fold' (ModelStandards 6): the cup mesh is built so no resting place
+    contactsurfacehost.cpp). A ball resting across a fold between two faces is the trap 'no root at a fold' (ModelStandards 6): the cup mesh is built so no resting place
     sits on a fold, and the rest-grid check (mk_grid.py) runs on each cup.
  c. The rim: the playfield's carved hole (1c) gives it: a face point inside the circle moves out to the circle (rubbercontact.h:1060-1072), so the rim is a sharp circular edge
     of the playfield, with the same law and edge rounding (edge_radius_mm) as every mesh edge. The cutout's real bevel is left out until the playfield cut-hole work.
@@ -125,7 +125,7 @@ Offline measurements (runs/2026-11-12-kicker-cup, results_handmade.txt; one cont
     cup at first); switch_depth_mm (default per cup, tuned); material keys as a wall's hard surface (e_mpa, mu, restitution, edge_radius_mm ...) with [Surfaces] defaults.
     Unknown or duplicate keys raise the notice (rule 8). Each key described beside it in the code; all values written to the log at load.
  c. The cup mesh is compiled in (a header like the stock meshes, mm, kicker frame), one per cup type; its hole radius is part of the cup data.
- d. Interface: the physical kicker is a static surface host (a HitRubber, as a wall builds one) plus the carved hole; no moving part, no GroupStep::Part. The virtual kicker
+ d. Interface: the physical kicker is a static surface host (a ContactSurfaceHost, as a wall builds one) plus the carved hole; no moving part, no GroupStep::Part. The virtual kicker
     is a sensing zone plus the parked-ball state; the parked ball enters the pair law as a held ball (pairform.h b < 0). No kicker special case inside contactsystem.cpp.
  e. Events: Hit and Unhit from the held test (F 6), queued with their time and fired after the step, as trigger None zones do (trigger.cpp CycleEnd); no script runs inside
     the step. A destroyed ball is dropped from the queue (BallGone).

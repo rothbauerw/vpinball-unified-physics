@@ -243,8 +243,8 @@ set(VPX_SOURCES
    src/physics/contactdiscpart.h
    src/physics/discgroup.h
    src/physics/pairform.h
-   src/physics/hitrubber.cpp
-   src/physics/hitrubber.h
+   src/physics/contactsurfacehost.cpp
+   src/physics/contactsurfacehost.h
    src/physics/carvedholes.cpp
    src/physics/carvedholes.h
    src/physics/kickerarm.h

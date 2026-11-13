@@ -50,7 +50,7 @@ on its own (section 8). Write-back once per cycle: the part's public angle (rend
   rest_angle_deg    one-way gates: the angle the gate hangs at, held by its reverse stop. Default 15, per gate. Two-way gates hang at 0 (no setting).
   open_stop_deg     the angle where the bracket/stop limits the forward swing. Default from the part's OpenAngle (stock AngleMax), else 90 (UNVERIFIED).
   material          steel: E 200 GPa, nu 0.3, density 7850 kg/m^3. Ball-gate friction and the damping of the ball contact from the part's Friction and
-                    Elasticity (as every hard surface, HitRubber::HardSurfaceE).
+                    Elasticity (as every hard surface, ContactSurfaceHost::HardSurfaceE).
   mu_pivot          0.3 (steel wire in a steel hole, UNVERIFIED).
   wire_d_mm         1.2 (user: 1.02 - 1.40, any value in range is fine). Also the pivot pin diameter.
   The four types are the part's DrawStyle (GateType): wire W, wire rectangle, plate, long plate.
@@ -166,7 +166,7 @@ In the unified engine a gate or spinner adds NO stock HitObjects (no HitGate, Hi
 m_hingeAdvanced flag). The part still owns its render state: the body writes the angle to the part's public angle at the end of every cycle, and CurrentAngle
 reads it. Collidable is read live every cycle (a script toggle acts at once). The stock objects stay for stock tables (engine chosen per table).
 Files: contacthinge.{h,cpp} is replaced by contactgate.{h,cpp} and contactspinner.{h,cpp} on a small shared body (contacthingebody.h: state, torques, stops,
-stick/slip, integration). The gate/spinner branches in HitRubber (SetHinge, MakeHingeHost, the hinge Probe path) move to the new surfaces.
+stick/slip, integration). The gate/spinner branches in ContactSurfaceHost (SetHinge, MakeHingeHost, the hinge Probe path) move to the new surfaces.
 
 [8 stepping and cost, 9 detectors (never built): moved to archive/GateSpinnerDesign_moved.txt on 2026-11-07 (replaced / not built)]
 

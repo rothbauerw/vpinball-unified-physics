@@ -8,7 +8,7 @@
 
 #include "physics/contactparthost.h"
 #include "physics/contactsystem.h"
-#include "physics/hitrubber.h"
+#include "physics/contactsurfacehost.h"
 #include "physics/PhysicsEngine.h"
 #include "physics/cabinet/NudgeHandler.h"
 

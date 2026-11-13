@@ -5,7 +5,7 @@
 #include "core/stdafx.h"
 #include "ramp.h"
 #include "physics/PhysicsEngine.h"
-#include "physics/hitrubber.h"
+#include "physics/contactsurfacehost.h"
 #include "physics/contactsystem.h"
 
 void Ramp::AddHardSurface(PhysicsEngine* physics, const bool isUI, const Vertex2D* const rgvLocal, const float* const rgheight1, const int cvertex, const float wallheightright, const float wallheightleft, const size_t collidersBefore)
@@ -13,8 +13,8 @@ void Ramp::AddHardSurface(PhysicsEngine* physics, const bool isUI, const Vertex2
    // unified engine: the ramp's floor and side walls are a hard surface of the contact model (sheets: the ball side is taken from where the ball is)
    std::shared_ptr<RubberSurface> rubberFaces;
    RubberObjectSettings rubberSettings;
-   const std::filesystem::path rubberIni = HitRubber::IniPathFor(m_ptable->m_filename);
-   if (!isUI && ContactSystem::Unified() && HitRubber::HardSurfaceWanted(rubberIni, "ramp", GetName()))
+   const std::filesystem::path rubberIni = ContactSurfaceHost::IniPathFor(m_ptable->m_filename);
+   if (!isUI && ContactSystem::Unified() && ContactSurfaceHost::HardSurfaceWanted(rubberIni, "ramp", GetName()))
       rubberFaces = std::make_shared<RubberSurface>();
    if (rubberFaces)
    {
@@ -50,10 +50,10 @@ void Ramp::AddHardSurface(PhysicsEngine* physics, const bool isUI, const Vertex2
       if (!rubberFaces->tris.empty())
       {
          const HitObject *const first = collidersBefore < m_vhoCollidable.size() ? m_vhoCollidable[collidersBefore] : nullptr;
-         HitRubber::LoadHardSurfaceSettings(rubberSettings, rubberIni, "ramp", GetName(), HitRubber::HardSurfaceE(first), first != nullptr ? first->m_friction : 0.3);
-         HitRubber *const host = new HitRubber(this, rubberFaces, rubberSettings, rubberIni, GetName(), "ramp");
+         ContactSurfaceHost::LoadHardSurfaceSettings(rubberSettings, rubberIni, "ramp", GetName(), ContactSurfaceHost::HardSurfaceE(first), first != nullptr ? first->m_friction : 0.3);
+         ContactSurfaceHost *const host = new ContactSurfaceHost(this, rubberFaces, rubberSettings, rubberIni, GetName(), "ramp");
          if (first != nullptr)
-            host->SetHardSurface(HitRubber::HardSurfaceE(first), first->m_friction);
+            host->SetHardSurface(ContactSurfaceHost::HardSurfaceE(first), first->m_friction);
          host->SetEventCarrier(collidersBefore < m_vhoCollidable.size() ? m_vhoCollidable[collidersBefore] : nullptr);
          for (size_t i = collidersBefore; i < m_vhoCollidable.size(); i++)
             m_vhoCollidable[i]->m_surfaceHost = host;   // the ramp's own colliders hand a hit to the host

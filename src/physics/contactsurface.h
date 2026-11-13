@@ -3,7 +3,7 @@
 // point, normal and curvature of the part of the surface near the ball (Probe), and, for a surface that moves, the velocity of the surface at the contact and the reaction
 // on it. The contact law (Hertz + damping + Mindlin + twist + rolling resistance) and the integration are the same for every surface and live outside.
 //
-// Implemented by the hosts (contacthost.h): HitRubber (a rubber tube, the faces of a wall, primitive, ramp or the playfield) and ContactPartHost (a moving part). The unified engine's own surfaces
+// Implemented by the hosts (contacthost.h): ContactSurfaceHost (a rubber tube, the faces of a wall, primitive, ramp or the playfield) and ContactPartHost (a moving part). The unified engine's own surfaces
 // (playfield mesh, ramps, wall and primitive meshes) will implement this interface directly.
 
 #include <string>
@@ -46,7 +46,7 @@ struct SurfaceContact
    double candR = -1.0;           // < 0 = no list
    static constexpr double kTightSkin = 0.002;   // m
    // the faces to test for a ball at c: the short list while the ball is within the skin of where it was filtered, the whole Verlet list beyond it
-   // shared_finder P2b (key on, a static mesh host): the ball's per-cycle query's faces of this object (qFaces, set by HitRubber::FinderBind; a re-query refreshes it in place)
+   // shared_finder P2b (key on, a static mesh host): the ball's per-cycle query's faces of this object (qFaces, set by ContactSurfaceHost::FinderBind; a re-query refreshes it in place)
    const std::vector<int> &Faces(const RubberContact::V3 &c) const { return qFaces != nullptr ? *qFaces : (c - tightC).Length() <= kTightSkin ? cand : candV; }
    // no face within reach: the surface has nothing to probe this cycle
    bool NoFaces(const RubberContact::V3 &c) const { return candR >= 0.0 && Faces(c).empty(); }
@@ -65,7 +65,7 @@ struct SurfaceContact
    // The last probe of this surface in the arrival loop: the gap (m, < 0 = overlap; probeT < 0 = none yet this cycle), where the ball was and when (s into the cycle). A static
    // surface's gap can shrink by no more than the ball has moved since, so a surface the ball cannot reach in the rest of the cycle is not probed again (ProbeBody).
    double probeGap = 0.0, probeT = -1.0;
-   void *finderQ = nullptr;       // shared_finder: the ball's per-cycle query (hitrubber.cpp FinderBallQ), set at each cycle's gather and at engagement (HitRubber::FinderBind); null = none
+   void *finderQ = nullptr;       // shared_finder: the ball's per-cycle query (contactsurfacehost.cpp FinderBallQ), set at each cycle's gather and at engagement (ContactSurfaceHost::FinderBind); null = none
    const std::vector<int> *qFaces = nullptr;   // shared_finder P2b (key on): this static mesh object's faces in the ball's query (Faces reads it in place of cand / candV); null = today's lists
    RubberContact::V3 probeC;
 };

@@ -29,7 +29,7 @@
 #include "physics/PhysicsEngine.h"
 #include "parts/ball.h"
 #include "physics/rubbercontact.h"
-#include "physics/hitrubber.h"
+#include "physics/contactsurfacehost.h"
 #include "physics/contactbat.h"
 #include "physics/contactsystem.h"
 #include "physics/physicsini.h"

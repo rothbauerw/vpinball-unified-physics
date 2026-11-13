@@ -9,7 +9,7 @@
 #include "physics/contacthingepart.h"
 #include "physics/contactsettings.h"
 #include "physics/contactsystem.h"
-#include "physics/hitrubber.h"
+#include "physics/contactsurfacehost.h"
 #include "ui/live/LiveUI.h"
 
 HingePartAdapter::HingePartAdapter(std::shared_ptr<HingeModel::Engine> model, Gate *gate, Spinner *spinner, float *angle, float *angleSpeed, const std::string &name)
