@@ -202,13 +202,14 @@ public:
    static void FinderBindOne(const HitBall *ball, SurfaceContact &it);
    static void FinderHosts(const HitBall *ball, std::vector<ContactHost *> &out);
    // shared_finder re-engage (runs/2026-11-13-finder-reengage/design.md): an object the inside check's re-query found that is not among the ball's surfaces is recorded for engagement;
-   // the group step takes it (FinderTakeNew: the ball's recorded hosts, cleared) and joins it mid-step. FinderPendAny: some ball has one recorded. One not taken by the ball's next query is
+   // the group step takes it (FinderTakeReachable: the recorded hosts the step's path can reach) and joins it mid-step. FinderPendAny: some ball has one recorded. One not taken by the ball's next query is
    // a fault, logged and counted ("not handled"). FinderJoinNote: counters of the joins (kind: the host's surface kind; ns: the join's own time, 0 when not timed)
    static bool FinderPendAny();
-   static void FinderTakeNew(const HitBall *ball, std::vector<ContactHost *> &out);
+   static void FinderTakeReachable(const HitBall *ball, const RubberContact::V3 &s0, const RubberContact::V3 &s1, double R, std::vector<ContactHost *> &out);   // build 3: the recorded hosts whose box the step's path s0 -> s1 (grown by R) reaches, taken; the others stay pending this cycle
    static void FinderJoinNote(const std::string &kind, bool againAttempt, bool insideAtStart, double ns);
    static void FinderJoinNotHandled(const HitBall *ball, const std::string &host, const char *why);
    static void FinderJoinCapHit(long n);
+   static void FinderJoinTiming(double setupNs, double rerunNs, long reruns, double stepsNs);   // VPX_CHECK_PROFILE: a cycle with a join: its setup and re-run attempts' time, and its whole group step time (worst kept)
    static void FinderJoinTouched(int items, int touched);   // the contacts joined in an island's cycle, and how many of them were touching at the end of some step of it
    // shared_finder P4b: the cut pieces around c0 within r (the cuts' box tree, built once per cut Setup), in index order, into cq; the item's ball's cut query (never null: an item with no query gets an empty one, queried around the ball)
    static void FinderCuts(PlayfieldCuts::CutQuery &cq, const RubberContact::V3 &c0, double r);

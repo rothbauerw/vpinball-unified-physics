@@ -13,7 +13,7 @@ G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
 In flight: 1.34 shared finder (P1-P5 done, old paths deleted; re-query objects join mid-step). Next: the join's gaps, then P6a (runs/2026-11-13-finder-P6). Refs: runs/2026-11-13-finder-cleanup. Lead log runs/2026-11-10-lead. 1.33: piece 2 kept with cut B, piece 3 dropped (cost).
-The lead owns the join's gaps: cord islands; GenieP ball held on the playfield reported it as new (t=8542, duplicate join risk); re-query in a probe outside an attempt (Ramp003 t=8122); cost split. Owed: snapshot hashes refresh. Separate: N3; P4c.
+The lead owns the join's open points: join setup 6 us mean and a 116 us outlier, not understood (time on a quiet machine); FarStillFar checks a skipped contact only at mid and end of a step (exact path test, per shape type). Owed: snapshot hashes refresh. Separate: N3; P4c.
 Kickers: in the branch (KickerDesign.txt). Next: physical cup settles too slowly (user's play): find the missing damping, maybe the switch blade. Resting cost 102 us per cycle is the contact system's. Lead log runs/2026-11-12-lead.
 Parked with playfield holes (Button and Star committed): a ball on a flush Button lands on the wood through the cap (no hole), bounce e 0.86; user expects much more loss on a Button.
 N12. Gorgar load: 0 halvings (cord grip 1cec677ab, rolling patch 87ec36642, stick-zone trial 49155d9e2: Drain-kicker 2-cycle gone, rounds per step -10 %); ~60 depth warnings < 20 um in the bottom pile and at the Drain kicker (stock kicker).

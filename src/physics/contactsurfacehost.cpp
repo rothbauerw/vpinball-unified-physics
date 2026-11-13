@@ -152,6 +152,7 @@ namespace
       uint64_t reqNew = 0;       // P2b: objects a re-query found that were not among the ball's surfaces (summed at the totals); re-engage: each counted once per cycle, as recorded below
       std::vector<int> pend;     // re-engage: those objects, recorded for engagement in the cycle (the group step takes them: FinderTakeNew)
       std::vector<std::pair<int, uint32_t>> pendAt;   // beside pend (diagnostics): the calling stage (ContactProf::StageCur) and the table time (ms) of the re-query that recorded it
+      std::vector<char> pendTested;   // beside pend: box-tested by a group step this cycle (one never tested at the next query: the ball was not stepped, a fault)
       uint64_t ver = 0;          // P3a: the query's version: each query, re-query and bind starts every table of the ball anew
       std::vector<RubberContact::FaceTable> tab;   // P3a: per finder object, the ball's measurement table of its faces in per[k] (one per ball position)
       const HitBall *ball = nullptr;   // P3a: the ball (check mode's log)
@@ -237,6 +238,10 @@ namespace
       uint64_t joins = 0, again = 0, insideAtStart = 0, notHandled = 0, capHit = 0, timed = 0, items = 0, touched = 0;
       double ns = 0.0;
       std::map<std::string, uint64_t> byKind;
+      uint64_t pendNever = 0;   // objects found, box-tested and never reached by a step in their cycle (left out correctly)
+      double rerunNs = 0.0, worstSteps = 0.0, worstSetup = 0.0, worstRerun = 0.0;   // VPX_CHECK_PROFILE: re-run attempts' time; the worst cycle with a join (its whole group step time, its setup and re-runs)
+      uint64_t reruns = 0, cyclesTimed = 0, worstMs = 0;
+      long worstReruns = 0;
       bool notified = false;
       int logged = 0;
    };
@@ -256,11 +261,17 @@ namespace
       {
          const int k = q.pend[i];
          const std::pair<int, uint32_t> at = i < q.pendAt.size() ? q.pendAt[i] : std::make_pair(-1, 0u);
+         if (i < q.pendTested.size() && q.pendTested[i])
+         {
+            g_join.pendNever++;   // found, its box out of every step's path this cycle: never joined, correctly
+            continue;
+         }
          const std::string why = "the ball was not stepped by the group step after it was found (re-query by " + std::string(StageWord(at.first)) + " at t=" + std::to_string(at.second) + ")";
          ContactSurfaceHost::FinderJoinNotHandled(q.ball, k >= 0 && k < (int)g_finder.objs.size() && g_finder.objs[k].host != nullptr ? g_finder.objs[k].host->Name() : std::string("?"), why.c_str());
       }
       q.pend.clear();
       q.pendAt.clear();
+      q.pendTested.clear();
    }
 
    // shared_finder P3a counters: one contact check = one outermost Probe, ProbePatch or ArrivalS of a static mesh host with a measurement table
@@ -2976,6 +2987,7 @@ void ContactSurfaceHost::FinderInside(const SurfaceContact &it, const RubberCont
             q->reqNew++;
             q->pend.push_back(k);
             q->pendAt.emplace_back(ContactProf::StageCur(), g_pplayer != nullptr ? (uint32_t)g_pplayer->m_time_msec : 0u);
+            q->pendTested.push_back(0);
             g_joinPendAny = true;
          }
    q->reqNs += std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count();
@@ -3077,9 +3089,13 @@ void ContactSurfaceHost::FinderTotals(const bool force)
                o << "; re-engage: mid-step joins " << g_join.joins << " (";
                for (const auto &e : g_join.byKind)
                   o << e.first << " " << e.second << " ";
-               o << "), contacts joined " << g_join.items << " of which touching at a step's end in that cycle " << g_join.touched << ", attempts run again " << g_join.again << ", found inside at the step's start " << g_join.insideAtStart << ", not handled " << g_join.notHandled << ", over 8 joins in a step " << g_join.capHit;
+               o << "), contacts joined " << g_join.items << " of which touching at a step's end in that cycle " << g_join.touched << ", attempts run again " << g_join.again << ", found inside at the step's start " << g_join.insideAtStart << ", pending never reached " << g_join.pendNever << ", not handled " << g_join.notHandled << ", over 8 joins in a step " << g_join.capHit;
                if (g_join.timed > 0)
                   o << ", join time " << g_join.ns * 1e-3 << " us in all over " << g.cycle << " cycles (" << g_join.ns * 1e-3 / (double)std::max<uint64_t>(g.cycle, 1) << " us per cycle)";
+               if (g_join.cyclesTimed > 0)
+                  o << "; join timing: setup " << g_join.ns * 1e-3 / (double)std::max<uint64_t>(g_join.joins, 1) << " us per join, re-run attempts " << g_join.reruns << " taking " << g_join.rerunNs * 1e-3 << " us in all ("
+                    << g_join.rerunNs * 1e-3 / (double)std::max<uint64_t>(g_join.joins, 1) << " us per join), cycles with a join " << g_join.cyclesTimed << ", worst such cycle t=" << g_join.worstMs << ": group step " << g_join.worstSteps * 1e-3
+                    << " us of which setup " << g_join.worstSetup * 1e-3 << " us, re-run " << g_join.worstRerun * 1e-3 << " us (" << g_join.worstReruns << " attempts)";
                return o.str();
             }();
    if (g_tab.checks > 0)   // P3a: the measurement tables
@@ -3165,21 +3181,37 @@ bool ContactSurfaceHost::FinderPendAny()
    return g_joinPendAny;
 }
 
-void ContactSurfaceHost::FinderTakeNew(const HitBall *const ball, std::vector<ContactHost *> &out)
+void ContactSurfaceHost::FinderTakeReachable(const HitBall *const ball, const RubberContact::V3 &s0, const RubberContact::V3 &s1, const double R, std::vector<ContactHost *> &out)
 {
    out.clear();
    FinderIndex &g = g_finder;
    if (!g.on)
       return;
    const auto f = g.balls.find(ball);
-   if (f != g.balls.end())
+   if (f == g.balls.end() || f->second.pend.empty())
+      return;
+   FinderBallQ &q = f->second;
+   // the step's path (the segment s0 -> s1 of the ball's centre) grown by the ball's radius, as a box: one that misses the object's box (its face tree's root) cannot touch it in this step
+   const RubberContact::V3 lo(std::min(s0.x, s1.x) - R, std::min(s0.y, s1.y) - R, std::min(s0.z, s1.z) - R), hi(std::max(s0.x, s1.x) + R, std::max(s0.y, s1.y) + R, std::max(s0.z, s1.z) + R);
+   size_t w = 0;
+   for (size_t i = 0; i < q.pend.size(); i++)
    {
-      for (const int k : f->second.pend)
-         out.push_back(const_cast<ContactSurfaceHost *>(g.objs[k].host));
-      f->second.pend.clear();
-      f->second.pendAt.clear();
+      const FinderObj &o = g.objs[q.pend[i]];
+      if (lo.x <= o.hi.x && hi.x >= o.lo.x && lo.y <= o.hi.y && hi.y >= o.lo.y && lo.z <= o.hi.z && hi.z >= o.lo.z)
+      {
+         out.push_back(const_cast<ContactSurfaceHost *>(o.host));
+         continue;
+      }
+      q.pend[w] = q.pend[i];   // pending: tested again at each later step of the cycle
+      q.pendAt[w] = i < q.pendAt.size() ? q.pendAt[i] : std::make_pair(-1, 0u);
+      q.pendTested[w] = 1;
+      w++;
    }
-   g_joinPendAny = std::any_of(g.balls.begin(), g.balls.end(), [](const auto &e) { return !e.second.pend.empty(); });
+   q.pend.resize(w);
+   q.pendAt.resize(w);
+   q.pendTested.resize(w);
+   if (!out.empty() || w == 0)
+      g_joinPendAny = std::any_of(g.balls.begin(), g.balls.end(), [](const auto &e) { return !e.second.pend.empty(); });
 }
 
 void ContactSurfaceHost::FinderJoinNote(const std::string &kind, const bool againAttempt, const bool insideAtStart, const double ns)
@@ -3211,6 +3243,21 @@ void ContactSurfaceHost::FinderJoinNotHandled(const HitBall *const ball, const s
    {
       g_join.notified = true;
       g_pplayer->m_liveUI->PushNotification("Contact finder: a ball reached " + host + " beyond its predicted reach and it could not join the step (see vpinball.log)", 8000);
+   }
+}
+
+void ContactSurfaceHost::FinderJoinTiming(const double setupNs, const double rerunNs, const long reruns, const double stepsNs)
+{
+   g_join.rerunNs += rerunNs;
+   g_join.reruns += (uint64_t)reruns;
+   g_join.cyclesTimed++;
+   if (stepsNs > g_join.worstSteps)
+   {
+      g_join.worstSteps = stepsNs;
+      g_join.worstSetup = setupNs;
+      g_join.worstRerun = rerunNs;
+      g_join.worstReruns = reruns;
+      g_join.worstMs = g_pplayer != nullptr ? (uint64_t)g_pplayer->m_time_msec : 0;
    }
 }
 

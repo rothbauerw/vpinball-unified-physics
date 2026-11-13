@@ -1285,6 +1285,8 @@ namespace GroupStep
          {
             if (s->onlyBall >= 0 && s->onlyBall != a)
                continue;
+            farNow[ni] = 1;   // (a skipped contact until the next attempt's start classifies it: FarStillFar tests it)
+            ie[ni].d1 = -1.0;   // (its end as a skipped contact's: Eval's far branch)
             Item &it = item[ni++];
             it = Item();
             it.a = a;
@@ -1296,6 +1298,11 @@ namespace GroupStep
       // the owner's mid-step join, after each attempt: the number of shapes it added (> 0: the attempt runs again); allow false (past kJoinRounds): add none, -1 if one is waiting.
       // Unset: none (every use but the contact system's islands)
       std::function<int(bool)> midJoin;
+      // the move of ball i in the current attempt (its centre's displacement over the step), m
+      V3 MoveOf(const int i) const { return V3(x[6 * i], x[6 * i + 1], x[6 * i + 2]); }
+      bool timeJoins = false;    // the owner's VPX_CHECK_PROFILE: time the attempts run again after a join (Solve)
+      double joinRerunNs = 0.0;  // their time, ns, and how many (the owner reads and clears them)
+      long joinReruns = 0;
       int joinRounds = 0;   // joins in the current step (Step)
       long joinCapHit = 0;  // attempts that found more after kJoinRounds joins in one step (the owner reads and clears it)
       static constexpr int kJoinRounds = 8;   // each round adds an object, so the rounds are bounded by the objects; more than this in one step is a fault, logged
@@ -4099,29 +4106,57 @@ namespace GroupStep
       }
 
       // Solve one step of h from the state now (the end values stay in x and ie[])
+      // shared_finder re-engage (build 3): a surface the ball's inside check found joins as a skipped contact (far) when the step's path can reach its box (the owner's test), with no re-run
+      // of its own: the check after the solve (FarStillFar) runs the attempt again only when a skipped contact is reached. Finds made by the checks' own probes are joined the same way and
+      // tested by FarStillFar again, so nothing found is left at the step's end.
       bool Solve(double h)
       {
          nearGrow = 1.0;
+         // VPX_CHECK_PROFILE (timeJoins, set by the owner; diagnostics only): an attempt run again in a step with a join (FarStillFar reached a contact, or a join after an all-in attempt)
+         const auto t = [&]() { return timeJoins ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point(); };
+         const auto timedRerun = [&](const std::chrono::steady_clock::time_point t0) {
+            if (timeJoins && joinRounds > 0)
+            {
+               joinRerunNs += std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count();
+               joinReruns++;
+            }
+         };
          for (;;)
          {
             farOff = false;
             const bool ok0 = SolveOnce(h);
-            if (Joined())
-               continue;   // a surface found inside the attempt joined: the attempt again from the step's start, with it
+            Joined();   // (joined as skipped contacts; a failed attempt halves the step with them in)
             if (!ok0)
                return false;
-            if (!FarStillFar(x))
+            bool again = false;
+            for (;;)
             {
-               farOff = true;
-               const bool ok = SolveOnce(h);
-               farOff = false;
-               if (Joined())
-                  continue;
-               return ok;   // (its lists hold every piece)
+               if (!FarStillFar(x))
+               {
+                  const auto t0 = t();
+                  farOff = true;
+                  const bool ok = SolveOnce(h);
+                  farOff = false;
+                  timedRerun(t0);
+                  if (Joined())
+                  {
+                     again = true;   // found in the all-in attempt: the attempt again, its new contacts classified at its start
+                     break;
+                  }
+                  return ok;   // (its lists hold every piece)
+               }
+               if (!NearStillNear(x))
+               {
+                  nearGrow *= 4.0;   // a piece off a list was reached: the lists anew from a longer reach, the attempt again
+                  again = true;
+                  break;
+               }
+               if (!Joined())
+                  return true;
+               // found by the checks' own probes: joined as skipped contacts, tested by FarStillFar again
             }
-            if (NearStillNear(x))
-               return true;
-            nearGrow *= 4.0;   // a piece off a list was reached: the lists anew from a longer reach, the attempt again
+            if (again)
+               continue;
          }
       }
       // shared_finder re-engage: the owner's join after an attempt (midJoin); true = a shape was added, run the attempt again. Bounded per step (kJoinRounds): past it, a fault logged once per table use
