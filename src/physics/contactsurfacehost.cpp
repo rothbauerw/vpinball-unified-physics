@@ -125,11 +125,11 @@ namespace
       std::vector<int> segs;
    };
 
-   // P5 counters (VPX_CHECK_PROFILE=1 or VPX_FINDER_CHECK=1; diagnostics only), per reader (0 probe, 1 bars, 2 patch, 3 arrival): calls, segments in the tube, segments read, ticks; check calls,
+   // P5 counters (VPX_CHECK_PROFILE=1 or VPX_FINDER_CHECK=1; diagnostics only), per reader (0 probe, 1 bars, 2 patch): calls, segments in the tube, segments read, ticks; check calls,
    // mismatches (an answer not bit-equal to the whole tube's), misses (a segment within the reader's reach not in the list); segment queries, re-queries; stock HitTest's segment loop reached
    struct SegStats
    {
-      uint64_t calls[4] = {}, inTube[4] = {}, tested[4] = {}, ticks[4] = {}, checks[4] = {}, mismatch[4] = {}, miss[4] = {};
+      uint64_t calls[3] = {}, inTube[3] = {}, tested[3] = {}, ticks[3] = {}, checks[3] = {}, mismatch[3] = {}, miss[3] = {};
       uint64_t queries = 0, requery = 0, hitTestLoop = 0;
    };
    SegStats g_segStats;
@@ -151,6 +151,7 @@ namespace
       double reqNs = 0.0;        // time spent in re-queries, ns (summed at the totals)
       uint64_t reqNew = 0;       // P2b: objects a re-query found that were not among the ball's surfaces (summed at the totals); re-engage: each counted once per cycle, as recorded below
       std::vector<int> pend;     // re-engage: those objects, recorded for engagement in the cycle (the group step takes them: FinderTakeNew)
+      std::vector<std::pair<int, uint32_t>> pendAt;   // beside pend (diagnostics): the calling stage (ContactProf::StageCur) and the table time (ms) of the re-query that recorded it
       uint64_t ver = 0;          // P3a: the query's version: each query, re-query and bind starts every table of the ball anew
       std::vector<RubberContact::FaceTable> tab;   // P3a: per finder object, the ball's measurement table of its faces in per[k] (one per ball position)
       const HitBall *ball = nullptr;   // P3a: the ball (check mode's log)
@@ -240,18 +241,29 @@ namespace
       int logged = 0;
    };
    JoinStats g_join;
+   // the calling stage of a re-query, one word (ContactProf::StageId; "other": a stage that sets none)
+   const char *StageWord(const int s)
+   {
+      static const char *const w[ContactProf::StCount] = { "other", "holds", "groupshape", "ringhandin", "ringcap", "loadstate", "cordnear", "engagenear", "seatattouch", "engage", "writeback", "release" };
+      return s >= 0 && s < ContactProf::StCount ? w[s] : "?";
+   }
    // an object recorded for the ball and not taken before its next query: not handled mid-cycle (a ball not on the group step this cycle)
    void JoinLeftover(FinderBallQ &q)
    {
       if (q.pend.empty())
          return;
-      for (const int k : q.pend)
-         ContactSurfaceHost::FinderJoinNotHandled(q.ball, k >= 0 && k < (int)g_finder.objs.size() && g_finder.objs[k].host != nullptr ? g_finder.objs[k].host->Name() : std::string("?"),
-            "the ball was not stepped by the group step after it was found");
+      for (size_t i = 0; i < q.pend.size(); i++)
+      {
+         const int k = q.pend[i];
+         const std::pair<int, uint32_t> at = i < q.pendAt.size() ? q.pendAt[i] : std::make_pair(-1, 0u);
+         const std::string why = "the ball was not stepped by the group step after it was found (re-query by " + std::string(StageWord(at.first)) + " at t=" + std::to_string(at.second) + ")";
+         ContactSurfaceHost::FinderJoinNotHandled(q.ball, k >= 0 && k < (int)g_finder.objs.size() && g_finder.objs[k].host != nullptr ? g_finder.objs[k].host->Name() : std::string("?"), why.c_str());
+      }
       q.pend.clear();
+      q.pendAt.clear();
    }
 
-   // shared_finder P3a counters: one contact check = one outermost Probe, ProbePatch or ArrivalS of a static mesh host with a measurement table (key on)
+   // shared_finder P3a counters: one contact check = one outermost Probe, ProbePatch or ArrivalS of a static mesh host with a measurement table
    struct FinderTabStats
    {
       uint64_t checks = 0, fills = 0, reads = 0, mism = 0;          // the whole run
@@ -293,7 +305,7 @@ namespace
          && eq(a.normal.z, b.normal.z) && eq(a.dist, b.dist) && eq(a.delta, b.delta) && eq(a.reff, b.reff) && eq(a.rho, b.rho) && eq(a.grad, b.grad);
    }
    // P3b: the faces a loop reads. in: the near pass's faces within R (load order, with their query-list positions); probe: the same, or with none within R the whole query list with the box bound
-   // (the probe's nearest wherever it is, as today). No near pass (key off, check mode's whole-list pass): both the query list as P3a.
+   // (the probe's nearest wherever it is, as today). No near pass (check mode's whole-list pass): both the query list as P3a.
    void NearLists(RubberContact::FaceTable *const ft, const std::vector<int> &all, const bool nearOn, const std::vector<int> *&inL, RubberContact::FaceRead &inR, const std::vector<int> *&prL,
                   RubberContact::FaceRead &prR)
    {
@@ -1608,7 +1620,7 @@ void ContactSurfaceHost::Refresh(SurfaceContact &it, const double ballR, const d
          g_pplayer->m_liveUI->PushNotification(msg, 5000);
    }
    if (it.qFaces != nullptr)
-      return;   // shared_finder P2b (key on): the ball's query holds this object's faces (FinderBind)
+      return;   // shared finder P2b: the ball's query holds this object's faces (FinderBind)
    // A list built with some margin stays good until the ball has moved farther than the margin allows: scanning every face of a playfield mesh for every ball on every
    // call was the main cost of a table with several balls on it.
    const double need = ballR + reachM;
@@ -1809,7 +1821,7 @@ RubberContact::TubeProbe ContactSurfaceHost::Probe(const RubberContact::BallSI &
    if (finderCheck)
       FinderCheck(it, c, bs.R, 0);
    const FinderGuard finderGuard(finderCheck);
-   RubberContact::FaceTable *const ft = FinderTable(it, c);   // P3a (key on): the ball's measurement table of this object at c (after the inside check, which may re-query)
+   RubberContact::FaceTable *const ft = FinderTable(it, c);   // P3a: the ball's measurement table of this object at c (after the inside check, which may re-query)
    const RubberContact::FaceRead frd { ft, nullptr };
    const RubberContact::FaceRead *const fr = ft != nullptr ? &frd : nullptr;
    checkProf.Tab(ft);
@@ -1873,7 +1885,7 @@ RubberContact::TubeProbe ContactSurfaceHost::ProbePatch(const RubberContact::Bal
    if (finderCheck)
       FinderCheck(it, c, bs.R, 1);
    const FinderGuard finderGuard(finderCheck);
-   RubberContact::FaceTable *const ft = FinderTable(it, c);   // P3a (key on): the ball's measurement table of this object at c (after the inside check, which may re-query)
+   RubberContact::FaceTable *const ft = FinderTable(it, c);   // P3a: the ball's measurement table of this object at c (after the inside check, which may re-query)
    const RubberContact::FaceRead frd { ft, nullptr };
    const RubberContact::FaceRead *const fr = ft != nullptr ? &frd : nullptr;
    checkProf.Tab(ft);
@@ -1979,7 +1991,7 @@ double ContactSurfaceHost::ArrivalS(const RubberContact::BallSI &bs, const Surfa
    if (finderCheck)
       FinderCheck(it, c, bs.R, 2);
    const FinderGuard finderGuard(finderCheck);
-   RubberContact::FaceTable *const ft = FinderTable(it, c);   // P3a (key on): the ball's measurement table of this object at c (after the inside check, which may re-query)
+   RubberContact::FaceTable *const ft = FinderTable(it, c);   // P3a: the ball's measurement table of this object at c (after the inside check, which may re-query)
    const RubberContact::FaceRead frd { ft, nullptr };
    const RubberContact::FaceRead *const fr = ft != nullptr ? &frd : nullptr;
    checkProf.Tab(ft);
@@ -1988,37 +2000,7 @@ double ContactSurfaceHost::ArrivalS(const RubberContact::BallSI &bs, const Surfa
       return PlayfieldCuts::ArrivalS(this, bs, m_surface->tris, it.Faces(c), nearestSeg, c, v, a, hMax, touchM, arriveM, it.candR >= 0.0 ? it.candR : 1e30, ft, FinderCutsOf(it));
    if (m_surface != nullptr)
       return RubberContact::ArrivalTriangles(bs, m_surface->tris, it.Faces(c), nearestSeg, c, v, a, hMax, touchM, arriveM, fr);
-   const bool prof = SegProfOn() && !CordModel();   // P5 counters (static tubes; diagnostics only)
-   const uint64_t t0 = prof ? __rdtsc() : 0;
-   const int n = (int)m_ptsSI.size();
-   const std::vector<int> *segs = nullptr;
-   double h;
-   if (SegsOn())
-   {
-      // P5: a segment farther than S + arriveM + |v| hMax + |a| hMax^2 from c leaves the step unchanged (ArrivalStep: its gap exceeds what the ball closes within hMax), so the list
-      // holding every segment within that is read in place of the whole tube
-      const double need = (bs.R + m_radiusSI + arriveM + v.Length() * hMax + std::abs(a) * hMax * hMax) * (1.0 + 1e-9) + 1e-9;
-      segs = &SegsFor(it, c, need);
-      h = RubberContact::ArrivalTube(bs, m_ptsSI.data(), n, m_radiusSI, m_tubePre, nearestSeg, c, v, a, hMax, touchM, arriveM, segs);
-      if (FinderCheckOn())   // check mode: the whole tube's answer
-      {
-         const double w = RubberContact::ArrivalTube(bs, m_ptsSI.data(), n, m_radiusSI, m_tubePre, nearestSeg, c, v, a, hMax, touchM, arriveM);
-         g_segStats.checks[3]++;
-         if (std::memcmp(&w, &h, sizeof(double)) != 0)
-            g_segStats.mismatch[3]++;
-         g_segStats.miss[3] += SegMisses(m_ptsSI, m_tubePre, c, need, *segs);
-      }
-   }
-   else
-      h = RubberContact::ArrivalTube(bs, m_ptsSI.data(), n, m_radiusSI, m_tubePre, nearestSeg, c, v, a, hMax, touchM, arriveM);
-   if (prof)
-   {
-      g_segStats.calls[3]++;
-      g_segStats.inTube[3] += n - 1;
-      g_segStats.tested[3] += segs != nullptr ? segs->size() : n - 1;
-      g_segStats.ticks[3] += __rdtsc() - t0;
-   }
-   return h;
+   return hMax;   // a tube: never called (the one caller, the group step's ringCap, skips an item with no face list, candR < 0, and a tube item never gets one)
 }
 
 // ---- Engine-stepped contact ----
@@ -2552,19 +2534,14 @@ void ContactSurfaceHost::FinderBuild(const bool atLoad)
       }
       hosts.push_back(h);
    }
-   if (hosts.empty())
+   if (hosts.empty() || !ContactSystem::Unified())   // (the stock engine: no finder)
       return;
-   if (!PhysicsIni::Active(hosts[0]->m_ini).sharedFinder)
-   {
-      PLOGI << "Shared finder: off ([Features] shared_finder = 0)";
-      return;
-   }
    g.on = true;
    if (!PhysicsIni::Active(hosts[0]->m_ini).proximityEngage)
    {
-      // with shared_finder on, stock's copies of converted meshes are out of stock's trees (P9), and proximity_engage = 0 leaves the contact system nothing that engages a free ball
+      // stock's copies of converted meshes are out of stock's trees (P9), and proximity_engage = 0 leaves the contact system nothing that engages a free ball
       // with them: balls pass through walls, ramps and the playfield (old-law switch, to-do 10.13)
-      const std::string msg = "[Features] proximity_engage = 0 with shared_finder = 1: no engagement path for converted surfaces, balls will fall through (set proximity_engage = 1)";
+      const std::string msg = "[Features] proximity_engage = 0: no engagement path for converted surfaces, balls will fall through (set proximity_engage = 1)";
       PLOGW << msg;
       if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
          g_pplayer->m_liveUI->PushNotification(msg, 10000);
@@ -2895,8 +2872,6 @@ void ContactSurfaceHost::FinderCuts(PlayfieldCuts::CutQuery &cq, const RubberCon
 
 PlayfieldCuts::CutQuery *ContactSurfaceHost::FinderCutsOf(const SurfaceContact &it)
 {
-   if (!g_finder.on)
-      return nullptr;   // key off: the scan
    FinderBallQ *const q = static_cast<FinderBallQ *>(it.finderQ);
    if (q != nullptr)
       return &q->cq;
@@ -2905,7 +2880,7 @@ PlayfieldCuts::CutQuery *ContactSurfaceHost::FinderCutsOf(const SurfaceContact &
    return &none;
 }
 
-// P4b counters (VPX_CHECK_PROFILE=1 or VPX_FINDER_CHECK=1; diagnostics only): once a second of table time, key on or off
+// P4b counters (VPX_CHECK_PROFILE=1 or VPX_FINDER_CHECK=1; diagnostics only): once a second of table time
 static void FinderP4Log(const uint64_t cycles)
 {
    static uint32_t next = 0;
@@ -2921,15 +2896,15 @@ static void FinderP4Log(const uint64_t cycles)
       return;
    const double nsPerTick = s * 1e9 / (double)dt, cyc = (double)cycles;
    const PlayfieldCuts::CutStats &c = PlayfieldCuts::Stats();
-   PLOGI << "Finder P4b totals: " << cycles << " cycles (key " << (g_finder.on ? 1 : 0) << "); NearCuts calls " << c.calls << " (" << (double)c.calls / cyc << " per cycle), cuts tested per call "
+   PLOGI << "Finder P4b totals: " << cycles << " cycles; NearCuts calls " << c.calls << " (" << (double)c.calls / cyc << " per cycle), cuts tested per call "
          << (c.calls > 0 ? (double)c.tested / (double)c.calls : 0.0) << ", us per cycle " << (double)c.ticks * nsPerTick * 1e-3 / cyc << ", re-queries " << c.requery << "; cut queries " << c.queries
          << ", us per cycle " << (double)c.queryTicks * nsPerTick * 1e-3 / cyc << "; check calls " << c.checks << ", mismatches " << c.mismatch << ", misses " << c.miss;
-   // P5: per tube reader (probe, bars, patch, arrival): calls, segments in the tube per call, segments read per call (key 0: the whole tube), us per cycle; check calls, mismatches, misses
+   // P5: per tube reader (probe, bars, patch): calls, segments in the tube per call, segments read per call (a cord: the whole tube), us per cycle; check calls, mismatches, misses
    const SegStats &t = g_segStats;
-   static const char *const names[4] = { "probe", "bars", "patch", "arrival" };
+   static const char *const names[3] = { "probe", "bars", "patch" };
    std::ostringstream o;
-   o << "Finder P5 totals: " << cycles << " cycles (key " << (g_finder.on ? 1 : 0) << ")";
-   for (int k = 0; k < 4; k++)
+   o << "Finder P5 totals: " << cycles << " cycles";
+   for (int k = 0; k < 3; k++)
    {
       const double nc = (double)std::max<uint64_t>(t.calls[k], 1);
       o << "; " << names[k] << " calls " << t.calls[k] << ", segs in tube " << (double)t.inTube[k] / nc << ", read " << (double)t.tested[k] / nc << ", us per cycle " << (double)t.ticks[k] * nsPerTick * 1e-3 / cyc
@@ -3000,6 +2975,7 @@ void ContactSurfaceHost::FinderInside(const SurfaceContact &it, const RubberCont
          {
             q->reqNew++;
             q->pend.push_back(k);
+            q->pendAt.emplace_back(ContactProf::StageCur(), g_pplayer != nullptr ? (uint32_t)g_pplayer->m_time_msec : 0u);
             g_joinPendAny = true;
          }
    q->reqNs += std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count();
@@ -3140,12 +3116,7 @@ void ContactSurfaceHost::FinderTotals(const bool force)
    }
 }
 
-// ---- The shared finder, piece P2b: the query finds every static mesh contact ([Features] shared_finder = 1) ----
-
-bool ContactSurfaceHost::FinderDrives()
-{
-   return g_finder.on;
-}
+// ---- The shared finder, piece P2b: the query finds every static mesh contact ----
 
 void ContactSurfaceHost::FinderQueryAt(const HitBall *const ball, const RubberContact::V3 &c, const double ballR, const double extM)
 {
@@ -3206,6 +3177,7 @@ void ContactSurfaceHost::FinderTakeNew(const HitBall *const ball, std::vector<Co
       for (const int k : f->second.pend)
          out.push_back(const_cast<ContactSurfaceHost *>(g.objs[k].host));
       f->second.pend.clear();
+      f->second.pendAt.clear();
    }
    g_joinPendAny = std::any_of(g.balls.begin(), g.balls.end(), [](const auto &e) { return !e.second.pend.empty(); });
 }

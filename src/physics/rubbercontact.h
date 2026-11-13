@@ -1717,31 +1717,6 @@ namespace RubberContact
       return h;
    }
 
-   // the segments next to the nearest one are passed over: the nearest point runs onto them with no jump in the gap
-   // segs (shared_finder P5): the segments to read, in index order (null: all)
-   inline double ArrivalTube(const BallSI &ball, const V3 *pts, const int n, const double rho, const TubePre &pre, const int nearest, const V3 &c, const V3 &v, const double a, const double hMax, const double touchM, const double arriveM,
-                             const std::vector<int> *segs = nullptr)
-   {
-      double h = hMax;
-      const double speed = v.Length(), S = ball.R + rho;
-      const int cnt = segs != nullptr ? (int)segs->size() : n - 1;
-      for (int k = 0; k < cnt; k++)
-      {
-         const int i = segs != nullptr ? (*segs)[k] : k;
-         if (std::abs(i - nearest) <= 1 || pre.L2[i] <= 0.0)
-            continue;
-         if ((c - pre.mid[i]).Length() - pre.rad[i] - S - touchM > speed * h + a * h * h)
-            continue;
-         const double s = std::min(std::max((c - pts[i]).Dot(pre.t[i]) / pre.L2[i], 0.0), 1.0);
-         const V3 dv = c - (pts[i] + pre.t[i] * s);
-         const double dist = dv.Length();
-         if (dist <= 1e-12 || dist - S <= touchM)
-            continue;
-         h = ArrivalStep(dist - S - arriveM, std::max(-v.Dot(dv) / dist, 0.0), a, h);
-      }
-      return h;
-   }
-
    // Static-surface contact for one step. Same law as Evaluate (ContactCore), plus rolling resistance on the tangential part of the
    // ball's spin (the roll axis of a ball running along a post is arbitrary, unlike the flipper's vertical face). h = rubber layer thickness.
    // torqueOnBat is left 0 (nothing moves).

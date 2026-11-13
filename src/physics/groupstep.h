@@ -1267,7 +1267,7 @@ namespace GroupStep
          shape.b.Grow((size_t)ns + 1);
          shape.b[ns++] = s;
       }
-      // shared_finder re-engage ([Features] shared_finder = 1; runs/2026-11-13-finder-reengage/design.md): a surface the ball's inside check found inside an attempt joins the group in the
+      // shared finder re-engage (runs/2026-11-13-finder-reengage/design.md): a surface the ball's inside check found inside an attempt joins the group in the
       // middle of a step. Its contacts are added after the others with nothing kept (as Configure makes them), every other contact keeps its state, the books go on; the owner sets each new
       // contact's zero (SetShapeItem) and the step's attempt runs again from the step's start state (Solve). The shape's storage is the owner's and must not move. Returns the first new item.
       int AddShapeMidStep(const Shape *const s)
@@ -1294,7 +1294,7 @@ namespace GroupStep
          return k0;
       }
       // the owner's mid-step join, after each attempt: the number of shapes it added (> 0: the attempt runs again); allow false (past kJoinRounds): add none, -1 if one is waiting.
-      // Unset: none (every use but an island's with shared_finder on)
+      // Unset: none (every use but the contact system's islands)
       std::function<int(bool)> midJoin;
       int joinRounds = 0;   // joins in the current step (Step)
       long joinCapHit = 0;  // attempts that found more after kJoinRounds joins in one step (the owner reads and clears it)

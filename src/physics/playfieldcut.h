@@ -60,7 +60,7 @@ namespace PlayfieldCuts
    void Setup(PhysicsEngine *physics, PinTable *table);
    // Cuts are held for this playfield host (false: the host's probe, patch and step bound are today's, unchanged)
    bool Any(const ContactSurface *host);
-   // shared_finder P4b ([Features] shared_finder = 1; runs/2026-11-11-finder/design.md section 3): a ball's cut pieces found by its per-cycle query (ContactSurfaceHost::FinderRun): every cut whose
+   // shared finder P4b (runs/2026-11-11-finder/design.md section 3): a ball's cut pieces found by its per-cycle query (ContactSurfaceHost::FinderRun): every cut whose
    // box (Rim::BoxDist's) lies within r of c0, in index order. r < 0: none yet. ver: the cuts' Version it was made for (a later Setup makes it stale). NearCuts reads it in place of a scan.
    struct CutQuery
    {
@@ -82,10 +82,10 @@ namespace PlayfieldCuts
    // inside a cut, or the deepest rim contact. patch: the group step's patch sum (the faces' fold sum, or the rim contacts' symmetric sum, playfieldcut.cpp Probe; zero = the touch's depth
    // zero). A rim contact's seg is tris.size() + the cut's index.
    RubberContact::TubeProbe Probe(const ContactSurface *host, const RubberContact::BallSI &bs, const std::vector<RubberContact::SurfaceTri> &tris, const std::vector<int> &faces, double edgeRho,
-                                  const RubberContact::V3 &c, double reachM, const RubberContact::CarvedHole *holes, int nHoles, bool patch, double zero, RubberContact::FaceTable *ft = nullptr, CutQuery *cq = nullptr);   // ft: shared_finder P3a, the ball's measurement table; cq: P4b, the ball's cut pieces (null: key off, the scan)
+                                  const RubberContact::V3 &c, double reachM, const RubberContact::CarvedHole *holes, int nHoles, bool patch, double zero, RubberContact::FaceTable *ft, CutQuery *cq);   // ft: shared_finder P3a, the ball's measurement table (null: none); cq: P4b, the ball's cut pieces (never null)
    // The step bound (ContactSurface::ArrivalS) of the same surface: the faces not inside a cut (ArrivalTriangles), and every rim contact but the probe's nearest (ArrivalStep each)
    double ArrivalS(const ContactSurface *host, const RubberContact::BallSI &bs, const std::vector<RubberContact::SurfaceTri> &tris, const std::vector<int> &faces, int nearestSeg,
-                   const RubberContact::V3 &c, const RubberContact::V3 &v, double a, double hMax, double touchM, double arriveM, double reachM, RubberContact::FaceTable *ft = nullptr, CutQuery *cq = nullptr);
+                   const RubberContact::V3 &c, const RubberContact::V3 &v, double a, double hMax, double touchM, double arriveM, double reachM, RubberContact::FaceTable *ft, CutQuery *cq);   // (ft, cq: as Probe)
    // A cut as the drawing needs it (parts/playfieldcutdraw.cpp, design section 8): the same numbers as its rim. Frame: centre (cx, cy) at the playfield's top z0, along (lx, ly), across
    // (px, py), metres (unit: metres per VPX unit). Shape (the slot's frame, comment above): a, hs, L, U1, wJ; the ramp's outline u = L - tau^2, w = c tau (tau from 0 at the tip to tauJ at
    // U1); th1 the round end's angle at U1; thick the through-hole's depth (the physics' through-hole, Rim::Holds).

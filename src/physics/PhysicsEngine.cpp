@@ -241,13 +241,13 @@ void PhysicsEngine::ReleaseStaticColliders(IEditable *editable)
       });
 }
 
-// shared_finder P9 ([Features] shared_finder = 1, unified engine): the stock copies (triangles, lines, points) of a wall, ramp or primitive whose faces the contact
+// shared finder P9 (unified engine): the stock copies (triangles, lines, points) of a wall, ramp or primitive whose faces the contact
 // system holds (m_surfaceHost set) stay out of stock's trees: the finder's query finds every contact with them, and stock's search could only find a hit it hands to the
 // host (with the ball already held, a hit that does nothing but split the cycle). They stay in the part's m_vhoCollidable (the Collidable switch, the Hit event carrier)
 // and the engine frees them (m_outOfTree). A slingshot segment does its own kick (it ignores the host), so it stays in the tree. The playfield primitive's copies leave too (P9b); stock's HitPlane is outside the trees and stays.
-void PhysicsEngine::KeepHostedCopiesOutOfTrees(const vector<HitObject *> &copies, size_t from, const std::filesystem::path &ini)
+void PhysicsEngine::KeepHostedCopiesOutOfTrees(const vector<HitObject *> &copies, size_t from)
 {
-   if (m_pendingHitObjects == nullptr || from >= copies.size() || !PhysicsIni::Active(ini).sharedFinder)
+   if (m_pendingHitObjects == nullptr || from >= copies.size() || !ContactSystem::Unified())
       return;
    std::unordered_set<HitObject *> out;
    for (size_t i = from; i < copies.size(); i++)
@@ -1156,7 +1156,7 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
          if (cs.bodies > 0 || ctT2 - ctT1 >= 3 || ctNear >= 3 || ContactSystem::LastSaveUs() >= 3)
          {
             static int rows = 0;
-            uint64_t fChecks = 0, fFills = 0, fReads = 0;   // shared_finder P3a: contact checks with a measurement table, faces measured, table reads since the last row (key on)
+            uint64_t fChecks = 0, fFills = 0, fReads = 0;   // shared_finder P3a: contact checks with a measurement table, faces measured, table reads since the last row
             ContactSurfaceHost::FinderTabTake(fChecks, fFills, fReads);
             fprintf(ctLog, "%u,%llu,%llu,%llu,%d,%d,%d,%d,%d,%d,%d,%d,%llu,%u,%u,%u,%llu,%llu,%llu,%llu,%llu\n", g_pplayer->m_time_msec, (unsigned long long)(ctT1 - ctT0), (unsigned long long)(ctT2 - ctT1), (unsigned long long)ctNear, cs.bodies, cs.islands, cs.substeps, cs.bats, cs.maxSteps, cs.gatherUs, cs.substepUs, cs.writeUs, (unsigned long long)s_ctMagUs, ContactSystem::LastSaveUs(), s_ctReplays, s_ctReplayUs, (unsigned long long)fChecks, (unsigned long long)fFills, (unsigned long long)fReads, (unsigned long long)ContactProf::CD().rowBarsN, (unsigned long long)ContactProf::CD().rowBars);   // bars_n, bars_ticks: mc-cost profile (VPX_CHECK_PROFILE only, else 0)
                ContactProf::CD().rowBarsN = ContactProf::CD().rowBars = 0;

@@ -38,7 +38,7 @@ public:
    // Add or remove a collider, as a consequence of PhysicSetup/Release
    // Colliders are given to the physics engine which owns them, except for balls which always owns their HitBall (therefore, being the only one using RemoveCollider)
    void AddCollider(HitObject * collider, const bool isUI);
-   void KeepHostedCopiesOutOfTrees(const vector<HitObject *> &copies, size_t from, const std::filesystem::path &ini); // shared_finder P9: see PhysicsEngine.cpp
+   void KeepHostedCopiesOutOfTrees(const vector<HitObject *> &copies, size_t from); // shared finder P9: see PhysicsEngine.cpp
    void RemoveCollider(HitObject * collider, const bool isUI);
    void CollectColliders(IEditable *editable, vector<HitObject *> *hitObjects, bool isUI);
 

@@ -194,10 +194,9 @@ public:
    // ball's velocity at the cycle start, dt the cycle), kept for the cycle; the ball's surface items point at it (SurfaceContact::finderQ). In P2a nothing reads its result
    // except check mode and the timing counters, so no result changes.
    static void FinderQuery(const HitBall *ball, const RubberContact::V3 &c, const RubberContact::V3 &v, double ballR, double dt);
-   // shared_finder P2b ([Features] shared_finder = 1): the query finds every static mesh contact (FinderDrives). FinderQueryAt: a query of a ball around c, radius ballR + extM, with no
+   // shared finder P2b: the query finds every static mesh contact. FinderQueryAt: a query of a ball around c, radius ballR + extM, with no
    // cycle bookkeeping (a free ball's engagement test, a new contact). FinderBind: the ball's items point at its query, and each static mesh item reads that object's faces from it.
    // FinderHosts: the static mesh hosts the ball's query found, in load order.
-   static bool FinderDrives();
    static void FinderQueryAt(const HitBall *ball, const RubberContact::V3 &c, double ballR, double extM);
    static void FinderBind(const HitBall *ball, std::vector<SurfaceContact> &items, bool cycleItems);   // cycleItems: the engaged ball's own set (kept for the re-query's count)
    static void FinderBindOne(const HitBall *ball, SurfaceContact &it);
@@ -211,13 +210,13 @@ public:
    static void FinderJoinNotHandled(const HitBall *ball, const std::string &host, const char *why);
    static void FinderJoinCapHit(long n);
    static void FinderJoinTouched(int items, int touched);   // the contacts joined in an island's cycle, and how many of them were touching at the end of some step of it
-   // shared_finder P4b: the cut pieces around c0 within r (the cuts' box tree, built once per cut Setup), in index order, into cq; the item's ball's cut query (null: key off)
+   // shared_finder P4b: the cut pieces around c0 within r (the cuts' box tree, built once per cut Setup), in index order, into cq; the item's ball's cut query (never null: an item with no query gets an empty one, queried around the ball)
    static void FinderCuts(PlayfieldCuts::CutQuery &cq, const RubberContact::V3 &c0, double r);
    static PlayfieldCuts::CutQuery *FinderCutsOf(const SurfaceContact &it);
    int FinderObjIndex() const override { return m_surface != nullptr ? m_surface->fobj : -1; }
    // the finder's totals (query cost, re-queries), once a second of table time and when the table closes
    static void FinderTotals(bool force);
-   // shared_finder P3a: the ball's measurement table of this object at c (null: key off, or the item does not read the ball's query); the cost log's counters since its last row
+   // shared_finder P3a: the ball's measurement table of this object at c (null: the item does not read the ball's query); the cost log's counters since its last row
    RubberContact::FaceTable *FinderTable(const SurfaceContact &it, const RubberContact::V3 &c) const;
    static void FinderTabTake(uint64_t &checks, uint64_t &fills, uint64_t &reads);
    // Non-legacy kickers are round holes in the playfield: the playfield host leaves no floor inside them (the ball rests on the rim, or falls in and is captured).
@@ -313,7 +312,7 @@ private:
    // (4 per leaf), built once at load. A ball's query finds the segments within its volume (SegsFor); the tube readers read that list in place of the whole tube. Cord bands keep the whole tube (P7).
    std::vector<RubberSurface::FinderNode> m_segNodes;
    std::vector<int> m_segOrder;
-   bool SegsOn() const;   // key on and not a cord band
+   bool SegsOn() const;   // the finder is built and not a cord band
    void SegQuery(void *t, const RubberContact::V3 &c0, double cov) const;   // t: a TubeSegQ; every segment whose centreline lies within cov of c0, in index order
    const std::vector<int> &SegsFor(const SurfaceContact &it, const RubberContact::V3 &c, double need, double *covAt = nullptr) const;   // the ball's segments, every one within need of c among them (re-queried if not)
    RubberContact::TubeProbe ProbeSegs(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, double need, const std::vector<int> *&segs) const;   // ProbeTube's exact answer from the list

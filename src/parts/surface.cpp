@@ -262,7 +262,7 @@ void Surface::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          host->SetEventCarrier(m_vhoCollidable[collidersBefore]);
       for (size_t i = collidersBefore; i < m_vhoCollidable.size(); i++)
          m_vhoCollidable[i]->m_surfaceHost = host;   // the wall's own colliders hand a hit to the host
-      physics->KeepHostedCopiesOutOfTrees(m_vhoCollidable, collidersBefore, rubberIni);   // shared_finder P9: the copies out of stock's trees (PhysicsEngine.cpp)
+      physics->KeepHostedCopiesOutOfTrees(m_vhoCollidable, collidersBefore);   // shared finder P9: the copies out of stock's trees (PhysicsEngine.cpp)
       SetupHitObject(physics, host, isUI);           // the host is enabled and disabled with them (Collidable)
       PLOGI << "Wall " << GetName() << ": rubber force model on (" << rubberFaces->tris.size() << " faces, layer "
             << (rubberSettings.layerMm > 0.0 ? rubberSettings.layerMm : rubberSettings.surfaceLayerMm) << " mm, edge radius " << rubberSettings.edgeRadiusMm << " mm, box x " << rubberFaces->lo[0] << ".." << rubberFaces->hi[0] << " y " << rubberFaces->lo[1] << ".." << rubberFaces->hi[1] << " z " << rubberFaces->lo[2] << ".." << rubberFaces->hi[2] << ")";

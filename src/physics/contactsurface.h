@@ -46,7 +46,7 @@ struct SurfaceContact
    double candR = -1.0;           // < 0 = no list
    static constexpr double kTightSkin = 0.002;   // m
    // the faces to test for a ball at c: the short list while the ball is within the skin of where it was filtered, the whole Verlet list beyond it
-   // shared_finder P2b (key on, a static mesh host): the ball's per-cycle query's faces of this object (qFaces, set by ContactSurfaceHost::FinderBind; a re-query refreshes it in place)
+   // shared finder P2b (a static mesh host): the ball's per-cycle query's faces of this object (qFaces, set by ContactSurfaceHost::FinderBind; a re-query refreshes it in place)
    const std::vector<int> &Faces(const RubberContact::V3 &c) const { return qFaces != nullptr ? *qFaces : (c - tightC).Length() <= kTightSkin ? cand : candV; }
    // no face within reach: the surface has nothing to probe this cycle
    bool NoFaces(const RubberContact::V3 &c) const { return candR >= 0.0 && Faces(c).empty(); }
@@ -66,7 +66,7 @@ struct SurfaceContact
    // surface's gap can shrink by no more than the ball has moved since, so a surface the ball cannot reach in the rest of the cycle is not probed again (ProbeBody).
    double probeGap = 0.0, probeT = -1.0;
    void *finderQ = nullptr;       // shared_finder: the ball's per-cycle query (contactsurfacehost.cpp FinderBallQ), set at each cycle's gather and at engagement (ContactSurfaceHost::FinderBind); null = none
-   const std::vector<int> *qFaces = nullptr;   // shared_finder P2b (key on): this static mesh object's faces in the ball's query (Faces reads it in place of cand / candV); null = today's lists
+   const std::vector<int> *qFaces = nullptr;   // shared finder P2b: this static mesh object's faces in the ball's query (Faces reads it in place of cand / candV); null = today's lists
    RubberContact::V3 probeC;
 };
 

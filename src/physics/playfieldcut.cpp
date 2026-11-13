@@ -327,7 +327,7 @@ namespace
 
    std::vector<Rim> g_rims;   // this table's cuts, rebuilt at every table load (Setup)
    uint64_t g_rimsVer = 0;    // shared_finder P4b: changes at every Setup (a ball's cut query made before it is stale)
-   std::vector<const ContactSurface *> g_anyHosts;   // P4b (key on): the hosts holding cuts, found once per Setup (Any)
+   std::vector<const ContactSurface *> g_anyHosts;   // P4b: the hosts holding cuts, found once per Setup (Any)
    uint64_t g_anyVer = 0;
    PlayfieldCuts::CutStats g_cutStats;   // P4b counters (diagnostics only)
    bool CutCheckOn()   // P4b check mode (VPX_FINDER_CHECK=1): every NearCuts answer against today's scan (diagnostics only)
@@ -1250,8 +1250,8 @@ namespace
       }
    }
 
-   // the cuts of this host within reach of a ball at c, in index order. cq null (shared_finder = 0): today's scan of every cut.
-   // shared_finder P4b (cq set): the ball's query holds every cut whose box is within cq->r of cq->c0; a cut within reachM of c is within |c - c0| + reachM of c0 (triangle inequality),
+   // the cuts of this host within reach of a ball at c, in index order.
+   // shared finder P4b: the ball's query holds every cut whose box is within cq->r of cq->c0; a cut within reachM of c is within |c - c0| + reachM of c0 (triangle inequality),
    // so the query's list is complete when that is inside its volume. Otherwise the cuts alone are queried again around c0 with reachM + 2 |c - c0| (design.md section 4's inside check:
    // the factor 2 bounds repeats), never scanned. No query yet or a stale one: queried around c within reachM.
    void NearCuts(const ContactSurface *host, const V3 &c, const double reachM, std::vector<int> &out, PlayfieldCuts::CutQuery *const cq)
@@ -1259,39 +1259,28 @@ namespace
       const bool prof = ContactProf::CheckOn() || CutCheckOn();
       const uint64_t t0 = prof ? __rdtsc() : 0;
       out.clear();
-      size_t tested = 0;
-      if (cq == nullptr)
+      const bool valid = cq->r >= 0.0 && cq->ver == g_rimsVer;
+      const double stray = valid ? (c - cq->c0).Length() : 0.0;
+      if (!valid || stray + reachM > cq->r)
       {
-         for (size_t i = 0; i < g_rims.size(); i++)
-            if (g_rims[i].host == host && g_rims[i].BoxDist(c) <= reachM)
-               out.push_back((int)i);
-         tested = g_rims.size();
+         if (valid)
+            ContactSurfaceHost::FinderCuts(*cq, cq->c0, reachM + 2.0 * stray);
+         else
+            ContactSurfaceHost::FinderCuts(*cq, c, reachM);
+         if (prof)
+            g_cutStats.requery++;
       }
-      else
-      {
-         const bool valid = cq->r >= 0.0 && cq->ver == g_rimsVer;
-         const double stray = valid ? (c - cq->c0).Length() : 0.0;
-         if (!valid || stray + reachM > cq->r)
-         {
-            if (valid)
-               ContactSurfaceHost::FinderCuts(*cq, cq->c0, reachM + 2.0 * stray);
-            else
-               ContactSurfaceHost::FinderCuts(*cq, c, reachM);
-            if (prof)
-               g_cutStats.requery++;
-         }
-         for (const int i : cq->cuts)
-            if (g_rims[i].host == host && g_rims[i].BoxDist(c) <= reachM)
-               out.push_back(i);
-         tested = cq->cuts.size();
-      }
+      for (const int i : cq->cuts)
+         if (g_rims[i].host == host && g_rims[i].BoxDist(c) <= reachM)
+            out.push_back(i);
+      const size_t tested = cq->cuts.size();
       if (prof)
       {
          g_cutStats.calls++;
          g_cutStats.tested += tested;
          g_cutStats.ticks += __rdtsc() - t0;
       }
-      if (cq != nullptr && CutCheckOn())   // check mode: today's scan, the same order
+      if (CutCheckOn())   // check mode: the reference scan of every cut, the same order
       {
          static std::vector<int> full;
          full.clear();
@@ -1911,8 +1900,6 @@ namespace PlayfieldCuts
 
    bool Any(const ContactSurface *const host)
    {
-      if (!ContactSurfaceHost::FinderDrives())   // shared_finder = 0: today's scan
-         return std::any_of(g_rims.begin(), g_rims.end(), [&](const Rim &m) { return m.host == host; });
       if (g_anyVer != g_rimsVer)   // P4b: the hosts holding cuts, once per Setup
       {
          g_anyHosts.clear();

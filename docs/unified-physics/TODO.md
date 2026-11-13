@@ -12,8 +12,8 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-In flight: 1.34 shared finder (P1-P5 done; objects the re-query finds join mid-step). Next, in order: cleanup (old finder paths deleted, runs/2026-11-13-finder-cleanup), the join in cord islands with its cost split, P6a (runs/2026-11-13-finder-P6). Lead log runs/2026-11-10-lead.
-The lead owns the join's gaps: cord islands (next piece), 3 balls not stepped by the group step (traced in the cleanup, fixed if real). Refs: runs/2026-11-13-finder-reengage. Separate: N3 ramp edge search; P4c turntable and kicker holes.
+In flight: 1.34 shared finder (P1-P5 done, old paths deleted; re-query objects join mid-step). Next: the join's gaps, then P6a (runs/2026-11-13-finder-P6). Refs: runs/2026-11-13-finder-cleanup. Lead log runs/2026-11-10-lead. 1.33: piece 2 kept with cut B, piece 3 dropped (cost).
+The lead owns the join's gaps: cord islands; GenieP ball held on the playfield reported it as new (t=8542, duplicate join risk); re-query in a probe outside an attempt (Ramp003 t=8122); cost split. Owed: snapshot hashes refresh. Separate: N3; P4c.
 Kickers: in the branch (KickerDesign.txt). Next: physical cup settles too slowly (user's play): find the missing damping, maybe the switch blade. Resting cost 102 us per cycle is the contact system's. Lead log runs/2026-11-12-lead.
 Parked with playfield holes (Button and Star committed): a ball on a flush Button lands on the wood through the cap (no hole), bounce e 0.86; user expects much more loss on a Button.
 N12. Gorgar load: 0 halvings (cord grip 1cec677ab, rolling patch 87ec36642, stick-zone trial 49155d9e2: Drain-kicker 2-cycle gone, rounds per step -10 %); ~60 depth warnings < 20 um in the bottom pile and at the Drain kicker (stock kicker).
@@ -26,7 +26,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 
 ## 1. Contact system (tasks)
 34. One shared finder for every contact (static, moving, tubes, ball pairs): complete, short, local, one index; replaces the per-part finders. Requirements accepted: runs/2026-11-11-finder/requirements.md. Design accepted: runs/2026-11-11-finder/design.md (build P1-P9).
-36. Release check's fixed 2 mm hold for a closing ball (contactsystem.cpp:707, from the port): no physics behind it; release at the ball's reach instead (mesh hosts already do with shared_finder).
+36. Release check's fixed 2 mm hold for a closing ball (contactsystem.cpp:707, from the port): no physics behind it; release at the ball's reach instead (mesh hosts already do through the shared finder).
 37. A no-op stock hit that splits a cycle moved S00's bounce spin 3.5 % (stress v2, 2894 ms; finder-P2b S00 trace): step-split sensitivity; check against the 1 us reference. Parked.
 38. Overlap replay with free_flight (every free ball stepped by the contact system, bb3898626): the replay now restores and re-steps every ball; seen only not to crash (19 replays). Judge one replayed hit against the same hit without a replay.
 39. Stress v2 cost over rule 5: worst 7-cycle window 9.6-9.8 ms (limit 3 ms), worst cycle 4.8-5.3 ms, with free_flight 0 and 1 alike (runs/2026-11-12-freeflight timing csv). Cause not traced.
@@ -94,7 +94,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 6. Editor changes to replace the ini files (panels, settings saved in the .vpx); unified off per table for release.
 7. Old keys in 14 inis, then the unknown-key notice.
 10. Review ReleasePlan with the user, then PR to the official repo after 3-5.
-13. Old-law switches to delete once accepted (CLAUDE.md): roll/pivot/step_model 0, island_reach 0, ball_pair_reach 0, free_flight 0, proximity_engage 0 (with shared_finder on, stock's copies are out of the path: balls fall through; load warns).
+13. Old-law switches to delete once accepted (CLAUDE.md): roll/pivot/step_model 0, island_reach 0, ball_pair_reach 0, free_flight 0, proximity_engage 0 (stock's copies of converted parts are out of the path: balls fall through; load warns).
 
 ## 11. Switches and triggers
 1. Light-part contact cost (ball on a part of a few grams): worst cycle wire switch 54-181 us, Button 271 us (runs/2026-11-10-rollover/S1); limit 30 us. Midpoint solver must follow the ball-on-part contact clock: needs another solver class (rigid contact + impact law, or L-stable). Parked to N10.
