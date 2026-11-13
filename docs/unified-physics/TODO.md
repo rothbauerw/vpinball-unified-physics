@@ -12,9 +12,10 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-In flight: 1.34 shared finder (P1-P5 done, old paths deleted; re-query objects join mid-step). Next: the join's gaps, then P6a (runs/2026-11-13-finder-P6). Refs: runs/2026-11-13-finder-cleanup. Lead log runs/2026-11-10-lead. 1.33: piece 2 kept with cut B, piece 3 dropped (cost).
-The lead owns the join's open points: join setup 6 us mean and a 116 us outlier, not understood (time on a quiet machine); FarStillFar checks a skipped contact only at mid and end of a step (exact path test, per shape type). Owed: snapshot hashes refresh. Separate: N3; P4c.
+In flight: 1.34 shared finder (P1-P5, mid-step join, old paths deleted; physics ini read at load and on focus only). Next: FarStillFar exact path test, then P6a (runs/2026-11-13-finder-P6/design_reach.md, accepted). Refs S dbd05f8a, G 3e32a558, GP 37bed503. Lead log runs/2026-11-10-lead.
+FarStillFar checks a skipped contact only at mid and end of a step: a ball clipping an edge between them is missed; needs an exact path test per shape type (mesh, tube, cut, part). Query outliers 0.3-9 ms are the OS taking the thread (measured). Owed: snapshot hashes refresh. 1.33: cut B kept.
 Kickers: in the branch (KickerDesign.txt). Next: physical cup settles too slowly (user's play): find the missing damping, maybe the switch blade. Resting cost 102 us per cycle is the contact system's. Lead log runs/2026-11-12-lead.
+Air-core coil fix (pull read at the step's midpoint, aircore_in_step): committed 87152bbf2 on branch aircore-in-step (worktree aircore-wt); merge into unified-physics once the finder cleanup commits (user). Lead log runs/2026-11-13-lead.
 Parked with playfield holes (Button and Star committed): a ball on a flush Button lands on the wood through the cap (no hole), bounce e 0.86; user expects much more loss on a Button.
 N12. Gorgar load: 0 halvings (cord grip 1cec677ab, rolling patch 87ec36642, stick-zone trial 49155d9e2: Drain-kicker 2-cycle gone, rounds per step -10 %); ~60 depth warnings < 20 um in the bottom pile and at the Drain kicker (stock kicker).
 N3. Playfield cuts (slot, groove, rectangle, meets: bbdee9278). Open: slot-in-groove 256 us/cycle; normal jump at slot tips (cut-junction/results_ramp.txt); ball held where a slot crosses a rect's edge gains energy (finder-P4b S20, S06). Later: draw new shapes, triangle, holes.
