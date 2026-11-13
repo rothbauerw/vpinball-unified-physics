@@ -19,7 +19,8 @@ namespace MagnetCore { struct Model; }
 
 namespace Magnets
 {
-   void Step();                                              // once per 1 ms physics frame: advance every coil current
+   void StartPlay();                                         // table load (Player::InitTableSession, after the script's Init, before the first physics step): reads the magnets from the physics ini
+   void Step();                                              // once per 1 ms physics frame: advance every coil current (never reads the file)
    bool CurrentSteady();                                     // pile sleep: no coil current would change in the next Step (each at its own fixed point)
    void Reload();                                            // live tuning: the physics ini changed (ContactSystem::ReloadChangedIni, on playfield focus gain): the magnets read again, coils keep volts and amps
    void RenderGuides(class Renderer *renderer);              // draws the guide tubes and stops that have tube_visible = 1

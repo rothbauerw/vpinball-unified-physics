@@ -627,19 +627,18 @@ namespace Magnets
          lastMs = now;
       }
 
-      // The magnets load from the physics step: a script call made while the script itself is being loaded finds no table yet.
-      void Ensure()
-      {
-         CheckSession();
-         if (g_pplayer == nullptr || g_pplayer->m_ptable == nullptr)
-            return;
-         if (!g_loaded)
-         {
-            g_owner = g_pplayer;
-            Load();
-            g_pending.clear();
-         }
-      }
+   }
+
+   // Table load (Player::InitTableSession, after the script's Init events, before the first physics step): the magnets read the table's physics ini here, once;
+   // what the script set while it loaded (g_pending) is applied. No physics step reads the file.
+   void StartPlay()
+   {
+      CheckSession();
+      if (g_pplayer == nullptr || g_pplayer->m_ptable == nullptr)
+         return;
+      g_owner = g_pplayer;
+      Load();
+      g_pending.clear();
    }
 
    // Live tuning: the table's physics ini changed (ContactSystem::ReloadChangedIni, on playfield focus gain, between frames; no physics path looks at the file).
@@ -648,7 +647,7 @@ namespace Magnets
    {
       CheckSession();
       if (!g_loaded || g_file.empty() || g_pplayer == nullptr)
-         return;   // (not loaded yet: the first physics step reads the file as it is then)
+         return;   // (not loaded: no table start yet, StartPlay reads the file as it is then)
       std::map<std::string, std::pair<double, double>> keep;
       for (const Magnet &m : g_magnets)
          keep[PhysicsIni::Lower(m.name)] = { m.volts, m.amps };
@@ -1086,7 +1085,6 @@ namespace Magnets
 
    bool CurrentSteady()
    {
-      Ensure();
       for (const Magnet &m : g_magnets)
          if (NextAmps(m) != m.amps)
             return false;
@@ -1095,7 +1093,7 @@ namespace Magnets
 
    void Step()
    {
-      Ensure();
+      CheckSession();   // (the game clock only: the magnets were read at table load, StartPlay)
       g_cellPulls.clear();
       g_stepNumber++;
       if (g_magnets.empty())
@@ -1489,7 +1487,7 @@ namespace Magnets
       CheckSession();
       if (!g_loaded)
       {
-         g_pending[PhysicsIni::Lower(name)] = { false, volts };   // applied when the physics step loads the magnets
+         g_pending[PhysicsIni::Lower(name)] = { false, volts };   // applied when the table load (StartPlay) loads the magnets
          return true;
       }
       const auto it = g_byName.find(PhysicsIni::Lower(name));
