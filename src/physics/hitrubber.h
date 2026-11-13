@@ -133,6 +133,7 @@ struct BallContact
 };
 
 class HitRubber;
+namespace PlayfieldCuts { struct CutQuery; }
 
 // Shared with the contact system (contactsystem.cpp)
 bool ContactTraceOn();
@@ -201,6 +202,9 @@ public:
    static void FinderBind(const HitBall *ball, std::vector<SurfaceContact> &items, bool cycleItems);   // cycleItems: the engaged ball's own set (kept for the re-query's count)
    static void FinderBindOne(const HitBall *ball, SurfaceContact &it);
    static void FinderHosts(const HitBall *ball, std::vector<ContactHost *> &out);
+   // shared_finder P4b: the cut pieces around c0 within r (the cuts' box tree, built once per cut Setup), in index order, into cq; the item's ball's cut query (null: key off)
+   static void FinderCuts(PlayfieldCuts::CutQuery &cq, const RubberContact::V3 &c0, double r);
+   static PlayfieldCuts::CutQuery *FinderCutsOf(const SurfaceContact &it);
    int FinderObjIndex() const override { return m_surface != nullptr ? m_surface->fobj : -1; }
    // the finder's totals (query cost, re-queries), once a second of table time and when the table closes
    static void FinderTotals(bool force);

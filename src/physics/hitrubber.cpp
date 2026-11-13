@@ -134,6 +134,7 @@ namespace
       uint64_t ver = 0;          // P3a: the query's version: each query, re-query and bind starts every table of the ball anew
       std::vector<RubberContact::FaceTable> tab;   // P3a: per finder object, the ball's measurement table of its faces in per[k] (one per ball position)
       const HitBall *ball = nullptr;   // P3a: the ball (check mode's log)
+      PlayfieldCuts::CutQuery cq;   // P4b: the playfield cuts found by the query, pieces of their playfield host (NearCuts reads them; playfieldcut.h)
    };
 
    // the timing counters' histogram: 10 ns bins up to 200 us
@@ -180,6 +181,9 @@ namespace
       int logged = 0;
       bool notifiedA = false, notifiedB = false, notifiedG = false, notifiedQ = false;
       uint32_t nextReportMs = 0;   // check mode: the totals are also written once a second of table time (a run may end without closing the table)
+      std::vector<FinderNode> cutNodes;   // P4b: the box tree over the playfield cuts' boxes (built at the first query after the cuts' Setup)
+      std::vector<int> cutOrder;
+      uint64_t cutVer = ~0ull;
       void Reset()   // the table closes (its first mesh host is deleted): the next table builds its own
       {
          built = on = false;
@@ -198,6 +202,9 @@ namespace
          logged = 0;
          notifiedA = notifiedB = notifiedG = notifiedQ = false;
          nextReportMs = 0;
+         cutNodes.clear();
+         cutOrder.clear();
+         cutVer = ~0ull;
       }
    };
    FinderIndex g_finder;
@@ -1616,7 +1623,7 @@ RubberContact::TubeProbe HitRubber::Probe(const RubberContact::BallSI &bs, const
          int nHoles = 0;
          Turntables::Holes(holes, nHoles);   // the playfield has a round hole under every turntable disc
          if (PlayfieldCuts::Any(this))   // holes cut in the playfield (playfieldcut.h): the faces inside a cut left out, its exact rim's contacts added. The cuts within the face list's reach are tested
-            return PlayfieldCuts::Probe(this, bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, it.candR >= 0.0 ? it.candR : 1e30, holes, nHoles, false, 0.0, ft);
+            return PlayfieldCuts::Probe(this, bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, it.candR >= 0.0 ? it.candR : 1e30, holes, nHoles, false, 0.0, ft, FinderCutsOf(it));
          if (nHoles > 0)   // P3b: a turntable's hole moves a face's nearest point to its rim, so the near pass's distances are not the probe's: the whole list as P3a
             return RubberContact::ProbeTriangles(bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, holes, nHoles, 0.0, nullptr, fr);
          return RubberContact::ProbeTriangles(bs, m_surface->tris, *prL, m_set.edgeRadiusMm * 1e-3, c, holes, nHoles, 0.0, nullptr, pPr);
@@ -1666,7 +1673,7 @@ RubberContact::TubeProbe HitRubber::ProbePatch(const RubberContact::BallSI &bs, 
       const RubberContact::CarvedHole *holes = nullptr;
       int nHoles = 0;
       Turntables::Holes(holes, nHoles);
-      return PlayfieldCuts::Probe(this, bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, it.candR >= 0.0 ? it.candR : 1e30, holes, nHoles, true, it.gs.zero, ft);
+      return PlayfieldCuts::Probe(this, bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, it.candR >= 0.0 ? it.candR : 1e30, holes, nHoles, true, it.gs.zero, ft, FinderCutsOf(it));
    }
    if (ContactSettings::Get().multiContact && !(m_surface != nullptr && m_surfaceKind == "playfield"))   // every pressed part its own Hertz bar (rubbercontact.h BarsTube / BarsTriangles); the playfield (turntable holes) keeps the patch sum
    {
@@ -1706,7 +1713,7 @@ double HitRubber::ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact
    checkProf.Tab(ft);
    const TabCheck tabCheck(ft, this, it, c);
    if (m_surface != nullptr && m_surfaceKind == "playfield" && PlayfieldCuts::Any(this))   // (as Probe: the faces not inside a cut, and the cut's rim contacts other than the probe's nearest)
-      return PlayfieldCuts::ArrivalS(this, bs, m_surface->tris, it.Faces(c), nearestSeg, c, v, a, hMax, touchM, arriveM, it.candR >= 0.0 ? it.candR : 1e30, ft);
+      return PlayfieldCuts::ArrivalS(this, bs, m_surface->tris, it.Faces(c), nearestSeg, c, v, a, hMax, touchM, arriveM, it.candR >= 0.0 ? it.candR : 1e30, ft, FinderCutsOf(it));
    if (m_surface != nullptr)
       return RubberContact::ArrivalTriangles(bs, m_surface->tris, it.Faces(c), nearestSeg, c, v, a, hMax, touchM, arriveM, fr);
    return RubberContact::ArrivalTube(bs, m_ptsSI.data(), (int)m_ptsSI.size(), m_radiusSI, m_tubePre, nearestSeg, c, v, a, hMax, touchM, arriveM);
@@ -2544,6 +2551,77 @@ void HitRubber::FinderRun(void *const qv, const double r)
       q.per[k].assign(q.faces.begin() + b, q.faces.end());
    }
    q.first.push_back((int)q.faces.size());
+   // P4b: the playfield's cuts in the same query, pieces of the playfield host with their own boxes. The cut readers reach R + reach from a ball anywhere inside the
+   // volume (within ext of c0, r = R + ext), so the cuts are found within r + reach: no re-query in the usual case.
+   if (PlayfieldCuts::Count() > 0)
+      FinderCuts(q.cq, q.c0, r + q.reach);
+}
+
+static bool CutProfOn() { return ContactProf::CheckOn() || FinderCheckOn(); }   // P4b counters (diagnostics only)
+
+void HitRubber::FinderCuts(PlayfieldCuts::CutQuery &cq, const RubberContact::V3 &c0, const double r)
+{
+   FinderIndex &g = g_finder;
+   const bool prof = CutProfOn();
+   const uint64_t t0 = prof ? __rdtsc() : 0;
+   const uint64_t ver = PlayfieldCuts::Version();
+   const auto box = [](const int i, RubberContact::V3 &lo, RubberContact::V3 &hi) { PlayfieldCuts::Box(i, lo, hi); };
+   if (g.cutVer != ver)   // the cuts' box tree, once per cut Setup (4 cuts per leaf, as the faces)
+   {
+      const int n = PlayfieldCuts::Count();
+      g.cutNodes.clear();
+      g.cutOrder.resize(n);
+      for (int i = 0; i < n; i++)
+         g.cutOrder[i] = i;
+      if (n > 0)
+         BuildTree(g.cutNodes, g.cutOrder, box, 0, n, 4);
+      g.cutVer = ver;
+   }
+   cq.c0 = c0;
+   cq.r = r;
+   cq.ver = ver;
+   cq.cuts.clear();
+   QueryTree(g.cutNodes, g.cutOrder, box, c0, r * r, cq.cuts);
+   std::sort(cq.cuts.begin(), cq.cuts.end());   // index order (R9)
+   if (prof)
+   {
+      PlayfieldCuts::CutStats &st = PlayfieldCuts::Stats();
+      st.queries++;
+      st.queryTicks += __rdtsc() - t0;
+   }
+}
+
+PlayfieldCuts::CutQuery *HitRubber::FinderCutsOf(const SurfaceContact &it)
+{
+   if (!g_finder.on)
+      return nullptr;   // key off: the scan
+   FinderBallQ *const q = static_cast<FinderBallQ *>(it.finderQ);
+   if (q != nullptr)
+      return &q->cq;
+   thread_local PlayfieldCuts::CutQuery none;   // no query for this item: NearCuts queries around the ball (counted as a re-query)
+   none.r = -1.0;
+   return &none;
+}
+
+// P4b counters (VPX_CHECK_PROFILE=1 or VPX_FINDER_CHECK=1; diagnostics only): once a second of table time, key on or off
+static void FinderP4Log(const uint64_t cycles)
+{
+   static uint32_t next = 0;
+   const uint32_t now = g_pplayer != nullptr ? g_pplayer->m_time_msec : 0;
+   if (!CutProfOn() || now < next || cycles == 0)
+      return;
+   next = now + 1000;
+   static const uint64_t tsc0 = __rdtsc();
+   static const auto c0 = std::chrono::steady_clock::now();
+   const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - c0).count();
+   const uint64_t dt = __rdtsc() - tsc0;
+   if (dt == 0 || s <= 0.0)
+      return;
+   const double nsPerTick = s * 1e9 / (double)dt, cyc = (double)cycles;
+   const PlayfieldCuts::CutStats &c = PlayfieldCuts::Stats();
+   PLOGI << "Finder P4b totals: " << cycles << " cycles (key " << (g_finder.on ? 1 : 0) << "); NearCuts calls " << c.calls << " (" << (double)c.calls / cyc << " per cycle), cuts tested per call "
+         << (c.calls > 0 ? (double)c.tested / (double)c.calls : 0.0) << ", us per cycle " << (double)c.ticks * nsPerTick * 1e-3 / cyc << ", re-queries " << c.requery << "; cut queries " << c.queries
+         << ", us per cycle " << (double)c.queryTicks * nsPerTick * 1e-3 / cyc << "; check calls " << c.checks << ", mismatches " << c.mismatch << ", misses " << c.miss;
 }
 
 void HitRubber::FinderQuery(const HitBall *const ball, const RubberContact::V3 &c, const RubberContact::V3 &v, const double ballR, const double dt)
@@ -2676,6 +2754,7 @@ void HitRubber::FinderTotals(const bool force)
    FinderIndex &g = g_finder;
    if (!force)
       g.cycle++;
+   FinderP4Log(g.cycle);   // P4b counters (profile or check mode)
    if (!g.on)
       return;
    const uint32_t now = g_pplayer != nullptr ? g_pplayer->m_time_msec : 0;

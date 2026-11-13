@@ -5,6 +5,8 @@
 #include "physics/hitrubber.h"
 #include "physics/physicsini.h"
 #include "physics/contactsystem.h"
+#include "physics/contactprof.h"
+#include <intrin.h>
 #include "parts/pintable.h"
 #include "core/player.h"
 #include "ui/live/LiveUI.h"
@@ -324,6 +326,15 @@ namespace
    };
 
    std::vector<Rim> g_rims;   // this table's cuts, rebuilt at every table load (Setup)
+   uint64_t g_rimsVer = 0;    // shared_finder P4b: changes at every Setup (a ball's cut query made before it is stale)
+   std::vector<const ContactSurface *> g_anyHosts;   // P4b (key on): the hosts holding cuts, found once per Setup (Any)
+   uint64_t g_anyVer = 0;
+   PlayfieldCuts::CutStats g_cutStats;   // P4b counters (diagnostics only)
+   bool CutCheckOn()   // P4b check mode (VPX_FINDER_CHECK=1): every NearCuts answer against today's scan (diagnostics only)
+   {
+      static const bool on = [] { const char *e = std::getenv("VPX_FINDER_CHECK"); return e != nullptr && e[0] == '1'; }();
+      return on;
+   }
    const PinTable *g_rimsTable = nullptr;   // the table they were read for (the drawn playfield of another table is not cut)
    bool g_warnedMany = false; // three or more rim contacts pressing on one cut: logged once per table start
 
@@ -1239,13 +1250,67 @@ namespace
       }
    }
 
-   // the cuts of this host within reach of a ball at c
-   void NearCuts(const ContactSurface *host, const V3 &c, const double reachM, std::vector<int> &out)
+   // the cuts of this host within reach of a ball at c, in index order. cq null (shared_finder = 0): today's scan of every cut.
+   // shared_finder P4b (cq set): the ball's query holds every cut whose box is within cq->r of cq->c0; a cut within reachM of c is within |c - c0| + reachM of c0 (triangle inequality),
+   // so the query's list is complete when that is inside its volume. Otherwise the cuts alone are queried again around c0 with reachM + 2 |c - c0| (design.md section 4's inside check:
+   // the factor 2 bounds repeats), never scanned. No query yet or a stale one: queried around c within reachM.
+   void NearCuts(const ContactSurface *host, const V3 &c, const double reachM, std::vector<int> &out, PlayfieldCuts::CutQuery *const cq)
    {
+      const bool prof = ContactProf::CheckOn() || CutCheckOn();
+      const uint64_t t0 = prof ? __rdtsc() : 0;
       out.clear();
-      for (size_t i = 0; i < g_rims.size(); i++)
-         if (g_rims[i].host == host && g_rims[i].BoxDist(c) <= reachM)
-            out.push_back((int)i);
+      size_t tested = 0;
+      if (cq == nullptr)
+      {
+         for (size_t i = 0; i < g_rims.size(); i++)
+            if (g_rims[i].host == host && g_rims[i].BoxDist(c) <= reachM)
+               out.push_back((int)i);
+         tested = g_rims.size();
+      }
+      else
+      {
+         const bool valid = cq->r >= 0.0 && cq->ver == g_rimsVer;
+         const double stray = valid ? (c - cq->c0).Length() : 0.0;
+         if (!valid || stray + reachM > cq->r)
+         {
+            if (valid)
+               HitRubber::FinderCuts(*cq, cq->c0, reachM + 2.0 * stray);
+            else
+               HitRubber::FinderCuts(*cq, c, reachM);
+            if (prof)
+               g_cutStats.requery++;
+         }
+         for (const int i : cq->cuts)
+            if (g_rims[i].host == host && g_rims[i].BoxDist(c) <= reachM)
+               out.push_back(i);
+         tested = cq->cuts.size();
+      }
+      if (prof)
+      {
+         g_cutStats.calls++;
+         g_cutStats.tested += tested;
+         g_cutStats.ticks += __rdtsc() - t0;
+      }
+      if (cq != nullptr && CutCheckOn())   // check mode: today's scan, the same order
+      {
+         static std::vector<int> full;
+         full.clear();
+         for (size_t i = 0; i < g_rims.size(); i++)
+            if (g_rims[i].host == host && g_rims[i].BoxDist(c) <= reachM)
+               full.push_back((int)i);
+         g_cutStats.checks++;
+         if (full != out)
+         {
+            g_cutStats.mismatch++;
+            for (const int i : full)
+               if (std::find(out.begin(), out.end(), i) == out.end())
+                  g_cutStats.miss++;
+            static int logged = 0;
+            if (logged++ < 20)
+               PLOGW << "Finder cut check: NearCuts differs from the scan at c " << c.x << " " << c.y << " " << c.z << ", reach " << reachM << ": " << out.size() << " against " << full.size()
+                     << " cuts; query c0 " << cq->c0.x << " " << cq->c0.y << " " << cq->c0.z << " r " << cq->r;
+         }
+      }
    }
 
    // the faces whose nearest point to c is surface: one inside a near cut's centre line (at or under the top) is not (as CarvedHole::Holds for a turntable)
@@ -1724,6 +1789,7 @@ namespace PlayfieldCuts
    void Setup(PhysicsEngine *, PinTable *const table)
    {
       g_rims.clear();
+      g_rimsVer++;   // shared_finder P4b: every ball's cut query is stale
       g_rimsTable = table;
       g_warnedMany = false;
       const std::filesystem::path file = PhysicsIni::FindUnified(table->m_filename);
@@ -1845,18 +1911,37 @@ namespace PlayfieldCuts
 
    bool Any(const ContactSurface *const host)
    {
-      return std::any_of(g_rims.begin(), g_rims.end(), [&](const Rim &m) { return m.host == host; });
+      if (!HitRubber::FinderDrives())   // shared_finder = 0: today's scan
+         return std::any_of(g_rims.begin(), g_rims.end(), [&](const Rim &m) { return m.host == host; });
+      if (g_anyVer != g_rimsVer)   // P4b: the hosts holding cuts, once per Setup
+      {
+         g_anyHosts.clear();
+         for (const Rim &m : g_rims)
+            if (std::find(g_anyHosts.begin(), g_anyHosts.end(), m.host) == g_anyHosts.end())
+               g_anyHosts.push_back(m.host);
+         g_anyVer = g_rimsVer;
+      }
+      return std::find(g_anyHosts.begin(), g_anyHosts.end(), host) != g_anyHosts.end();
    }
 
+   uint64_t Version() { return g_rimsVer; }
+   int Count() { return (int)g_rims.size(); }
+   void Box(const int i, V3 &lo, V3 &hi)
+   {
+      lo = V3(g_rims[i].lo[0], g_rims[i].lo[1], g_rims[i].lo[2]);
+      hi = V3(g_rims[i].hi[0], g_rims[i].hi[1], g_rims[i].hi[2]);
+   }
+   CutStats &Stats() { return g_cutStats; }
+
    RubberContact::TubeProbe Probe(const ContactSurface *const host, const RubberContact::BallSI &bs, const std::vector<SurfaceTri> &tris, const std::vector<int> &faces, const double edgeRho,
-                                  const V3 &c, const double reachM, const RubberContact::CarvedHole *const holes, const int nHoles, const bool patch, const double zero, RubberContact::FaceTable *const ft)
+                                  const V3 &c, const double reachM, const RubberContact::CarvedHole *const holes, const int nHoles, const bool patch, const double zero, RubberContact::FaceTable *const ft, CutQuery *const cq)
    {
       static std::vector<int> cuts, left, leftPos;   // (the physics thread's; reused)
       const RubberContact::FaceRead frF { ft, nullptr };   // shared_finder P3a: the ball's table (null: measured as before)
       const RubberContact::FaceRead *const pF = ft != nullptr ? &frF : nullptr;
       static std::vector<RimHit> hits;
       static std::vector<RimHump> humps;
-      NearCuts(host, c, reachM, cuts);
+      NearCuts(host, c, reachM, cuts, cq);
       // shared_finder P3b: the near pass's faces within R (HitRubber::FinderTable), in load order with their query-list positions; the probe with none within R reads the whole list with the
       // box bound (its nearest wherever it is, as today). A turntable's hole (nHoles) moves a face's nearest point, so there the whole list as P3a.
       const bool nearOn = ft != nullptr && ft->useNear && nHoles == 0;
@@ -2033,13 +2118,13 @@ namespace PlayfieldCuts
    }
 
    double ArrivalS(const ContactSurface *const host, const RubberContact::BallSI &bs, const std::vector<SurfaceTri> &tris, const std::vector<int> &faces, const int nearestSeg, const V3 &c,
-                   const V3 &v, const double a, const double hMax, const double touchM, const double arriveM, const double reachM, RubberContact::FaceTable *const ft)
+                   const V3 &v, const double a, const double hMax, const double touchM, const double arriveM, const double reachM, RubberContact::FaceTable *const ft, CutQuery *const cq)
    {
       static std::vector<int> cuts, left, leftPos;
       static std::vector<RimHit> hits;
       const RubberContact::FaceRead frF { ft, nullptr };   // shared_finder P3a: the ball's table (null: measured as before)
       const RubberContact::FaceRead *const pF = ft != nullptr ? &frF : nullptr;
-      NearCuts(host, c, reachM, cuts);
+      NearCuts(host, c, reachM, cuts, cq);
       if (cuts.empty())   // today's bound
          return RubberContact::ArrivalTriangles(bs, tris, faces, nearestSeg, c, v, a, hMax, touchM, arriveM, pF);
       const int nT = (int)tris.size();

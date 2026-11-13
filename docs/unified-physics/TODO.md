@@ -12,11 +12,11 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-In flight: 1.34 first (shared finder; P1, P2a, P2b, P9, P3 static meshes committed). 1.33: piece 2 kept with cut B (stress v2 cost 52 to 1.7 us per cycle), piece 3 dropped (cost). Owed: snapshot hashes refresh. Lead log runs/2026-11-10-lead.
-Next decision: 1.34 P4 (cuts and holes through the finder's query: locality, under 3 us per cycle today), then P5-P8. Plane pre-test dropped (3-10 ns per check). Separate: N3 ramp edge search (343 of 417 us per cycle, slot in groove).
+In flight: 1.34 first (shared finder; P1-P3, P9 static meshes, P4b playfield cuts committed). 1.33: piece 2 kept with cut B (stress v2 cost 52 to 1.7 us per cycle), piece 3 dropped (cost). Owed: snapshot hashes refresh. Lead log runs/2026-11-10-lead.
+Next decision: 1.34 P4c (turntable hole, and kicker holes once they use its logic, in the near pass; refs runs/2026-11-12-finder-P4b), then P5-P8. Separate: N3 ramp edge search (343 of 417 us per cycle, slot in groove).
 Parked with playfield holes (Button and Star committed): a ball on a flush Button lands on the wood through the cap (no hole), bounce e 0.86; user expects much more loss on a Button.
 N12. Gorgar load: 0 halvings (cord grip 1cec677ab, rolling patch 87ec36642, stick-zone trial 49155d9e2: Drain-kicker 2-cycle gone, rounds per step -10 %); ~60 depth warnings < 20 um in the bottom pile and at the Drain kicker (stock kicker).
-N3. Playfield cuts: slot (drawn), groove, rectangle, cuts that meet in bbdee9278. Open: slot-in-groove 256 us/cycle (ramp edge search); normal jump at slot tips in the groove, b8 unchecked (runs/2026-11-10-cut-junction/results_ramp.txt). Later: draw new shapes, triangle, holes.
+N3. Playfield cuts (slot, groove, rectangle, meets: bbdee9278). Open: slot-in-groove 256 us/cycle; normal jump at slot tips (cut-junction/results_ramp.txt); ball held where a slot crosses a rect's edge gains energy (finder-P4b S20, S06). Later: draw new shapes, triangle, holes.
 N5. One reach rule from physics (speed plus force) for grouping and step length; first built in 1.34 P2. Grouping: Gate001's 81 mm swing as one-cycle travel joins two lanes. Step length: speed only, no force. Check all parts; ball pairs of unequal mass and resting-ball wake (read only).
 N7. Stress v2 bench: ball travel energy +2 % at 57 ms; spin not counted. Check total energy in the saved run (no new run).
 N8. Test driver must refuse a ball placed inside any object, unless the file declares the overlap (rule 10b: then judged on recovery, no energy gained).
