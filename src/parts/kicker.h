@@ -92,12 +92,11 @@ public:
 
    vector<Vertex3Ds> m_hitMesh;
 
-   // Physical kicker (unified engine, [Features] kickers = 1, [Kicker:<name>] type = physical; KickerDesign.txt): the held test (ContactSystem::NoneZones) calls these.
+   // Physical kicker (unified engine, [Kicker:<name>] type = physical; KickerDesign.txt): the held test (ContactSystem::NoneZones) calls these.
    void HeldChange(HitBall *ball, bool in);   // during the step: the ball's held state changed; the kicker's held ball follows it
    void HeldEvent(bool hit);                  // after the step: Hit / Unhit for the script (its ActiveBall set by the caller)
    bool IsPhysical() const { return m_physical; }
-   bool IsConverted() const { return m_physical || m_physicalRefused || m_virtual; }   // on the unified kicker path (no stock kicker code; stock counter, design 7f)
-   // Virtual kicker (unified engine, [Features] kickers = 1, type virtual, the default; KickerDesign.txt 1g-1i, 4b; Requirements F 10): its sensing zone (ContactSystem::NoneZones) calls these.
+   // Virtual kicker (unified engine, type virtual, the default; KickerDesign.txt 1g-1i, 4b; Requirements F 10): its sensing zone (ContactSystem::NoneZones) calls these.
    bool Park(HitBall *ball);   // a ball's centre entered the zone: an empty, enabled kicker parks it at its centre at stock's hold height (true: listed, Hit); else false (not caught)
    bool Parked(const HitBall *ball) const { return m_virtual && ball != nullptr && m_heldBall == ball; }   // the parked ball: held, no Unhit until it is kicked
    void Capture(HitBall *ball);                      // Park: the capture (design 1i): placed at the centre at stock's hold height, speed and spin to 0, the energy change booked; no surface contact
@@ -106,8 +105,8 @@ public:
    HitBall *HeldBall() const { return m_heldBall; }
 
 private:
-   bool PhysicalSetup(PhysicsEngine *physics);   // PhysicSetup on the unified engine: false = today's kicker (kickers = 0)
-   void VirtualSetup(PhysicsEngine *physics, bool fromIni);   // the virtual kicker: its sensing zone, no KickerHitCircle, no playfield hole
+   void PhysicalSetup(PhysicsEngine *physics);   // PhysicSetup on the unified engine: every kicker, physical or virtual (the stock kicker only with unified = 0)
+   void VirtualSetup(PhysicsEngine *physics, bool fromIni);   // the virtual kicker: its sensing zone, no KickerHitCircle
    bool m_virtual = false;               // this kicker is a virtual kicker on the unified path (a sensing zone and its parked, held ball)
    Vertex3Ds m_parkPlace;                // virtual: where the parked ball is held (its centre where it crossed into the zone, or where CreateBall made it), VPX units
    bool m_parkMovedNoted = false;        // virtual: CheckParked said once that something moved the parked ball

@@ -14,10 +14,8 @@ G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 ## Now
 In flight: 1.34 shared finder. Exact path test (runs/2026-11-13-finder-exactpath/design.md, accepted): build 1 committed (static straight pieces). Next: build 2, curved by chords; then P6a. Refs S 1fcacee9, G 459fa088, GP 294ae449. Lead log runs/2026-11-13-lead.
 Path test builds left: 2 curved static (posts, cut rims, bumper body, disc, holes), 3 moving parts with P6, then delete the two-point check. Query outliers 0.3-9 ms are the OS (measured). Owed: snapshot hashes refresh; GL main rebuild (bench obj_gl stale). 1.33: cut B kept.
-Kickers: in the branch (KickerDesign.txt). Next: physical cup settles too slowly (user's play): find the missing damping, maybe the switch blade. Resting cost 102 us per cycle is the contact system's. Lead log runs/2026-11-12-lead.
 Air-core coil fix (pull read at the step's midpoint, aircore_in_step, on while tested): merged d9629bc4b and pushed. Lead log runs/2026-11-13-lead.
 Parked with playfield holes (Button and Star committed): a ball on a flush Button lands on the wood through the cap (no hole), bounce e 0.86; user expects much more loss on a Button.
-N12. Gorgar load: 0 halvings (cord grip 1cec677ab, rolling patch 87ec36642, stick-zone trial 49155d9e2: Drain-kicker 2-cycle gone, rounds per step -10 %); ~60 depth warnings < 20 um in the bottom pile and at the Drain kicker (stock kicker).
 N3. Playfield cuts (slot, groove, rectangle, meets: bbdee9278). Open: slot-in-groove 256 us/cycle; normal jump at slot tips (cut-junction/results_ramp.txt); ball held where a slot crosses a rect's edge gains energy (finder-P4b S20, S06). Later: draw new shapes, triangle, holes.
 N5. One reach rule from physics (speed plus force) for grouping and step length; first built in 1.34 P2. Grouping: Gate001's 81 mm swing as one-cycle travel joins two lanes. Step length: speed only, no force. Check all parts; ball pairs of unequal mass and resting-ball wake (read only).
 N7. Stress v2 bench: ball travel energy +2 % at 57 ms; spin not counted. Check total energy in the saved run (no new run).
@@ -99,3 +97,6 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 
 ## 11. Switches and triggers
 1. Light-part contact cost (ball on a part of a few grams): worst cycle wire switch 54-181 us, Button 271 us (runs/2026-11-10-rollover/S1); limit 30 us. Midpoint solver must follow the ball-on-part contact clock: needs another solver class (rigid contact + impact law, or L-stable). Parked to N10.
+
+## 12. Kickers (when kickers are extended)
+1. Physical cup settles too slowly (user's play): find the missing damping, maybe the switch blade. Resting cost 102 us per cycle is the contact system's (runs/2026-11-12-lead).

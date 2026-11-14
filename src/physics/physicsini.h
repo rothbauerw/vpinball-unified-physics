@@ -56,8 +56,6 @@ namespace PhysicsIni
                                   // engagement query's size is the one reach rule (ContactReachM); 0 = probed at the move's middle and end only, and the engagement query 20 U, as before
       bool seatEditorBalls = true; // seat_editor_balls (on while tested, rule 6; runs/2026-11-13-editor-balls): 1 = at play start each ball placed in the table editor is moved out of any surface it overlaps
                                   // (playfield, walls, ramps, primitives, rubbers, moving parts at rest; not other balls) by the shortest move, the no-past seating (ContactSystem::PushOutAtStart); 0 = left where it was placed, as today
-      bool kickers = true;        // kickers (on while tested, rule 6; KickerDesign.txt): 1 = a kicker of type physical ([Kicker:<name>] type; default virtual) is a cup of the
-                                  // contact model under a hole carved in the playfield, with Hit / Unhit from its held test; a virtual kicker is a sensing zone that parks the ball, a held ball of infinite mass (kickerarm.h); 0 = every kicker on today's path, unchanged
       bool hitSpeed = true;       // PROTOTYPE: Ball.HitSpeed (normal speed before an impact) and the table's Hit event for the playfield; off = neither
    };
 
@@ -180,8 +178,6 @@ namespace PhysicsIni
             f.pathTest = on;
          else if (key == "hit_speed")
             f.hitSpeed = on;
-         else if (key == "kickers")
-            f.kickers = on;
          else if (key == "seat_editor_balls")
             f.seatEditorBalls = on;
          else if (key == "hit_speed_min")
@@ -200,7 +196,7 @@ namespace PhysicsIni
       if (!ContactSystem::Unified())
       {
          f.flippers = f.flipperRubber = f.rubbers = f.playfieldContact = f.surfaceRubbers = f.hardSurfaces = f.proximityEngage = f.hinges = f.triggers = false;
-         f.bands = f.slings = f.contact = f.magnets = f.turntables = f.playfieldCuts = f.hitSpeed = f.freeFlight = f.aircoreInStep = f.kickers = f.seatEditorBalls = false;
+         f.bands = f.slings = f.contact = f.magnets = f.turntables = f.playfieldCuts = f.hitSpeed = f.freeFlight = f.aircoreInStep = f.seatEditorBalls = false;
          return f;
       }
       if (!file.empty())

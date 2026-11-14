@@ -337,7 +337,7 @@ struct ContactSystemImpl
          }
          {
             HitBall *const pb = e.ball;
-            if (pb->m_d.m_lockedInKicker || KickerHold::Held(pb))   // captured by a kicker, or held by one (KickerDesign 1h: no surface contacts): the kicker holds it, not the contact
+            if (KickerHold::Held(pb))   // held by a kicker (KickerDesign 1h: no surface contacts): the kicker holds it, not the contact
             {
                cy.releases.emplace_back(pb, "kicker");
                continue;
@@ -350,12 +350,7 @@ struct ContactSystemImpl
             ContactSurfaceHost::FinderQuery(pb, w.c, w.v, w.bs.R, dt);   // the shared finder's per-cycle query (design.md section 3): the ball's static mesh surfaces, before the gather that reads it
             {
                CPROF(Regather);
-               Regather(e, w.posStart, pb->m_d.m_radius);   // (over a kicker's hole the playfield is left out)
-            }
-            if (PlayfieldHolesExist() && InPlayfieldHole(pb->m_d.m_pos) && std::any_of(e.items.begin(), e.items.end(), [](const SurfaceContact &it) { return it.r->IsPlayfield(); }))
-            {
-               cy.releases.emplace_back(pb, "kicker hole");   // rolled into a non-legacy kicker's circle with nothing else to hold it
-               continue;
+               Regather(e, w.posStart, pb->m_d.m_radius);
             }
             ContactSurfaceHost::FinderBind(pb, e.items, true);   // shared finder: each static mesh item reads its faces from the ball's query (its Refresh below does nothing)
             w.band = e.band;
@@ -365,7 +360,7 @@ struct ContactSystemImpl
                for (SurfaceContact &it : e.items)
                   it.r->Refresh(it, w.bs.R, 2.0 * w.v.Length() * dt + 0.005, w.c);   // a surface: the faces the ball can reach this cycle
             }
-            ContactSurfaceHost::FinderCheckGather(pb, e.items, w.c, w.bs.R, PlayfieldHolesExist() && InPlayfieldHole(pb->m_d.m_pos));   // check mode only (VPX_FINDER_CHECK=1)
+            ContactSurfaceHost::FinderCheckGather(pb, e.items, w.c, w.bs.R);   // check mode only (VPX_FINDER_CHECK=1)
             cy.bodies.push_back(std::move(w));
          }
       }
@@ -1928,7 +1923,6 @@ struct ContactSystemImpl
                   continue;
                Body &w = *bodyOf[ib];
                HitBall *const pb = balls[ib];
-               const bool hole = PlayfieldHolesExist() && InPlayfieldHole(pb->m_d.m_pos);
                for (ContactHost *const o : joinHosts)
                {
                   if (w.e == nullptr)
@@ -1937,7 +1931,7 @@ struct ContactSystemImpl
                      continue;
                   }
                   std::vector<SurfaceContact> &items = w.e->items;
-                  if (!o->m_set.contact || (hole && o->IsPlayfield()) || o->m_set.band || std::any_of(items.begin(), items.end(), [o](const SurfaceContact &it) { return it.r == o; }))
+                  if (!o->m_set.contact || o->m_set.band || std::any_of(items.begin(), items.end(), [o](const SurfaceContact &it) { return it.r == o; }))
                      continue;   // (as Regather leaves them out)
                   SurfaceContact nit;
                   nit.r = o;
@@ -2480,8 +2474,6 @@ struct ContactSystemImpl
    {
       for (const HitBall *const pb : g.balls)
       {
-         if (pb->m_d.m_lockedInKicker)
-            return "ball captured by a kicker";
          if (KickerHold::Held(pb))
             return "ball held by a kicker";
          if (!SameV(pb->m_d.m_pos, pb->m_sleepPos))
@@ -2587,13 +2579,13 @@ struct ContactSystemImpl
             for (auto *const a : g_pplayer->m_vball)
             {
                const HitBall &h = a->m_hitBall;
-               if (h.m_sleepGroup == 0 && !h.m_d.m_lockedInKicker && !KickerHold::Held(&h))
+               if (h.m_sleepGroup == 0 && !KickerHold::Held(&h))
                   eAwake += 0.5 * (h.m_d.m_mass * ContactSystem::kMassUnitKg * h.m_d.m_vel.Dot(h.m_d.m_vel) * VS * VS + h.m_angularmomentum.Dot(h.m_angularmomentum) / h.Inertia() * ContactSystem::kMassUnitKg * VS * VS);
             }
          for (auto *const a : g_pplayer->m_vball)
          {
             const HitBall *const pa = &a->m_hitBall;
-            if (pa->m_sleepGroup != 0 || pa->m_d.m_lockedInKicker || KickerHold::Held(pa))
+            if (pa->m_sleepGroup != 0 || KickerHold::Held(pa))
                continue;
             const double ra = (double)pa->m_d.m_radius * U, va = std::sqrt((double)pa->m_d.m_vel.Dot(pa->m_d.m_vel)) * VS;
             const double va2 = pairReach ? BallSpeedBound(eAwake, pa->m_d.m_mass * ContactSystem::kMassUnitKg, 0.0) : 0.0;
@@ -2644,7 +2636,7 @@ struct ContactSystemImpl
          spinMax = std::max(spinMax, spin);
          pb->m_sleepHoldS = std::max(v, spin) < vs ? pb->m_sleepHoldS + PHYSICS_STEPTIME_S : 0.0;
          minHold = std::min(minHold, pb->m_sleepHoldS);
-         if (b.band != nullptr || pb->m_bandOwner != nullptr || pb->m_d.m_lockedInKicker || KickerHold::Held(pb))
+         if (b.band != nullptr || pb->m_bandOwner != nullptr || KickerHold::Held(pb))
             bandKick = true;
          if (pb->m_contact != nullptr)
             for (const SurfaceContact &it : pb->m_contact->items)
@@ -2889,7 +2881,7 @@ void ContactSystemImpl::CordNear(const double dt)
    for (auto *const ball : g_pplayer->m_vball)
    {
       HitBall *const pb = &ball->m_hitBall;
-      if (pb->m_bandOwner != nullptr || pb->m_d.m_lockedInKicker || KickerHold::Held(pb))
+      if (pb->m_bandOwner != nullptr || KickerHold::Held(pb))
          continue;
       const Vertex3Ds &pos = pb->m_d.m_pos;
       const double speed = std::sqrt((double)pb->m_d.m_vel.Dot(pb->m_d.m_vel)) * VS;
@@ -2955,7 +2947,7 @@ void ContactSystemImpl::EngageNear(const double dt)
    for (auto *const ball : g_pplayer->m_vball)
    {
       HitBall *const pb = &ball->m_hitBall;
-      if (pb->m_contact != nullptr || pb->m_bandOwner != nullptr || pb->m_d.m_lockedInKicker || KickerHold::Held(pb) || pb->m_sleepGroup != 0)
+      if (pb->m_contact != nullptr || pb->m_bandOwner != nullptr || KickerHold::Held(pb) || pb->m_sleepGroup != 0)
          continue;
       const Vertex3Ds &pos = pb->m_d.m_pos;
       const double speed = std::sqrt((double)pb->m_d.m_vel.Dot(pb->m_d.m_vel)) * VS;
@@ -2997,8 +2989,6 @@ void ContactSystemImpl::EngageNear(const double dt)
          }
          if (!mesh && (pos.x < bb.left - reachHost || pos.x > bb.right + reachHost || pos.y < bb.top - reachHost || pos.y > bb.bottom + reachHost || pos.z < bb.zlow - reachHost || pos.z > bb.zhigh + reachHost))
             continue;
-         if (o->m_surfaceKind == "playfield" && InPlayfieldHole(pos))
-            continue;   // the kicker's
          SurfaceContact itq;   // a mesh host found by the query: its faces from the query (no cached list)
          if (mesh)
          {
@@ -3149,8 +3139,6 @@ void ContactSystemImpl::GatherItems(ContactHost *const host, const HitBall *cons
       {
          if (!o->m_enabled || !o->m_set.contact)
             continue;
-         if (o->IsPlayfield() && InPlayfieldHole(posStart))
-            continue;   // no floor over a kicker's hole
          if (o->m_set.band)
             continue;   // the band rubbers are the band model's: as a rigid surface contact they would stop the ball before the band could deflect (as Regather)
          const FRect3D &bb = o->m_hitBBox;
@@ -3209,10 +3197,8 @@ bool ContactSystemImpl::EngageImpl(ContactHost *const host, HitBall *const pb, c
    CPROF(EngageImpl);
    const ContactProf::Stage profStage(ContactProf::StEngageImpl);   // P3a profile: the calling stage of the checks here (diagnostics only)
    using namespace RubberContact;
-   if ((host != nullptr && !host->m_set.contact) || pb->m_bandOwner != nullptr || pb->m_contact != nullptr || pb->m_d.m_lockedInKicker || KickerHold::Held(pb))
+   if ((host != nullptr && !host->m_set.contact) || pb->m_bandOwner != nullptr || pb->m_contact != nullptr || KickerHold::Held(pb))
       return false;   // (a ball held in a kicker, parked or carried, belongs to the kicker: KickerDesign 1h)
-   if (host != nullptr && host->m_surfaceKind == "playfield" && InPlayfieldHole(pb->m_d.m_pos))
-      return false;   // the kicker's
    BallContact rb;
    rb.ball = pb;
    BallSI bs;
@@ -3353,8 +3339,7 @@ void ContactSystemImpl::Regather(BallContact &e, const Vertex3Ds &pos, const flo
    // A Verlet list: the surfaces within reach + 10 U are kept and collected again only after the ball has moved 5 U (or 10 ms have passed: a part can become collidable)
    constexpr float kMarginU = 10.0f, kMoveU = 5.0f;
    const uint32_t nowMs = g_pplayer->m_time_msec;
-   const bool hole = PlayfieldHolesExist() && InPlayfieldHole(pos);
-   const bool rescan = !(e.regathered && hole == e.inHole && nowMs - e.regatherMs < 10 && (pos - e.regatherPos).LengthSquared() < kMoveU * kMoveU);
+   const bool rescan = !(e.regathered && nowMs - e.regatherMs < 10 && (pos - e.regatherPos).LengthSquared() < kMoveU * kMoveU);
    std::vector<SurfaceContact> next;
    // shared finder (design.md section 3): the static mesh hosts every cycle from the ball's query (a face within R + reach), the others from the Verlet list below;
    // kept in the registry's order, as the registry loop gave them
@@ -3364,8 +3349,6 @@ void ContactSystemImpl::Regather(BallContact &e, const Vertex3Ds &pos, const flo
    {
       if (!o->m_set.contact)
          continue;
-      if (hole && o->IsPlayfield())
-         continue;   // no floor over a kicker's hole
       const auto old = std::find_if(e.items.begin(), e.items.end(), [o](const SurfaceContact &it) { return it.r == o; });
       if (old == e.items.end() && o->m_set.band)
          continue;   // (as below)
@@ -3387,7 +3370,6 @@ void ContactSystemImpl::Regather(BallContact &e, const Vertex3Ds &pos, const flo
             next.push_back(std::move(it));
    if (rescan)
    {
-   e.inHole = hole;
    e.regathered = true;
    e.regatherPos = pos;
    e.regatherMs = nowMs;
@@ -3397,8 +3379,6 @@ void ContactSystemImpl::Regather(BallContact &e, const Vertex3Ds &pos, const flo
          continue;   // a static mesh host: from the query, above
       if (!o->m_enabled || !o->m_set.contact)
          continue;
-      if (hole && o->IsPlayfield())
-         continue;   // no floor over a kicker's hole
       const auto old = std::find_if(e.items.begin(), e.items.end(), [o](const SurfaceContact &it) { return it.r == o; });
       if (old == e.items.end() && o->m_set.band)
          continue;   // a band (and a sling) is the band model's: as a rigid surface contact it would stop the ball before the band could deflect, and hide the band from its own collision
@@ -3429,16 +3409,13 @@ void ContactSystem::EngageNear(const double cycleS)
    ContactSystemImpl::EngageNear(cycleS);
 }
 
-// A surface's collider, or the slow pass, found the ball: the ball is on this surface's law from now on, whatever holds it. False only for what no surface law covers yet: the playfield
-// over a kicker's hole (the kicker, not converted).
+// A surface's collider, or the slow pass, found the ball: the ball is on this surface's law from now on, whatever holds it. False when EngageImpl turns it down.
 bool ContactSystem::Engage(ContactHost *const host, HitBall *const pb, const char *how)
 {
-   if (pb->m_d.m_lockedInKicker || KickerHold::Held(pb))
+   if (KickerHold::Held(pb))
       return true;   // the kicker holds it: no surface acts on it, nothing to solve
    if (pb->m_contact == nullptr)
       return ContactSystemImpl::EngageImpl(host, pb, how);
-   if (host->IsPlayfield() && InPlayfieldHole(pb->m_d.m_pos))
-      return false;
    // Already held, and this surface is not in its set (made collidable, or the ball was moved, since the last gather): it joins the set, as Regather would add it
    std::vector<SurfaceContact> &items = pb->m_contact->items;
    if (std::none_of(items.begin(), items.end(), [host](const SurfaceContact &it) { return it.r == host; }))
@@ -3664,7 +3641,7 @@ void ContactSystem::NotePlaced(const HitBall *const ball)
 
 void ContactSystem::PushOutAtStart(HitBall *const ball, const std::string &name)
 {
-   if (!Unified() || !s_seatEditorBalls || ball->m_d.m_lockedInKicker)
+   if (!Unified() || !s_seatEditorBalls)
       return;
    using namespace RubberContact;
    BallSI bs;
@@ -4033,7 +4010,7 @@ void ContactSystemImpl::CheckOverlaps(const float hittime, const double hS)
    if (parts.empty())
       return;
    const double tol = ContactSettings::Get().arrivalDepthUm * 1e-6;
-   auto isFree = [](const HitBall *pb) { return pb->m_contact == nullptr && pb->m_bandOwner == nullptr && !pb->m_d.m_lockedInKicker && !KickerHold::Held(pb); };
+   auto isFree = [](const HitBall *pb) { return pb->m_contact == nullptr && pb->m_bandOwner == nullptr && !KickerHold::Held(pb); };
    struct Cand
    {
       HitBall *pb;

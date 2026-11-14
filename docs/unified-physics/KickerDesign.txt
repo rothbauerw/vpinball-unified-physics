@@ -33,9 +33,10 @@ Virtual kicker (F 9-10):
  i. Capture zeroes the parked ball's speed and spin and places it at the kicker's centre at stock's hold height, as stock does (user 2026-11-13, replacing 'park where it
     entered': script offsets and trough layouts assume the centre). The placement goes through the first-sight rule (NotePlaced), so an overlap it makes stores nothing; the
     capture books its drive work (kinetic energy out, height change). Kick restores motion as the drive in e.
-Stock is not deleted (user 2026-11-12): on the unified path the new kicker replaces it; with unified = 0 the stock kicker runs unchanged. Once accepted, the unified path's
-own kicker workarounds go: the g_playfieldHoles exclusion and its hand-over to stock, the m_lockedInKicker skips inside the contact system (PairEligible, contactsystem.cpp
-skips), the stock counter's kicker rows. KickerHitCircle, collide.cpp, quadtree.cpp and hitball.cpp's frozen ball stay for stock.
+Stock is not deleted (user 2026-11-12): on the unified path the new kicker replaces it; with unified = 0 the stock kicker runs unchanged. Accepted by the user 2026-11-14;
+the unified path's own kicker workarounds are gone: the kickers switch, the playfield-hole exclusion and its hand-over to stock, the m_lockedInKicker skips in the contact
+system and magnets, the stock counter's kicker, locked-ball and hole rows. KickerHitCircle, collide.cpp, quadtree.cpp, hitball.cpp's frozen ball, PairEligible and the
+shared stock loop in PhysicsEngine.cpp keep theirs: stock uses them with unified = 0.
 
 
 2. Stiff things and the step  (APPROVED by the user 2026-11-12; ModelStandards 3)
@@ -122,7 +123,7 @@ Offline measurements (runs/2026-11-12-kicker-cup, results_handmade.txt; one cont
 
 7. Settings, events and the interface  (APPROVED by the user 2026-11-12; ModelStandards 2a, 2f, 2g; DevelopmentRules 6)
 --------------------------------------------------------------------------------------------------
- a. Switch: [Features] kickers = 1 (on by default while tested); 0 = today's stock kicker unchanged. Deleted with the stock path once the user accepts the new one.
+ a. Switch: none. [Features] kickers was deleted when the user accepted the kicker (2026-11-14); every kicker on the unified engine is physical or virtual.
  b. Per kicker, [Kicker:<name>] in the table's physics ini: type = physical | virtual (default virtual, user 2026-11-12 after K3); cup = sys7 (the only
     cup at first); switch_depth_mm (default per cup, tuned); material keys as a wall's hard surface (e_mpa, mu, restitution, edge_radius_mm ...) with [Surfaces] defaults.
     Unknown or duplicate keys raise the notice (rule 8). Each key described beside it in the code; all values written to the log at load.
@@ -131,4 +132,4 @@ Offline measurements (runs/2026-11-12-kicker-cup, results_handmade.txt; one cont
     is a sensing zone plus the parked-ball state; the parked ball enters the pair law as a held ball (pairform.h b < 0). No kicker special case inside contactsystem.cpp.
  e. Events: Hit and Unhit from the held test (F 6), queued with their time and fired after the step, as trigger None zones do (trigger.cpp CycleEnd); no script runs inside
     the step. A destroyed ball is dropped from the queue (BallGone).
- f. Stock counter: the kicker leaves AllowedStock when converted; any stock use by a converted kicker fails the driver run.
+ f. Stock counter: the kicker is out of AllowedStock; any stock use by a kicker on the unified engine fails the driver run.

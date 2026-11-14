@@ -126,7 +126,6 @@ struct BallContact
    Vertex3Ds regatherPos;                // where the surfaces near the ball were last collected, and when (Regather is a Verlet list: it rescans after 5 U of travel or 10 ms)
    uint32_t regatherMs = 0;
    bool regathered = false;
-   bool inHole = false;                  // the ball was over a non-legacy kicker's hole when the surfaces were collected: the playfield has no floor there and is left out
    double endStored = -1.0;              // the energy check: what its contacts held at the end of the last cycle, J (< 0 = no cycle yet)
    bool groupLoop = false;               // ring_model: the last cycle went through the group step, so the touches' state is in SurfaceContact::gs (GroupStepDesign 14.4)
    bool seatPending = false;             // ring_model: found inside a rubber at engagement and not seated: the group counts it from zero; the old loop seats it if the island goes there (14.5)
@@ -138,8 +137,6 @@ namespace PlayfieldCuts { struct CutQuery; }
 // Shared with the contact system (contactsystem.cpp)
 bool ContactTraceOn();
 bool ContactTraceDetail();
-bool InPlayfieldHole(const Vertex3Ds &pos);
-bool PlayfieldHolesExist();
 bool PairEligible(const HitBall *x);          // a ball the pair model can take part in
 // shear state of a ball-to-ball contact, kept between cycles (a few pairs at most)
 struct BallPairState
@@ -191,8 +188,8 @@ public:
    // any index left from a previous table first; the call at each cycle's gather is a no-op once built (it builds only if the load call did not run)
    static void FinderBuild(bool atLoad = false);
    // check mode (VPX_FINDER_CHECK=1, diagnostics only): once per engaged ball and cycle, every enabled mesh object with a face within the ball's radius must be among the ball's
-   // gathered surfaces (items) and found by the index's object tree; inPlayfieldHole: the ball is over a kicker's hole (the gather leaves the playfield out on purpose)
-   static void FinderCheckGather(const HitBall *ball, const std::vector<SurfaceContact> &items, const RubberContact::V3 &c, double ballR, bool inPlayfieldHole);
+   // gathered surfaces (items) and found by the index's object tree
+   static void FinderCheckGather(const HitBall *ball, const std::vector<SurfaceContact> &items, const RubberContact::V3 &c, double ballR);
    // shared_finder piece P2a (runs/2026-11-11-finder/design.md section 3): the per-cycle query of one engaged ball at the cycle start (centre c, radius R + reach, v the
    // ball's velocity at the cycle start, dt the cycle), kept for the cycle; the ball's surface items point at it (SurfaceContact::finderQ). In P2a nothing reads its result
    // except check mode and the timing counters, so no result changes.
@@ -223,10 +220,6 @@ public:
    // shared_finder P3a: the ball's measurement table of this object at c (null: the item does not read the ball's query); the cost log's counters since its last row
    RubberContact::FaceTable *FinderTable(const SurfaceContact &it, const RubberContact::V3 &c) const;
    static void FinderTabTake(uint64_t &checks, uint64_t &fills, uint64_t &reads);
-   // Non-legacy kickers are round holes in the playfield: the playfield host leaves no floor inside them (the ball rests on the rim, or falls in and is captured).
-   // Filled by Kicker::PhysicSetup, cleared when the physics engine is built. x, y, r in VPX units.
-   static void AddPlayfieldHole(float x, float y, float r);
-   static void ClearPlayfieldHoles();
    double m_tableMu = 0.3;   // a playfield host: the table's friction (the default mu of its material)
    static bool ContactPairModel(const HitBall *a, const BallS &b);   // both balls are contact-held and [Contact] ball_contact is on: the force model handles the pair, not the stock collision
 

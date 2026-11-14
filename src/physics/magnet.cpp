@@ -760,7 +760,7 @@ namespace Magnets
                for (const auto ball : g_pplayer->m_vball)
                {
                   const HitBall &hb = ball->m_hitBall;
-                  if (hb.m_sleepGroup != 0 || !hb.m_magnetic || hb.m_d.m_lockedInKicker || KickerHold::Held(&hb) || awakeGated)
+                  if (hb.m_sleepGroup != 0 || !hb.m_magnetic || KickerHold::Held(&hb) || awakeGated)
                      continue;
                   const double p[3] = { hb.m_d.m_pos.x, hb.m_d.m_pos.y, hb.m_d.m_pos.z };
                   double B[3];
@@ -800,7 +800,7 @@ namespace Magnets
          {
             HitBall &hb = ball->m_hitBall;
             hb.m_magPair[0] = hb.m_magPair[1] = hb.m_magPair[2] = 0.f;
-            if (!hb.m_magnetic || hb.m_d.m_lockedInKicker || KickerHold::Held(&hb))   // (a ball a kicker holds is not stepped: KickerDesign 1h)
+            if (!hb.m_magnetic || KickerHold::Held(&hb))   // (a ball a kicker holds is not stepped: KickerDesign 1h)
                continue;
             BallM b = {};
             b.hb = &hb;

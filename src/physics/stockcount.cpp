@@ -15,7 +15,6 @@
 #include "physics/testdriver.h"
 #include "parts/ball.h"
 #include "parts/trigger.h"
-#include "parts/kicker.h"
 #include "core/player.h"
 #include "physics/PhysicsEngine.h"
 #include "ui/live/LiveUI.h"
@@ -53,7 +52,6 @@ namespace StockCount
       {
          switch (t)
          {
-         case eItemKicker: return "kicker: not converted (map step 8)";
          case eItemPlunger: return "plunger: not converted (map step 8)";
          case eItemHitTarget: return "drop or stand-up target: not converted (map step 8)";
          case eItemTrigger: return "trigger: a sensor, not converted (map step 8)";
@@ -105,8 +103,6 @@ namespace StockCount
                if (tr->OnWirePart() || sh == TriggerStar || sh == TriggerButton || sh == TriggerNone)
                   r->allowed = nullptr;
             }
-            if (t == eItemKicker && dynamic_cast<const Kicker *>(obj->m_editable) != nullptr && dynamic_cast<const Kicker *>(obj->m_editable)->IsConverted())
-               r->allowed = nullptr;   // a physical or virtual kicker on the unified path (KickerDesign 7f): converted, no stock allowed
             if (t == eItemTable)   // the table's own edges (PhysicsEngine): no part of the table to convert yet
             {
                r->name = "table edge";
@@ -139,9 +135,6 @@ namespace StockCount
          s_byObject.clear();
          s_cur = nullptr;
       }
-
-      // Pseudo objects for what one collider does in two different cases
-      char s_keyLocked, s_keyHole;
 
       void Warn(Row &r)
       {
@@ -176,23 +169,11 @@ namespace StockCount
       Fresh();
       const void *key = obj;
       const HitBall *const other = obj->GetType() == eBall ? static_cast<const HitBall *>(obj) : nullptr;
-      if (other != nullptr && (other->m_d.m_lockedInKicker || ball->m_d.m_lockedInKicker))
-         key = &s_keyLocked;   // a free ball on a ball a kicker holds
-      else if (obj == s_playfield && InPlayfieldHole(ball->m_d.m_pos))
-         key = &s_keyHole;     // the playfield over a kicker's hole
       const auto it = s_byObject.find(key);
       Row *r = it != s_byObject.end() ? it->second : nullptr;
       if (r == nullptr)
       {
          r = MakeRow(key, obj);
-         if (key == &s_keyLocked)
-         {
-            r->name = "locked ball";
-            r->kind = "locked ball";
-            r->allowed = "a ball a kicker holds: goes with the kicker (map step 8)";
-         }
-         else if (key == &s_keyHole)
-            r->name = "playfield over a kicker's hole";
       }
       s_cur = r;
       s_ball = ball;

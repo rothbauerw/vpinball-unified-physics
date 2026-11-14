@@ -35,6 +35,7 @@ void ContactTraceBall(const char *stage, const HitBall *pb, bool items, int isla
 #include "parts/ball.h"
 #include "parts/flipper.h"
 #include "parts/primitive.h"
+#include "physics/carvedholes.h"
 static unsigned s_ctReplays = 0, s_ctReplayUs = 0;   // VPX_CONTACT_TIMING: overlap replays and their time since the last cost-log row
 static uint64_t s_ctMagUs = 0;   // VPX_CONTACT_TIMING: time of Magnets::Step since the last cost-log row, us
 // VPX_TRACE_BALL: a stock Collide or Contact on the traced ball: the object, whether the contact system owns it (a surface host) and owns it for this ball, and what it did to the ball
@@ -74,7 +75,7 @@ PhysicsEngine::PhysicsEngine(PinTable *const table)
       PLOGW << "Physics: surface hosts left over from the previous table (a leak, the game will slow down with each restart): " << m_leftoverHosts;
    else
       PLOGI << "Physics: no surface hosts left over from the previous table";
-   ContactSurfaceHost::ClearPlayfieldHoles();   // the kickers add theirs in PhysicSetup, below
+   CarvedHoles::Clear();   // the playfield's carved holes (turntables, physical kickers): they add theirs in PhysicSetup, below
 
    // Collect all hit objects
    const FRect3D tableBounds = table->GetBoundingBox();
@@ -916,7 +917,7 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
          for (const auto ball : g_pplayer->m_vball)
          {
             HitBall &hb = ball->m_hitBall;
-            if (hb.m_d.m_lockedInKicker || KickerHold::Held(&hb))
+            if (KickerHold::Held(&hb))
                continue;
             float p[3] = { hb.m_d.m_pos.x, hb.m_d.m_pos.y, hb.m_d.m_pos.z }, v[3] = { hb.m_d.m_vel.x, hb.m_d.m_vel.y, hb.m_d.m_vel.z };
             float L[3] = { hb.m_angularmomentum.x, hb.m_angularmomentum.y, hb.m_angularmomentum.z };
@@ -1136,7 +1137,7 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
             what += splitBall->m_contact != nullptr ? " ballheld" : " ballfree";
          if (splitBall != nullptr && splitBall->m_contact == nullptr)
             what += " at " + std::to_string((int)(splitBall->m_d.m_pos.x / 100) * 100) + "," + std::to_string((int)(splitBall->m_d.m_pos.y / 100) * 100) + " z" + std::to_string((int)(splitBall->m_d.m_pos.z / 20) * 20)
-                    + (splitBall->m_d.m_lockedInKicker ? " kickerlocked" : "") + (InPlayfieldHole(splitBall->m_d.m_pos) ? " inhole" : "") + (splitBall->m_bandOwner != nullptr ? " band" : "");
+                    + (splitBall->m_d.m_lockedInKicker ? " kickerlocked" : "") + (splitBall->m_bandOwner != nullptr ? " band" : "");
          ContactProf::Split(splitCause, splitStatic, what.c_str());
       }
       ContactSystem::Step(hS); // contact-held balls: surface contacts and, for touching balls, ball-to-ball contact, stepped together

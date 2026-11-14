@@ -1072,12 +1072,6 @@ namespace RubberContact
       }
    }
 
-   // A round hole of a non-legacy kicker in the playfield (centre and radius in the surface's plane, metres): a ball inside one is handed to the kicker, see InPlayfieldHole.
-   struct SurfaceHole
-   {
-      double x, y, r;
-   };
-
    // The nearest point on the faces in `cand`. A contact on a face is flat (effective radius R). On an edge or a corner, where the direction to the ball is
    // more than ~5 deg off the face normal, the rubber counts as rounded to edgeRho (the effective radius falls toward that of a ball on a tube of radius
    // edgeRho, fully at 15 deg), so a knife edge has a contact patch. The depth is measured from the sharp geometry. The result has rho = 0.

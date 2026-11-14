@@ -110,14 +110,13 @@ namespace
    }
 }
 
-// Physical kicker (docs/unified-physics/KickerDesign.txt sections 1, 2, 5, 7; Requirements F 1-8), on the unified engine with [Features] kickers = 1 and type physical: no KickerHitCircle and no
-// AddPlayfieldHole. The ball meets the cup, a static hard-surface host built from the cup data compiled in (meshes/kickerCupSys7.h: the cup and the hole's wall below the rim, mm, kicker
+// Physical kicker (docs/unified-physics/KickerDesign.txt sections 1, 2, 5, 7; Requirements F 1-8), on the unified engine with type physical: no KickerHitCircle. The ball meets the cup, a static hard-surface host built from the cup data compiled in (meshes/kickerCupSys7.h: the cup and the hole's wall below the rim, mm, kicker
 // frame), under a round hole carved in the playfield (CarvedHoles: the playfield's faces do not press a ball inside the real cutout's radius, from the cup data; the rim is the hole's
 // edge). Gravity, the cup and friction bring the ball to rest; nothing else holds it (1d). Held: the cup's switch, a switch with travel (Requirements F 6): it closes when the ball's centre
 // is inside the hole and its bottom reaches the close depth, and opens only when the bottom rises above the open depth (cup data), judged on each step's chord, Hit / Unhit queued and fired
 // after the step (ContactSystem::NoneZones with the kicker as owner, 1f, 7e). The kick (KickXYZ) is the arm stroke (4c: the held ball carried along a quarter circle, KickerArm). No Enabled: the cup and its switch are
-// always there (F 9). Type virtual (the default) is the virtual kicker (VirtualSetup). Returns false for today's kicker (kickers = 0).
-bool Kicker::PhysicalSetup(PhysicsEngine *const physics)
+// always there (F 9). Type virtual (the default) is the virtual kicker (VirtualSetup). Every kicker on the unified engine comes here; the stock kicker runs only with unified = 0.
+void Kicker::PhysicalSetup(PhysicsEngine *const physics)
 {
    KickerArm::Remove(this);   // (a stroke left from the last table start)
    KickerHold::Remove(this);
@@ -126,8 +125,6 @@ bool Kicker::PhysicalSetup(PhysicsEngine *const physics)
    m_offsetNoted = m_enabledNoted = m_createNoted = m_inclNoted = false;
    const std::filesystem::path ini = ContactHost::IniPathFor(m_ptable->m_filename);
    const PhysicsIni::Features feat = PhysicsIni::Active(ini);
-   if (!feat.kickers)
-      return false;
    // [Kicker:<name>] in the table's physics ini, every key read here or by the hard-surface loader below; unknown or repeated keys are said on screen (rule 8)
    bool physical = false;               // type = physical | virtual: default virtual; physical only where the table's physics ini says so (design 7b, Requirements F 9, user 2026-11-12)
    std::string cup = "sys7";            // cup = sys7: the collision cup and its switch depths, compiled in, one per cup type (System 7 the only one so far)
@@ -161,7 +158,7 @@ bool Kicker::PhysicalSetup(PhysicsEngine *const physics)
    if (!physical)
    {
       VirtualSetup(physics, seen.count("type") != 0);
-      return true;
+      return;
    }
    if (cup != "sys7")
       KickerNotice("Kicker " + name + ": cup '" + cup + "' is not a known cup; the System 7 cup (sys7) is used. Set cup = sys7");
@@ -174,7 +171,7 @@ bool Kicker::PhysicalSetup(PhysicsEngine *const physics)
       m_physicalRefused = true;
       KickerNotice("Kicker " + name + ": a physical kicker needs the playfield" + (feat.playfieldContact ? " (it is on " + m_d.m_szSurface + ")" : " on the force model ([Features] playfield_contact = 0)")
                    + "; it does nothing. Set type = virtual in [Kicker:" + name + "]");
-      return true;
+      return;
    }
    constexpr double U = ContactSystem::kMetresPerUnit;
    const double mmU = 1e-3 / U;   // mm -> VPX units
@@ -210,11 +207,10 @@ bool Kicker::PhysicalSetup(PhysicsEngine *const physics)
          << " mm (VPX radius " << m_d.m_radius * U * 1e3 << " mm, drawing only); switch closes at a bottom depth of " << kickerCupSys7SwitchCloseDepthMm << " mm (z " << zClose << " VPU), opens above "
          << kickerCupSys7SwitchOpenDepthMm << " mm (z " << zOpen << " VPU), rest " << kickerCupSys7RestDepthMm << " mm; material e_mpa " << rs.eMpa
          << ", mu " << rs.mu << ", restitution " << (rs.restitution > 0.0 ? rs.restitution : kE) << ", edge_radius_mm " << rs.edgeRadiusMm << "; scatter " << m_d.m_scatter << " deg (table difficulty " << m_ptable->m_globalDifficulty << "); Enabled ignored";
-   return true;
 }
 
-// The virtual kicker (KickerDesign.txt 1g-1i, 4b, 6c; Requirements F 9-10), on the unified engine with [Features] kickers = 1 and type virtual (the default): a ball store. No KickerHitCircle,
-// no playfield hole, no m_lockedInKicker. A sensing zone, the stock hit circle's (radius with the legacy factor, height from the surface to the surface + HitHeight), tests the ball's centre on
+// The virtual kicker (KickerDesign.txt 1g-1i, 4b, 6c; Requirements F 9-10), on the unified engine with type virtual (the default): a ball store. No KickerHitCircle,
+// no m_lockedInKicker. A sensing zone, the stock hit circle's (radius with the legacy factor, height from the surface to the surface + HitHeight), tests the ball's centre on
 // each step's chord as a None trigger's zone does (ContactSystem::NoneZones). An empty, enabled kicker parks the entering ball at its centre at stock's hold height at the end of that step
 // (Park: the capture, speed and spin to 0, the energy change booked, 1i); from then on it is a held ball (KickerHold, design 1h): infinite mass in the shared pair law, not stepped. Hit is fired after the step.
 // A ball entering a full kicker is not caught (not listed, no Hit, as stock). Kick (4b): today's kick, angle and inclination in degrees; Unhit when the kicked ball's centre leaves the zone.
@@ -463,8 +459,11 @@ void Kicker::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 {
    if (!isUI && GetPartGroup() != nullptr && GetPartGroup()->GetReferenceSpace() != PartGroupData::SpaceReference::SR_PLAYFIELD)
       return;
-   if (!isUI && ContactSystem::Unified() && PhysicalSetup(physics))
+   if (!isUI && ContactSystem::Unified())
+   {
+      PhysicalSetup(physics);   // the unified kicker (physical or virtual); the stock kicker below runs only with unified = 0 (and for the editor's UI pick)
       return;
+   }
 
    const float height = m_ptable->GetSurfaceHeight(m_d.m_szSurface, m_d.m_vCenter.x, m_d.m_vCenter.y);
    const float radius = m_d.m_radius * (m_d.m_legacyMode ? (m_d.m_fallThrough ? 0.75f : 0.6f) // reduce the hit circle radius because only the inner circle of the kicker should start a hit event
@@ -479,8 +478,6 @@ void Kicker::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    else
    {
       KickerHitCircle *const phitcircle = new KickerHitCircle(this, m_d.m_vCenter, radius, height, height + m_d.m_hit_height); // height of kicker hit cylinder
-      if (!m_d.m_legacyMode)
-         ContactSurfaceHost::AddPlayfieldHole(m_d.m_vCenter.x, m_d.m_vCenter.y, m_d.m_radius);   // a non-legacy kicker is a hole in the playfield (a playfield on the force model has no floor in it)
       if (!m_d.m_legacyMode)
       {
          const float rad = phitcircle->radius * 0.8f;

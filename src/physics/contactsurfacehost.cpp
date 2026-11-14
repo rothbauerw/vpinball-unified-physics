@@ -818,33 +818,6 @@ ContactSurfaceHost::~ContactSurfaceHost()
          e.ball->m_bandOwner = nullptr;
 }
 
-static std::vector<RubberContact::SurfaceHole> g_playfieldHoles;   // metres
-bool PlayfieldHolesExist() { return !g_playfieldHoles.empty(); }
-
-void ContactSurfaceHost::AddPlayfieldHole(const float x, const float y, const float r)
-{
-   g_playfieldHoles.push_back({ (double)x * U, (double)y * U, (double)r * U });
-}
-
-void ContactSurfaceHost::ClearPlayfieldHoles()
-{
-   g_playfieldHoles.clear();
-   CarvedHoles::Clear();   // the turntables' and the physical kickers' holes (carvedholes.cpp; the kickers add theirs in PhysicSetup, the turntables in Turntables::Setup, both after this)
-}
-
-// A ball whose centre is inside a non-legacy kicker's circle belongs to the kicker: VPX implements the kicker's funnel, capture and release together with the stock floor
-// contact (the kicker's own impulses against the floor's embed correction), so the playfield model leaves it to them.
-bool InPlayfieldHole(const Vertex3Ds &pos)
-{
-   for (const RubberContact::SurfaceHole &h : g_playfieldHoles)
-   {
-      const double dx = (double)pos.x * U - h.x, dy = (double)pos.y * U - h.y;
-      if (dx * dx + dy * dy < h.r * h.r)
-         return true;
-   }
-   return false;
-}
-
 // Band detection, for every rubber: find the posts and the free spans. With at least one free span the rubber is a band (the constructor), otherwise a ring, which is normal and says nothing.
 // A VPX rubber stores only a closed centreline, so the posts are recovered from it: a vertex whose local bend radius is below
 // band_curve_radius_mm is on a post wrap, a run of such vertices is one post (a circle is fitted to it), and the straight runs between
@@ -1855,7 +1828,7 @@ RubberContact::TubeProbe ContactSurfaceHost::Probe(const RubberContact::BallSI &
             return RubberContact::ProbeTriangles(bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, holes, nHoles, 0.0, nullptr, fr);
          return RubberContact::ProbeTriangles(bs, m_surface->tris, *prL, m_set.edgeRadiusMm * 1e-3, c, holes, nHoles, 0.0, nullptr, pPr);
       }
-      return RubberContact::ProbeTriangles(bs, m_surface->tris, *prL, m_set.edgeRadiusMm * 1e-3, c, nullptr, 0, 0.0, nullptr, pPr);   // (no carved hole: a ball inside a non-legacy kicker's circle is handed to the stock contact instead, see InPlayfieldHole; a carved hole let balls fall through a plane playfield)
+      return RubberContact::ProbeTriangles(bs, m_surface->tris, *prL, m_set.edgeRadiusMm * 1e-3, c, nullptr, 0, 0.0, nullptr, pPr);   // (no carved hole here: a carved hole let balls fall through a plane playfield)
    }
    const bool prof = SegProfOn() && !CordModel();   // P5 counters (static tubes; diagnostics only)
    const uint64_t t0 = prof ? __rdtsc() : 0;
@@ -3000,7 +2973,7 @@ void ContactSurfaceHost::FinderCheck(const SurfaceContact &it, const RubberConta
    }
 }
 
-void ContactSurfaceHost::FinderCheckGather(const HitBall *ball, const std::vector<SurfaceContact> &items, const RubberContact::V3 &c, const double ballR, const bool inPlayfieldHole)
+void ContactSurfaceHost::FinderCheckGather(const HitBall *ball, const std::vector<SurfaceContact> &items, const RubberContact::V3 &c, const double ballR)
 {
    if (!g_finder.built)
       FinderBuild();   // (an evaluation before the first cycle's gather)
@@ -3018,8 +2991,8 @@ void ContactSurfaceHost::FinderCheckGather(const HitBall *ball, const std::vecto
    {
       const FinderObj &ob = g.objs[k];
       const ContactSurfaceHost *const h = ob.host;
-      if (!h->m_enabled || !h->m_set.contact || h->m_set.band || (inPlayfieldHole && h->m_surfaceKind == "playfield"))
-         continue;   // (as the gather: a disabled object, one off the contact model, and the playfield over a kicker's hole are left out there on purpose)
+      if (!h->m_enabled || !h->m_set.contact || h->m_set.band)
+         continue;   // (as the gather: a disabled object and one off the contact model are left out there on purpose)
       if (BoxD2(ob.lo, ob.hi, c) > r2)
          continue;
       const std::vector<RubberContact::SurfaceTri> &tris = h->m_surface->tris;

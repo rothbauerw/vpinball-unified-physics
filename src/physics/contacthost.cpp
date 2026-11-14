@@ -424,7 +424,7 @@ bool ContactHost::SurfaceCollide(HitBall *const pball, const Vertex3Ds &n)
       return true;   // already held: another collider of the same hit
    const float dot = -(n.Dot(pball->m_d.m_vel));
    if (dot < C_LOWNORMVEL)
-      return !(IsPlayfield() && InPlayfieldHole(pball->m_d.m_pos));   // receding or sliding: no closing speed, nothing to solve (the slow pass takes a ball resting or rolling here)
+      return true;   // receding or sliding: no closing speed, nothing to solve (the slow pass takes a ball resting or rolling here)
    if (!ContactEngage(pball))
       return false;
    g_pplayer->m_physics->OnBallWallHit(*pball, n, dot);   // the force-model contact is stepped by the engine from here on (no impulse here)
