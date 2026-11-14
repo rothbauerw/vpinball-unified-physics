@@ -203,3 +203,30 @@ Agreed with the user 2026-11-12, one item at a time (draft and tests: runs/2026-
    after a reset hold let a resting neighbour sink); a second ball entering a full kicker is not caught. Kick releases it at its parked place plus the script's offset with the kick's speed, angle and scatter (the only energy in); an offset that starts the ball inside something
    falls under the overlap rule (no stored energy reaches the ball). Unhit when the kicked ball's centre leaves the zone. CreateBall makes a parked ball, DestroyBall removes it.
    Limit: a parked ball floats where it was caught (even mid-air), the reason it is discouraged.
+
+G. STAND-UP TARGETS
+-------------------
+Agreed with the user 2026-11-14, one item at a time (draft with the paper estimates: runs/2026-11-14-standup-requirements/draft.md). Part data: PartData section 10.
+Drop targets later, separately.
+1. Scope: VPX types HitTargetRound, HitTargetRectangle, HitTargetSlim, HitFatTargetRectangle, HitFatTargetSquare, HitFatTargetSlim, all on the shared contact path.
+2. The face gives way: the ball meets the face, which moves back against the target blade's spring and comes forward again.
+3. The rebound comes from the parts (face mass, blade, stop, contact law); no restitution number is applied to the ball, and there is no feel target: the inputs come
+   from part geometry and material data.
+4. Stop: back plate and foam pad are each optional per target (plate on by default; no plate means no pad). With a pad the face presses the foam from the start of its travel;
+   without one, the face ends hard on the plate (9.5-12.7 mm behind the face). With no plate, the EM helper blade by default: a stiffer C (item 5), engaging after the
+   switch closes. Fat (3D) targets are not a separate model: their type sets the defaults (plate about 3.2 mm sooner; confined foam stiffer and more lossy).
+5. Switch: closes when A's contact reaches B's (gap 0.8-1.6 mm at the contacts, a setting) and opens when it returns past it; a hit too soft to travel that does not fire.
+   Once A reaches B, B and C add stiffness as one step at the closing point. Events: on closing Hit and SwitchClosed, on opening Unhit and SwitchOpened.
+   Later extension, not now: Hit on first contact with the face.
+6. Shape: the collision shape matches the drawn mesh (it need not be the drawn mesh); the drawn meshes are redrawn to the real geometry (real plate gap; the fat target's
+   blade at the body's back, the plate behind the body). The face moves with its shape; the back plate, when present, is collidable as a fixed part (rear hits); the
+   blades are not collidable.
+7. A ball resting against the face on the table's slope stays at rest (no creep, no chatter) and its weight alone does not close the switch; a pinched ball squirts out,
+   never stuck; the resting cost is within item 10.
+8. Several balls: a ball driven into the face by another, and two balls on one face, behave by the shared ball-ball and ball-face law, with no energy gained.
+9. Script interface: kept X, Y, Z, ScaleX/Y/Z, Orientation, Collidable, Visible and drawing properties, Friction, HasHitEvent (off: no Hit / Unhit; switch events still
+   fire). CurrentAnimOffset reads the face's real travel. Elasticity, ElasticityFalloff, Scatter, Threshold / HitThreshold, LegacyMode are no longer used, silently (every
+   target has them until the options are removed); PhysicsMaterial and OverwritePhysics only for friction; drop-target properties do not apply.
+10. Cost stated with 1, 2 and 6 balls; limit 30 us per contact in the worst cycle. Light sprung parts cost 54-271 us today (to-do 11.1): the model must avoid that.
+11. Values: estimated from part geometry and published material data, each labelled estimated with its source; tuned for feel only where no data exists; replaced
+    when measured.
