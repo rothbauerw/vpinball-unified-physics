@@ -12,7 +12,7 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-In flight: 1.34 shared finder, piece 6 (runs/2026-11-13-finder-P6). 6a committed f823ce22e; 6a2 + group A uncommitted, run and passed (results_groupA.txt). Next: tapered-profile probe (Revolve::Closest), then drive set review, then commit. Lead log runs/2026-11-13-lead.
+In flight: 1.34 finder piece 6: 6a, 6a2 + group A, self-check fix committed (to 6e5aa2679), not pushed. Next: drive set findings (runs/2026-11-14-moving-drives/results.txt), then 6b (OutOfReach added to it). Lead log runs/2026-11-13-lead, section STATE AT HANDOFF.
 Judge a change by one exe, its setting on vs off; never by an older exe's md5 (ModelStandards trap 112). Query outliers 0.3-9 ms are the OS (measured). Owed: snapshot hashes refresh; GL main rebuild (bench obj_gl stale). 1.33: cut B kept.
 Stand-up targets: building, uncommitted. State and next piece: StandupTargetDesign.txt section 8 "BUILD STATE" (faults, standards review, settings for the user). Lead log runs/2026-11-13-lead.
 Air-core coil fix (pull read at the step's midpoint, aircore_in_step, on while tested): merged d9629bc4b and pushed. Lead log runs/2026-11-13-lead.
