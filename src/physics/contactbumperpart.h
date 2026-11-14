@@ -45,6 +45,8 @@ namespace JetBumper
       void Build(const Params &prm, const V3 &foot)
       {
          gp.Configure(prm, partSet);
+         slopeSkirt = gp.cfg.skirt0.Slope();   // ([Features] part_finder: the profiles' largest slopes, for the path test)
+         slopeRing = gp.cfg.ring0.Slope();
          origin = foot;
          m_reach = 0.5 * prm.skirtOdMm * MM + 2.0e-3;
          const double edgeMin = prm.edgeMinMm * MM;
@@ -87,6 +89,27 @@ namespace JetBumper
             ps.kBand[1] += band;
          }
          return r;
+      }
+
+      // [Features] part_finder, the path test's motion term (group A; GroupStep::Shape::PathMotion), P in the table's frame: 0 the skirt (BumperGroup::Part::SkirtMotion), 1 the ring:
+      // it moves along the axis only, |d dr|; 2 the body is fixed (its own test, GroupPathReach)
+      double slopeSkirt = 1.0, slopeRing = 1.0;   // Revolve::Slope of the skirt's and the ring's profiles (Build)
+      double GroupPathSlope(const int surface) const override { return surface == 0 ? slopeSkirt : surface == 1 ? slopeRing : 1.0; }
+      double GroupPathMotion(const int surface, const V3 &P, const double dLen, const double *const trial) const override
+      {
+         if (surface == 0)
+            return gp.SkirtMotion(P - origin, dLen, trial);
+         if (surface == 1)
+            return trial != nullptr ? std::fabs(trial[BumperGroup::Part::kR]) : 0.0;
+         return -1.0;
+      }
+      // the overlap check of free balls (part_finder, group A): |c - origin| less the bounding radius from its built profiles: the body; the ring plus its stroke (or its drop now, if more: the stop is a spring); the skirt plus its
+      // pivot's height now (it turns about (0, 0, z))
+      double RegionDist(const V3 &c) const override
+      {
+         const JetBumper::Bumper &b = gp.cfg;
+         const double fr = std::max(BumperGroup::FarR(b.body0), std::max(BumperGroup::FarR(b.ring0) + std::max(b.p.ringStrokeMm * JetBumper::MM, std::fabs(gp.dr)), BumperGroup::FarR(b.skirt0) + std::fabs(gp.z)));
+         return (c - origin).Length() - fr;
       }
 
       // ---- the script ----
@@ -164,7 +187,7 @@ namespace JetBumper
       {
          RubberContact::TubeProbe pr;
          const V3 rel = c - origin;
-         if (!collidable || std::sqrt(rel.x * rel.x + rel.y * rel.y) > m_reach + ball.R + 0.05 || rel.z > 0.06 + ball.R)
+         if (!collidable)
          {
             pr.dist = INFINITY;
             pr.delta = -INFINITY;

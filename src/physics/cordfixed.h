@@ -1960,5 +1960,32 @@ public:
       const V3 vq = up * dy;
       h.c[0].Set(0, h.n.Dot(vq), vq, V3());
    }
+   // [Features] part_finder, the path test's motion term (group A; GroupStep::Shape::PathMotion): the tube's core is a segment along the span carried across it (up) by the face's offset
+   // yl(phi) (Limit) as the plate turns by trial[0] (null: no move), a translation. The most it moves from its middle place over the step is yl's largest change from yl(phi middle) over
+   // [phi, phi + dq]: at an end or at yl's one turning point (dyl/dtheta = ((a + rc) sin theta + h) / cos^2 theta = 0, theta = phi + rest); m is twice that. Its probe is the exact
+   // distance to the segment less rc at any range
+   double PathMotion(const V3 &, double) const override
+   {
+      if (!GroupStep::partFinder)
+         return -1.0;
+      const double dq = trial ? trial[0] : 0.0, ph0 = pt->phi, ph1 = pt->phi + dq, lo = std::min(ph0, ph1), hi = std::max(ph0, ph1);
+      double y0, y1, ym, dy;
+      pt->Limit(ph0, y0, dy);
+      pt->Limit(ph1, y1, dy);
+      pt->Limit(pt->phi + 0.5 * dq, ym, dy);
+      double dev = std::max(std::fabs(y0 - ym), std::fabs(y1 - ym));
+      const double A = pt->pl.a + pt->rc;
+      if (A != 0.0 && std::fabs(pt->pl.h / A) < 1.0)
+      {
+         const double phS = std::asin(-pt->pl.h / A) - pt->pl.rest;
+         if (phS > lo && phS < hi)
+         {
+            double yS;
+            pt->Limit(phS, yS, dy);
+            dev = std::max(dev, std::fabs(yS - ym));
+         }
+      }
+      return 2.0 * dev;
+   }
 };
 }

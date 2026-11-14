@@ -86,6 +86,19 @@ namespace JetBumper
          double rr = 0;
          double gr = 0, gz = 1;   // the distance's exact gradient in the meridian plane: the normal, less the taper of the sweep's radius along the segment
       };
+      // [Features] part_finder (group A slope fix): Closest's largest slope over its segments. On a segment whose sweep radius tapers, rr is read at the core's nearest point, so the
+      // distance changes by sqrt(1 + taper^2) per unit of the point's move (taper = d rr / segment length); 1 where rr is constant. The path test multiplies the moves by it
+      double Slope() const
+      {
+         double L = 1.0;
+         for (size_t i = 0; i + 1 < v.size(); i++)
+         {
+            const double len = std::hypot(v[i + 1].r - v[i].r, v[i + 1].z - v[i].z);
+            if (len > 0.0)
+               L = std::max(L, std::sqrt(1.0 + (v[i + 1].rr - v[i].rr) * (v[i + 1].rr - v[i].rr) / (len * len)));
+         }
+         return L;
+      }
       Near Closest(double rho, double z, double edgeMin) const
       {
          Near best;

@@ -944,6 +944,7 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       const GroupStep::V3 axis((double)m_d.m_vCenter.x * U, (double)m_d.m_vCenter.y * U, (double)height * U);
       auto model = std::make_shared<ButtonCap::Cap>();
       model->Build(s, axis, m_d.m_radius * U, RubberContact::BallSI(), star ? ButtonCap::Top::Star : ButtonCap::Top::Button);
+      PLOGI << "part_finder path slope (group A): " << (star ? "star" : "button") << " trigger " << GetName() << " cap " << model->GroupPathSlope(0);
       // the drawn cap, moved by the travel (looks only). A Button: the stock mesh (taller than the real cap), its top put at the physical top at rest. A Star: the stock star mesh, its
       // height scaled to the model's (GenerateMesh), its top already there
       float meshTop = -FLT_MAX;

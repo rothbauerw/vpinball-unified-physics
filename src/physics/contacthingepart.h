@@ -153,7 +153,8 @@ namespace HingeModel
          return true;
       }
       int GroupCycleMisses(const int surface, const V3 &c, const double R, const double dq, const std::vector<int> &list) const override { return gp.CycleMisses(surface, c, R, dq, list); }
-      double RegionDist(const V3 &c) const override { return gp.RegionDist(c); }   // (its pieces' sectors at its angle now)
+      double RegionDist(const V3 &c) const override { return gp.RegionDist(c); }   // (its bounding radius about its axis point, built from its pieces)
+      double GroupPathMotion(int, const V3 &P, const double dLen, const double *const trial) const override { return gp.PathMotion(P, dLen, trial != nullptr ? trial[0] : 0.0); }
       const RubberContact::RubberParams *GroupLaw(int, double &layerM) const override
       {
          layerM = 0.0;

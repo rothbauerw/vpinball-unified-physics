@@ -50,6 +50,7 @@ namespace DiscModel
       void SetGravity(const V3 &) override {}   // the disc turns about its own axis: its weight acts on the bearing, not about the axis
       V3 Origin() const override { return gp.centre; }
       double Reach() const override { return gp.R; }
+      double RegionDist(const V3 &c) const override { return (c - gp.centre).Length() - std::hypot(gp.R, gp.centre.z - std::min(gp.zBottom, gp.centre.z)); }   // ([Features] part_finder, group A: its solid's farthest point from its top centre)
       double SurfaceSpeedBound(double) const override { return 0.0; }   // no point of the disc moves along its own normal (discgroup.h)
       double MotionRange() const override { return 0.0; }               // (nor over any time: turning moves no gap)
       RubberContact::TubeProbe Probe(const V3 &c) const override

@@ -169,6 +169,23 @@ namespace BatGroup
          h.c[1].Set(kPivot, h.n.x, V3(1.0, 0.0, 0.0), V3());
       }
 
+      // [Features] part_finder, the path test's motion term (group A; GroupStep::Shape::PathMotion): the bat turns by trial[kPhi] about the vertical axis through its pivot and the pivot
+      // moves by trial[kPivot] along x (null: no move): (rho(P) + dLen / 2) |dphi| + |sP|, rho from the axis at the pivot's middle place. Its probe (ProbeRubber: the outline's nearest
+      // point, RubberContact::Outline::NearestPoint, height clamped to the rubber's) is the exact distance to the rubber's wall at any range
+      double PathMotion(const V3 &P, const double dLen, const double *const trial) const
+      {
+         const double tPhi = trial != nullptr ? trial[kPhi] : 0.0, sP = trial != nullptr ? trial[kPivot] : 0.0;
+         return (std::hypot(P.x - geo.pivot.x - 0.5 * sP, P.y - geo.pivot.y) + 0.5 * dLen) * std::fabs(tPhi) + std::fabs(sP);
+      }
+      // the overlap check of free balls (part_finder, group A): |c - pivot| less the bat's bounding radius about its pivot (the outline's farthest point, the larger of rb and Lc + re,
+      // with the rubber's farther height): a lower bound on the distance at any angle
+      double RegionDist(const V3 &c) const
+      {
+         const RubberContact::Outline &ol = geo.ol;
+         const double z0 = rp.zLoMm * 1e-3, z1 = (rp.zLoMm + rp.heightMm) * 1e-3, rr = std::max(ol.rb, ol.Lc + ol.re), zz = std::max(std::fabs(z0), std::fabs(z1));
+         return (c - geo.pivot).Length() - std::sqrt(rr * rr + zz * zz);
+      }
+
       // ---- the group's interface ----
       int NumDof() const override { return rigid ? (phiPinned ? 0 : 1) : (plungerPinned ? 1 : 2); }
       int MaxDof() const override { return 2; }

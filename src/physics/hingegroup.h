@@ -282,19 +282,30 @@ namespace HingeGroup
          cycLo = lo;
          cycHi = hi;
       }
-      // the cycle's list of one side for a ball whose centre was c at the cycle's start and can move reach in it: every piece whose sector, its angle range grown by the
-      // turn (CycleTurn), is within R + reach + 100 um of c (the exact point-to-sector distance, section 3). Order kept
+      // the cycle's list of one side for a ball whose centre was c at the cycle's start and can move reach in it (group A): every piece whose exact distance from c, the part at the
+      // range's reference angle cycQ0, less the most c moves relative to the part over the range (in the part's frame: the chord 2 rho sin(dth / 2), rho = c's distance from the axis,
+      // dth = the range's farther end from cycQ0, at most pi), is within R + reach. The range is a size only (CycleRangeHolds). Order kept
       void CycleNear(const int surface, const V3 &c, const double R, const double reach, std::vector<int> &list, int &nPieces) const
       {
          BuildJoints();
          list.clear();
-         const V3 dn = Down(cycQ0), fr = Front(cycQ0), rel = c - A;
-         const double x = rel.Dot(E), y = rel.Dot(dn), z = rel.Dot(fr), lim = R + reach + 1e-4;
-         const std::vector<Sector> &ss = sectors[(size_t)surface];
-         nPieces = (int)ss.size();
-         for (int i = 0; i < (int)ss.size(); i++)
-            if (SectorDist(ss[(size_t)i], x, y, z, cycQ0 - cycLo, cycHi - cycQ0) <= lim)
+         const V3 dn = Down(cycQ0), fr = Front(cycQ0), rel = c - A, cb(rel.Dot(E), rel.Dot(dn), rel.Dot(fr));
+         const double dth = std::min(GroupStep::kPi, std::max(cycQ0 - cycLo, cycHi - cycQ0)), move = 2.0 * std::hypot(cb.y, cb.z) * std::sin(0.5 * dth), lim = R + reach + move;
+         const std::vector<Piece> &ps = pieces[(size_t)surface];
+         nPieces = (int)ps.size();
+         for (int i = 0; i < (int)ps.size(); i++)
+            if (PieceDist(ps[(size_t)i], cb) - ps[(size_t)i].rr <= lim)
                list.push_back(i);
+      }
+      // [Features] part_finder, the range check after each solve (group A): the solved angle q + qe[0] inside [cycLo, cycHi]
+      bool CycleRangeHolds(const double *qe) const override { return q + qe[0] >= cycLo && q + qe[0] <= cycHi; }
+      // a new range: the turn from its state now over T with E (CycleTurn, the reference cycQ0 its angle now) joined to the old range and the solved angle
+      void CycleRegrow(const double *qe, const double En, const double T) override
+      {
+         const double lo = std::min(cycLo, q + qe[0]), hi = std::max(cycHi, q + qe[0]);
+         CycleTurn(En, T);
+         cycLo = std::min(cycLo, lo);
+         cycHi = std::max(cycHi, hi);
       }
       // check mode: the pieces of one side within R of a ball at c, the part at its angle now + dq, that are not on list (exact distances to each piece's core less its radius)
       int CycleMisses(const int surface, const V3 &c, const double R, const double dq, const std::vector<int> &list) const
@@ -317,17 +328,18 @@ namespace HingeGroup
          }
          return n;
       }
-      // the overlap check of free balls (part_finder): the distance from c to the part where it is now (no growth), a lower bound: its pieces' sectors at its angle now
+      // [Features] part_finder, the path test's motion term (group A; GroupStep::Shape::PathMotion): a turn by dq about the axis; P's distance from the axis rho, plus dLen / 2
+      double PathMotion(const V3 &P, const double dLen, const double dq) const
+      {
+         const V3 rel = P - A, ax = rel - E * rel.Dot(E);
+         return (ax.Length() + 0.5 * dLen) * std::fabs(dq);
+      }
+      // the overlap check of free balls (part_finder, group A): |c - A| less the part's bounding radius about A (its pieces' farthest core point plus the piece's radius; built at load
+      // with the pieces): a lower bound on the distance at any angle
       double RegionDist(const V3 &c) const
       {
          BuildJoints();
-         const V3 dn = Down(q), fr = Front(q), rel = c - A;
-         const double x = rel.Dot(E), y = rel.Dot(dn), z = rel.Dot(fr);
-         double d = INFINITY;
-         for (const std::vector<Sector> &ss : sectors)
-            for (const Sector &sc : ss)
-               d = std::min(d, SectorDist(sc, x, y, z, 0.0, 0.0));
-         return d;
+         return (c - A).Length() - boundR;
       }
       void ProbeTerms(const int surface, const V3 &cb, const BallSI &b, const V3 &dn, const V3 &fr, Hit &h) const
       {
@@ -722,138 +734,33 @@ namespace HingeGroup
             for (int i = 0; i < (int)lines.size(); i++)
                ps.push_back({ 3, i, (lines[i].a + lines[i].b) * 0.5, 0.5 * (lines[i].b - lines[i].a).Length(), lines[i].r });
          }
-         // part_finder: each piece's sector, from its core as built
-         sectors.assign(pieces.size(), std::vector<Sector>());
+         // part_finder: the bounding radius about A (body coordinates are about A), from each piece's core as built
+         boundR = 0.0;
          for (size_t sf = 0; sf < pieces.size(); sf++)
             for (const Piece &pc : pieces[sf])
             {
-               V3 pts[4];
-               int n;
+               double fp = 0.0;
                if (pc.kind == 0)
-               {
-                  pts[0] = wires[(size_t)pc.i].a;
-                  pts[1] = wires[(size_t)pc.i].b;
-                  n = 2;
-               }
+                  fp = std::max(wires[(size_t)pc.i].a.Length(), wires[(size_t)pc.i].b.Length());
                else if (pc.kind == 1)
-               {
-                  pts[0] = joints[(size_t)pc.i].v;
-                  n = 1;
-               }
+                  fp = joints[(size_t)pc.i].v.Length();
                else if (pc.kind == 2)
-               {
                   for (int e = 0; e < 4; e++)
-                     pts[e] = quads[(size_t)pc.i].p[e];
-                  n = 4;
-               }
+                     fp = std::max(fp, quads[(size_t)pc.i].p[e].Length());
                else
-               {
-                  pts[0] = lines[(size_t)pc.i].a;
-                  pts[1] = lines[(size_t)pc.i].b;
-                  n = 2;
-               }
-               sectors[sf].push_back(MakeSector(pts, n, pc.rr));
+                  fp = std::max(lines[(size_t)pc.i].a.Length(), lines[(size_t)pc.i].b.Length());
+               boundR = std::max(boundR, fp + pc.rr);
             }
       }
       struct Piece { int kind, i; V3 m; double half, rr; };   // kind 0 wire, 1 joint, 2 quad, 3 shared line
       mutable std::vector<std::vector<Piece>> pieces;
-      // [Features] part_finder (design_reach.md section 2): a piece's sector about the axis in body coordinates, x along it, (y, z) across it at angle atan2(z, y): along-axis range,
-      // radius range and angle range (middle pm, half width ph; >= pi: the whole ring), each grown by the piece's own radius. Built with the pieces (BuildJoints), from the shape the part built
-      struct Sector { double x0, x1, r0, r1, pm, ph; };
-      mutable std::vector<std::vector<Sector>> sectors;
+      mutable double boundR = 0.0;   // part_finder: the bounding radius about A (BuildJoints), for the overlap check
       double cycQ0 = 0.0, cycLo = 0.0, cycHi = 0.0;   // part_finder: the angle at the cycle's start and the ends of its turn range over the cycle (CycleTurn; set every cycle, not kept state)
-      static double Seg2Dist(const double ay, const double az, const double by, const double bz, const double py, const double pz)   // point to segment in a plane
-      {
-         const double uy = by - ay, uz = bz - az, L2 = uy * uy + uz * uz;
-         const double t = L2 > 0.0 ? std::min(1.0, std::max(0.0, ((py - ay) * uy + (pz - az) * uz) / L2)) : 0.0;
-         return std::hypot(py - ay - uy * t, pz - az - uz * t);
-      }
       static double SegDist(const V3 &a, const V3 &b, const V3 &p)   // point to segment
       {
          const V3 u = b - a;
          const double L2 = u.Dot(u), t = L2 > 0.0 ? std::min(1.0, std::max(0.0, (p - a).Dot(u) / L2)) : 0.0;
          return (p - a - u * t).Length();
-      }
-      // a piece's sector from its core points (1 a point, 2 a segment, 4 a flat convex quad) and its radius rr
-      static Sector MakeSector(const V3 *p, const int n, const double rr)
-      {
-         Sector s;
-         s.x0 = INFINITY;
-         s.x1 = -INFINITY;
-         double rmax = 0.0;
-         for (int i = 0; i < n; i++)
-         {
-            s.x0 = std::min(s.x0, p[i].x);
-            s.x1 = std::max(s.x1, p[i].x);
-            rmax = std::max(rmax, std::hypot(p[i].y, p[i].z));
-         }
-         double rmin;
-         if (n == 1)
-            rmin = std::hypot(p[0].y, p[0].z);
-         else if (n == 2)
-            rmin = Seg2Dist(p[0].y, p[0].z, p[1].y, p[1].z, 0.0, 0.0);
-         else
-         {
-            rmin = INFINITY;
-            bool pos = true, neg = true;
-            for (int i = 0; i < n; i++)
-            {
-               const V3 &a = p[i], &b = p[(i + 1) % n];
-               rmin = std::min(rmin, Seg2Dist(a.y, a.z, b.y, b.z, 0.0, 0.0));
-               const double cr = (b.y - a.y) * (0.0 - a.z) - (b.z - a.z) * (0.0 - a.y);
-               pos = pos && cr >= 0.0;
-               neg = neg && cr <= 0.0;
-            }
-            if (pos || neg)
-               rmin = 0.0;   // (the axis passes through it)
-         }
-         s.x0 -= rr;
-         s.x1 += rr;
-         s.r0 = std::max(0.0, rmin - rr);
-         s.r1 = rmax + rr;
-         if (rmin <= rr)
-         {
-            s.pm = 0.0;
-            s.ph = GroupStep::kPi;
-            return s;
-         }
-         // a core that does not hold the axis spans less than pi about it: its points' angles as offsets from the first
-         const double a0 = std::atan2(p[0].z, p[0].y);
-         double lo = 0.0, hi = 0.0;
-         for (int i = 1; i < n; i++)
-         {
-            const double d = std::remainder(std::atan2(p[i].z, p[i].y) - a0, 2.0 * GroupStep::kPi);
-            lo = std::min(lo, d);
-            hi = std::max(hi, d);
-         }
-         s.pm = a0 + 0.5 * (lo + hi);
-         s.ph = 0.5 * (hi - lo) + std::asin(rr / rmin) + 1e-9;   // (a point within rr of a core point at rho >= rmin is within asin(rr / rmin) of its angle)
-         if (s.ph >= GroupStep::kPi)
-            s.ph = GroupStep::kPi;
-         return s;
-      }
-      // the exact distance from the point (x, y, z) to a sector whose angle range is grown by lo toward lower and hi toward higher angles (design_reach.md section 3)
-      static double SectorDist(const Sector &s, const double x, const double y, const double z, const double lo, const double hi)
-      {
-         const double dx = std::max(0.0, std::max(s.x0 - x, x - s.x1)), rho = std::hypot(y, z);
-         const double half = s.ph + 0.5 * (lo + hi);
-         double across;
-         const double dr = std::max(0.0, std::max(s.r0 - rho, rho - s.r1));
-         if (half >= GroupStep::kPi)
-            across = dr;
-         else
-         {
-            const double mid = s.pm + 0.5 * (hi - lo), d = std::remainder(std::atan2(z, y) - mid, 2.0 * GroupStep::kPi);
-            if (std::fabs(d) <= half)
-               across = dr;
-            else   // outside the angle range: the nearer of its two straight edges
-            {
-               const double e0 = mid - half, e1 = mid + half;
-               across = std::min(Seg2Dist(s.r0 * std::cos(e0), s.r0 * std::sin(e0), s.r1 * std::cos(e0), s.r1 * std::sin(e0), y, z),
-                                 Seg2Dist(s.r0 * std::cos(e1), s.r0 * std::sin(e1), s.r1 * std::cos(e1), s.r1 * std::sin(e1), y, z));
-            }
-         }
-         return std::sqrt(dx * dx + across * across);
       }
       // check mode: the exact distance from p (body coordinates) to a piece's core (a wire's or shared line's segment, a joint's point, a flat quad)
       double PieceDist(const Piece &pc, const V3 &p) const
@@ -931,5 +838,6 @@ namespace HingeGroup
          return true;
       }
       int CycleMisses(const V3 &c, const double R, const double dq, const std::vector<int> &list) const override { return owner->CycleMisses(surface, c, R, dq, list); }
+      double PathMotion(const V3 &P, const double dLen) const override { return GroupStep::partFinder ? owner->PathMotion(P, dLen, trial != nullptr ? trial[0] : 0.0) : -1.0; }
    };
 }

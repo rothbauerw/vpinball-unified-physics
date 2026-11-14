@@ -106,13 +106,17 @@ public:
    virtual bool GroupNearHolds(int, const V3 &, double, double, const std::vector<int> &) const { return true; }                // (GroupStep::Shape::NearHolds)
    virtual bool GroupCycleNear(int, const V3 &, double, double, std::vector<int> &, int &) const { return false; }              // [Features] part_finder: the cycle's list (GroupStep::Shape::CycleNear)
    virtual int GroupCycleMisses(int, const V3 &, double, double, const std::vector<int> &) const { return 0; }                // (GroupStep::Shape::CycleMisses, check mode)
-   // [Features] part_finder, the overlap check of free balls (ContactSystem CheckOverlaps): a lower bound on the distance from c to the part where it is now. Here: every point of the
-   // part is within Reach of Origin (above); a part with pieces answers its own region
-   virtual double RegionDist(const V3 &c) const { return (c - Origin()).Length() - Reach(); }
+   // [Features] part_finder, the overlap check of free balls (ContactSystem CheckOverlaps): a lower bound on the distance from c to the part where it is now; each part its bounding
+   // radius from its built pieces (group A: not Reach(), which carries margins). Here: none, always probed
+   virtual double RegionDist(const V3 &) const { return -INFINITY; }
    virtual const RubberContact::RubberParams *GroupLaw(int, double &) const { return nullptr; }      // the surface's material and layer; null = the host's
    // [Features] path_test (GroupStep::Shape::PathReach): a surface of the part that never moves (a bumper's body, a disc turning about its own axis), the ball's centre moving straight
    // from s to s + d: 1 = it can touch it on the way, 0 = no (exact), -1 = no exact test (a surface that moves with the part: build 3, piece 6), FarStillFar probes as before
    virtual int GroupPathReach(int, const V3 &, const V3 &, double) const { return -1; }
+   // [Features] part_finder, a surface that moves with the part (group A; GroupStep::Shape::PathMotion): the most any point of it moves relative to P over the step, the ball's centre
+   // moving dLen and the part by trial (the solve's end move; null = no move); its probe (GroupProbe) must give the exact distance at any range. -1 = none: the two probes
+   virtual double GroupPathMotion(int, const V3 &, double, const double *) const { return -1.0; }
+   virtual double GroupPathSlope(int) const { return 1.0; }   // its probe's largest slope (GroupStep::Shape::PathSlope), built at load
    virtual double GroupPathCoverSag(int, int &) const { return -1.0; }   // the cover's largest sagitta and kind (the self-check, VPX_FINDER_CHECK; GroupStep::Shape::PathCoverSag); -1 = none
    virtual void CycleBegin() {}                                                                      // a group holding it is being built this cycle
    virtual void TouchBegan(int, int, double) {}                                                      // this surface, this ball of the group, closing at vn (m/s): a touch began. A part's Hit is what it decides

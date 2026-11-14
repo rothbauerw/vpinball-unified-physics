@@ -201,6 +201,16 @@ namespace BumperGroup
       double FollowerD() const { return D(PoseAt(nullptr)); }
       double TiltDeg() const { return std::sqrt(thx * thx + thy * thy) / JB::DEG; }
 
+      // [Features] part_finder, the path test's motion term of the skirt (group A; GroupStep::Shape::PathMotion), P in the bumper's frame: it turns about its pivot (0, 0, z) by at most
+      // sqrt(dthx^2 + dthy^2) (Ry Rx: two poses differ by one turn of at most that, paper_groupA.txt) and the pivot slides |dz|: (|P - pivot at the middle| + dLen / 2) |dtilt| + |dz|.
+      // Its probe (ProbeSkirt: JB::Revolve::Closest in its own frame) is the profile's distance at any range
+      double SkirtMotion(const V3 &P, const double dLen, const double *const trial) const
+      {
+         if (trial == nullptr)
+            return 0.0;
+         const double zm = z + 0.5 * trial[kZ];
+         return (std::sqrt(P.x * P.x + P.y * P.y + (P.z - zm) * (P.z - zm)) + 0.5 * dLen) * std::hypot(trial[kThx], trial[kThy]) + std::fabs(trial[kZ]);
+      }
       // The skirt's top for a ball centre and radius, the coordinates moved by trial (null = where they are): depth, normal, radius, and how its point moves with each coordinate
       void ProbeSkirt(const V3 &c, const double R, const double *const trial, Hit &h) const
       {
@@ -700,6 +710,15 @@ namespace BumperGroup
       const Part *owner = nullptr;
       void Probe(const V3 &c, const double R, Hit &h) const override { owner->ProbeSkirt(c, R, trial, h); }
    };
+   // [Features] part_finder (group A): the farthest point of a solid of revolution's profile from its frame's origin (each vertex's |(r, z)| plus its sweep radius: along a segment
+   // |core| + rr is convex, so its largest is at a vertex), for the overlap check's bounding radius
+   inline double FarR(const JB::Revolve &p)
+   {
+      double f = 0.0;
+      for (const JB::Revolve::Vtx &v : p.v)
+         f = std::max(f, std::hypot(v.r, v.z) + v.rr);
+      return f;
+   }
    // A surface of revolution round the bumper's axis: the centre body, fixed; the ring, carried by the part along its drop (one column, down)
    class RevolveShape : public GroupStep::Shape
    {

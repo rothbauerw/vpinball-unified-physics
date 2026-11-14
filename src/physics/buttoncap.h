@@ -250,6 +250,8 @@ namespace ButtonCap
          h.nc = 1;
          h.c[0].Set(0, h.n.Dot(down), down, V3());
       }
+      // [Features] part_finder (group A): the overlap check's distance, |c - centre| less the profile's farthest point plus its sink (its travel, or its sink now if more)
+      double RegionDist(const V3 &c) const { return (c - centre).Length() - (BumperGroup::FarR(prof) + std::max(travel, std::fabs(q))); }
       std::string HistoryNote() const override
       {
          char line[200];
@@ -280,6 +282,7 @@ namespace ButtonCap
       {
          ball = b;
          part.Build(s, axis, radius, b, top);
+         slope = part.prof.Slope();   // ([Features] part_finder: its profile's largest slope, for the path test)
          idle = true;   // held on its up stop: nothing to step until a ball comes near or the gravity changes
       }
       // The switch's changes as the part's events. The adapter calls it before the host takes the events
@@ -328,6 +331,11 @@ namespace ButtonCap
       GroupStep::Part *GroupPart() override { return &part; }
       int GroupSurfaces() const override { return 1; }
       void GroupProbe(int, const V3 &c, const double R, const double *const trial, Hit &h) const override { part.ProbeSurface(c, R, trial != nullptr ? trial[0] : 0.0, h); }
+      // [Features] part_finder, the path test's motion term (group A): the cap moves along its axis only, |dq|; its probe (ProbeSurface: JetBumper::Revolve::Closest) is the profile's distance at any range
+      double GroupPathMotion(int, const V3 &, double, const double *const trial) const override { return trial != nullptr ? std::fabs(trial[0]) : 0.0; }
+      double RegionDist(const V3 &c) const override { return part.RegionDist(c); }
+      double slope = 1.0;
+      double GroupPathSlope(int) const override { return slope; }
       const RubberContact::RubberParams *GroupLaw(int, double &layerM) const override
       {
          layerM = 0.0;

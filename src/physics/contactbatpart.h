@@ -117,6 +117,8 @@ namespace BatPart
       // ---- the group's calls ----
       GroupStep::Part *GroupPart() override { return &gp; }
       void GroupProbe(int, const V3 &c, const double R, const double *const trial, GroupStep::Hit &h) const override { gp.ProbeRubber(c, R, trial, h); }
+      double GroupPathMotion(int, const V3 &P, const double dLen, const double *const trial) const override { return gp.PathMotion(P, dLen, trial); }
+      double RegionDist(const V3 &c) const override { return gp.RegionDist(c); }   // (group A: its bounding radius about the pivot)
       const RubberContact::RubberParams *GroupLaw(int, double &layerM) const override
       {
          layerM = gp.layerM;
