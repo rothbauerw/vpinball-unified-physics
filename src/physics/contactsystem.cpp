@@ -74,6 +74,10 @@ namespace ContactSystem
       s_seatEditorBalls = s_unified && f.seatEditorBalls;
       s_aircoreInStep = s_unified && f.aircoreInStep;
       GroupStep::pathTest = f.pathTest;   // [Features] path_test (groupstep.h; read by the group step and the engagement query only)
+      GroupStep::partFinder = f.partFinder;   // [Features] part_finder (groupstep.h, hingegroup.h; the group step's piece lists and CheckOverlaps)
+      GroupStep::partFinderProf = ContactProf::CheckOn() || GroupStep::FinderCheckEnv();   // (its counters: diagnostics only)
+      GroupStep::partFinderCount.clear();
+      GroupStep::partFinderFirstMiss.clear();
       const char *const px = getenv("VPX_PROXIMITY");   // (diagnostic override, TestingPlaybook)
       s_proximity = s_unified && (px != nullptr ? atoi(px) != 0 : f.proximityEngage);
       ContactSettings::StartPlay(tableFile);   // (after the switch above: the settings ask it)
@@ -82,6 +86,7 @@ namespace ContactSystem
          PLOGI << "Contact system: unified engine on (" << file.string() << "; dev fallback: stock hit search still runs for object types not yet converted)";
          PLOGI << "Contact system: [Features] aircore_in_step = " << (s_aircoreInStep ? 1 : 0) << (s_aircoreInStep ? " (an air-core coil's pull read at each step's midpoint)" : " (an air-core coil's pull held for the cycle)");
          PLOGI << "Contact system: [Features] path_test = " << (GroupStep::pathTest ? 1 : 0) << (GroupStep::pathTest ? " (a skipped contact on a static surface or a ball pair tested over the whole move; engagement query by the reach rule)" : " (a skipped contact probed at the move's middle and end; engagement query 20 U)");
+         PLOGI << "Contact system: [Features] part_finder = " << (GroupStep::partFinder ? 1 : 0) << (GroupStep::partFinder ? " (a hinge part's pieces listed once per cycle from their swept sectors; the overlap check by region)" : " (per-step piece lists; the overlap check probes every part)");
       }
       else
          PLOGI << "Contact system: stock VPX physics, every new model off (" << (file.empty() ? std::string("no physics ini") : file.string() + " has no [Features] unified = 1") << ")";
@@ -1021,6 +1026,8 @@ struct ContactSystemImpl
          return mp != nullptr && mp->GroupNearPieces(surface, c, R, reach, swing, minReach, list);
       }
       bool NearHolds(const V3 &c, const double R, const double dq, const std::vector<int> &list) const override { return mp == nullptr || mp->GroupNearHolds(surface, c, R, dq, list); }
+      bool CycleNear(const V3 &c, const double R, const double reach, std::vector<int> &list, int &n) const override { return mp != nullptr && mp->GroupCycleNear(surface, c, R, reach, list, n); }
+      int CycleMisses(const V3 &c, const double R, const double dq, const std::vector<int> &list) const override { return mp != nullptr ? mp->GroupCycleMisses(surface, c, R, dq, list) : 0; }
       int PathReach(const V3 &s, const V3 &d, const double R) const override { return mp != nullptr ? mp->GroupPathReach(surface, s, d, R) : r->PathReach(*it, s, d, R); }
       bool PathOneWay(const V3 &e) const override { return mp == nullptr && r->PathOneWay(*it, e); }   // (the self-check: the playfield's full faces bound one way, a hole's rim two ways)
       double PathCoverSag(int &kind) const override { return mp != nullptr ? mp->GroupPathCoverSag(surface, kind) : r->PathCoverSag(*it, kind); }   // (the self-check, VPX_FINDER_CHECK)   // ([Features] path_test; a part's surface: its own answer, -1 for one that moves: build 3)
@@ -4032,8 +4039,25 @@ void ContactSystemImpl::CheckOverlaps(const float hittime, const double hS)
          for (ContactHost *const o : parts)
          {
             ContactMovingPart *const mp = o->MovingPart();
+            // [Features] part_finder: only a part whose region where it is now is within the ball's radius (plus the tolerance) can overlap it
+            const bool skip = GroupStep::partFinder && mp->RegionDist(c) > bs.R + tol;
+            GroupStep::PartFinderCount *const pc = GroupStep::partFinderProf ? &GroupStep::partFinderCount[typeid(*mp).name()] : nullptr;
+            if (pc != nullptr)
+            {
+               pc->ovCalls++;
+               pc->ovProbes += skip ? 0 : 1;
+               pc->ovSkips += skip ? 1 : 0;
+            }
+            if (skip && !GroupStep::FinderCheckEnv())
+               continue;
             mp->SetBall(bs);
             const TubeProbe pr = mp->Probe(c);
+            if (skip)   // check mode: a skipped part must not overlap
+            {
+               if (pr.overlap && pr.delta > tol && pc != nullptr)
+                  pc->ovMismatch++;
+               continue;
+            }
             if (pr.overlap && pr.delta > tol)
                out.push_back({ pb, o, pr.delta });
          }

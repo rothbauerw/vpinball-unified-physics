@@ -34,6 +34,7 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <typeinfo>
 #include <utility>
 #include <vector>
 
@@ -266,10 +267,47 @@ namespace GroupStep
       virtual double PathCoverSag(int & /*kind*/) const { return -1.0; }
       // the self-check of kind 2 at the path end e: true = the cover bounds one way only (the playfield's full faces), false = two ways (a carved hole's rim ring, design.md 2c)
       virtual bool PathOneWay(const V3 & /*e*/) const { return true; }
+      // [Features] part_finder, a surface of pieces: the cycle's list (in the pieces' own order) for a ball whose centre was c0 at the cycle's start and can move reach (m) in the cycle,
+      // its part turning within the range its CycleTurn set; pieces: how many the surface has. False: not a surface of pieces (its probe takes no list)
+      virtual bool CycleNear(const V3 &, double, double, std::vector<int> &, int &) const { return false; }
+      // check mode (VPX_FINDER_CHECK): the pieces within R of a ball at c, its part moved by dq (the rigid piece at the trial angle), that are not on list (exact distances)
+      virtual int CycleMisses(const V3 &, double, double, const std::vector<int> &) const { return 0; }
    };
    // [Features] path_test of this table (physicsini.h; set by ContactSystem::SetTable): 1 = FarStillFar tests a skipped contact on a static shape over the ball's whole move
    // (object box, piece boxes, exact distance); 0 = at the move's middle and end only, as before
    inline bool pathTest = true;
+   // [Features] part_finder of this table (physicsini.h; set by ContactSystem::SetTable; runs/2026-11-13-finder-P6/design_reach.md, piece P6a): 1 = a surface of pieces takes its cycle's
+   // list (Shape::CycleNear) in every attempt of the cycle, and a ball centre outside its query volume at a move's middle or end queries again (Group::NearStillNear); 0 = the
+   // per-step lists (Shape::NearPieces, NearHolds, nearGrow), as before
+   inline bool partFinder = true;
+   // part_finder's counters per kind of part (its type's name; diagnostics only: VPX_CHECK_PROFILE or VPX_FINDER_CHECK, set by the owner in partFinderProf)
+   struct PartFinderCount
+   {
+      long long lists = 0, listLen = 0, pieces = 0;   // lists built (key 0: per attempt; key 1: per cycle and after a re-query), their pieces, the surface's pieces
+      long long retries = 0, requeries = 0;          // key 0: nearGrow retries (a piece off a list reached); key 1: re-queries (a ball outside its query volume)
+      long long checks = 0, misses = 0;              // check mode, key 1: positions checked (start, middle, end of each solve), pieces within R off the list
+      long long ovCalls = 0, ovProbes = 0, ovSkips = 0, ovMismatch = 0;   // CheckOverlaps: calls (each part counted once per call), probes, parts skipped by their region (key 1), skipped parts overlapping (check mode)
+   };
+   inline std::map<std::string, PartFinderCount> partFinderCount;
+   inline bool partFinderProf = false;
+   inline std::string partFinderFirstMiss;   // check mode: the first miss, for the owner's report
+   inline bool FinderCheckEnv() { static const bool on = []() { const char *const e = getenv("VPX_FINDER_CHECK"); return e != nullptr && atoi(e) != 0; }(); return on; }
+   inline std::string PartFinderReport()
+   {
+      std::string s = std::string("Part finder totals (key part_finder = ") + (partFinder ? "1" : "0") + "):";
+      char b[600];
+      for (const auto &e : partFinderCount)
+      {
+         const PartFinderCount &c = e.second;
+         snprintf(b, sizeof b, " | %s: lists %lld, pieces per list %.3f, pieces per surface %.3f, retries %lld, re-queries %lld, checks %lld, misses %lld; overlap check calls %lld, probes %lld (%.3f per call), skipped %lld, mismatches %lld",
+                  e.first.c_str(), c.lists, c.lists > 0 ? (double)c.listLen / (double)c.lists : 0.0, c.lists > 0 ? (double)c.pieces / (double)c.lists : 0.0, c.retries, c.requeries, c.checks, c.misses,
+                  c.ovCalls, c.ovProbes, c.ovCalls > 0 ? (double)c.ovProbes / (double)c.ovCalls : 0.0, c.ovSkips, c.ovMismatch);
+         s += b;
+      }
+      if (!partFinderFirstMiss.empty())
+         s += " | first miss: " + partFinderFirstMiss;
+      return s;
+   }
    // A flat face through p with unit normal n (the ball's side); unbounded
    class PlaneShape : public Shape
    {
@@ -652,6 +690,8 @@ namespace GroupStep
       bool guessAccel = false;   // [Contact] part_guess_accel (Settings::partGuessAccel, set by the group before BeginStep)
       bool gripInStep = true;    // [Contact] grip_in_step (Settings::gripInStep, set by the group before BeginStep): its grip limit from each Eval's own unknowns; false = UpdateGrip between rounds
       mutable const std::vector<int> *nearNow = nullptr;   // [Contact] hinge_piece_sum: the probe of a surface it carries takes only these pieces (this attempt's list); null = all
+      // [Features] part_finder: at the cycle's start, how far it can turn in the cycle of T s with the balls of its island holding E J of kinetic energy (design_reach.md section 1). None: no lists
+      virtual void CycleTurn(double /*E*/, double /*T*/) {}
       // what it is
       virtual int NumDof() const = 0;
       virtual int MaxDof() const { return NumDof(); }   // the most its NumDof can be inside a cycle (the group's storage is sized between cycles)
@@ -1119,6 +1159,15 @@ namespace GroupStep
       bool nearOn = false;
       double nearGrow = 1.0;     // the reach's factor: x4 each time a solve's end left its list (the lists then grow to all the pieces)
       bool farOff = false;
+      // [Features] part_finder: the cycle's lists per item (cycHas 0 = to build, 1 = built, 2 = not a surface of pieces; cycAS: the ball and shape it was built for), each ball's query
+      // centre and reach, the cycle's length; nearCyc: this attempt's lists are the cycle's
+      std::vector<std::vector<int>> cycL;
+      std::vector<char> cycHas;
+      std::vector<std::pair<int, int>> cycAS;
+      std::vector<V3> cycC0;
+      std::vector<double> cycReach;
+      double cycT = 1e-3;
+      bool cycOn = false, nearCyc = false;
    };
 
    class Group : public PartRecords, public GroupUseWork
@@ -1548,6 +1597,9 @@ namespace GroupStep
          stopBuf.clear();
          stopLines = 0;
          FILE *const pf = PhaseFile();
+         struct CycOff { bool &f; explicit CycOff(bool &b) : f(b) {} ~CycOff() { f = false; } } cycOff(cycOn);   // part_finder: the cycle's lists end with it
+         if (partFinder)
+            FinderCycleStart(dt);
          while (done < dt - 1e-12)
          {
             const double hChoice = std::min(ChooseStep(), dt - done);
@@ -2460,12 +2512,23 @@ namespace GroupStep
          if (nearL.size() < (size_t)ni)
             nearL.resize((size_t)ni);
          const bool all = farOff || NearAllOn() || nearGrow > 1e6;
+         // [Features] part_finder: the cycle's lists (CycleList); a step outside a cycle's StepsOver, or one that takes every piece, takes all (never the per-step lists)
+         nearCyc = partFinder && !all;
          for (int k = 0; k < ni; k++)
          {
             Item &it = item[k];
             it.nearK = -1;
             if (it.b >= 0 || shape[it.s]->part < 0)
                continue;
+            if (partFinder)
+            {
+               if (nearCyc && cycOn && CycleList(k))
+               {
+                  nearL[(size_t)k] = cycL[(size_t)k];
+                  it.nearK = k;
+               }
+               continue;
+            }
             const Shape *const sh = shape[it.s];
             const Part *const pp = part[sh->part];
             const Ball &A = ball[it.a];
@@ -2478,15 +2541,134 @@ namespace GroupStep
             }
             const double reach = all ? INFINITY : 2.0 * A.v.Length() * h * nearGrow + 1e-4, swing = all ? INFINITY : 2.0 * rate * h * nearGrow;
             if (sh->NearPieces(A.c, A.R, reach, swing, 2.0 * sp * h + 1e-4, nearL[(size_t)k]))
+            {
                it.nearK = k;
+               if (partFinderProf)
+               {
+                  PartFinderCount &pc = partFinderCount[typeid(*pp).name()];
+                  pc.lists++;
+                  pc.listLen += (long long)nearL[(size_t)k].size();
+               }
+            }
          }
          nearOn = true;
+      }
+      // [Features] part_finder: item k's cycle list, built once per cycle (and again after its ball's re-query) from the ball's centre at the cycle's start and its reach; false = not a
+      // surface of pieces
+      bool CycleList(const int k)
+      {
+         const Item &it = item[k];
+         if (cycHas.size() <= (size_t)k)
+         {
+            cycHas.resize((size_t)k + 1, 0);
+            cycL.resize((size_t)k + 1);
+            cycAS.resize((size_t)k + 1, std::make_pair(-1, -1));
+         }
+         if (cycHas[(size_t)k] != 0 && cycAS[(size_t)k] == std::make_pair(it.a, it.s))
+            return cycHas[(size_t)k] == 1;
+         if (cycC0.size() <= (size_t)it.a)   // (a ball the cycle's start did not have: its query from where it is now)
+         {
+            const size_t n0 = cycC0.size();
+            cycC0.resize((size_t)it.a + 1);
+            cycReach.resize((size_t)it.a + 1);
+            for (size_t i = n0; i < cycC0.size(); i++)
+            {
+               cycC0[i] = ball[i].c;
+               cycReach[i] = ContactReachM(ball[i].v.Length(), 0.0, cycT);
+            }
+         }
+         const Shape *const sh = shape[it.s];
+         int pieces = 0;
+         const bool ok = sh->CycleNear(cycC0[(size_t)it.a], ball[it.a].R, cycReach[(size_t)it.a], cycL[(size_t)k], pieces);
+         cycHas[(size_t)k] = ok ? 1 : 2;
+         cycAS[(size_t)k] = std::make_pair(it.a, it.s);
+         if (ok && partFinderProf)
+         {
+            PartFinderCount &pc = partFinderCount[typeid(*part[sh->part]).name()];
+            pc.lists++;
+            pc.listLen += (long long)cycL[(size_t)k].size();
+            pc.pieces += pieces;
+         }
+         return ok;
+      }
+      // [Features] part_finder, the cycle's start (StepsOver): each part's turn over the cycle from the island's balls' kinetic energy (spin included), each ball's query volume
+      // (its centre now, its reach ContactReachM from its speed now; its acceleration is not known here: 0, the inside check covers it)
+      void FinderCycleStart(const double T)
+      {
+         cycOn = true;
+         cycT = T;
+         double E = 0.0;
+         for (int i = 0; i < nb; i++)
+            E += 0.5 * ball[i].m * ball[i].v.Dot(ball[i].v) + 0.5 * ball[i].I() * ball[i].w.Dot(ball[i].w);
+         for (int p = 0; p < np; p++)
+            part[p]->CycleTurn(E, T);
+         cycC0.resize((size_t)nb);
+         cycReach.resize((size_t)nb);
+         for (int i = 0; i < nb; i++)
+         {
+            cycC0[(size_t)i] = ball[i].c;
+            cycReach[(size_t)i] = ContactReachM(ball[i].v.Length(), 0.0, T);
+         }
+         std::fill(cycHas.begin(), cycHas.end(), (char)0);
+      }
+      // [Features] part_finder, after the solve: the inside check of every ball with a listed contact at the move's middle and end (its centre within its reach of where the cycle's
+      // query was made). Outside: the query again around the same centre at twice the distance found (design.md section 4), its lists rebuilt, the attempt again
+      bool CycleStillInside(const double *xv)
+      {
+         bool inside = true;
+         for (int k = 0; k < ni; k++)
+         {
+            const Item &it = item[k];
+            if (it.nearK < 0)
+               continue;
+            const Ball &A = ball[it.a];
+            const V3 dc(xv[6 * it.a], xv[6 * it.a + 1], xv[6 * it.a + 2]);
+            const V3 &c0 = cycC0[(size_t)it.a];
+            const double d = std::max((A.c + dc * 0.5 - c0).Length(), (A.c + dc - c0).Length());
+            if (d <= cycReach[(size_t)it.a])
+               continue;
+            inside = false;
+            cycReach[(size_t)it.a] = 2.0 * d;
+            for (int j = 0; j < ni; j++)
+               if (item[j].a == it.a && (size_t)j < cycHas.size())
+                  cycHas[(size_t)j] = 0;
+            if (partFinderProf)
+               partFinderCount[typeid(*part[shape[it.s]->part]).name()].requeries++;
+         }
+         if (!inside || !FinderCheckEnv())
+            return inside;
+         // check mode: every piece within R of its ball at the move's start, middle and end (the rigid piece at the trial angle) is on the list
+         for (int k = 0; k < ni; k++)
+         {
+            const Item &it = item[k];
+            if (it.nearK < 0)
+               continue;
+            const Shape *const sh = shape[it.s];
+            const Ball &A = ball[it.a];
+            const V3 dc(xv[6 * it.a], xv[6 * it.a + 1], xv[6 * it.a + 2]);
+            const double *const qe = (const double *)qEnd + coordOff[sh->part], *const qm = (const double *)qMid + coordOff[sh->part];
+            const std::vector<int> &l = cycL[(size_t)k];
+            const int m = sh->CycleMisses(A.c, A.R, 0.0, l) + sh->CycleMisses(A.c + dc * 0.5, A.R, qm[0], l) + sh->CycleMisses(A.c + dc, A.R, qe[0], l);
+            PartFinderCount &pc = partFinderCount[typeid(*part[sh->part]).name()];
+            pc.checks += 3;
+            pc.misses += m;
+            if (m > 0 && partFinderFirstMiss.empty())
+            {
+               char b[300];
+               snprintf(b, sizeof b, "%s %s: %d piece(s) within R off the cycle list, ball at (%.5f %.5f %.5f) m, move (%.3g %.3g %.3g) m, cycle start (%.5f %.5f %.5f) reach %.4g m", typeid(*part[sh->part]).name(),
+                        sh->Name().c_str(), m, A.c.x, A.c.y, A.c.z, dc.x, dc.y, dc.z, cycC0[(size_t)it.a].x, cycC0[(size_t)it.a].y, cycC0[(size_t)it.a].z, cycReach[(size_t)it.a]);
+               partFinderFirstMiss = b;
+            }
+         }
+         return inside;
       }
       // after the solve: every piece off a list is off its ball at the move's middle and end (the start: by its building)
       bool NearStillNear(const double *xv)
       {
          if (carried)
             SetTrials(xv);
+         if (partFinder)
+            return !nearCyc || CycleStillInside(xv);
          for (int k = 0; k < ni; k++)
          {
             const Item &it = item[k];
@@ -2497,7 +2679,11 @@ namespace GroupStep
             const V3 dc(xv[6 * it.a], xv[6 * it.a + 1], xv[6 * it.a + 2]);
             const double *const qe = (const double *)qEnd + coordOff[sh->part], *const qm = (const double *)qMid + coordOff[sh->part];
             if (!sh->NearHolds(A.c + dc, A.R, qe[0], nearL[(size_t)k]) || !sh->NearHolds(A.c + dc * 0.5, A.R, qm[0], nearL[(size_t)k]))
+            {
+               if (partFinderProf)
+                  partFinderCount[typeid(*part[sh->part]).name()].retries++;
                return false;
+            }
          }
          return true;
       }
@@ -4301,7 +4487,8 @@ namespace GroupStep
                }
                if (!NearStillNear(x))
                {
-                  nearGrow *= 4.0;   // a piece off a list was reached: the lists anew from a longer reach, the attempt again
+                  if (!partFinder)
+                     nearGrow *= 4.0;   // a piece off a list was reached: the lists anew from a longer reach, the attempt again (part_finder: the ball's re-query, CycleStillInside)
                   again = true;
                   break;
                }

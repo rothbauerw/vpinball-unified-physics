@@ -29,9 +29,7 @@ struct SurfaceState
 };
 
 // What one ball has with ONE surface: the material parameters, the shear state kept between cycles, and the faces near the ball this cycle.
-// The reach of a ball over one cycle (to-do N5, the one reach rule; shared finder design.md section 3): how far its centre can move in dt from its speed and its
-// acceleration, reach = speed x dt + 1/2 x accel x dt^2 (m; speed m/s, accel m/s^2, dt s). Used first by the shared finder's per-cycle query (to-do 1.34 P2a).
-inline double ContactReachM(const double speed, const double accel, const double dt) { return speed * dt + 0.5 * accel * dt * dt; }
+// (ContactReachM, the one reach rule, is in rubbercontact.h: pure SI, shared with the group step)
 
 struct SurfaceContact
 {

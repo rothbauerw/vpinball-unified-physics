@@ -145,6 +145,15 @@ namespace HingeModel
          return true;
       }
       bool GroupNearHolds(const int surface, const V3 &c, const double R, const double dq, const std::vector<int> &list) const override { return gp.NearHolds(surface, c, R, dq, list); }
+      bool GroupCycleNear(const int surface, const V3 &c, const double R, const double reach, std::vector<int> &list, int &n) const override
+      {
+         if (!gp.pieceSum)
+            return false;
+         gp.CycleNear(surface, c, R, reach, list, n);
+         return true;
+      }
+      int GroupCycleMisses(const int surface, const V3 &c, const double R, const double dq, const std::vector<int> &list) const override { return gp.CycleMisses(surface, c, R, dq, list); }
+      double RegionDist(const V3 &c) const override { return gp.RegionDist(c); }   // (its pieces' sectors at its angle now)
       const RubberContact::RubberParams *GroupLaw(int, double &layerM) const override
       {
          layerM = 0.0;

@@ -259,6 +259,76 @@ namespace HingeGroup
          }
          return true;
       }
+      // [Features] part_finder (runs/2026-11-13-finder-P6/design_reach.md sections 1-3): the turn over the cycle, from the cycle's start. Energy enters only through the drives and
+      // the balls: 1/2 I w^2 <= 1/2 I w0^2 + E + I alpha theta, so dtheta <= c T + 1/2 alpha T^2, c^2 = w0^2 + 2 E / I, alpha = MaxStoredTorque / I, w_max = c + alpha T.
+      // Clamped at each enabled, armed stop (a driven one at the far end of its move): a Hertz stop squashes at most what the part can carry into it,
+      // 2/5 k d^2.5 = 1/2 I w_max^2 at its lever; never past where the part is now
+      void CycleTurn(const double En, const double T) override
+      {
+         const double I = mass, alpha = MaxStoredTorque() / I, c = std::sqrt(rate * rate + 2.0 * En / I), dth = c * T + 0.5 * alpha * T * T, wMax = c + alpha * T;
+         double lo = q - dth, hi = q + dth;
+         for (const GroupStep::BodyStop &st : stops)
+         {
+            if (!st.enabled || !st.armed)
+               continue;
+            const double at = st.side > 0 ? (st.rate != 0.0 ? std::max(st.at, st.target) : st.at) : (st.rate != 0.0 ? std::min(st.at, st.target) : st.at);
+            const double over = st.k > 0.0 ? std::pow(0.5 * I * wMax * wMax / (0.4 * st.k), 0.4) / st.lever : INFINITY;
+            if (st.side > 0)
+               hi = std::min(hi, std::max(q, at + over));
+            else
+               lo = std::max(lo, std::min(q, at - over));
+         }
+         cycQ0 = q;
+         cycLo = lo;
+         cycHi = hi;
+      }
+      // the cycle's list of one side for a ball whose centre was c at the cycle's start and can move reach in it: every piece whose sector, its angle range grown by the
+      // turn (CycleTurn), is within R + reach + 100 um of c (the exact point-to-sector distance, section 3). Order kept
+      void CycleNear(const int surface, const V3 &c, const double R, const double reach, std::vector<int> &list, int &nPieces) const
+      {
+         BuildJoints();
+         list.clear();
+         const V3 dn = Down(cycQ0), fr = Front(cycQ0), rel = c - A;
+         const double x = rel.Dot(E), y = rel.Dot(dn), z = rel.Dot(fr), lim = R + reach + 1e-4;
+         const std::vector<Sector> &ss = sectors[(size_t)surface];
+         nPieces = (int)ss.size();
+         for (int i = 0; i < (int)ss.size(); i++)
+            if (SectorDist(ss[(size_t)i], x, y, z, cycQ0 - cycLo, cycHi - cycQ0) <= lim)
+               list.push_back(i);
+      }
+      // check mode: the pieces of one side within R of a ball at c, the part at its angle now + dq, that are not on list (exact distances to each piece's core less its radius)
+      int CycleMisses(const int surface, const V3 &c, const double R, const double dq, const std::vector<int> &list) const
+      {
+         BuildJoints();
+         const double th = q + dq;
+         const V3 dn = Down(th), fr = Front(th), rel = c - A, cb(rel.Dot(E), rel.Dot(dn), rel.Dot(fr));
+         const std::vector<Piece> &ps = pieces[(size_t)surface];
+         int n = 0;
+         size_t l = 0;
+         for (int i = 0; i < (int)ps.size(); i++)
+         {
+            if (l < list.size() && list[l] == i)
+            {
+               l++;
+               continue;
+            }
+            if (PieceDist(ps[(size_t)i], cb) - ps[(size_t)i].rr < R)
+               n++;
+         }
+         return n;
+      }
+      // the overlap check of free balls (part_finder): the distance from c to the part where it is now (no growth), a lower bound: its pieces' sectors at its angle now
+      double RegionDist(const V3 &c) const
+      {
+         BuildJoints();
+         const V3 dn = Down(q), fr = Front(q), rel = c - A;
+         const double x = rel.Dot(E), y = rel.Dot(dn), z = rel.Dot(fr);
+         double d = INFINITY;
+         for (const std::vector<Sector> &ss : sectors)
+            for (const Sector &sc : ss)
+               d = std::min(d, SectorDist(sc, x, y, z, 0.0, 0.0));
+         return d;
+      }
       void ProbeTerms(const int surface, const V3 &cb, const BallSI &b, const V3 &dn, const V3 &fr, Hit &h) const
       {
          BuildJoints();
@@ -652,9 +722,171 @@ namespace HingeGroup
             for (int i = 0; i < (int)lines.size(); i++)
                ps.push_back({ 3, i, (lines[i].a + lines[i].b) * 0.5, 0.5 * (lines[i].b - lines[i].a).Length(), lines[i].r });
          }
+         // part_finder: each piece's sector, from its core as built
+         sectors.assign(pieces.size(), std::vector<Sector>());
+         for (size_t sf = 0; sf < pieces.size(); sf++)
+            for (const Piece &pc : pieces[sf])
+            {
+               V3 pts[4];
+               int n;
+               if (pc.kind == 0)
+               {
+                  pts[0] = wires[(size_t)pc.i].a;
+                  pts[1] = wires[(size_t)pc.i].b;
+                  n = 2;
+               }
+               else if (pc.kind == 1)
+               {
+                  pts[0] = joints[(size_t)pc.i].v;
+                  n = 1;
+               }
+               else if (pc.kind == 2)
+               {
+                  for (int e = 0; e < 4; e++)
+                     pts[e] = quads[(size_t)pc.i].p[e];
+                  n = 4;
+               }
+               else
+               {
+                  pts[0] = lines[(size_t)pc.i].a;
+                  pts[1] = lines[(size_t)pc.i].b;
+                  n = 2;
+               }
+               sectors[sf].push_back(MakeSector(pts, n, pc.rr));
+            }
       }
       struct Piece { int kind, i; V3 m; double half, rr; };   // kind 0 wire, 1 joint, 2 quad, 3 shared line
       mutable std::vector<std::vector<Piece>> pieces;
+      // [Features] part_finder (design_reach.md section 2): a piece's sector about the axis in body coordinates, x along it, (y, z) across it at angle atan2(z, y): along-axis range,
+      // radius range and angle range (middle pm, half width ph; >= pi: the whole ring), each grown by the piece's own radius. Built with the pieces (BuildJoints), from the shape the part built
+      struct Sector { double x0, x1, r0, r1, pm, ph; };
+      mutable std::vector<std::vector<Sector>> sectors;
+      double cycQ0 = 0.0, cycLo = 0.0, cycHi = 0.0;   // part_finder: the angle at the cycle's start and the ends of its turn range over the cycle (CycleTurn; set every cycle, not kept state)
+      static double Seg2Dist(const double ay, const double az, const double by, const double bz, const double py, const double pz)   // point to segment in a plane
+      {
+         const double uy = by - ay, uz = bz - az, L2 = uy * uy + uz * uz;
+         const double t = L2 > 0.0 ? std::min(1.0, std::max(0.0, ((py - ay) * uy + (pz - az) * uz) / L2)) : 0.0;
+         return std::hypot(py - ay - uy * t, pz - az - uz * t);
+      }
+      static double SegDist(const V3 &a, const V3 &b, const V3 &p)   // point to segment
+      {
+         const V3 u = b - a;
+         const double L2 = u.Dot(u), t = L2 > 0.0 ? std::min(1.0, std::max(0.0, (p - a).Dot(u) / L2)) : 0.0;
+         return (p - a - u * t).Length();
+      }
+      // a piece's sector from its core points (1 a point, 2 a segment, 4 a flat convex quad) and its radius rr
+      static Sector MakeSector(const V3 *p, const int n, const double rr)
+      {
+         Sector s;
+         s.x0 = INFINITY;
+         s.x1 = -INFINITY;
+         double rmax = 0.0;
+         for (int i = 0; i < n; i++)
+         {
+            s.x0 = std::min(s.x0, p[i].x);
+            s.x1 = std::max(s.x1, p[i].x);
+            rmax = std::max(rmax, std::hypot(p[i].y, p[i].z));
+         }
+         double rmin;
+         if (n == 1)
+            rmin = std::hypot(p[0].y, p[0].z);
+         else if (n == 2)
+            rmin = Seg2Dist(p[0].y, p[0].z, p[1].y, p[1].z, 0.0, 0.0);
+         else
+         {
+            rmin = INFINITY;
+            bool pos = true, neg = true;
+            for (int i = 0; i < n; i++)
+            {
+               const V3 &a = p[i], &b = p[(i + 1) % n];
+               rmin = std::min(rmin, Seg2Dist(a.y, a.z, b.y, b.z, 0.0, 0.0));
+               const double cr = (b.y - a.y) * (0.0 - a.z) - (b.z - a.z) * (0.0 - a.y);
+               pos = pos && cr >= 0.0;
+               neg = neg && cr <= 0.0;
+            }
+            if (pos || neg)
+               rmin = 0.0;   // (the axis passes through it)
+         }
+         s.x0 -= rr;
+         s.x1 += rr;
+         s.r0 = std::max(0.0, rmin - rr);
+         s.r1 = rmax + rr;
+         if (rmin <= rr)
+         {
+            s.pm = 0.0;
+            s.ph = GroupStep::kPi;
+            return s;
+         }
+         // a core that does not hold the axis spans less than pi about it: its points' angles as offsets from the first
+         const double a0 = std::atan2(p[0].z, p[0].y);
+         double lo = 0.0, hi = 0.0;
+         for (int i = 1; i < n; i++)
+         {
+            const double d = std::remainder(std::atan2(p[i].z, p[i].y) - a0, 2.0 * GroupStep::kPi);
+            lo = std::min(lo, d);
+            hi = std::max(hi, d);
+         }
+         s.pm = a0 + 0.5 * (lo + hi);
+         s.ph = 0.5 * (hi - lo) + std::asin(rr / rmin) + 1e-9;   // (a point within rr of a core point at rho >= rmin is within asin(rr / rmin) of its angle)
+         if (s.ph >= GroupStep::kPi)
+            s.ph = GroupStep::kPi;
+         return s;
+      }
+      // the exact distance from the point (x, y, z) to a sector whose angle range is grown by lo toward lower and hi toward higher angles (design_reach.md section 3)
+      static double SectorDist(const Sector &s, const double x, const double y, const double z, const double lo, const double hi)
+      {
+         const double dx = std::max(0.0, std::max(s.x0 - x, x - s.x1)), rho = std::hypot(y, z);
+         const double half = s.ph + 0.5 * (lo + hi);
+         double across;
+         const double dr = std::max(0.0, std::max(s.r0 - rho, rho - s.r1));
+         if (half >= GroupStep::kPi)
+            across = dr;
+         else
+         {
+            const double mid = s.pm + 0.5 * (hi - lo), d = std::remainder(std::atan2(z, y) - mid, 2.0 * GroupStep::kPi);
+            if (std::fabs(d) <= half)
+               across = dr;
+            else   // outside the angle range: the nearer of its two straight edges
+            {
+               const double e0 = mid - half, e1 = mid + half;
+               across = std::min(Seg2Dist(s.r0 * std::cos(e0), s.r0 * std::sin(e0), s.r1 * std::cos(e0), s.r1 * std::sin(e0), y, z),
+                                 Seg2Dist(s.r0 * std::cos(e1), s.r0 * std::sin(e1), s.r1 * std::cos(e1), s.r1 * std::sin(e1), y, z));
+            }
+         }
+         return std::sqrt(dx * dx + across * across);
+      }
+      // check mode: the exact distance from p (body coordinates) to a piece's core (a wire's or shared line's segment, a joint's point, a flat quad)
+      double PieceDist(const Piece &pc, const V3 &p) const
+      {
+         if (pc.kind == 0)
+            return SegDist(wires[(size_t)pc.i].a, wires[(size_t)pc.i].b, p);
+         if (pc.kind == 1)
+            return (p - joints[(size_t)pc.i].v).Length();
+         if (pc.kind == 3)
+            return SegDist(lines[(size_t)pc.i].a, lines[(size_t)pc.i].b, p);
+         const Quad &qd = quads[(size_t)pc.i];
+         V3 nrm = (qd.p[2] - qd.p[0]).Cross(qd.p[3] - qd.p[1]);
+         const double nl = nrm.Length();
+         double d = INFINITY;
+         for (int e = 0; e < 4; e++)
+            d = std::min(d, SegDist(qd.p[e], qd.p[(e + 1) % 4], p));
+         if (nl > 0.0)
+         {
+            nrm = nrm / nl;
+            const double h = (p - qd.p[0]).Dot(nrm);
+            const V3 pp = p - nrm * h;
+            bool pos = true, neg = true;
+            for (int e = 0; e < 4; e++)
+            {
+               const double cr = (qd.p[(e + 1) % 4] - qd.p[e]).Cross(pp - qd.p[e]).Dot(nrm);
+               pos = pos && cr >= 0.0;
+               neg = neg && cr <= 0.0;
+            }
+            if (pos || neg)
+               d = std::min(d, std::fabs(h));
+         }
+         return d;
+      }
       std::vector<RubberContact::SurfaceTri> tris;
       std::vector<int> cand;
       struct Quad { V3 p[4]; std::vector<int> cand; };   // an AddPlate face: its corners and its two triangles (hinge_piece_sum's face terms)
@@ -691,5 +923,13 @@ namespace HingeGroup
          return true;
       }
       bool NearHolds(const V3 &c, const double R, const double dq, const std::vector<int> &list) const override { return owner->NearHolds(surface, c, R, dq, list); }
+      bool CycleNear(const V3 &c, const double R, const double reach, std::vector<int> &list, int &n) const override
+      {
+         if (!owner->pieceSum)
+            return false;
+         owner->CycleNear(surface, c, R, reach, list, n);
+         return true;
+      }
+      int CycleMisses(const V3 &c, const double R, const double dq, const std::vector<int> &list) const override { return owner->CycleMisses(surface, c, R, dq, list); }
    };
 }

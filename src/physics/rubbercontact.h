@@ -48,6 +48,11 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+// The reach of a ball over one cycle (to-do N5, the one reach rule; shared finder design.md section 3): how far its centre can move in dt from its speed and its
+// acceleration, reach = speed x dt + 1/2 x accel x dt^2 (m; speed m/s, accel m/s^2, dt s). Used by the shared finder's per-cycle query (to-do 1.34 P2a) and the
+// group step's part_finder lists (P6a). Here, not in contactsurface.h, so the group step needs no VPX types (ModelStandards 2e).
+inline double ContactReachM(const double speed, const double accel, const double dt) { return speed * dt + 0.5 * accel * dt * dt; }
+
 namespace RubberContact
 {
    struct V3

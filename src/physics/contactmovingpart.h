@@ -104,6 +104,11 @@ public:
    virtual void GroupProbe(int, const V3 &, double, const double *, GroupStep::Hit &) const {}       // a surface for a ball centre and radius, its coordinates moved by trial (null = where they are); fills the hit's columns
    virtual bool GroupNearPieces(int, const V3 &, double, double, double, double, std::vector<int> &) const { return false; }   // a surface of pieces: the step's list (GroupStep::Shape::NearPieces)
    virtual bool GroupNearHolds(int, const V3 &, double, double, const std::vector<int> &) const { return true; }                // (GroupStep::Shape::NearHolds)
+   virtual bool GroupCycleNear(int, const V3 &, double, double, std::vector<int> &, int &) const { return false; }              // [Features] part_finder: the cycle's list (GroupStep::Shape::CycleNear)
+   virtual int GroupCycleMisses(int, const V3 &, double, double, const std::vector<int> &) const { return 0; }                // (GroupStep::Shape::CycleMisses, check mode)
+   // [Features] part_finder, the overlap check of free balls (ContactSystem CheckOverlaps): a lower bound on the distance from c to the part where it is now. Here: every point of the
+   // part is within Reach of Origin (above); a part with pieces answers its own region
+   virtual double RegionDist(const V3 &c) const { return (c - Origin()).Length() - Reach(); }
    virtual const RubberContact::RubberParams *GroupLaw(int, double &) const { return nullptr; }      // the surface's material and layer; null = the host's
    // [Features] path_test (GroupStep::Shape::PathReach): a surface of the part that never moves (a bumper's body, a disc turning about its own axis), the ball's centre moving straight
    // from s to s + d: 1 = it can touch it on the way, 0 = no (exact), -1 = no exact test (a surface that moves with the part: build 3, piece 6), FarStillFar probes as before

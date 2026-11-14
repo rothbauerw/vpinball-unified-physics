@@ -54,6 +54,11 @@ namespace PhysicsIni
                                   // tubes, the playfield with cuts or holes by its full faces; posts, a bumper's body and a disc by chords or facets, rubbercontact.h PathRevolve) or a ball pair is tested over the
                                   // ball's whole straight move in the step (object box, piece boxes, exact distance; groupstep.h FarStillFar), and the
                                   // engagement query's size is the one reach rule (ContactReachM); 0 = probed at the move's middle and end only, and the engagement query 20 U, as before
+      bool partFinder = true;     // part_finder (on while tested, rule 6; runs/2026-11-13-finder-P6/design_reach.md sections 1-3, 6 piece P6a): 1 = a hinge part's (gate, spinner, wire switch) pieces
+                                  // a ball can touch are listed once per cycle from each piece's swept sector about the axis (the part's turn bounded by energy, clamped at its stops) and the ball's
+                                  // reach (ContactReachM), every attempt of the cycle takes that list, and a ball centre outside its query volume at a move's middle or end re-queries
+                                  // (groupstep.h CycleNear); the overlap check of free balls probes only the parts whose region is within the ball's radius; 0 = the per-step lists
+                                  // (NearPieces, NearHolds, the retry factor nearGrow) and every part probed, as before
       bool seatEditorBalls = true; // seat_editor_balls (on while tested, rule 6; runs/2026-11-13-editor-balls): 1 = at play start each ball placed in the table editor is moved out of any surface it overlaps
                                   // (playfield, walls, ramps, primitives, rubbers, moving parts at rest; not other balls) by the shortest move, the no-past seating (ContactSystem::PushOutAtStart); 0 = left where it was placed, as today
       bool hitSpeed = true;       // PROTOTYPE: Ball.HitSpeed (normal speed before an impact) and the table's Hit event for the playfield; off = neither
@@ -176,6 +181,8 @@ namespace PhysicsIni
             f.aircoreInStep = on;
          else if (key == "path_test")
             f.pathTest = on;
+         else if (key == "part_finder")
+            f.partFinder = on;
          else if (key == "hit_speed")
             f.hitSpeed = on;
          else if (key == "seat_editor_balls")

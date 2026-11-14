@@ -3325,6 +3325,8 @@ void ContactSurfaceHost::FinderTotals(const bool force)
    if (!force && now < g.nextTotalsMs)
       return;
    g.nextTotalsMs = now + 1000;
+   if (GroupStep::partFinderProf)   // [Features] part_finder's counters, running totals once a second of table time (VPX_CHECK_PROFILE or VPX_FINDER_CHECK)
+      PLOGI << GroupStep::PartFinderReport();
    if (g.queries == 0)
       return;
    double reqNs = 0.0;
