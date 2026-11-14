@@ -182,6 +182,7 @@ public:
    void Refresh(SurfaceContact &it, double ballR, double reachM, const RubberContact::V3 &c) const override;   // the faces the ball can reach this cycle
    double ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, double a, double hMax, double touchM, double arriveM) const override;
    RubberContact::TubeProbe ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const override;
+   int PathReach(const SurfaceContact &it, const RubberContact::V3 &s, const RubberContact::V3 &d, double R) const override;   // [Features] path_test: a static mesh (no cut, no carved hole) or a static tube
    RubberContact::TubeProbe Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const override;   // the nearest point of one surface contact (tube or faces)
    double LayerM() const override;
    // shared_finder (to-do 1.34, piece P1): builds the index over every static mesh host once. atLoad: the call at the end of the table's load (PhysicsEngine), which drops

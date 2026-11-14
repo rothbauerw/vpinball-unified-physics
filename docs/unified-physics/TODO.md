@@ -12,8 +12,8 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-In flight: 1.34 shared finder (P1-P5, mid-step join, old paths deleted; physics ini read at load and on focus only). Next: FarStillFar exact path test, then P6a (runs/2026-11-13-finder-P6/design_reach.md, accepted). Refs S dbd05f8a, G 3e32a558, GP 37bed503. Lead log runs/2026-11-10-lead.
-FarStillFar checks a skipped contact only at mid and end of a step: a ball clipping an edge between them is missed; needs an exact path test per shape type (mesh, tube, cut, part). Query outliers 0.3-9 ms are the OS taking the thread (measured). Owed: snapshot hashes refresh. 1.33: cut B kept.
+In flight: 1.34 shared finder. Exact path test (runs/2026-11-13-finder-exactpath/design.md, accepted): build 1 committed (static straight pieces). Next: build 2, curved by chords; then P6a. Refs S 1fcacee9, G 459fa088, GP 294ae449. Lead log runs/2026-11-13-lead.
+Path test builds left: 2 curved static (posts, cut rims, bumper body, disc, holes), 3 moving parts with P6, then delete the two-point check. Query outliers 0.3-9 ms are the OS (measured). Owed: snapshot hashes refresh; GL main rebuild (bench obj_gl stale). 1.33: cut B kept.
 Kickers: in the branch (KickerDesign.txt). Next: physical cup settles too slowly (user's play): find the missing damping, maybe the switch blade. Resting cost 102 us per cycle is the contact system's. Lead log runs/2026-11-12-lead.
 Air-core coil fix (pull read at the step's midpoint, aircore_in_step, on while tested): merged d9629bc4b and pushed. Lead log runs/2026-11-13-lead.
 Parked with playfield holes (Button and Star committed): a ball on a flush Button lands on the wood through the cap (no hole), bounce e 0.86; user expects much more loss on a Button.

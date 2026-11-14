@@ -1994,6 +1994,93 @@ RubberContact::TubeProbe ContactSurfaceHost::ProbePatch(const RubberContact::Bal
    return pr;
 }
 
+// [Features] path_test (runs/2026-11-13-finder-exactpath/design.md): the ball's centre moves straight from s to s + d in the step (the solver's own model); can it touch this surface on the way?
+// a. the object's box against the path's box grown by the reach; b. each piece of the ball's query (faces, tube segments), its box the same; c. the exact distance (rubbercontact.h path kit).
+// The query's pieces cover the whole path: both ends lie inside the query's volume (the inside check, as the probes made it), and the volume is convex (design.md section 4).
+// The reach is the probe's: a face's depth is R - distance (ProbeTriangles; a static mesh has no thickness), a tube's R + its radius - distance (ProbeTube).
+int ContactSurfaceHost::PathReach(const SurfaceContact &it, const RubberContact::V3 &s, const RubberContact::V3 &d, const double R) const
+{
+   using RubberContact::V3;
+   if (CordModel())
+      return -1;   // a cord band: its surface moves with the cord (P7)
+   const bool prof = ContactProf::CheckOn();   // (counters: diagnostics only)
+   RubberContact::PathStats &ps = RubberContact::pathStats;
+   const V3 e = s + d;
+   const V3 plo(std::min(s.x, e.x), std::min(s.y, e.y), std::min(s.z, e.z)), phi(std::max(s.x, e.x), std::max(s.y, e.y), std::max(s.z, e.z));
+   if (m_surface != nullptr)
+   {
+      if (it.qFaces == nullptr || !g_finder.on)
+         return -1;   // no query: the lists of the start position only
+      if (m_surfaceKind == "playfield")
+      {
+         const RubberContact::CarvedHole *holes = nullptr;
+         int nHoles = 0;
+         CarvedHoles::Get(holes, nHoles);
+         if (nHoles > 0 || PlayfieldCuts::Any(this))
+            return -1;   // the rims of cuts and holes are curved: build 2 (chords)
+      }
+      FinderInside(it, e);   // both ends inside the query's volume (a re-query otherwise, as the end probe made it)
+      FinderInside(it, s);
+      const RubberSurface &sf = *m_surface;
+      if (!sf.fnodes.empty() && RubberContact::PathBoxApart(sf.fnodes[0].lo, sf.fnodes[0].hi, plo, phi, R))
+      {
+         if (prof)
+            ps.clearA++;
+         return 0;
+      }
+      bool any = false;
+      for (const int i : *it.qFaces)
+      {
+         const RubberContact::SurfaceTri &t = sf.tris[i];
+         if (RubberContact::PathBoxApart(t.lo, t.hi, plo, phi, R))
+            continue;
+         any = true;
+         if (prof)
+            ps.kit++;
+         if (RubberContact::PathWithin(RubberContact::PathTriD2(s, d, t), R))
+            return 1;
+      }
+      if (prof)
+         (any ? ps.clearC : ps.clearB)++;
+      return 0;
+   }
+   const int n = (int)m_ptsSI.size();
+   if (n < 2)
+      return -1;
+   const double reach = R + m_radiusSI;
+   if (!m_segNodes.empty() && RubberContact::PathBoxApart(m_segNodes[0].lo, m_segNodes[0].hi, plo, phi, R))   // (the tree's boxes hold the tube's radius already)
+   {
+      if (prof)
+         ps.clearA++;
+      return 0;
+   }
+   bool any = false;
+   const auto test = [&](const int i) {
+      if (m_tubePre.L2[i] <= 0.0)
+         return false;   // (no length: ProbeTube skips it too)
+      const V3 &a = m_ptsSI[i], &b = m_ptsSI[i + 1];
+      if (RubberContact::PathBoxApart(V3(std::min(a.x, b.x), std::min(a.y, b.y), std::min(a.z, b.z)), V3(std::max(a.x, b.x), std::max(a.y, b.y), std::max(a.z, b.z)), plo, phi, reach))
+         return false;
+      any = true;
+      if (prof)
+         ps.kit++;
+      return RubberContact::PathWithin(RubberContact::PathSegD2(s, d, a, b - a), reach);
+   };
+   if (SegsOn())   // the query's segments: every centreline within reach of the path lies within reach + half the move of its middle
+   {
+      for (const int i : SegsFor(it, s + d * 0.5, reach + 0.5 * d.Length() + 1e-9))
+         if (test(i))
+            return 1;
+   }
+   else
+      for (int i = 0; i + 1 < n; i++)
+         if (test(i))
+            return 1;
+   if (prof)
+      (any ? ps.clearC : ps.clearB)++;
+   return 0;
+}
+
 double ContactSurfaceHost::ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, const int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, const double a, const double hMax, const double touchM, const double arriveM) const
 {
    CheckProfScope checkProf(2);   // P3a profile (diagnostics only)
@@ -3099,6 +3186,13 @@ void ContactSurfaceHost::FinderTotals(const bool force)
                     << " us of which setup " << g_join.worstSetup * 1e-3 << " us, re-run " << g_join.worstRerun * 1e-3 << " us (" << g_join.worstReruns << " attempts)";
                return o.str();
             }();
+   if (ContactProf::CheckOn())   // [Features] path_test: FarStillFar's counters (VPX_CHECK_PROFILE; diagnostics only)
+   {
+      const RubberContact::PathStats &p = RubberContact::pathStats;
+      PLOGI << "Path test totals: FarStillFar calls with a skipped contact " << p.calls << ", time " << p.ns * 1e-3 << " us in all (" << (p.calls > 0 ? (double)p.ns / (double)p.calls : 0.0) << " ns per call, worst "
+            << p.nsWorst << " ns); skipped contacts tested on the path " << p.tested << " (cleared at the object box " << p.clearA << ", at the piece boxes " << p.clearB << ", by the exact distance " << p.clearC
+            << ", reached " << p.reached << "), exact kit tests " << p.kit << "; tested by the two probes (curved or moving) " << p.twoPoint << ", reached there " << p.reachedTwo;
+   }
    if (g_tab.checks > 0)   // P3a: the measurement tables
    {
       const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - g_tab.t0).count();

@@ -258,7 +258,13 @@ namespace GroupStep
       virtual bool NearPieces(const V3 &, double, double, double, double, std::vector<int> &) const { return false; }
       // the pieces off the list are off the ball at c with its part moved by dq (trial): a distance bound, no probe
       virtual bool NearHolds(const V3 &, double, double, const std::vector<int> &) const { return true; }
+      // [Features] path_test: does the ball's centre moving straight from s to s + d come within reach of a piece (depth above 0 anywhere on the path, before the item's zero)?
+      // 1 = yes, 0 = no (exact, the path kit in rubbercontact.h), -1 = no exact test for this shape (a curved or moving piece): FarStillFar probes the middle and the end as before
+      virtual int PathReach(const V3 & /*s*/, const V3 & /*d*/, double /*R*/) const { return -1; }
    };
+   // [Features] path_test of this table (physicsini.h; set by ContactSystem::SetTable): 1 = FarStillFar tests a skipped contact on a static straight shape over the ball's whole move
+   // (object box, piece boxes, exact distance); 0 = at the move's middle and end only, as before
+   inline bool pathTest = true;
    // A flat face through p with unit normal n (the ball's side); unbounded
    class PlaneShape : public Shape
    {
@@ -270,6 +276,11 @@ namespace GroupStep
          h.n = n;
          h.reff = R;
          h.curvDist = 0.0;
+      }
+      int PathReach(const V3 &s, const V3 &d, const double R) const override   // the height over the plane is linear along the path: its least is at an end
+      {
+         const double hs = (s - p).Dot(n), he = (s + d - p).Dot(n);
+         return R - std::min(hs, he) > 0.0 ? 1 : 0;
       }
    };
    struct Ball
@@ -2560,7 +2571,27 @@ namespace GroupStep
          return r;
       }
       // After the solve: did a skipped contact get reached after all? Then the attempt runs again with none skipped.
+      // [Features] path_test: a static straight shape and a ball pair are tested over the whole move (PathReach, the path kit); a curved or moving shape at the move's middle and end
       bool FarStillFar(const double *xv)
+      {
+         if (!ContactProf::CheckOn())
+            return FarStillFarRun(xv);
+         const auto t0 = std::chrono::steady_clock::now();   // (VPX_CHECK_PROFILE: the call's time, diagnostics only)
+         const bool r = FarStillFarRun(xv);
+         bool any = false;
+         for (int k = 0; k < ni && !any; k++)
+            any = farNow[k] != 0;
+         if (any)
+         {
+            const uint64_t ns = (uint64_t)std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count();
+            RubberContact::PathStats &ps = RubberContact::pathStats;
+            ps.calls++;
+            ps.ns += ns;
+            ps.nsWorst = std::max(ps.nsWorst, ns);
+         }
+         return r;
+      }
+      bool FarStillFarRun(const double *xv)
       {
          if (carried)
             SetTrials(xv);
@@ -2572,13 +2603,52 @@ namespace GroupStep
             b1[i].c = ball[i].c + dc;
             bm[i].c = ball[i].c + dc * 0.5;
          }
+         const bool prof = ContactProf::CheckOn();
          for (int k = 0; k < ni; k++)
             if (farNow[k])
             {
+               if (pathTest)
+               {
+                  const Item &it = item[k];
+                  const Ball &A = ball[it.a];
+                  const V3 dA(xv[6 * it.a], xv[6 * it.a + 1], xv[6 * it.a + 2]);
+                  int r;
+                  if (it.b >= 0)   // a ball pair: the other centre is fixed in the relative move (both move straight over the step)
+                  {
+                     const Ball &B = ball[it.b];
+                     const V3 dB(xv[6 * it.b], xv[6 * it.b + 1], xv[6 * it.b + 2]);
+                     r = RubberContact::PathWithin(RubberContact::PathPointD2(A.c - B.c, dA - dB, V3()), A.R + B.R - it.dZero) ? 1 : 0;
+                     if (prof)
+                        RubberContact::pathStats.kit++;
+                  }
+                  else
+                     r = shape[it.s]->part >= 0 ? -1 : shape[it.s]->PathReach(A.c, dA, A.R);   // (a moving part: build 3)
+                  if (r >= 0)
+                  {
+                     if (prof)
+                     {
+                        RubberContact::PathStats &ps = RubberContact::pathStats;
+                        ps.tested++;
+                        if (r > 0)
+                           ps.reached++;
+                        else if (it.b >= 0)
+                           ps.clearC++;   // (a surface host counts its clears where it decided: a, b or c)
+                     }
+                     if (r > 0)
+                        return false;
+                     continue;
+                  }
+               }
                Hit h1, hm;
                ProbeMove(item[k], b1, bm, h1, hm);
+               if (prof && pathTest)
+                  RubberContact::pathStats.twoPoint++;
                if (h1.delta > 0.0 || hm.delta > 0.0)
+               {
+                  if (prof && pathTest)
+                     RubberContact::pathStats.reachedTwo++;
                   return false;
+               }
             }
          return true;
       }

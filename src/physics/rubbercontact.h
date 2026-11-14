@@ -805,6 +805,93 @@ namespace RubberContact
       return t.a + ab * (vb * denom) + ac * (vc * denom);
    }
 
+   // ---- The path kit ([Features] path_test; runs/2026-11-13-finder-exactpath/design.md section 2): exact squared distances from a ball centre's straight move in a step,
+   // the segment s + u d (u in [0, 1]; the solver's own model of the move), to a straight piece. One place, shared by every shape that has straight pieces.
+   // to a point (a ball pair: the relative move against the other centre)
+   inline double PathPointD2(const V3 &s, const V3 &d, const V3 &p)
+   {
+      const double dd = d.Dot(d);
+      const double u = dd > 0.0 ? std::min(std::max((p - s).Dot(d) / dd, 0.0), 1.0) : 0.0;
+      const V3 q = s + d * u - p;
+      return q.Dot(q);
+   }
+   // to a segment p2 + w d2 (an edge, a tube's centreline segment): closest points of two segments (Ericson, Real-Time Collision Detection 5.1.9)
+   inline double PathSegD2(const V3 &p1, const V3 &d1, const V3 &p2, const V3 &d2)
+   {
+      const V3 r = p1 - p2;
+      const double a = d1.Dot(d1), e = d2.Dot(d2), f = d2.Dot(r);
+      double s = 0.0, t = 0.0;
+      if (a <= 0.0 && e <= 0.0)
+         return r.Dot(r);
+      if (a <= 0.0)
+         t = std::min(std::max(f / e, 0.0), 1.0);
+      else
+      {
+         const double c = d1.Dot(r);
+         if (e <= 0.0)
+            s = std::min(std::max(-c / a, 0.0), 1.0);
+         else
+         {
+            const double b = d1.Dot(d2), den = a * e - b * b;
+            s = den > 0.0 ? std::min(std::max((b * f - c * e) / den, 0.0), 1.0) : 0.0;   // (parallel: any s; 0, then t is clamped below)
+            t = (b * s + f) / e;
+            if (t < 0.0)
+            {
+               t = 0.0;
+               s = std::min(std::max(-c / a, 0.0), 1.0);
+            }
+            else if (t > 1.0)
+            {
+               t = 1.0;
+               s = std::min(std::max((b - c) / a, 0.0), 1.0);
+            }
+         }
+      }
+      const V3 q = p1 + d1 * s - (p2 + d2 * t);
+      return q.Dot(q);
+   }
+   // to a triangle (a mesh face with its edges and corners, as ProbeTriangles measures it): the segment and the triangle are convex, so apart from a crossing the nearest
+   // pair has the segment's end or a triangle edge in it: both ends (ClosestOnTriangle, the probe's own function), the three edges, and the point where the segment crosses the face's plane
+   inline double PathTriD2(const V3 &s, const V3 &d, const SurfaceTri &t)
+   {
+      int kind = 0;
+      const V3 e = s + d;
+      V3 q = s - ClosestOnTriangle(t, s, kind);
+      double best = q.Dot(q);
+      q = e - ClosestOnTriangle(t, e, kind);
+      best = std::min(best, q.Dot(q));
+      best = std::min(best, PathSegD2(s, d, t.a, t.b - t.a));
+      best = std::min(best, PathSegD2(s, d, t.b, t.c - t.b));
+      best = std::min(best, PathSegD2(s, d, t.c, t.a - t.c));
+      if (t.area)
+      {
+         const double ds = (s - t.a).Dot(t.n), de = (e - t.a).Dot(t.n);
+         if (ds != de && ((ds <= 0.0 && de >= 0.0) || (ds >= 0.0 && de <= 0.0)))
+         {
+            const V3 x = s + d * (ds / (ds - de));
+            q = x - ClosestOnTriangle(t, x, kind);
+            best = std::min(best, q.Dot(q));
+         }
+      }
+      return best;
+   }
+   // within reach: the piece's depth (reach - distance, the probe's form) is above 0 somewhere on the path. The band 1e-9 x reach only widens it (a rounding guard against the
+   // probes' own arithmetic at the ends: a re-run more, never one less)
+   inline bool PathWithin(const double d2, const double reach) { return reach - std::sqrt(d2) > -1e-9 * reach; }
+   // a box against the path's box grown by reach (lo, hi of the path's ends)
+   inline bool PathBoxApart(const V3 &lo, const V3 &hi, const V3 &plo, const V3 &phi, const double reach)
+   {
+      return lo.x > phi.x + reach || hi.x < plo.x - reach || lo.y > phi.y + reach || hi.y < plo.y - reach || lo.z > phi.z + reach || hi.z < plo.z - reach;
+   }
+   // counters of the path test (VPX_CHECK_PROFILE=1 only; diagnostics, logged with the finder's once-a-second totals): skipped contacts tested by the path, by the two probes (a curved or moving
+   // shape); cleared at the object box (a), at every piece box (b), by the exact distance (c); exact kit tests; reached; FarStillFar calls with a skipped contact, their time (ns) and worst
+   struct PathStats
+   {
+      uint64_t tested = 0, twoPoint = 0, clearA = 0, clearB = 0, clearC = 0, kit = 0, reached = 0, reachedTwo = 0;
+      uint64_t calls = 0, ns = 0, nsWorst = 0;
+   };
+   inline PathStats pathStats;
+
    // Which triangles can touch a ball of radius R centred within `reach` of c (indices into tris)
    inline void SurfaceCandidates(const std::vector<SurfaceTri> &tris, const V3 &c, double reach, std::vector<int> &out)
    {

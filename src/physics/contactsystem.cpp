@@ -73,6 +73,7 @@ namespace ContactSystem
       s_freeFlight = s_unified && f.freeFlight;
       s_seatEditorBalls = s_unified && f.seatEditorBalls;
       s_aircoreInStep = s_unified && f.aircoreInStep;
+      GroupStep::pathTest = f.pathTest;   // [Features] path_test (groupstep.h; read by the group step and the engagement query only)
       const char *const px = getenv("VPX_PROXIMITY");   // (diagnostic override, TestingPlaybook)
       s_proximity = s_unified && (px != nullptr ? atoi(px) != 0 : f.proximityEngage);
       ContactSettings::StartPlay(tableFile);   // (after the switch above: the settings ask it)
@@ -80,6 +81,7 @@ namespace ContactSystem
       {
          PLOGI << "Contact system: unified engine on (" << file.string() << "; dev fallback: stock hit search still runs for object types not yet converted)";
          PLOGI << "Contact system: [Features] aircore_in_step = " << (s_aircoreInStep ? 1 : 0) << (s_aircoreInStep ? " (an air-core coil's pull read at each step's midpoint)" : " (an air-core coil's pull held for the cycle)");
+         PLOGI << "Contact system: [Features] path_test = " << (GroupStep::pathTest ? 1 : 0) << (GroupStep::pathTest ? " (a skipped contact on a static straight surface or a ball pair tested over the whole move; engagement query by the reach rule)" : " (a skipped contact probed at the move's middle and end; engagement query 20 U)");
       }
       else
          PLOGI << "Contact system: stock VPX physics, every new model off (" << (file.empty() ? std::string("no physics ini") : file.string() + " has no [Features] unified = 1") << ")";
@@ -1024,6 +1026,7 @@ struct ContactSystemImpl
          return mp != nullptr && mp->GroupNearPieces(surface, c, R, reach, swing, minReach, list);
       }
       bool NearHolds(const V3 &c, const double R, const double dq, const std::vector<int> &list) const override { return mp == nullptr || mp->GroupNearHolds(surface, c, R, dq, list); }
+      int PathReach(const V3 &s, const V3 &d, const double R) const override { return mp != nullptr ? -1 : r->PathReach(*it, s, d, R); }   // ([Features] path_test; a part's own surface: build 3)
       void Probe(const V3 &c, double R, GroupStep::Hit &h) const override
       {
          const ContactProf::Stage profStage(ContactProf::StGroupShape);   // P3a profile: the calling stage of the checks here (diagnostics only)
@@ -3129,7 +3132,8 @@ void ContactSystemImpl::GatherItems(ContactHost *const host, const HitBall *cons
    // instead of the host's box); kept in the registry's order
    thread_local std::vector<ContactHost *> hosts;
    hosts.clear();
-   ContactSurfaceHost::FinderQueryAt(pb, c, bs.R, 20.0 * U);
+   // [Features] path_test: the query's size is the one reach rule (ContactReachM; the acceleration unknown at engagement: 0, the inside check re-queries past it); 0 = 20 U as before
+   ContactSurfaceHost::FinderQueryAt(pb, c, bs.R, GroupStep::pathTest ? ContactReachM(V3((double)pb->m_d.m_vel.x * VS, (double)pb->m_d.m_vel.y * VS, (double)pb->m_d.m_vel.z * VS).Length(), 0.0, PHYSICS_STEPTIME_S) : 20.0 * U);
    ContactSurfaceHost::FinderHosts(pb, hosts);
    for (ContactHost *const o : ContactHost::Registry())
       if (o->FinderObjIndex() < 0 || o == host)
