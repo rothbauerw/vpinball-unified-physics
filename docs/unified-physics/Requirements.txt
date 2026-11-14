@@ -213,7 +213,7 @@ Drop targets later, separately.
 3. The rebound comes from the parts (face mass, blade, stop, contact law); no restitution number is applied to the ball, and there is no feel target: the inputs come
    from part geometry and material data.
 4. Stop: back plate and foam pad are each optional per target (plate on by default; no plate means no pad). With a pad the face presses the foam from the start of its travel;
-   without one, the face ends hard on the plate (9.5-12.7 mm behind the face). With no plate, the EM helper blade by default: a stiffer C (item 5), engaging after the
+   without one, the face ends hard on the plate (3.2-6.4 mm behind the face, PartData T12a). With no plate, the EM helper blade by default: a stiffer C (item 5), engaging after the
    switch closes. Fat (3D) targets are not a separate model: their type sets the defaults (plate about 3.2 mm sooner; confined foam stiffer and more lossy).
 5. Switch: closes when A's contact reaches B's (gap 0.8-1.6 mm at the contacts, a setting) and opens when it returns past it; a hit too soft to travel that does not fire.
    Once A reaches B, B and C add stiffness as one step at the closing point. Events: on closing Hit and SwitchClosed, on opening Unhit and SwitchOpened.

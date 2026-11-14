@@ -12,8 +12,9 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-In flight: 1.34 shared finder. Exact path test (runs/2026-11-13-finder-exactpath/design.md, accepted): build 1 committed (static straight pieces). Next: build 2, curved by chords; then P6a. Refs S 1fcacee9, G 459fa088, GP 294ae449. Lead log runs/2026-11-13-lead.
-Path test builds left: 2 curved static (posts, cut rims, bumper body, disc, holes), 3 moving parts with P6, then delete the two-point check. Query outliers 0.3-9 ms are the OS (measured). Owed: snapshot hashes refresh; GL main rebuild (bench obj_gl stale). 1.33: cut B kept.
+In flight: 1.34 shared finder. Exact path test (runs/2026-11-13-finder-exactpath/design.md): static pieces committed (c22f049e7, a2c55a534, hole fix 1dcf382d5). Next: P6 design section 4 review, then P6a; path test build 3 (moving parts) with P6. Lead log runs/2026-11-13-lead.
+Judge a change by one exe, its setting on vs off; never by an older exe's md5 (ModelStandards trap 112). Query outliers 0.3-9 ms are the OS (measured). Owed: snapshot hashes refresh; GL main rebuild (bench obj_gl stale). 1.33: cut B kept.
+Stand-up targets: Requirements G agreed; design runs/2026-11-14-standup-design/design.md (face with mass; impact law for ball-face and face-plate, springs for blade, B+C, foam; tilt tied to travel; ini settings sec 4). Next: impact law design. Lead log runs/2026-11-13-lead.
 Air-core coil fix (pull read at the step's midpoint, aircore_in_step, on while tested): merged d9629bc4b and pushed. Lead log runs/2026-11-13-lead.
 Parked with playfield holes (Button and Star committed): a ball on a flush Button lands on the wood through the cap (no hole), bounce e 0.86; user expects much more loss on a Button.
 N3. Playfield cuts (slot, groove, rectangle, meets: bbdee9278). Open: slot-in-groove 256 us/cycle; normal jump at slot tips (cut-junction/results_ramp.txt); ball held where a slot crosses a rect's edge gains energy (finder-P4b S20, S06). Later: draw new shapes, triangle, holes.
