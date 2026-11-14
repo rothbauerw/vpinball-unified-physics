@@ -1,0 +1,113 @@
+STAND-UP TARGET DESIGN (DRAFT, lead 2026-11-14; reviewed with the user section by section before engine code, ModelStandards 1d)
+=================================================================================================================================
+Requirements: Requirements.txt section G. Part data: PartData.txt section 10 (T8-T13, T12a). Values and their sources: runs/2026-11-14-standup-requirements/values.md.
+Paper work behind every section: runs/2026-11-14-standup-design (design.md = the working draft; paper checks 1-12 with scripts and results files).
+Closest existing models (ModelStandards 1b): bodypart.h (one body on a coordinate, stops with the impact law and rest rule), buttoncap.h (a light part a ball sits on),
+hingegroup.h (a body the ball pushes). Values are ESTIMATED (geometry, handbook), TUNED (feel, no data) or ASSUMED (no source yet), as labelled.
+
+
+1. BODIES AND COORDINATES
+-------------------------
+a. One moving body, the face (face + rivet + the blade's share), mass 2.6-4.4 g ESTIMATED (3.5 g used on paper), on two coordinates:
+   x      travel of the face centre along its rest normal (positive back toward the plate);
+   theta  twist about the blade's long axis (off-centre hits), inertia ESTIMATED from the face size (1.5e-7 kg m^2 used on paper, ASSUMED until computed per target).
+   CHANGED 11-14 (user: "account for when parts touch"; paper check 13, runs/2026-11-14-standup-shapes): tilt IS a coordinate. The face is a rigid body on the
+   blade tip with travel, tilt and twist; the blade by beam theory, EI / L^3 [[12, -6 L], [-6 L, 4 L^2]] on (travel, tilt), G J / L on twist. With only the ball
+   pushing at the centre the tilt comes out as 1.5 x / L (the old tie, now a result). The face's top edge reaches the plate first (2-11 deg), then pivots flat.
+   Face mass and inertias from the drawn mesh outline (piece 1: 1.46 g for Gorgar's round faces, not the 3.5 g of the papers).
+b. Supports on the face (each a potential plus a named loss):
+   blade A          k_A x, k_A = 3 E I / L^3 from blade sizes (165-5100 N/m ESTIMATED); twist G J / L (0.16-2.9 N m/rad ESTIMATED).
+   switch B + C     k_BC (x - x_close) past the switch's closing travel (900 N/m at the face ASSUMED); the helper blade (no plate) is a stiffer C, after closing.
+   foam pad         Hunt-Crossley k_f x (1 + alpha x_dot), k_f 600 N/m TUNED, stiffening past 1 mm (K 7.88e7 N/m^2 TUNED: a 3 m/s centre hit travels about 3 mm),
+                    alpha 0.373 s/m (80 % return of the foam alone at 1 m/s, TUNED); one-sided (pushes only); resists twist with its stiffness over its width (w^2 / 12).
+   blade stack loss one loss tangent on blade A, B + C and twist (the shared law's form: damper c = tanDelta sqrt(k m_f), damping ratio tanDelta / 2): the
+                    clamped stack and its fibre insulators (INFERRED source). 0.05 TUNED from the user's "a struck face stops within 1 s at most" (11-14): the
+                    light blade's 31 Hz ring falls to 1 % in 0.94 s, the heavy blade's 223 Hz in 0.13 s, twist 0.18 s. On a hit (ball carried) it is a damping
+                    ratio of about 0.005: under 1 % of the ball's energy (INFERRED, to check on paper).
+   back plate       a fixed stop at x = gap (6.35 mm, fat targets 3.2 mm): the face meets it by the BodyStop impact law (bodypart.h).
+c. Stiffest internal contacts and what is done with them (ModelStandards 3a): ball-face plastic contact (about 1 MN/m against a 3.5 g face: 0.34 ms period) and
+   face-plate: impact laws, no stiff spring. Springs left in the motion: blade, B + C, foam; the stiffest is the densified foam with the ball on it (about 3.3 ms period).
+
+
+2. BALL ON THE FACE (the shared law for a ball on a light part; also for the Button, to-do 11.1)
+------------------------------------------------------------------------------------------------
+a. Impact: a ball meeting the free face at closing speed u along the contact normal: normal impulse (1 + e) mu u, mu = m m_eff / (m + m_eff), m_eff the face's mass
+   at the contact point along the normal (travel and twist mobility: 1 / m_eff = n_x^2 / m_f + ((r x n)_z)^2 / I_theta); e(u) from the shared Hertz + Kuwabara-Kono law
+   at mass mu (ImpactRestitutionKK, a table as BodyStopLaw). Friction: a Coulomb impulse, at most mu_face times the normal impulse, capped where the sliding stops.
+b. Rest rule (as bodypart.h): if 1/2 mu (e u)^2 <= 2/5 F d(F), the pair joins (momentum kept; the rest of the relative energy is the loss of the bounces that would
+   follow). F = mu times the face point's acceleration toward the ball from ALL its supports (travel and twist): with the travel spring alone, off-centre hits on
+   the heavy blade took up to 2393 impacts (paper check 12).
+c. Carried: the joined ball and face move together along the normal (section 3 gives the solver form). The contact force is solved, not taken from a dent; the shared
+   friction (sideways spring capped at mu N) and twisting friction use it. Released when the contact force at a step's end reaches zero.
+d. CHANGED 11-14 (user, after paper check 13's plate events needed rule after rule): the face's back meets the plate by the shared SPRING contact law at the
+   shape's points (polygon corners, round rim as points), in both face_contact modes; no plate impacts, no held points, no series rule. The text below is superseded.
+   (old) Pinned: the carried face reaching the plate, or an impact whose face would reach the plate within the impact itself (face travel over the impact's contact time
+   more than the distance left: the two contacts overlap). The face stops (its energy to the plate); the ball meets face and plate as two contacts in series with the
+   face massless between them (Hertz + KK each; the split of the squash is one internal value). Ends free when that contact opens.
+e. Face alone on the plate: the BodyStop impact law, unchanged.
+Evidence (paper, same laws as a reference with every contact a spring and both bodies with mass): head-on 18 hits within 3.7 % of return; 2-D with friction 16 hits,
+exit angle within 3.1 deg; two balls within about 5 %; 3-D 20 hits, twist within 0.1 deg, lift within 3.2 deg, speed 0.1-6.8 % low (worst: light blade off-centre at
+3 m/s, sensitive to the assumed twist inertia: a bench case). Energy never above the reference. 3-16 events per hit.
+
+
+3. CARRIED CONSTRAINT IN THE GROUP STEP (shared engine piece)
+--------------------------------------------------------------
+a. One Lagrange multiplier lambda per carried pair, a new unknown with its row G = 0 (the ball-face gap closed at the step's end); lambda times the gradient of G in
+   the ball's and the part's rows. SolveLinear pivots, so the zero diagonal is taken as it is. Rejected: eliminating the part's coordinate through the ball (no clean
+   two-ball case).
+b. Energy: the constraint does no work by construction (G = 0 at both ends; lambda times the discrete gradient of G gives lambda (G_end - G_start) = 0).
+c. Friction uses lambda (the step's mean force, as every force enters the midpoint rows); the contact radius from Hertz a(lambda).
+d. Events through the stop search: the step ends where a ball meets a free face (impact and rest rule between steps, as BodyStop impacts); a carried pair ends a step
+   where its contact force at the step's END state reaches zero (not lambda: lambda is the step's mean, which released a step late with the face pulling, -4.24 N).
+e. The multiplier rows join the group's convergence tests (else short steps accepted lambda unsolved).
+f. Two balls: two multipliers, unique (balls with mass), each released on its own.
+g. Step rule: the carried pair states its support stiffness with mass m + m_f, and the stiffening ahead (the foam's densification), as a steep field does (3d).
+Evidence: offline prototype on the engine's own group step (runs/2026-11-14-carried-proto/numbers.txt): 2-5 Newton rounds, no failed solve, no energy step, halvings
+recover, energy rise per step at most 1e-14 J, two balls fine.
+
+
+4. SWITCH AND EVENTS (Requirements G5, G9)
+------------------------------------------
+Closes when the face's travel reaches x_close (from the contact gap at the blades through the lever, 2.2-3.0 mm at the face ESTIMATED), opens when the travel returns
+below the same point (B rides with A once touched, so they part where they met: no hysteresis constant); B + C stiffness steps in at closing. Events into the part's event list after the step: on closing Hit and SwitchClosed, on opening Unhit and SwitchOpened;
+HasHitEvent off drops Hit / Unhit only. CurrentAnimOffset reads the real travel.
+
+
+5. SETTINGS ([Targets] for all, [Target:<name>] per target; every value's comment says ESTIMATED or TUNED)
+--------------------------------------------------------------------------------------------------------
+plate = 1/0 (0: helper blade); pad = 1/0 (needs plate); plate_gap_mm 6.35 (fat 3.2); foam_k 600; foam_stiffen_mm 1.0; foam_stiffen_k 7.88e7; foam_return 0.80;
+blade_thickness_mm, blade_width_mm, blade_length_mm, blade_material steel/brass (travel, twist, tilt); switch_gap_mm 1.2; switch_bc_k 900; helper_k; blade_loss 0.05 (TUNED: ring-down within 1 s).
+face_contact = impact / spring: the ball-face contact by the impact law (sections 2-3, default) or the shared spring contact law (the engine's existing path). Both kept
+permanently (user 11-14: spring for when its cost is solved); an agreed exception to DevelopmentRules 6's deletion of the old path. The bench compares the two on the
+same hits (speed, angles, switch, energy, cost per cycle). The plate meets the face's back by the shared spring contact law at the shape's points in both.
+Face friction: the target's own Friction. The model is behind its own ini setting, on by default while tested (DevelopmentRules 6).
+
+
+6. ENERGY (ModelStandards 2h)
+-----------------------------
+Enters only through gravity on the ball (and nudge). The target has no drive. Stored: blade, B + C, foam (potentials). Lost: impacts (KK), rest joins, foam
+Hunt-Crossley, the blade stack's loss, plate impacts, friction, the series contact's damping when pinned. The constraint does no work (3b). Checked per step by the group's book.
+
+
+7. COST (estimate; DevelopmentRules 5: 30 us per cycle with the ball on it)
+---------------------------------------------------------------------------
+No stiff spring in the motion: paper 3-16 events per hit, each ending a step (plus one stop-search step per release, prototype); prototype 16-25 steps per 3 m/s hit
+at 2-5 rounds; a resting ball 1 round per cycle. INFERRED within the limit; measured with 1, 2 and 6 balls once built (ModelStandards 4b).
+
+
+8. WHAT IT DOES NOT HANDLE OR MAY BREAK (DevelopmentRules 7; INFERRED unless stated)
+--------------------------------------------------------------------------------------
+- BUILD STATE 11-14 (uncommitted, unified-physics-branch; runs/2026-11-14-standup-build1, -build2, -build3, each results.md):
+  piece 1 face_contact = spring: runs clean, worst cycle 14-24 ms (steps median 0.87 us, below the rule's omegaH / omega of about 4.7 us: cause not traced).
+  piece 2 face_contact = impact: steps per hit about 100, return within 2-3 % of spring; faults: stop-search loop (fixed in piece 3, patch in build3, not applied),
+  Newton stall on the twist row (Jacobian slope 3x the real one, a ball coupling missing; not found), energy gain from the carried constraint pushing out a ball
+  that overlapped the face by rounding (touch stop must watch touching balls), friction while carried not built.
+  Standards review open: build3/standards_review.md (epsilons as physics, silent limits kMaxBalls 16 / kMaxCarried 4 to remove, loss >= 0 check, [Target:] key
+  report, stockcount.cpp). User to decide: settings switch_lever, mass_g, pad_grid (outside section 5).
+- Two balls carried with the face at the plate: not modelled on paper.
+- A ball held by a kicker is never carried (its motion is given).
+- A ball pinched between a carried face and a wall: the wall's compliance takes it (reasoned, not tested).
+- Carried flag and lambda's guess are ball state (snapshot self-test, trap 111); part switched off or table restart releases every carried ball.
+- A ball starting inside the face: the overlap rule (no energy gained), never carried.
+- Values: plastic restitution (0.5 at 0.5 m/s, a guess carried from the bumper), face-plate contact radius 5 mm, twist inertia: ASSUMED; a measured pad and face would replace them.
+- Bench cases kept: light blade off-centre 3 m/s; no-pad plate hits at 3 m/s (paper -3.5 to -6.2 %).

@@ -8,13 +8,13 @@ A hook refuses an edit that breaks these limits (.claude/hooks/check_todo.py).
 ## Goals (shared engine; what must be finished, in order; changes only with the user)
 G1. One shared path: the old-law switches deleted (10.13).
 G2. Energy by construction: energy enters only through drives; EnergyStep removed once no state needs it.
-G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md); stock detection off for them.
+G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md); stock detection off for them. Table outline (stock edge LineSeg): no surface beyond the playfield in the unified engine (gate3-energy).
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-In flight: 1.34 shared finder. Exact path test (runs/2026-11-13-finder-exactpath/design.md): static pieces committed (c22f049e7, a2c55a534, hole fix 1dcf382d5). Next: P6 design section 4 review, then P6a; path test build 3 (moving parts) with P6. Lead log runs/2026-11-13-lead.
+In flight: 1.34 shared finder, piece 6 (runs/2026-11-13-finder-P6). 6a committed f823ce22e; 6a2 + group A uncommitted, run and passed (results_groupA.txt). Next: tapered-profile probe (Revolve::Closest), then drive set review, then commit. Lead log runs/2026-11-13-lead.
 Judge a change by one exe, its setting on vs off; never by an older exe's md5 (ModelStandards trap 112). Query outliers 0.3-9 ms are the OS (measured). Owed: snapshot hashes refresh; GL main rebuild (bench obj_gl stale). 1.33: cut B kept.
-Stand-up targets: Requirements G agreed; design runs/2026-11-14-standup-design/design.md (face with mass; impact law for ball-face and face-plate, springs for blade, B+C, foam; tilt tied to travel; ini settings sec 4). Next: impact law design. Lead log runs/2026-11-13-lead.
+Stand-up targets: building, uncommitted. State and next piece: StandupTargetDesign.txt section 8 "BUILD STATE" (faults, standards review, settings for the user). Lead log runs/2026-11-13-lead.
 Air-core coil fix (pull read at the step's midpoint, aircore_in_step, on while tested): merged d9629bc4b and pushed. Lead log runs/2026-11-13-lead.
 Parked with playfield holes (Button and Star committed): a ball on a flush Button lands on the wood through the cap (no hole), bounce e 0.86; user expects much more loss on a Button.
 N3. Playfield cuts (slot, groove, rectangle, meets: bbdee9278). Open: slot-in-groove 256 us/cycle; normal jump at slot tips (cut-junction/results_ramp.txt); ball held where a slot crosses a rect's edge gains energy (finder-P4b S20, S06). Later: draw new shapes, triangle, holes.
