@@ -105,6 +105,10 @@ public:
    virtual bool GroupNearPieces(int, const V3 &, double, double, double, double, std::vector<int> &) const { return false; }   // a surface of pieces: the step's list (GroupStep::Shape::NearPieces)
    virtual bool GroupNearHolds(int, const V3 &, double, double, const std::vector<int> &) const { return true; }                // (GroupStep::Shape::NearHolds)
    virtual const RubberContact::RubberParams *GroupLaw(int, double &) const { return nullptr; }      // the surface's material and layer; null = the host's
+   // [Features] path_test (GroupStep::Shape::PathReach): a surface of the part that never moves (a bumper's body, a disc turning about its own axis), the ball's centre moving straight
+   // from s to s + d: 1 = it can touch it on the way, 0 = no (exact), -1 = no exact test (a surface that moves with the part: build 3, piece 6), FarStillFar probes as before
+   virtual int GroupPathReach(int, const V3 &, const V3 &, double) const { return -1; }
+   virtual double GroupPathCoverSag(int, int &) const { return -1.0; }   // the cover's largest sagitta and kind (the self-check, VPX_FINDER_CHECK; GroupStep::Shape::PathCoverSag); -1 = none
    virtual void CycleBegin() {}                                                                      // a group holding it is being built this cycle
    virtual void TouchBegan(int, int, double) {}                                                      // this surface, this ball of the group, closing at vn (m/s): a touch began. A part's Hit is what it decides
    virtual bool Sleeping() const { return false; }                                                   // no ball near and nothing to step: no group this cycle

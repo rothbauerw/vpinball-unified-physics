@@ -40,6 +40,8 @@
 #include <utility>
 #include <cstring>
 #include <cstdint>
+#include <cstdlib>
+#include <string>
 #include "contactprof.h"
 
 #ifndef M_PI
@@ -885,12 +887,177 @@ namespace RubberContact
    }
    // counters of the path test (VPX_CHECK_PROFILE=1 only; diagnostics, logged with the finder's once-a-second totals): skipped contacts tested by the path, by the two probes (a curved or moving
    // shape); cleared at the object box (a), at every piece box (b), by the exact distance (c); exact kit tests; reached; FarStillFar calls with a skipped contact, their time (ns) and worst
+   // Build 2, per kind of curved shape (0 post, 1 bumper body, 2 playfield with cuts or carved holes, 3 disc): tested, reached, reached only inside the cover's sagitta band (the cover's distance
+   // within reach + sagitta but not within reach: an upper bound on the re-runs the cover adds, the true curve not measured), reached because a path end lies below a cut's or hole's top (kind 2);
+   // pieces passed over by their box (boxSkip) against the kit tests above (kit)
    struct PathStats
    {
       uint64_t tested = 0, twoPoint = 0, clearA = 0, clearB = 0, clearC = 0, kit = 0, reached = 0, reachedTwo = 0;
       uint64_t calls = 0, ns = 0, nsWorst = 0;
+      uint64_t kTested[4] = {}, kReached[4] = {}, kBand[4] = {}, cutBelow = 0, boxSkip = 0;
    };
    inline PathStats pathStats;
+   // The covers' self-check (VPX_FINDER_CHECK=1; diagnostics only, no bit changes; groupstep.h PathSelfCheck): per kind as PathStats, the checks made and the disagreements, and the first
+   // disagreement's numbers for the log's WARN (logged with "Path test totals")
+   inline bool PathCheckOn()
+   {
+      static const bool on = [] { const char *e = std::getenv("VPX_FINDER_CHECK"); return e != nullptr && e[0] == '1'; }();
+      return on;
+   }
+   struct PathCheck
+   {
+      uint64_t n[4] = {}, bad[4] = {};
+      bool warned[4] = {}, logged[4] = {};
+      std::string first[4];
+   };
+   inline PathCheck pathCheck;
+
+   // ---- Covers of curved pieces ([Features] path_test, build 2; design.md sections 2 and 2b) ----
+   // A curved centre line or surface is replaced, for the path test only, by straight chords or flat facets inscribed in it, built once with the shape. Each lies within its sagitta s of the true
+   // curve and the curve within s of it (a two-way bound), so the path's distance to the curve >= its distance to the cover - s: a cover farther than reach + s clears the piece exactly.
+   // kPathSagittaM: the largest sagitta of a cover (m). A COST setting, not physics: fewer chords mean fewer kit tests and more re-runs for a path that passes inside the band (a re-run only
+   // puts the contact in the solve; it adds no force unless the ball touches). 20 um: about 32 chords on a 4 mm ring (design.md 2b, paper/chords.txt).
+   constexpr double kPathSagittaM = 20e-6;
+   // the chords of a circle of radius r that keep the sagitta r (1 - cos(pi / N)) at or under kPathSagittaM (at least 8)
+   inline int PathChords(const double r)
+   {
+      if (r <= kPathSagittaM)
+         return 8;
+      return std::max(8, (int)std::ceil(3.14159265358979323846 / std::acos(1.0 - kPathSagittaM / r)));
+   }
+   // A profile in (rho, z) about the vertical axis through o, revolved (a post ring: one vertex, its circle; a bumper body or a disc: a polyline, each segment a band of flat facets, a
+   // frustum or a flat ring). Each vertex has a sweep radius rr (the surface lies rr from the revolved line; a post's tube, a bumper sheet's half thickness). Reach of a segment: R + its larger rr.
+   struct PathRevolve
+   {
+      struct Seg
+      {
+         int first = 0, count = 0;   // its pieces: chords (pts[first + k] to pts[first + k + 1]) for a ring, else facets (tris[first + k])
+         bool ring = false;
+         double rr = 0.0, sag = 0.0;   // the larger sweep radius, the sagitta at the larger radius
+         V3 lo, hi;                    // the pieces' box
+      };
+      std::vector<Seg> seg;
+      std::vector<V3> pts;
+      std::vector<SurfaceTri> tris;
+      double MaxSag() const
+      {
+         double s = 0.0;
+         for (const Seg &g : seg)
+            s = std::max(s, g.sag);
+         return s;
+      }
+      void Build(const V3 &o, const double *r, const double *z, const double *rr, const int n)
+      {
+         seg.clear();
+         pts.clear();
+         tris.clear();
+         const auto at = [&](const double rv, const double zv, const double ph) { return V3(o.x + rv * std::cos(ph), o.y + rv * std::sin(ph), o.z + zv); };
+         const auto boxOf = [](Seg &g, const V3 &p) {
+            g.lo = V3(std::min(g.lo.x, p.x), std::min(g.lo.y, p.y), std::min(g.lo.z, p.z));
+            g.hi = V3(std::max(g.hi.x, p.x), std::max(g.hi.y, p.y), std::max(g.hi.z, p.z));
+         };
+         const double twoPi = 2.0 * 3.14159265358979323846;
+         if (n == 1)   // a ring: N chords of the circle
+         {
+            Seg g;
+            g.ring = true;
+            g.rr = rr[0];
+            const int N = PathChords(r[0]);
+            g.sag = r[0] * (1.0 - std::cos(0.5 * twoPi / N));
+            g.first = 0;
+            g.count = N;
+            g.lo = g.hi = at(r[0], z[0], 0.0);
+            for (int k = 0; k <= N; k++)
+            {
+               pts.push_back(at(r[0], z[0], twoPi * (k % N) / N));
+               boxOf(g, pts.back());
+            }
+            seg.push_back(g);
+            return;
+         }
+         for (int i = 0; i + 1 < n; i++)   // a band of N facets per segment, each a flat trapezoid (two parallel chords at the two ends' heights) as two triangles
+         {
+            Seg g;
+            const double rMax = std::max(r[i], r[i + 1]);
+            const int N = PathChords(rMax);
+            g.rr = std::max(rr[i], rr[i + 1]);
+            g.sag = rMax * (1.0 - std::cos(0.5 * twoPi / N));
+            g.first = (int)tris.size();
+            g.lo = g.hi = at(r[i], z[i], 0.0);
+            for (int k = 0; k < N; k++)
+            {
+               const double p0 = twoPi * k / N, p1 = twoPi * ((k + 1) % N) / N;
+               const V3 a0 = at(r[i], z[i], p0), a1 = at(r[i], z[i], p1), b0 = at(r[i + 1], z[i + 1], p0), b1 = at(r[i + 1], z[i + 1], p1);
+               if (r[i] > 0.0)   // (an end on the axis: its chord is a point, one triangle)
+                  tris.push_back(MakeSurfaceTri(a0, a1, b1));
+               if (r[i + 1] > 0.0)
+                  tris.push_back(MakeSurfaceTri(a0, b1, b0));
+               for (const V3 &p : { a0, a1, b0, b1 })
+                  boxOf(g, p);
+            }
+            g.count = (int)tris.size() - g.first;
+            seg.push_back(g);
+         }
+      }
+      // 1 = a piece of the cover comes within its reach + sagitta of the path s -> s + d (a re-run), 0 = none (exact: the true surface is clear). band: reached only inside the sagitta band.
+      int Reach(const V3 &s, const V3 &d, const double R, const bool prof, bool &band) const
+      {
+         PathStats &ps = pathStats;
+         band = false;
+         const V3 e = s + d;
+         const V3 plo(std::min(s.x, e.x), std::min(s.y, e.y), std::min(s.z, e.z)), phi(std::max(s.x, e.x), std::max(s.y, e.y), std::max(s.z, e.z));
+         for (const Seg &g : seg)
+         {
+            const double reach = R + g.rr, lim = reach + g.sag;
+            if (PathBoxApart(g.lo, g.hi, plo, phi, lim))
+            {
+               if (prof)
+                  ps.boxSkip += (uint64_t)g.count;
+               continue;
+            }
+            for (int k = 0; k < g.count; k++)
+            {
+               double d2;
+               if (g.ring)
+               {
+                  const V3 &a = pts[g.first + k], &b = pts[g.first + k + 1];
+                  if (PathBoxApart(V3(std::min(a.x, b.x), std::min(a.y, b.y), std::min(a.z, b.z)), V3(std::max(a.x, b.x), std::max(a.y, b.y), std::max(a.z, b.z)), plo, phi, lim))
+                  {
+                     if (prof)
+                        ps.boxSkip++;
+                     continue;
+                  }
+                  d2 = PathSegD2(s, d, a, b - a);
+               }
+               else
+               {
+                  const SurfaceTri &t = tris[g.first + k];
+                  if (PathBoxApart(t.lo, t.hi, plo, phi, lim))
+                  {
+                     if (prof)
+                        ps.boxSkip++;
+                     continue;
+                  }
+                  d2 = PathTriD2(s, d, t);
+               }
+               if (prof)
+                  ps.kit++;
+               if (PathWithin(d2, reach))
+               {
+                  band = false;
+                  return 1;
+               }
+               if (PathWithin(d2, lim))
+               {
+                  band = true;
+                  if (!prof)
+                     return 1;   // (profile only: look on for a piece within reach itself, so the band count is not inflated; the answer is 1 either way)
+               }
+            }
+         }
+         return band ? 1 : 0;
+      }
+   };
 
    // Which triangles can touch a ball of radius R centred within `reach` of c (indices into tris)
    inline void SurfaceCandidates(const std::vector<SurfaceTri> &tris, const V3 &c, double reach, std::vector<int> &out)

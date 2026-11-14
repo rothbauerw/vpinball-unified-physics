@@ -2011,13 +2011,34 @@ int ContactSurfaceHost::PathReach(const SurfaceContact &it, const RubberContact:
    {
       if (it.qFaces == nullptr || !g_finder.on)
          return -1;   // no query: the lists of the start position only
+      bool cut = false;   // (the counters' kind 2)
       if (m_surfaceKind == "playfield")
       {
+         // Cuts and carved holes (design.md 2b): every cut piece (rims, walls, floors, joins) lies at or below the cut's top plane inside its outline grown by rho, the playfield flat
+         // there (PlayfieldCuts::TopZ); a hole's rim point is on the face's plane. For a point P on or above that plane, a point Q below it is farther than its vertical projection Q'
+         // on the plane, and Q' lies on the playfield's full faces (the faces FacesLeft drops are still in the mesh and the query). So the path's distance to the FULL faces (the
+         // loop below, no FacesLeft) bounds every cut and hole piece from below: exact, no chords. A path end below a top plane: reached (a re-run, never a miss).
          const RubberContact::CarvedHole *holes = nullptr;
          int nHoles = 0;
          CarvedHoles::Get(holes, nHoles);
-         if (nHoles > 0 || PlayfieldCuts::Any(this))
-            return -1;   // the rims of cuts and holes are curved: build 2 (chords)
+         cut = nHoles > 0 || PlayfieldCuts::Any(this);
+         if (cut)
+         {
+            double top = PlayfieldCuts::TopZ(this);
+            for (int k = 0; k < nHoles; k++)
+               top = std::max(top, holes[k].z);
+            if (prof)
+               ps.kTested[2]++;
+            if (std::min(s.z, e.z) < top)
+            {
+               if (prof)
+               {
+                  ps.kReached[2]++;
+                  ps.cutBelow++;
+               }
+               return 1;
+            }
+         }
       }
       FinderInside(it, e);   // both ends inside the query's volume (a re-query otherwise, as the end probe made it)
       FinderInside(it, s);
@@ -2033,12 +2054,20 @@ int ContactSurfaceHost::PathReach(const SurfaceContact &it, const RubberContact:
       {
          const RubberContact::SurfaceTri &t = sf.tris[i];
          if (RubberContact::PathBoxApart(t.lo, t.hi, plo, phi, R))
+         {
+            if (prof)
+               ps.boxSkip++;
             continue;
+         }
          any = true;
          if (prof)
             ps.kit++;
          if (RubberContact::PathWithin(RubberContact::PathTriD2(s, d, t), R))
+         {
+            if (prof && cut)
+               ps.kReached[2]++;
             return 1;
+         }
       }
       if (prof)
          (any ? ps.clearC : ps.clearB)++;
@@ -2060,7 +2089,11 @@ int ContactSurfaceHost::PathReach(const SurfaceContact &it, const RubberContact:
          return false;   // (no length: ProbeTube skips it too)
       const V3 &a = m_ptsSI[i], &b = m_ptsSI[i + 1];
       if (RubberContact::PathBoxApart(V3(std::min(a.x, b.x), std::min(a.y, b.y), std::min(a.z, b.z)), V3(std::max(a.x, b.x), std::max(a.y, b.y), std::max(a.z, b.z)), plo, phi, reach))
+      {
+         if (prof)
+            ps.boxSkip++;
          return false;
+      }
       any = true;
       if (prof)
          ps.kit++;
@@ -2079,6 +2112,17 @@ int ContactSurfaceHost::PathReach(const SurfaceContact &it, const RubberContact:
    if (prof)
       (any ? ps.clearC : ps.clearB)++;
    return 0;
+}
+
+double ContactSurfaceHost::PathCoverSag(const SurfaceContact &it, int &kind) const
+{
+   kind = 2;
+   if (m_surface == nullptr || it.qFaces == nullptr || !g_finder.on || CordModel() || m_surfaceKind != "playfield")
+      return -1.0;
+   const RubberContact::CarvedHole *holes = nullptr;
+   int nHoles = 0;
+   CarvedHoles::Get(holes, nHoles);
+   return nHoles > 0 || PlayfieldCuts::Any(this) ? 0.0 : -1.0;
 }
 
 double ContactSurfaceHost::ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, const int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, const double a, const double hMax, const double touchM, const double arriveM) const
@@ -3191,7 +3235,23 @@ void ContactSurfaceHost::FinderTotals(const bool force)
       const RubberContact::PathStats &p = RubberContact::pathStats;
       PLOGI << "Path test totals: FarStillFar calls with a skipped contact " << p.calls << ", time " << p.ns * 1e-3 << " us in all (" << (p.calls > 0 ? (double)p.ns / (double)p.calls : 0.0) << " ns per call, worst "
             << p.nsWorst << " ns); skipped contacts tested on the path " << p.tested << " (cleared at the object box " << p.clearA << ", at the piece boxes " << p.clearB << ", by the exact distance " << p.clearC
-            << ", reached " << p.reached << "), exact kit tests " << p.kit << "; tested by the two probes (curved or moving) " << p.twoPoint << ", reached there " << p.reachedTwo;
+            << ", reached " << p.reached << "), exact kit tests " << p.kit << ", pieces passed over by their box " << p.boxSkip << "; tested by the two probes (moving) " << p.twoPoint
+            << ", reached there " << p.reachedTwo << "; by kind tested / reached / in the sagitta band: post " << p.kTested[0] << " / " << p.kReached[0] << " / " << p.kBand[0] << ", bumper body "
+            << p.kTested[1] << " / " << p.kReached[1] << " / " << p.kBand[1] << ", playfield with cuts or holes " << p.kTested[2] << " / " << p.kReached[2] << " (an end below the top " << p.cutBelow
+            << "), disc " << p.kTested[3] << " / " << p.kReached[3] << " / " << p.kBand[3];
+   }
+   if (RubberContact::PathCheckOn())   // the covers' self-check (VPX_FINDER_CHECK=1; groupstep.h PathSelfCheck): checks / disagreements per kind, a WARN with the first of each kind
+   {
+      RubberContact::PathCheck &c = RubberContact::pathCheck;
+      PLOGI << "Path test self-check: checks / disagreements: post " << c.n[0] << " / " << c.bad[0] << ", bumper body " << c.n[1] << " / " << c.bad[1] << ", playfield with cuts or holes " << c.n[2]
+            << " / " << c.bad[2] << ", disc " << c.n[3] << " / " << c.bad[3];
+      static const char *const kinds[4] = { "post", "bumper body", "playfield with cuts or holes", "disc" };
+      for (int k = 0; k < 4; k++)
+         if (c.warned[k] && !c.logged[k])
+         {
+            c.logged[k] = true;
+            PLOGW << "Path test self-check: a " << kinds[k] << " cover disagrees with its probe (VPX_FINDER_CHECK; first of its kind): " << c.first[k];
+         }
    }
    if (g_tab.checks > 0)   // P3a: the measurement tables
    {

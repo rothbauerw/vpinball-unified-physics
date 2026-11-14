@@ -81,7 +81,7 @@ namespace ContactSystem
       {
          PLOGI << "Contact system: unified engine on (" << file.string() << "; dev fallback: stock hit search still runs for object types not yet converted)";
          PLOGI << "Contact system: [Features] aircore_in_step = " << (s_aircoreInStep ? 1 : 0) << (s_aircoreInStep ? " (an air-core coil's pull read at each step's midpoint)" : " (an air-core coil's pull held for the cycle)");
-         PLOGI << "Contact system: [Features] path_test = " << (GroupStep::pathTest ? 1 : 0) << (GroupStep::pathTest ? " (a skipped contact on a static straight surface or a ball pair tested over the whole move; engagement query by the reach rule)" : " (a skipped contact probed at the move's middle and end; engagement query 20 U)");
+         PLOGI << "Contact system: [Features] path_test = " << (GroupStep::pathTest ? 1 : 0) << (GroupStep::pathTest ? " (a skipped contact on a static surface or a ball pair tested over the whole move; engagement query by the reach rule)" : " (a skipped contact probed at the move's middle and end; engagement query 20 U)");
       }
       else
          PLOGI << "Contact system: stock VPX physics, every new model off (" << (file.empty() ? std::string("no physics ini") : file.string() + " has no [Features] unified = 1") << ")";
@@ -1026,7 +1026,8 @@ struct ContactSystemImpl
          return mp != nullptr && mp->GroupNearPieces(surface, c, R, reach, swing, minReach, list);
       }
       bool NearHolds(const V3 &c, const double R, const double dq, const std::vector<int> &list) const override { return mp == nullptr || mp->GroupNearHolds(surface, c, R, dq, list); }
-      int PathReach(const V3 &s, const V3 &d, const double R) const override { return mp != nullptr ? -1 : r->PathReach(*it, s, d, R); }   // ([Features] path_test; a part's own surface: build 3)
+      int PathReach(const V3 &s, const V3 &d, const double R) const override { return mp != nullptr ? mp->GroupPathReach(surface, s, d, R) : r->PathReach(*it, s, d, R); }
+      double PathCoverSag(int &kind) const override { return mp != nullptr ? mp->GroupPathCoverSag(surface, kind) : r->PathCoverSag(*it, kind); }   // (the self-check, VPX_FINDER_CHECK)   // ([Features] path_test; a part's surface: its own answer, -1 for one that moves: build 3)
       void Probe(const V3 &c, double R, GroupStep::Hit &h) const override
       {
          const ContactProf::Stage profStage(ContactProf::StGroupShape);   // P3a profile: the calling stage of the checks here (diagnostics only)

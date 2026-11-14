@@ -53,6 +53,40 @@ namespace JetBumper
          ringShape.owner = &gp;
          bodyShape.prof = &gp.cfg.body0;
          bodyShape.edgeMin = edgeMin;
+         // [Features] path_test: the fixed centre body's profile revolved into facets (world frame, once at load); the ring and skirt move with the part (build 3)
+         std::vector<double> r, z, rr;
+         for (const Revolve::Vtx &v : gp.cfg.body0.v)
+         {
+            r.push_back(v.r);
+            z.push_back(v.z);
+            rr.push_back(v.rr);
+         }
+         bodyCover.Build(origin, r.data(), z.data(), rr.data(), (int)r.size());
+      }
+      RubberContact::PathRevolve bodyCover;   // [Features] path_test (Build)
+      double GroupPathCoverSag(const int surface, int &kind) const override   // (the self-check, VPX_FINDER_CHECK)
+      {
+         kind = 1;
+         return surface == 2 && collidable ? bodyCover.MaxSag() : -1.0;
+      }
+      // [Features] path_test: surface 2, the centre body, never moves: its facets, reach R + the segment's larger sweep radius (RevolveShape's probe, owner null); not collidable: never touched
+      int GroupPathReach(const int surface, const V3 &s, const V3 &d, const double R) const override
+      {
+         if (surface != 2)
+            return -1;
+         if (!collidable)
+            return 0;
+         const bool prof = ContactProf::CheckOn();
+         bool band = false;
+         const int r = bodyCover.Reach(s, d, R, prof, band);
+         if (prof)
+         {
+            RubberContact::PathStats &ps = RubberContact::pathStats;
+            ps.kTested[1]++;
+            ps.kReached[1] += r > 0;
+            ps.kBand[1] += band;
+         }
+         return r;
       }
 
       // ---- the script ----

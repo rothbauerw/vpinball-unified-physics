@@ -77,6 +77,25 @@ namespace DiscModel
       // ---- the group's calls ----
       GroupStep::Part *GroupPart() override { return &gp; }
       void GroupProbe(int, const V3 &c, const double R, const double *, GroupStep::Hit &h) const override { gp.ProbeSurface(c, R, h); }
+      double GroupPathCoverSag(int, int &kind) const override   // (the self-check, VPX_FINDER_CHECK)
+      {
+         kind = 3;
+         return gp.pathCover.MaxSag();
+      }
+      int GroupPathReach(int, const V3 &s, const V3 &d, const double R) const override   // [Features] path_test: the surface never moves (DiscGroup::Part::PathReach)
+      {
+         const bool prof = ContactProf::CheckOn();
+         bool band = false;
+         const int r = gp.PathReach(s, d, R, prof, band);
+         if (prof)
+         {
+            RubberContact::PathStats &ps = RubberContact::pathStats;
+            ps.kTested[3]++;
+            ps.kReached[3] += r > 0;
+            ps.kBand[3] += band;
+         }
+         return r;
+      }
       const RubberContact::RubberParams *GroupLaw(int, double &layer) const override
       {
          layer = layerM;

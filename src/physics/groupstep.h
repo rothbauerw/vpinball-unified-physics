@@ -259,10 +259,13 @@ namespace GroupStep
       // the pieces off the list are off the ball at c with its part moved by dq (trial): a distance bound, no probe
       virtual bool NearHolds(const V3 &, double, double, const std::vector<int> &) const { return true; }
       // [Features] path_test: does the ball's centre moving straight from s to s + d come within reach of a piece (depth above 0 anywhere on the path, before the item's zero)?
-      // 1 = yes, 0 = no (exact, the path kit in rubbercontact.h), -1 = no exact test for this shape (a curved or moving piece): FarStillFar probes the middle and the end as before
+      // 1 = yes, 0 = no (exact, the path kit in rubbercontact.h; a curved piece by its cover, PathRevolve), -1 = no exact test for this shape (a moving piece): FarStillFar probes the middle and the end as before
       virtual int PathReach(const V3 & /*s*/, const V3 & /*d*/, double /*R*/) const { return -1; }
+      // the self-check of a cover (VPX_FINDER_CHECK=1, diagnostics only): its largest sagitta (m) and kind (0 post, 1 bumper body, 2 playfield with cuts or holes: a one-way bound, 3 disc);
+      // -1 = not a cover
+      virtual double PathCoverSag(int & /*kind*/) const { return -1.0; }
    };
-   // [Features] path_test of this table (physicsini.h; set by ContactSystem::SetTable): 1 = FarStillFar tests a skipped contact on a static straight shape over the ball's whole move
+   // [Features] path_test of this table (physicsini.h; set by ContactSystem::SetTable): 1 = FarStillFar tests a skipped contact on a static shape over the ball's whole move
    // (object box, piece boxes, exact distance); 0 = at the move's middle and end only, as before
    inline bool pathTest = true;
    // A flat face through p with unit normal n (the ball's side); unbounded
@@ -2571,7 +2574,7 @@ namespace GroupStep
          return r;
       }
       // After the solve: did a skipped contact get reached after all? Then the attempt runs again with none skipped.
-      // [Features] path_test: a static straight shape and a ball pair are tested over the whole move (PathReach, the path kit); a curved or moving shape at the move's middle and end
+      // [Features] path_test: a static shape (straight, or curved by its cover) and a ball pair are tested over the whole move (PathReach, the path kit); a moving shape at the move's middle and end
       bool FarStillFar(const double *xv)
       {
          if (!ContactProf::CheckOn())
@@ -2590,6 +2593,37 @@ namespace GroupStep
             ps.nsWorst = std::max(ps.nsWorst, ns);
          }
          return r;
+      }
+      // VPX_FINDER_CHECK=1 (diagnostics only: the counters are put back, nothing else changes): a cover against its shape's own probe at the path's end e. The probe's gap there g = -delta
+      // (R + g: the distance from the surface the probe measures). A zero-length path at e must reach with a ball of R + g + 1 um (the cover lies within its sagitta of the curve, and its
+      // test adds the sagitta) and must not with R + g - 2 sagitta - 1 um (the cover can lie a sagitta nearer than the curve, and the test adds one more); the cut playfield's full faces
+      // bound only one way: the first check alone
+      void PathSelfCheck(const Shape &sh, const V3 &e, const double R, const int ia) const
+      {
+         int kind = -1;
+         const double sag = sh.PathCoverSag(kind);
+         if (sag < 0.0 || kind < 0 || kind > 3)
+            return;
+         const RubberContact::PathStats save = RubberContact::pathStats;
+         Hit h;
+         sh.Probe(e, R, h);
+         const double g = -h.delta, rIn = R + g + 1e-6, rOut = R + g - 2.0 * sag - 1e-6;
+         const int a = sh.PathReach(e, V3(), rIn);
+         const int b = kind != 2 && rOut > 0.0 ? sh.PathReach(e, V3(), rOut) : 0;
+         RubberContact::pathStats = save;
+         RubberContact::PathCheck &pc = RubberContact::pathCheck;
+         pc.n[kind]++;
+         if (a == 1 && b == 0)
+            return;
+         pc.bad[kind]++;
+         if (!pc.warned[kind])
+         {
+            pc.warned[kind] = true;
+            char buf[400];
+            snprintf(buf, sizeof(buf), "shape %s, ball %d at (%.9f, %.9f, %.9f) m, probe gap %.9g m, sagitta %.3g m: radius R + g + 1 um -> %d (want 1), R + g - 2 sag - 1 um -> %d (want 0)", sh.Name().c_str(), ia,
+                     e.x, e.y, e.z, g, sag, a, b);
+            pc.first[kind] = buf;
+         }
       }
       bool FarStillFarRun(const double *xv)
       {
@@ -2622,7 +2656,9 @@ namespace GroupStep
                         RubberContact::pathStats.kit++;
                   }
                   else
-                     r = shape[it.s]->part >= 0 ? -1 : shape[it.s]->PathReach(A.c, dA, A.R);   // (a moving part: build 3)
+                     r = shape[it.s]->PathReach(A.c, dA, A.R);   // (a surface that moves with its part answers -1: build 3; a part's fixed surface, a bumper's body or a disc, its own test)
+                  if (r >= 0 && it.b < 0 && RubberContact::PathCheckOn())
+                     PathSelfCheck(*shape[it.s], A.c + dA, A.R, it.a);
                   if (r >= 0)
                   {
                      if (prof)

@@ -84,8 +84,10 @@ public:
    // The same, as the group step's law reads it: the ball's contact patch has a size, so a fold under it pushes along the patch's average (rubbercontact.h PatchTube, PatchTriangles)
    virtual RubberContact::TubeProbe ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const { return Probe(bs, it, c); }
    // [Features] path_test: can a ball of radius R whose centre moves straight from s to s + d touch the surface on the way (any piece within R plus the piece's radius of the path)?
-   // 1 = yes, 0 = no (the whole path checked exactly, rubbercontact.h path kit), -1 = this surface has no exact path test (a curved or moving piece): the caller probes as before
+   // 1 = yes, 0 = no (the whole path checked exactly, rubbercontact.h path kit), -1 = this surface has no exact path test (a cord band, no query): the caller probes as before
    virtual int PathReach(const SurfaceContact & /*it*/, const RubberContact::V3 & /*s*/, const RubberContact::V3 & /*d*/, double /*R*/) const { return -1; }
+   // the self-check of a cover (VPX_FINDER_CHECK=1; GroupStep::Shape::PathCoverSag): the playfield with cuts or carved holes, kind 2, sagitta 0 (its full faces); -1 = none
+   virtual double PathCoverSag(const SurfaceContact & /*it*/, int & /*kind*/) const { return -1.0; }
    // The longest step, at most hMax, that brings the ball at most to arriveM of a part of the surface other than the probe's nearest (nearestSeg); a nearest-only surface: hMax. a: the acceleration bound.
    virtual double ArrivalS(const RubberContact::BallSI & /*bs*/, const SurfaceContact & /*it*/, int /*nearestSeg*/, const RubberContact::V3 & /*c*/, const RubberContact::V3 & /*v*/, double /*a*/, double hMax, double /*touchM*/, double /*arriveM*/) const { return hMax; }
    virtual const RubberObjectSettings *Settings() const { return nullptr; }   // the step and rest settings of a surface that has them (rubber, wall, primitive, ramp, playfield, disc); null = none

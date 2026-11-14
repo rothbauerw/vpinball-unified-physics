@@ -950,6 +950,28 @@ public:
          h.reff = std::sqrt(R1 / std::max(1.0 / R + kLong, 0.05 / R));
          h.curvDist = D;
       }
+      // [Features] path_test: the circle's chords (postCover, built with the posts at load), reach R + rc, the bound chords - sagitta; a twin is never touched (its probe)
+      int PathReach(const V3 &s, const V3 &d, const double R) const override
+      {
+         const bool prof = ContactProf::CheckOn();
+         if (pt->circles[j].twin || j >= (int)pt->postCover.size())
+            return pt->circles[j].twin ? 0 : -1;
+         bool band = false;
+         const int r = pt->postCover[j].Reach(s, d, R, prof, band);
+         if (prof)
+         {
+            RubberContact::PathStats &ps = RubberContact::pathStats;
+            ps.kTested[0]++;
+            ps.kReached[0] += r > 0;
+            ps.kBand[0] += band;
+         }
+         return r;
+      }
+      double PathCoverSag(int &kind) const override   // (the self-check, VPX_FINDER_CHECK)
+      {
+         kind = 0;
+         return pt->circles[j].twin || j >= (int)pt->postCover.size() ? -1.0 : pt->postCover[j].MaxSag();
+      }
    };
    // Into the group, after AddPart, before its Configure
    template <class Tube> void AddPostShapes(GroupStep::Group &g, Tube &tube)
@@ -1239,7 +1261,18 @@ public:
             }
       }
    }
-   void SetNShapes() { nShapes = (int)circles.size() + (pl.on ? 1 : 0); swClosed.assign(kMaxSwitches, 0); }
+   void SetNShapes()
+   {
+      nShapes = (int)circles.size() + (pl.on ? 1 : 0);
+      swClosed.assign(kMaxSwitches, 0);
+      postCover.assign(circles.size(), RubberContact::PathRevolve());   // [Features] path_test: each post's circle as chords (once, at load, with the posts)
+      for (size_t k = 0; k < circles.size(); k++)
+      {
+         const double r = circles[k].r, z = 0.0;
+         postCover[k].Build(V3(circles[k].x, circles[k].y, zc), &r, &z, &rc, 1);
+      }
+   }
+   std::vector<RubberContact::PathRevolve> postCover;   // [Features] path_test: the posts' chords, by circle (PostShape::PathReach)
    int postFirst = 0, nShapes = 0;
    struct Keep { bool touching = false; double zero = 0.0; V3 xi; RubberContact::RollAngle ra; };
    std::vector<Keep> keep;

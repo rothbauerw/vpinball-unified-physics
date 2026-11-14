@@ -1911,6 +1911,15 @@ namespace PlayfieldCuts
       return std::find(g_anyHosts.begin(), g_anyHosts.end(), host) != g_anyHosts.end();
    }
 
+   double TopZ(const ContactSurface *const host)
+   {
+      double z = -1e30;
+      for (const Rim &m : g_rims)
+         if (m.host == host)
+            z = std::max(z, m.z0);
+      return z;
+   }
+
    uint64_t Version() { return g_rimsVer; }
    int Count() { return (int)g_rims.size(); }
    void Box(const int i, V3 &lo, V3 &hi)

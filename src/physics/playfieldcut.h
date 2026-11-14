@@ -60,6 +60,9 @@ namespace PlayfieldCuts
    void Setup(PhysicsEngine *physics, PinTable *table);
    // Cuts are held for this playfield host (false: the host's probe, patch and step bound are today's, unchanged)
    bool Any(const ContactSurface *host);
+   // [Features] path_test: the highest top plane (world z, m) of this host's cuts; every piece of a cut lies at or below its top inside its outline grown by rho, and the playfield is flat
+   // there (checked at Setup), so a path above it is nearer the playfield's full faces than any cut piece (design runs/2026-11-13-finder-exactpath/design.md 2b). -1e30: no cut
+   double TopZ(const ContactSurface *host);
    // shared finder P4b (runs/2026-11-11-finder/design.md section 3): a ball's cut pieces found by its per-cycle query (ContactSurfaceHost::FinderRun): every cut whose
    // box (Rim::BoxDist's) lies within r of c0, in index order. r < 0: none yet. ver: the cuts' Version it was made for (a later Setup makes it stale). NearCuts reads it in place of a scan.
    struct CutQuery
