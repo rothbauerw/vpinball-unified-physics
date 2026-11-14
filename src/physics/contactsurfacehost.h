@@ -183,6 +183,7 @@ public:
    double ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, double a, double hMax, double touchM, double arriveM) const override;
    RubberContact::TubeProbe ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const override;
    int PathReach(const SurfaceContact &it, const RubberContact::V3 &s, const RubberContact::V3 &d, double R) const override;
+   bool PathOneWay(const SurfaceContact &it, const RubberContact::V3 &e) const override;   // (the self-check: false inside a carved hole's rim ring, design.md 2c)
    double PathCoverSag(const SurfaceContact &it, int &kind) const override;   // (the self-check, VPX_FINDER_CHECK)   // [Features] path_test: a static mesh (the playfield with cuts or carved holes: its full faces, a path end under a cut's top: 1) or a static tube
    RubberContact::TubeProbe Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const override;   // the nearest point of one surface contact (tube or faces)
    double LayerM() const override;
@@ -307,7 +308,20 @@ private:
    static void FinderRun(void *q, double r);   // the query itself (q: a FinderBallQ), radius r around its centre
    std::shared_ptr<RubberSurface> m_surface;   // a wall / primitive host: its faces (m_pts is then empty)
    int m_linkOver = 0;                         // multi_contact: edges on more than two faces, counted when the faces' shared edges are built at load (Link)
-   mutable bool m_linkNoticed = false;         // that count reported (log and screen) at the first ball near the surface, once
+   // [Features] path_test, design.md 2c: the playfield's carved holes' rims, each a ring cover (rubbercontact.h PathRevolve: radius the hole's, at the middle zc of the slab the faces
+   // over the hole's disk span, zc +- dz; reach R + dz), built at the first path test after the holes are set (the holes come after this host, carvedholes.h); a hole with no face over
+   // its disk has no ring (the full faces there). Only for a playfield without cuts (the cuts keep the full faces, design.md 2b)
+   struct HoleRing
+   {
+      double x, y, r, z, dz;   // centre, radius, the slab's middle and half height (m)
+      bool ok = false;
+      RubberContact::PathRevolve cover;
+   };
+   mutable std::vector<HoleRing> m_holeRings;
+   mutable std::vector<RubberContact::CarvedHole> m_holeRingsOf;   // the holes the rings were built from (rebuilt when they differ: a table restart)
+   const std::vector<HoleRing> &HoleRings() const;
+   static bool InSlab(const RubberContact::SurfaceTri &t, const HoleRing &g);
+   mutable bool m_linkNoticed = false;        // that count reported (log and screen) at the first ball near the surface, once
    HitObject *m_eventCarrier = nullptr;        // see SetEventCarrier
    std::vector<Vertex3Ds> m_pts; // closed loop, last = first
    RubberContact::TubePre m_tubePre;       // what ProbeTube precomputes from m_ptsSI

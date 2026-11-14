@@ -2012,23 +2012,30 @@ int ContactSurfaceHost::PathReach(const SurfaceContact &it, const RubberContact:
       if (it.qFaces == nullptr || !g_finder.on)
          return -1;   // no query: the lists of the start position only
       bool cut = false;   // (the counters' kind 2)
+      const std::vector<HoleRing> *rings = nullptr;   // the holed playfield without cuts (design.md 2c)
       if (m_surfaceKind == "playfield")
       {
-         // Cuts and carved holes (design.md 2b): every cut piece (rims, walls, floors, joins) lies at or below the cut's top plane inside its outline grown by rho, the playfield flat
-         // there (PlayfieldCuts::TopZ); a hole's rim point is on the face's plane. For a point P on or above that plane, a point Q below it is farther than its vertical projection Q'
-         // on the plane, and Q' lies on the playfield's full faces (the faces FacesLeft drops are still in the mesh and the query). So the path's distance to the FULL faces (the
-         // loop below, no FacesLeft) bounds every cut and hole piece from below: exact, no chords. A path end below a top plane: reached (a re-run, never a miss).
+         // Cuts (design.md 2b): every cut piece (rims, walls, floors, joins) lies at or below the cut's top plane inside its outline grown by rho, the playfield flat there
+         // (PlayfieldCuts::TopZ). For a point P on or above that plane, a point Q below it is farther than its vertical projection Q' on the plane, and Q' lies on the playfield's full
+         // faces (the faces FacesLeft drops are still in the mesh and the query). So the path's distance to the FULL faces (no FacesLeft) bounds every cut piece from below: exact, no
+         // chords. A path end below a top plane: reached (a re-run, never a miss).
+         // Carved holes and no cuts (design.md 2c): the probe's surface is the faces with each hole's disk D taken out and its rim circle put in (ProbeTriangles). For P whose
+         // projection lies inside D, a face point Q in the slab zc +- dz the faces over D span, outside D, is at least |P - Q''| - dz from P (Q'' its projection on the plane zc), and
+         // the nearest point of that plane outside D is on the rim, straight out from the centre: the path's parts inside a hole are tested against the hole's rim ring (its cover,
+         // the sagitta and dz added) and the faces not wholly in the slab; the parts outside every hole against the full faces (a superset of what is left: a true bound at any
+         // height). The split: the path's horizontal projection crosses a hole's circle where a quadratic is 0 (closed form).
          const RubberContact::CarvedHole *holes = nullptr;
          int nHoles = 0;
          CarvedHoles::Get(holes, nHoles);
-         cut = nHoles > 0 || PlayfieldCuts::Any(this);
-         if (cut)
+         const bool cuts = PlayfieldCuts::Any(this);
+         cut = nHoles > 0 || cuts;
+         if (cut && prof)
+            ps.kTested[2]++;
+         if (cuts)
          {
             double top = PlayfieldCuts::TopZ(this);
             for (int k = 0; k < nHoles; k++)
                top = std::max(top, holes[k].z);
-            if (prof)
-               ps.kTested[2]++;
             if (std::min(s.z, e.z) < top)
             {
                if (prof)
@@ -2039,34 +2046,99 @@ int ContactSurfaceHost::PathReach(const SurfaceContact &it, const RubberContact:
                return 1;
             }
          }
+         else if (nHoles > 0)
+            rings = &HoleRings();
       }
       FinderInside(it, e);   // both ends inside the query's volume (a re-query otherwise, as the end probe made it)
       FinderInside(it, s);
       const RubberSurface &sf = *m_surface;
-      if (!sf.fnodes.empty() && RubberContact::PathBoxApart(sf.fnodes[0].lo, sf.fnodes[0].hi, plo, phi, R))
+      if (!sf.fnodes.empty() && RubberContact::PathBoxApart(sf.fnodes[0].lo, sf.fnodes[0].hi, plo, phi, R))   // (a hole's rim lies on the faces' plane inside the faces' box)
       {
          if (prof)
             ps.clearA++;
          return 0;
       }
       bool any = false;
-      for (const int i : *it.qFaces)
-      {
-         const RubberContact::SurfaceTri &t = sf.tris[i];
-         if (RubberContact::PathBoxApart(t.lo, t.hi, plo, phi, R))
+      // the query's faces against the path piece s1 -> s1 + d1; inside a hole (g) the faces wholly in its slab are left to the ring (their points inside the hole are the rim's,
+      // outside it no nearer than the rim less dz)
+      const auto faces = [&](const V3 &s1, const V3 &d1, const HoleRing *g) {
+         const V3 e1 = s1 + d1;
+         const V3 lo1(std::min(s1.x, e1.x), std::min(s1.y, e1.y), std::min(s1.z, e1.z)), hi1(std::max(s1.x, e1.x), std::max(s1.y, e1.y), std::max(s1.z, e1.z));
+         for (const int i : *it.qFaces)
          {
+            const RubberContact::SurfaceTri &t = sf.tris[i];
+            if (g != nullptr && InSlab(t, *g))
+               continue;
+            if (RubberContact::PathBoxApart(t.lo, t.hi, lo1, hi1, R))
+            {
+               if (prof)
+                  ps.boxSkip++;
+               continue;
+            }
+            any = true;
             if (prof)
-               ps.boxSkip++;
-            continue;
+               ps.kit++;
+            if (RubberContact::PathWithin(RubberContact::PathTriD2(s1, d1, t), R))
+               return true;
          }
-         any = true;
-         if (prof)
-            ps.kit++;
-         if (RubberContact::PathWithin(RubberContact::PathTriD2(s, d, t), R))
+         return false;
+      };
+      const auto reached = [&]() {
+         if (prof && cut)
+            ps.kReached[2]++;
+         return 1;
+      };
+      if (rings == nullptr || rings->empty())
+      {
+         if (faces(s, d, nullptr))
+            return reached();
+      }
+      else
+      {
+         // the cut points u of s + u d (u in [0, 1]) where the projection crosses a hole's circle: (o + u dxy)^2 = r^2, o the start's offset from the centre
+         thread_local std::vector<double> us;
+         us.clear();
+         us.push_back(0.0);
+         us.push_back(1.0);
+         const double a = d.x * d.x + d.y * d.y;
+         if (a > 0.0)
+            for (const HoleRing &g : *rings)
+            {
+               if (!g.ok)
+                  continue;
+               const double ox = s.x - g.x, oy = s.y - g.y, b = ox * d.x + oy * d.y, c = ox * ox + oy * oy - g.r * g.r, disc = b * b - a * c;
+               if (disc <= 0.0)
+                  continue;   // (no crossing, or a touch: the whole path outside)
+               const double sq = std::sqrt(disc);
+               for (const double u : { (-b - sq) / a, (-b + sq) / a })
+                  if (u > 0.0 && u < 1.0)
+                     us.push_back(u);
+            }
+         std::sort(us.begin(), us.end());
+         for (size_t k = 0; k + 1 < us.size(); k++)
          {
-            if (prof && cut)
-               ps.kReached[2]++;
-            return 1;
+            const double ua = us[k], ub = us[k + 1];
+            if (ub <= ua)
+               continue;
+            const V3 s1 = s + d * ua, d1 = d * (ub - ua), m = s + d * (0.5 * (ua + ub));
+            bool inside = false;
+            for (const HoleRing &g : *rings)
+            {
+               if (!g.ok || (m.x - g.x) * (m.x - g.x) + (m.y - g.y) * (m.y - g.y) >= g.r * g.r)
+                  continue;
+               inside = true;
+               bool band = false;
+               if (g.cover.Reach(s1, d1, R, prof, band) == 1)
+               {
+                  if (prof && band)
+                     ps.kBand[2]++;
+                  return reached();
+               }
+               if (faces(s1, d1, &g))
+                  return reached();
+            }
+            if (!inside && faces(s1, d1, nullptr))
+               return reached();
          }
       }
       if (prof)
@@ -2122,7 +2194,85 @@ double ContactSurfaceHost::PathCoverSag(const SurfaceContact &it, int &kind) con
    const RubberContact::CarvedHole *holes = nullptr;
    int nHoles = 0;
    CarvedHoles::Get(holes, nHoles);
-   return nHoles > 0 || PlayfieldCuts::Any(this) ? 0.0 : -1.0;
+   if (PlayfieldCuts::Any(this))
+      return 0.0;   // the full faces
+   if (nHoles == 0)
+      return -1.0;
+   double sag = 0.0;   // the rings' largest sagitta + dz (the full faces outside them: 0)
+   for (const HoleRing &g : HoleRings())
+      if (g.ok)
+         sag = std::max(sag, g.cover.MaxSag() + g.dz);
+   return sag;
+}
+
+bool ContactSurfaceHost::PathOneWay(const SurfaceContact &, const RubberContact::V3 &e) const
+{
+   if (m_surface == nullptr || m_surfaceKind != "playfield" || PlayfieldCuts::Any(this))
+      return true;
+   for (const HoleRing &g : HoleRings())
+      if (g.ok && (e.x - g.x) * (e.x - g.x) + (e.y - g.y) * (e.y - g.y) < g.r * g.r)
+         return false;   // inside a hole: its rim ring, within its sagitta + dz of the probe's rim both ways
+   return true;
+}
+
+// a face wholly in a hole's slab zc +- dz (its three corners): left to the hole's ring inside the hole's region of a path
+bool ContactSurfaceHost::InSlab(const RubberContact::SurfaceTri &t, const HoleRing &g)
+{
+   return std::abs(t.a.z - g.z) <= g.dz && std::abs(t.b.z - g.z) <= g.dz && std::abs(t.c.z - g.z) <= g.dz;
+}
+
+const std::vector<ContactSurfaceHost::HoleRing> &ContactSurfaceHost::HoleRings() const
+{
+   const RubberContact::CarvedHole *holes = nullptr;
+   int nHoles = 0;
+   CarvedHoles::Get(holes, nHoles);
+   bool same = (int)m_holeRingsOf.size() == nHoles;
+   for (int k = 0; same && k < nHoles; k++)
+      same = m_holeRingsOf[k].x == holes[k].x && m_holeRingsOf[k].y == holes[k].y && m_holeRingsOf[k].r == holes[k].r && m_holeRingsOf[k].z == holes[k].z;
+   if (same)
+      return m_holeRings;
+   m_holeRingsOf.assign(holes, holes + nHoles);
+   m_holeRings.clear();
+   const std::vector<RubberContact::SurfaceTri> &tris = m_surface->tris;
+   for (int k = 0; k < nHoles; k++)
+   {
+      const RubberContact::CarvedHole &h = holes[k];
+      HoleRing g;
+      g.x = h.x;
+      g.y = h.y;
+      g.r = h.r;
+      g.z = h.z;
+      g.dz = 0.0;
+      g.ok = false;
+      // the slab: the corners' heights of the faces whose box meets the hole's horizontal disk, zLo .. zHi (measured); the ring at its middle zc, dz its half height (+ 1 pm, a
+      // rounding guard so the extreme corners count as in it; dz enters the bound as it is). The probe's rim lies at its nearest face point's height, in the slab
+      double zLo = INFINITY, zHi = -INFINITY;
+      int nFaces = 0;
+      for (const RubberContact::SurfaceTri &t : tris)
+      {
+         const double cx = std::min(std::max(h.x, t.lo.x), t.hi.x), cy = std::min(std::max(h.y, t.lo.y), t.hi.y);
+         if ((cx - h.x) * (cx - h.x) + (cy - h.y) * (cy - h.y) > h.r * h.r)
+            continue;
+         nFaces++;
+         for (const RubberContact::V3 *p : { &t.a, &t.b, &t.c })
+         {
+            zLo = std::min(zLo, p->z);
+            zHi = std::max(zHi, p->z);
+         }
+      }
+      if (nFaces > 0)
+      {
+         g.z = 0.5 * (zLo + zHi);
+         g.dz = 0.5 * (zHi - zLo) + 1e-12;
+         g.ok = true;
+         const double dz = g.dz, zero = 0.0;   // (the ring's reach R + dz: its bound is the cover's distance - sagitta - dz)
+         g.cover.Build(RubberContact::V3(h.x, h.y, g.z), &h.r, &zero, &dz, 1);
+      }
+      PLOGI << "Path test (design.md 2c): playfield carved hole " << k << ": centre " << h.x * 1e3 << ", " << h.y * 1e3 << " mm, radius " << h.r * 1e3 << " mm, hole z " << h.z * 1e3 << " mm; faces over its disk "
+            << nFaces << (nFaces > 0 ? "" : " (no ring: the full faces there)") << ", slab zc " << g.z * 1e3 << " mm, dz " << g.dz * 1e6 << " um, ring sagitta " << (g.ok ? g.cover.MaxSag() * 1e6 : 0.0) << " um";
+      m_holeRings.push_back(std::move(g));
+   }
+   return m_holeRings;
 }
 
 double ContactSurfaceHost::ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, const int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, const double a, const double hMax, const double touchM, const double arriveM) const

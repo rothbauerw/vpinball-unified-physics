@@ -1027,6 +1027,7 @@ struct ContactSystemImpl
       }
       bool NearHolds(const V3 &c, const double R, const double dq, const std::vector<int> &list) const override { return mp == nullptr || mp->GroupNearHolds(surface, c, R, dq, list); }
       int PathReach(const V3 &s, const V3 &d, const double R) const override { return mp != nullptr ? mp->GroupPathReach(surface, s, d, R) : r->PathReach(*it, s, d, R); }
+      bool PathOneWay(const V3 &e) const override { return mp == nullptr && r->PathOneWay(*it, e); }   // (the self-check: the playfield's full faces bound one way, a hole's rim two ways)
       double PathCoverSag(int &kind) const override { return mp != nullptr ? mp->GroupPathCoverSag(surface, kind) : r->PathCoverSag(*it, kind); }   // (the self-check, VPX_FINDER_CHECK)   // ([Features] path_test; a part's surface: its own answer, -1 for one that moves: build 3)
       void Probe(const V3 &c, double R, GroupStep::Hit &h) const override
       {
