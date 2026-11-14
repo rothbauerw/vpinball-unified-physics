@@ -59,6 +59,9 @@ namespace PhysicsIni
                                   // reach (ContactReachM), every attempt of the cycle takes that list, and a ball centre outside its query volume at a move's middle or end re-queries
                                   // (groupstep.h CycleNear); the overlap check of free balls probes only the parts whose region is within the ball's radius; 0 = the per-step lists
                                   // (NearPieces, NearHolds, the retry factor nearGrow) and every part probed, as before
+      bool ballInsideCheck = true;   // ball_inside_check (on while tested, rule 6; runs/2026-11-14-inside-check/brief.md, design runs/2026-11-11-finder/design.md section 4): 1 = after each
+                                     // attempt's solve, every group ball with a cycle query is checked at its move's end against its query volume (ContactSurfaceHost::FinderInsideBall),
+                                     // whatever its items, so its re-query and the mid-step join run for a ball with no static mesh item; 0 = only a static mesh item's probes check it, as before
       bool seatEditorBalls = true; // seat_editor_balls (on while tested, rule 6; runs/2026-11-13-editor-balls): 1 = at play start each ball placed in the table editor is moved out of any surface it overlaps
                                   // (playfield, walls, ramps, primitives, rubbers, moving parts at rest; not other balls) by the shortest move, the no-past seating (ContactSystem::PushOutAtStart); 0 = left where it was placed, as today
       bool hitSpeed = true;       // PROTOTYPE: Ball.HitSpeed (normal speed before an impact) and the table's Hit event for the playfield; off = neither
@@ -183,6 +186,8 @@ namespace PhysicsIni
             f.pathTest = on;
          else if (key == "part_finder")
             f.partFinder = on;
+         else if (key == "ball_inside_check")
+            f.ballInsideCheck = on;
          else if (key == "hit_speed")
             f.hitSpeed = on;
          else if (key == "seat_editor_balls")

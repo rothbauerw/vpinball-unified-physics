@@ -51,6 +51,7 @@ namespace ContactSystem
    static bool s_seatEditorBalls = false;   // [Features] seat_editor_balls of this table (physicsini.h), read likewise; off with the unified engine off
    static std::filesystem::path s_iniFile;   // the table's physics ini (PhysicsIni::FindUnified at SetTable; empty = none): every reader reads this one file
    static std::filesystem::file_time_type s_iniTime{};   // its write time when the readers last read it (SetTable, ReloadChangedIni)
+   static bool s_ballInsideCheck = true;    // [Features] ball_inside_check of this table (physicsini.h), read likewise: 1 = every group ball's inside check after each attempt (the midJoin lambda); 0 = as before
    static bool s_aircoreInStep = false;     // [Features] aircore_in_step of this table (physicsini.h), read likewise: 1 = an air-core coil's pull is read at each step's midpoint (AircorePullForce, CordIsland); 0 = held for the cycle as before
 
    void SetTable(const std::filesystem::path &tableFile)
@@ -75,6 +76,7 @@ namespace ContactSystem
       s_aircoreInStep = s_unified && f.aircoreInStep;
       GroupStep::pathTest = f.pathTest;   // [Features] path_test (groupstep.h; read by the group step and the engagement query only)
       GroupStep::partFinder = f.partFinder;   // [Features] part_finder (groupstep.h, hingegroup.h; the group step's piece lists and CheckOverlaps)
+      s_ballInsideCheck = f.ballInsideCheck;   // [Features] ball_inside_check (physicsini.h; the group step's per-ball inside check, the midJoin lambda)
       GroupStep::partFinderProf = ContactProf::CheckOn() || GroupStep::FinderCheckEnv();   // (its counters: diagnostics only)
       GroupStep::partFinderCount.clear();
       GroupStep::partFinderFirstMiss.clear();
@@ -87,6 +89,7 @@ namespace ContactSystem
          PLOGI << "Contact system: [Features] aircore_in_step = " << (s_aircoreInStep ? 1 : 0) << (s_aircoreInStep ? " (an air-core coil's pull read at each step's midpoint)" : " (an air-core coil's pull held for the cycle)");
          PLOGI << "Contact system: [Features] path_test = " << (GroupStep::pathTest ? 1 : 0) << (GroupStep::pathTest ? " (a skipped contact on a static surface or a ball pair tested over the whole move; engagement query by the reach rule)" : " (a skipped contact probed at the move's middle and end; engagement query 20 U)");
          PLOGI << "Contact system: [Features] part_finder = " << (GroupStep::partFinder ? 1 : 0) << (GroupStep::partFinder ? " (a hinge part's pieces listed once per cycle from their swept sectors; the overlap check by region)" : " (per-step piece lists; the overlap check probes every part)");
+         PLOGI << "Contact system: [Features] ball_inside_check = " << (s_ballInsideCheck ? 1 : 0) << (s_ballInsideCheck ? " (every group ball checked against its cycle query after each attempt)" : " (only a static mesh item's probes check the ball's query)");
       }
       else
          PLOGI << "Contact system: stock VPX physics, every new model off (" << (file.empty() ? std::string("no physics ini") : file.string() + " has no [Features] unified = 1") << ")";
@@ -1916,6 +1919,13 @@ struct ContactSystemImpl
       g.joinRerunNs = 0.0;
       g.joinReruns = 0;
       g.midJoin = [&](const bool allow) -> int {
+            // [Features] ball_inside_check: every ball of the group is checked against its own cycle query at the attempt's end, whatever its items (design.md section 4: the
+            // inside check first). The attempt moves the ball's centre on the straight segment c -> c + MoveOf, whose farthest point from the query's centre is one of its ends;
+            // the start passed the last check, so the end covers the move. A ball with no BallContact entry has no cycle query (FinderQuery runs per entry): nothing to check.
+            if (ContactSystem::s_ballInsideCheck)
+               for (int ib = 0; ib < g.nb; ib++)
+                  if (bodyOf[ib] != nullptr && bodyOf[ib]->e != nullptr)
+                     ContactSurfaceHost::FinderInsideBall(balls[ib], g.ball[ib].c + g.MoveOf(ib));
             if (!ContactSurfaceHost::FinderPendAny())
                return 0;
             if (!allow)

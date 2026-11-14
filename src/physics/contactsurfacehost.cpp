@@ -3224,7 +3224,21 @@ void ContactSurfaceHost::FinderQuery(const HitBall *const ball, const RubberCont
 void ContactSurfaceHost::FinderInside(const SurfaceContact &it, const RubberContact::V3 &c) const
 {
    const ContactProf::Ticks profInside(ContactProf::CD().inside);   // P3a profile (diagnostics only)
-   FinderBallQ *const q = static_cast<FinderBallQ *>(it.finderQ);
+   FinderInsideQ(it.finderQ, c);
+}
+
+void ContactSurfaceHost::FinderInsideBall(const HitBall *const ball, const RubberContact::V3 &c)
+{
+   if (!g_finder.on)
+      return;
+   const auto f = g_finder.balls.find(ball);   // (a lookup: no allocation in the step loop)
+   if (f != g_finder.balls.end())
+      FinderInsideQ(&f->second, c);
+}
+
+void ContactSurfaceHost::FinderInsideQ(void *const qv, const RubberContact::V3 &c)
+{
+   FinderBallQ *const q = static_cast<FinderBallQ *>(qv);
    if (q == nullptr || !g_finder.on)
       return;
    const double stray = (c - q->c0).Length();
