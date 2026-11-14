@@ -2842,6 +2842,11 @@ namespace GroupStep
          const RubberContact::PathStats save = RubberContact::pathStats;
          Hit h;
          sh.Probe(e, R, h);
+         if (h.delta <= -1.0)   // the probe's "not there" (no face in its reach, or the surface switched off): no gap to compare, as PathSelfCheckSwept
+         {
+            RubberContact::pathStats = save;
+            return;
+         }
          const double g = -h.delta, rIn = R + g + 1e-6, rOut = R + g - 2.0 * sag - 1e-6;
          const int a = sh.PathReach(e, V3(), rIn);
          const int b = (kind != 2 || !sh.PathOneWay(e)) && rOut > 0.0 ? sh.PathReach(e, V3(), rOut) : 0;
