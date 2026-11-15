@@ -53,6 +53,7 @@ namespace ContactSystem
    static std::filesystem::file_time_type s_iniTime{};   // its write time when the readers last read it (SetTable, ReloadChangedIni)
    static bool s_ballInsideCheck = true;    // [Features] ball_inside_check of this table (physicsini.h), read likewise: 1 = every group ball's inside check after each attempt (the midJoin lambda); 0 = as before
    static bool s_energyGather = true;       // [Features] energy_gather of this table (physicsini.h), read likewise: 1 = every non-mesh surface by the energy reach (GatherNonMesh); 0 = Regather's box, as before
+   static bool s_queryEngage = true;        // [Features] query_engage of this table (physicsini.h), read likewise, on only with unified, energy_reach and energy_gather: 1 = every ball one entry, its items from its query each cycle; 0 = the engaged / free split
    static bool s_energySolveParts = true;   // [Features] energy_solve_parts of this table (physicsini.h), read likewise: 1 = PartsInSolve by the energy law (with energy_reach); 0 = as before
    static bool s_reachFullFeed = true;      // [Features] reach_full_feed of this table (physicsini.h), read likewise: 1 = a part's move in ReachEnergy takes its group's full feed (the other parts' work too); 0 = the balls' energy only, as before
    static bool s_energyReach = true;        // [Features] energy_reach of this table (physicsini.h), read likewise: 1 = grouping and the finder's look-ahead by the one energy reach (ReachEnergy); 0 = as before
@@ -84,6 +85,7 @@ namespace ContactSystem
       GroupStep::energyReach = f.energyReach;
       s_reachFullFeed = f.reachFullFeed;   // [Features] reach_full_feed (physicsini.h; ReachEnergy)
       s_energyGather = f.energyGather;   // [Features] energy_gather (physicsini.h; Regather, GatherNonMesh)
+      s_queryEngage = s_unified && f.queryEngage && f.energyReach && f.energyGather;   // [Features] query_engage (physicsini.h; EnsureEntries, the release test, EngageNear, Release)
       s_energySolveParts = f.energySolveParts;   // [Features] energy_solve_parts (physicsini.h; PartsInSolve)
       GroupStep::jetPulseAtCycle = f.jetPulseAtCycle;   // [Features] jet_pulse_at_cycle (physicsini.h; BumperGroup::Part::CycleStart, ContactBumperPart::EnergyMove)
       GroupStep::partFinderProf = ContactProf::CheckOn() || GroupStep::FinderCheckEnv();   // (its counters: diagnostics only)
@@ -101,6 +103,7 @@ namespace ContactSystem
          PLOGI << "Contact system: [Features] part_finder = " << (GroupStep::partFinder ? 1 : 0) << (GroupStep::partFinder ? " (a hinge part's pieces listed once per cycle from their swept sectors; the overlap check by region)" : " (per-step piece lists; the overlap check probes every part)");
          PLOGI << "Contact system: [Features] energy_reach = " << (s_energyReach ? 1 : 0) << (s_energyReach ? " (grouping and the finder's look-ahead by one energy reach: a part's turn or travel and a ball's travel from the energy that can feed them)" : " (a part's whole range once a ball reaches it, 2 x surface speed in the ball's bound)");
          PLOGI << "Contact system: [Features] energy_gather = " << (s_energyGather ? 1 : 0) << (s_energyGather ? " (with energy_reach: every non-mesh surface joins a ball's items by the energy reach each cycle)" : " (non-mesh surfaces by the box: radius + 20 U + 10 U)");
+         PLOGI << "Contact system: [Features] query_engage = " << (s_queryEngage ? 1 : 0) << (s_queryEngage ? " (every ball one contact entry, its items from its query each cycle: no engaged / free split)" : " (the engaged / free split: engagement by the stock search and proximity, the release test)");
          PLOGI << "Contact system: [Features] energy_solve_parts = " << (s_energySolveParts ? 1 : 0) << (s_energySolveParts ? " (with energy_reach: a part at rest joins a solve when a ball can close its gap by the energy law)" : " (a part at rest joins by the summed-speed reach)");
          PLOGI << "Contact system: [Features] reach_full_feed = " << (s_reachFullFeed ? 1 : 0) << (s_reachFullFeed ? " (a part's move takes its group's full feed: the balls' energy and the other parts' work)" : " (a part's move from its group's balls' energy only)");
          PLOGI << "Contact system: [Features] jet_pulse_at_cycle = " << (GroupStep::jetPulseAtCycle ? 1 : 0) << (GroupStep::jetPulseAtCycle ? " (a jet's switch closure arms a pulse that starts at the next cycle's start after its jet_coil_delay_ms)" : " (a jet's pulse fires at the end of the step whose switch closes)");
@@ -182,6 +185,24 @@ using namespace RubberContact;
 // The balls the contact system holds in an engine-stepped contact (a post, a wall rubber, the playfield, a disc): the rubbers each one touches, the shear state and the
 // bookkeeping for the log and the release. HitBall::m_contact points at the ball's entry.
 static std::list<BallContact> g_engaged;
+// [Features] query_engage counters (diagnostics only, deterministic; running totals logged every 10 s of table time and at the table's end, ReleaseHost): the nets that should never fire (stock: a stock collider found a ball
+// on a converted surface; noPast: a ball seated by minimum translation; overlap: the overlap replay's scan found a ball; snap: a snapshot restore with a changed entry list),
+// items joined / left between cycles, and the tightness: per kind, the ball-surface pairs kept in a ball's solve at a cycle's end and those that touched in that cycle
+struct QueryEngageCounts
+{
+   uint64_t made = 0, cleared = 0, stock = 0, noPast = 0, overlap = 0, snap = 0, joined = 0, left = 0, cycles = 0, firstSightZero = 0;   // firstSightZero: items new in the query found inside (zero = start depth)
+   std::map<std::string, std::pair<uint64_t, uint64_t>> kept;   // kind -> (kept, touched)
+};
+static QueryEngageCounts g_qe;
+static void QueryEngageLog(const char *const when)   // the query_engage counters' line (running totals; diagnostics only)
+{
+   std::ostringstream o;
+   o << "Query engage (" << when << "): cycles " << g_qe.cycles << ", entries made " << g_qe.made << ", items cleared " << g_qe.cleared << "; nets: stock " << g_qe.stock << ", no past " << g_qe.noPast << ", overlap " << g_qe.overlap
+     << ", snapshot " << g_qe.snap << "; items joined " << g_qe.joined << ", left " << g_qe.left << ", found inside at first sight (zero = depth) " << g_qe.firstSightZero << "; tightness (kept in solve at cycle end / touched in the cycle):";
+   for (const auto &k : g_qe.kept)
+      o << " [" << k.first << " " << k.second.first << " / " << k.second.second << "]";
+   PLOGI << o.str();
+}
 static double g_frameUsedS = 0.0;   // how much of this physics step (1 ms) the sub-intervals before this one took (the engine splits a step at a hit)
 static double g_subS = 0.0;         // the engine's current sub-interval in seconds, as ContactSystem::Step was given it (the parts and cords advanced alone after it read it)
 static std::vector<const HitBall *> g_placed;   // the balls a script or the driver put where they are since the last cycle (NotePlaced)
@@ -195,11 +216,34 @@ static constexpr float kFlipperHorizonVpt = 1.0f;   // trace only: VPX time unit
 struct ContactSystemImpl
 {
    static void StepBalls(double dt);   // dt: seconds
-   static void Release(HitBall *ball, const char *why);
+   static void Release(HitBall *ball, const char *why, bool remove = false);   // remove: the ball leaves play (query_engage: only then is its entry erased; otherwise its items are cleared)
    static void Regather(BallContact &e, const Vertex3Ds &pos, float radiusU, int part = 0);   // the static mesh hosts come from the ball's query (shared finder), the others from a Verlet list
    // ([Features] energy_reach, part: 1 = the others only (before the grouping), 2 = the static mesh hosts only (from the query at the ball's energy travel, after it); 0 = both)
    static bool EngageImpl(ContactHost *host, HitBall *pb, const char *how);
    static void EngageNear(double dt);   // dt: the cycle in seconds
+   // [Features] query_engage: the ball's one entry, made when it has none (its first cycle, or the first collider to find it before that); no seat, no items: its query fills them
+   static BallContact &EnsureOne(HitBall *const pb)
+   {
+      if (pb->m_contact != nullptr)
+         return *pb->m_contact;
+      BallContact rb;
+      rb.ball = pb;
+      rb.posStart = pb->m_d.m_pos;
+      g_engaged.push_back(std::move(rb));
+      pb->m_contact = &g_engaged.back();
+      g_qe.made++;
+      return g_engaged.back();
+   }
+   // every ball in play (not locked in a kicker) has its entry from its first cycle
+   static void EnsureEntries()
+   {
+      for (auto *const ball : g_pplayer->m_vball)
+      {
+         HitBall *const pb = &ball->m_hitBall;
+         if (pb->m_contact == nullptr && PairEligible(pb))
+            EnsureOne(pb);
+      }
+   }
    static void CordNear(double dt);     // likewise
 
    // A ball in the step: its SI state, the substep's forces, and what the step needs to know about it.
@@ -270,6 +314,23 @@ struct ContactSystemImpl
       // Gravity and nudge: the engine has added this step's increment to the ball already (the stock contacts of everything else rely on it): this cycle's share of it is taken
       // back here and given back in small pieces, so the step ends with the same total.
       // Only while the playfield is one of the surfaces of the contact, or the ball has no contact at all: with the stock plane contact under it the ball needs the engine's kick to stay on the plane.
+      // [Features] energy_reach: gravity and the nudge act on every ball every cycle, whichever model gives them (the stock engine's kick or the substeps): the drive's acceleration
+      // (ReachEnergy's forces term; also a new ball's early query, EngageNear). Reads only: the ball's velocity is not changed here
+      static void ReachAcc(Body &w)
+      {
+         HitBall *const pb = w.pb;
+         const Vertex3Ds g = pb->ExternalVelocityIncrement(false);
+         w.gravAcc = V3(g.x * VS, g.y * VS, g.z * VS).Length() / PHYSICS_STEPTIME_S;
+         // a magnet's pull on a magnetic ball while a coil carries current, whether or not the substeps give it (the stock increment gives it to a ball off the playfield model);
+         // at the ball's place now (the field's change over the cycle's travel is not bounded here)
+         w.magReach = 0.0;
+         if (pb->m_magnetic && Magnets::Active())
+         {
+            const Vertex3Ds a = pb->ExternalVelocityIncrement(true);
+            w.magReach = V3((a.x - g.x) * VS, (a.y - g.y) * VS, (a.z - g.z) * VS).Length() / PHYSICS_STEPTIME_S;
+         }
+      }
+
       static void Begin(Body &w, const double dt, const bool always = false)
       {
          HitBall *const pb = w.pb;
@@ -281,18 +342,7 @@ struct ContactSystemImpl
             w.extBaseVS = w.extOwe = V3();
             return;
          }
-         {   // [Features] energy_reach: gravity and the nudge act on every ball every cycle, whichever model gives them (the stock engine's kick or the substeps): the drive's acceleration
-            const Vertex3Ds g = pb->ExternalVelocityIncrement(false);
-            w.gravAcc = V3(g.x * VS, g.y * VS, g.z * VS).Length() / PHYSICS_STEPTIME_S;
-            // a magnet's pull on a magnetic ball while a coil carries current, whether or not the substeps give it (the stock increment gives it to a ball off the playfield model);
-            // at the ball's place now (the field's change over the cycle's travel is not bounded here)
-            w.magReach = 0.0;
-            if (pb->m_magnetic && Magnets::Active())
-            {
-               const Vertex3Ds a = pb->ExternalVelocityIncrement(true);
-               w.magReach = V3((a.x - g.x) * VS, (a.y - g.y) * VS, (a.z - g.z) * VS).Length() / PHYSICS_STEPTIME_S;
-            }
-         }
+         ReachAcc(w);
          // A free ball (no contact of its own, in an island only through a ball pair) has nothing of the stock engine under it: its gravity, nudge and magnet pull act in the substeps like an engaged ball's.
          const bool onPlayfieldModel = always || w.e == nullptr || std::any_of(w.e->items.begin(), w.e->items.end(), [](const SurfaceContact &it) { return it.r->IsFloor(); });
          w.extTaken = onPlayfieldModel;
@@ -373,18 +423,36 @@ struct ContactSystemImpl
          ContactHost *const o = e.host;   // null for a ball only a band holds
          if (o != nullptr && !o->m_set.contact)   // switched off in the ini while a ball is engaged
          {
-            Release(e.ball, "rubber contact switched off");
-            continue;
+            if (ContactSystem::s_queryEngage)
+               e.host = nullptr;   // query_engage: the entry stays; the gather below drops the host's items (a host switched off is no candidate)
+            else
+            {
+               Release(e.ball, "rubber contact switched off");
+               continue;
+            }
          }
          {
             HitBall *const pb = e.ball;
-            if (KickerHold::Held(pb))   // held by a kicker (KickerDesign 1h: no surface contacts): the kicker holds it, not the contact
+            if (KickerHold::Held(pb) || (ContactSystem::s_queryEngage && pb->m_d.m_lockedInKicker))   // held by a kicker (KickerDesign 1h: no surface contacts): the kicker holds it, not the contact
             {
-               cy.releases.emplace_back(pb, "kicker");
+               if (ContactSystem::s_queryEngage)
+               {
+                  if (!e.items.empty())
+                     g_qe.cleared++;
+                  e.items.clear();   // query_engage: its items cleared, its entry kept
+               }
+               else
+                  cy.releases.emplace_back(pb, "kicker");
                continue;
             }
+            if (ContactSystem::s_queryEngage)
+            {
+               e.lastHosts.clear();   // (counters: the items before this cycle's gather)
+               for (const SurfaceContact &it : e.items)
+                  e.lastHosts.push_back(it.r);
+            }
             Body w;
-            w.o = o;
+            w.o = e.host;
             w.e = &e;
             LoadBody(w, pb);
             LoadState(w);
@@ -479,7 +547,7 @@ struct ContactSystemImpl
          if (it.r != nullptr && it.r->FinderObjIndex() >= 0)
             next.push_back(std::move(it));   // the static mesh items as Regather part 2 left them
       std::stable_sort(next.begin(), next.end(), [](const SurfaceContact &a, const SurfaceContact &b) { return static_cast<const ContactHost *>(a.r)->m_regOrder < static_cast<const ContactHost *>(b.r)->m_regOrder; });
-      if (!next.empty())   // never drop the whole set: the release test decides when the ball is free
+      if (!next.empty() || ContactSystem::s_queryEngage)   // never drop the whole set: the release test decides when the ball is free (query_engage: an empty set is a ball touching nothing)
          e.items = std::move(next);
       if (++s_calls % 10000 == 0)
       {
@@ -502,6 +570,8 @@ struct ContactSystemImpl
          HitBall *const pb = w.pb;
          BallContact &e = *w.e;
          ContactSurfaceHost::FinderQuery(pb, w.c, w.v, w.bs.R, cy.dt, std::max(w.reachS, 0.0));
+         e.reachS = w.reachS;   // (the stock net's log reads it)
+         e.reachMs = g_pplayer->m_time_msec;
          {
             CPROF(Regather);
             Regather(e, w.posStart, pb->m_d.m_radius, 2);
@@ -516,6 +586,15 @@ struct ContactSystemImpl
                   it.r->Refresh(it, w.bs.R, 2.0 * w.v.Length() * cy.dt + 0.005, w.c);
          }
          ContactSurfaceHost::FinderCheckGather(pb, e.items, w.c, w.bs.R);   // check mode only (VPX_FINDER_CHECK=1)
+         if (ContactSystem::s_queryEngage)   // (counters: items joined and left since the last cycle's gather)
+         {
+            for (const SurfaceContact &it : e.items)
+               if (std::find(e.lastHosts.begin(), e.lastHosts.end(), it.r) == e.lastHosts.end())
+                  g_qe.joined++;
+            for (const void *const h : e.lastHosts)
+               if (std::none_of(e.items.begin(), e.items.end(), [h](const SurfaceContact &it) { return it.r == h; }))
+                  g_qe.left++;
+         }
       }
    }
 
@@ -524,7 +603,7 @@ struct ContactSystemImpl
    static void GatherFree(Cycle &cy)
    {
       CPROF(GatherFree);
-      if (!ContactSystem::s_unified)
+      if (!ContactSystem::s_unified || ContactSystem::s_queryEngage)   // (query_engage: no free ball, every ball has its entry: GatherBalls)
          return;
       std::vector<Body> cand;
       for (auto *const ball : g_pplayer->m_vball)
@@ -1129,6 +1208,8 @@ struct ContactSystemImpl
                cy.bandReleases.emplace_back(pb, "clear");
             continue;
          }
+         if (ContactSystem::s_queryEngage)
+            continue;   // query_engage: no release test: the entry lasts the ball's life, its items are the query's
          bool free = true, touching = false, closeBy = false;
          CPROF(ReleaseTest);
          const ContactProf::Stage profStage(ContactProf::StReleaseTest);   // P3a profile: the calling stage of the checks here (diagnostics only)
@@ -1164,6 +1245,30 @@ struct ContactSystemImpl
             s_relTimeout++;
          }
       }
+   }
+
+   // query_engage, rule 8: a ball found inside a surface where its group state is (re)built (zero = that depth, nothing stored): a placement fault or a contact missed earlier.
+   // Shown once per surface per table start; every one is counted (g_qe.firstSightZero).
+   static void FoundInside(const HitBall *const pb, const std::string &surface, const double depth)
+   {
+      static const void *owner = nullptr;
+      static std::vector<std::string> seen;
+      if (owner != g_pplayer)
+      {
+         owner = g_pplayer;
+         seen.clear();
+      }
+      if (std::find(seen.begin(), seen.end(), surface) != seen.end())
+         return;
+      seen.push_back(surface);
+      const char *const name = TestDriver::BallName(pb);
+      const Vertex3Ds &p = pb->m_d.m_pos;
+      std::ostringstream o;
+      o << "Contact: ball " << (name != nullptr ? name : "") << " at (" << p.x << ", " << p.y << ", " << p.z << ") found " << depth * 1e3 << " mm inside " << surface
+        << ": a ball started or was moved inside " << surface << ": a placement fault or a contact missed earlier. It counts from there, nothing stored. t=" << g_pplayer->m_time_msec;
+      PLOGW << o.str();
+      if (g_pplayer->m_liveUI != nullptr)
+         g_pplayer->m_liveUI->PushNotification(o.str(), 6000);
    }
 
    // ---- The whole-ball energy check (ModelStandards 2b, rule 8): always on ----
@@ -1287,17 +1392,57 @@ struct ContactSystemImpl
                island = (int)k;
          ContactTraceBall("EnergyCheckStart", cy.bodies[i].pb, true, island);
       }
+      // query_engage: a ball handed to the group step this cycle (a new entry in an island without a cord: RingHandIn runs in its CordIsland, after this check)
+      auto handedIn = [&cy](const Body &w)
+      {
+         if (!ContactSystem::s_queryEngage || w.e == nullptr || w.e->groupLoop)
+            return false;
+         const int i = (int)(&w - &cy.bodies[0]);
+         for (size_t k = 0; k < cy.islands.count; k++)
+         {
+            const std::vector<int> &m = cy.islands.list[k].members;
+            if (std::find(m.begin(), m.end(), i) == m.end())
+               continue;
+            for (const int j : m)
+               if (cy.bodies[j].band != nullptr)
+                  return false;
+            return true;
+         }
+         return false;
+      };
       for (Body &w : cy.bodies)
       {
-         double held = 0.0, worst = 0.0, depth0 = 0.0, depth1 = 0.0;
+         double held = 0.0, worst = 0.0, depth0 = 0.0, depth1 = 0.0, heldEnd = 0.0;
          const SurfaceContact *where = nullptr;
+         const bool qe = ContactSystem::s_queryEngage;   // query_engage: first sight per item (a surface new in the items), not per entry
+         const bool handIn = handedIn(w);
          if (w.e != nullptr)
-            for (const SurfaceContact &it : w.e->items)
+            for (SurfaceContact &it : w.e->items)
             {
+               // query_engage, first sight of an item (new in the query) already overlapping: the zero rule (GroupStepDesign 14.4): its zero is its start depth, nothing stored,
+               // no position snap (rule 10b: the overlap came from no drive). A moving part's surfaces take the same rule in the group step (SetShapeItem: not touching, zero 0)
+               if (qe && it.endHeld < 0.0 && w.e->groupLoop && !it.gs.touching && it.gs.zero <= 0.0 && it.r->MovingPart() == nullptr && !it.NoFaces(w.c))
+               {
+                  const TubeProbe pr = it.r->ProbePatch(w.bs, it, w.c);
+                  if (pr.overlap && pr.delta > 0.0)
+                  {
+                     it.gs.zero = pr.delta;
+                     g_qe.firstSightZero++;
+                     FoundInside(w.pb, it.r->Name(), pr.delta);
+                  }
+               }
+               // a ball handed in this cycle: an item RingHandIn will find inside takes zero = its depth there, so it holds nothing at this reading either (same rule, same probe)
+               bool zeroAtHandIn = false;
+               if (handIn && !(it.touching && w.e->dwellS > 0.0) && it.r->MovingPart() == nullptr && !it.NoFaces(w.c))
+               {
+                  const TubeProbe pr = it.r->ProbePatch(w.bs, it, w.c);
+                  zeroAtHandIn = pr.overlap && pr.delta > 0.0;
+               }
                double d = 0.0;
-               const double v = w.e->seatPending ? 0.0 : ContactHolds(it, w.bs, w.c, w.e->groupLoop, d);   // (found inside and not seated: it counts from zero)
+               const double v = w.e->seatPending || zeroAtHandIn ? 0.0 : ContactHolds(it, w.bs, w.c, w.e->groupLoop, d);   // (found inside and not seated: it counts from zero)
                held += v;
-               const double was = w.e->endStored >= 0.0 ? it.endDepth : 0.0;
+               heldEnd += std::max(it.endHeld, 0.0);
+               const double was = (qe ? it.endHeld >= 0.0 : w.e->endStored >= 0.0) ? it.endDepth : 0.0;
                if (d - was > worst)
                {
                   worst = d - was;
@@ -1310,9 +1455,10 @@ struct ContactSystemImpl
          w.eScale = (w.held ? 0.0 : 0.5 * w.bs.m * w.v.Dot(w.v) + 0.5 * w.bs.Inertia() * w.w.Dot(w.w)) + held;
          if (w.e != nullptr)
          {
-            const double rise = held - std::max(w.e->endStored, 0.0);
+            const double rise = held - (qe ? heldEnd : std::max(w.e->endStored, 0.0));
+            const bool first = qe ? where != nullptr && where->endHeld < 0.0 : w.e->endStored < 0.0;
             if (rise > std::max(1e-3, 0.01 * w.eScale))
-               EnergyRaise(w.e->endStored >= 0.0 ? "between cycles" : "at first sight", w.pb, where != nullptr ? where->r->Name() : std::string("?"), depth0, depth1, rise);
+               EnergyRaise(!first ? "between cycles" : "at first sight", w.pb, where != nullptr ? where->r->Name() : std::string("?"), depth0, depth1, rise);
          }
       }
       for (const auto &p : cy.pairs)   // what the ball pairs hold, half to each ball
@@ -1366,7 +1512,28 @@ struct ContactSystemImpl
             for (SurfaceContact &it : w.e->items)
             {
                driven = driven || (!it.partOut && it.r->MovingPart() != nullptr);
-               held += ContactHolds(it, w.bs, w.c, w.e->groupLoop, it.endDepth);
+               const double v = ContactHolds(it, w.bs, w.c, w.e->groupLoop, it.endDepth);
+               held += v;
+               if (ContactSystem::s_queryEngage)
+               {
+                  it.endHeld = v;
+                  if (it.partOut)   // (out of the ball's solve: not touching; its zero is 0, as any item clear at a cycle's end)
+                  {
+                     it.gs.zero = 0.0;
+                     for (SurfaceState &m : it.gsMore)
+                        m.zero = 0.0;
+                  }
+                  // tightness counters: a pair kept in the ball's solve, and whether it touched in this cycle (per kind; diagnostics only)
+                  if (!it.partOut)
+                  {
+                     const ContactMovingPart *const mp = it.r->MovingPart();
+                     auto &k = g_qe.kept[mp != nullptr ? std::string("part ") + typeid(*it.r).name() : it.r->FinderObjIndex() >= 0 ? std::string("static mesh") : std::string("static other")];
+                     k.first++;
+                     if (it.cycleTouched || it.touching)
+                        k.second++;
+                  }
+                  it.cycleTouched = false;
+               }
             }
             w.e->endStored = held;
          }
@@ -1524,6 +1691,20 @@ struct ContactSystemImpl
          it.gs.xi = it.st.xi;
          it.gs.ra = it.st.ra;
          it.gs.zero = it.gs.reff = 0.0;
+         // query_engage: an item not touching that the ball is found inside has stored nothing (rule 10b: the overlap came from no drive): its zero is its depth, by the
+         // group's own probe of a fixed surface (SurfaceShape::Probe, ProbePatch); a moving part's surfaces take the same rule in SetShapeItem
+         if (ContactSystem::s_queryEngage && !it.gs.touching && it.r->MovingPart() == nullptr && !it.NoFaces(c))
+         {
+            const TubeProbe pr = it.r->ProbePatch(bs, it, c);
+            if (pr.overlap && pr.delta > 0.0)
+            {
+               it.gs.zero = pr.delta;
+               g_qe.firstSightZero++;
+               if (e.ball != nullptr)
+                  FoundInside(e.ball, it.r->Name(), pr.delta);
+            }
+            continue;
+         }
          if (!it.gs.touching || it.hLayer <= 0.0 || it.r->MovingPart() != nullptr || it.NoFaces(c))
             continue;
          // the group's law at this depth may not hold more than the old loop's did: its zero takes up the rest (a change of loop does no work)
@@ -1832,7 +2013,7 @@ struct ContactSystemImpl
             const bool same = kd != g_keptDoubles.end() && kd->second.pos == w.pb->m_d.m_pos;
             cause[ib] = std::find(g_placed.begin(), g_placed.end(), w.pb) != g_placed.end() ? DepthCause::Placed
                : w.e != nullptr && !w.e->groupLoop && w.e->endStored >= 0.0 ? DepthCause::HandedOver
-               : w.e != nullptr && w.e->endStored < 0.0 ? DepthCause::FirstSight
+               : w.e != nullptr && w.e->endStored < 0.0 && !ContactSystem::s_queryEngage ? DepthCause::FirstSight   // (query_engage: per item, below)
                : same ? DepthCause::Faces : DepthCause::StockMoved;
          }
          if (ring && w.e != nullptr)
@@ -2002,8 +2183,10 @@ struct ContactSystemImpl
                it.dZero += hp.delta - was;
          }
          // what the zero took this cycle, by who moved the ball
-         if (ring && it.dZero > kept.zero + 1e-9 && cause[it.a] != DepthCause::Placed && cause[it.a] != DepthCause::HandedOver)
-            DepthFault(cause[it.a], balls[it.a], sh->r->Name(), it.dZero - kept.zero);
+         // (query_engage: first sight per item: the zero rule took its start depth, SetShapeItem / EnergyCheckStart, as a placed ball: nothing to report)
+         const DepthCause why = ContactSystem::s_queryEngage && cause[it.a] != DepthCause::Placed && sh->it->endHeld < 0.0 ? DepthCause::FirstSight : cause[it.a];
+         if (ring && it.dZero > kept.zero + 1e-9 && why != DepthCause::Placed && why != DepthCause::HandedOver && !(ContactSystem::s_queryEngage && why == DepthCause::FirstSight))
+            DepthFault(why, balls[it.a], sh->r->Name(), it.dZero - kept.zero);
       }
       for (int k = 0; k < g.ni; k++)   // ... and a ball pair's zero
          if (g.item[k].b >= 0)
@@ -2051,6 +2234,8 @@ struct ContactSystemImpl
             const GroupStep::Item &gi = g.item[k];
             if (!ring && (gi.b >= 0 || !isSurf(gi.s) || static_cast<const SurfaceShape *>(g.shape[gi.s])->mp == nullptr))   // (a cord island: a part's touches only)
                continue;
+            if (ContactSystem::s_queryEngage && gi.touching && gi.b < 0 && isSurf(gi.s))
+               const_cast<SurfaceContact *>(static_cast<const SurfaceShape *>(g.shape[gi.s])->it)->cycleTouched = true;   // (query_engage counters)
             if (gi.touching == hitOn[k])
                continue;
             hitOn[k] = gi.touching;
@@ -2588,7 +2773,7 @@ struct ContactSystemImpl
             GroupStep::Hit hp;
             g.ProbeItem(k, hp);
             kept.endDepth = hp.delta;
-            if (!gi.touching && it.partTouching && hp.delta < -sh->r->ReleaseGapM())
+            if (!gi.touching && it.partTouching && hp.delta < -sh->r->ReleaseGapM() && !ContactSystem::s_queryEngage)   // (query_engage: it clears when the item leaves the query)
                it.partTouching = false;
          }
          else if (ring)
@@ -2610,7 +2795,17 @@ struct ContactSystemImpl
          kept.touching = gi.touching;
          kept.xi = gi.xi;
          kept.ra = gi.ra;
-         kept.zero = gi.dZero;
+         // query_engage: an item not touching keeps its zero while the ball is still inside it (the zero follows the ball out, groupstep BackOut); zero 0 only once the ball is
+         // clear: its raw depth at the cycle's end <= 0. Raw depth: ProbeItem is the shape's own probe less the item's zero, so adding gi.dZero back gives the geometric depth
+         double zeroKept = gi.dZero;
+         if (ContactSystem::s_queryEngage && !gi.touching && gi.dZero > 0.0)   // (a zero of 0 stays 0)
+         {
+            GroupStep::Hit hr;
+            g.ProbeItem(k, hr);
+            if (hr.delta + gi.dZero <= 0.0)
+               zeroKept = 0.0;
+         }
+         kept.zero = zeroKept;
       }
       for (ContactSurfaceHost *const c : cords)
       {
@@ -3259,6 +3454,19 @@ void ContactSystemImpl::StepBalls(const double dt)
    static const bool timed = getenv("VPX_CONTACT_TIMING") != nullptr && *getenv("VPX_CONTACT_TIMING") != 0;
    uint64_t tp = timed ? usec() : 0;
    auto lap = [&](int &acc) { if (timed) { const uint64_t t = usec(); acc += (int)(t - tp); tp = t; } };
+   if (ContactSystem::s_queryEngage)
+   {
+      EnsureEntries();   // query_engage: every ball in play has its entry before the gather
+      g_qe.cycles++;
+      static uint32_t nextLogMs = 10000;
+      if (g_pplayer->m_time_msec < nextLogMs - 10000)   // (a new table)
+         nextLogMs = 10000;
+      if (g_pplayer->m_time_msec >= nextLogMs)   // the counters' running totals every 10 s of table time (the bench stops before the table's end)
+      {
+         nextLogMs = g_pplayer->m_time_msec - g_pplayer->m_time_msec % 10000 + 10000;
+         QueryEngageLog("running");
+      }
+   }
    GatherBalls(cy);
    GatherFree(cy);
    FindIslands(cy);
@@ -3353,7 +3561,37 @@ void ContactSystemImpl::EngageNear(const double dt)
    CPROF(EngageNear);
    const ContactProf::Stage profStage(ContactProf::StEngageNear);   // P3a profile: the calling stage of the checks here (diagnostics only)
    ContactProf::Cycle();
-   if (!ContactSystem::s_proximity)   // (read at the table load, SetTable)
+   if (ContactSystem::s_queryEngage)
+   {
+      // query_engage: a ball that entered play since the last step (made or moved in by the driver, the script or a kicker) has its entry and its first query here, before
+      // the stock hit search of its first cycle: one contact path for every surface that touches a ball, from its first instant. Without it the stock search tests every
+      // converted collider of a new ball (no items: SurfaceOwns false) and a ball made touching a surface is caught by stock's net. Its reach is the cycle's own energy reach
+      // (ReachLinks / ReachEnergy on a cycle of this one ball: its own kinetic energy and spin, gravity + nudge + magnets (ReachAcc), the drive work of every moving part in reach
+      // (Regather part 1: each one a candidate); a new ball holds no stored energy and is in no ball pair yet), then the cycle's own query and gather (GatherStatic).
+      // Only this ball's entry is written; the cycle's Step groups it with the others and regathers it as every ball.
+      for (auto *const ball : g_pplayer->m_vball)
+      {
+         HitBall *const pb = &ball->m_hitBall;
+         if (pb->m_contact != nullptr || !PairEligible(pb) || KickerHold::Held(pb))
+            continue;
+         BallContact &e = EnsureOne(pb);
+         Cycle cy;
+         cy.dt = dt;
+         cy.cs = &ContactSettings::Get();
+         Body w;
+         w.o = e.host;
+         w.e = &e;
+         LoadBody(w, pb);
+         LoadState(w);
+         w.band = e.band;
+         Regather(e, w.posStart, pb->m_d.m_radius, 1);
+         Sources::ReachAcc(w);
+         cy.bodies.push_back(std::move(w));
+         ReachLinks(cy);
+         GatherStatic(cy);
+      }
+   }
+   if (!ContactSystem::s_proximity || ContactSystem::s_queryEngage)   // (read at the table load, SetTable; query_engage: no free ball to engage, every ball's query fills its items)
       return;
    // The faces near each free ball, per surface, kept between cycles (a Verlet list: Refresh only rescans when the ball has moved out of the list): scanning a mesh playfield
    // afresh for every free ball every cycle would cost milliseconds.
@@ -3643,6 +3881,8 @@ bool ContactSystemImpl::EngageImpl(ContactHost *const host, HitBall *const pb, c
    // Found inside a part with no earlier clean state (docs/unified-physics/archive/UnifiedContactDesign.txt 11, point 6): CheckOverlaps found no clean start of the sub-interval, or the engagement by proximity finds the ball already inside a
    // moving part (point 1 engages a ball that has a past before it touches, so a ball inside at that point was created or moved there)
    bool noPast = std::strcmp(how, "no past") == 0 && !(host != nullptr && host->MovingPart() != nullptr && host->MovingPart()->GroupPart() != nullptr);   // (a part on the group step: its zero, below)
+   if (ContactSystem::s_queryEngage)   // query_engage nets (0 expected): a ball the overlap replay found, a ball with no past
+      (std::strcmp(how, "no past") == 0 ? g_qe.noPast : g_qe.overlap)++;
    if (!noPast && host != nullptr && std::strcmp(how, "near") == 0)
       for (SurfaceContact &it : rb.items)
          if (it.r->MovingPart() != nullptr && it.r->MovingPart()->GroupPart() == nullptr)
@@ -3673,8 +3913,17 @@ bool ContactSystemImpl::EngageImpl(ContactHost *const host, HitBall *const pb, c
       }
    if (std::any_of(rb.items.begin(), rb.items.end(), [](const SurfaceContact &it) { return it.r->MovingPart() != nullptr && it.r->MovingPart()->GroupPart() == nullptr; }))
       zeroNotSeat = false;
+   if (ContactSystem::s_queryEngage)   // query_engage: no rewind to the touch; a ball found inside counts from zero (the group step's zero rule)
+   {
+      zeroNotSeat = false;
+      for (const SurfaceContact &it : rb.items)
+      {
+         const TubeProbe p0 = it.r->Probe(bs, it, c);
+         zeroNotSeat = zeroNotSeat || (p0.overlap && p0.delta > 1e-6);
+      }
+   }
    rb.seatPending = zeroNotSeat;
-   if (!zeroNotSeat)
+   if (!zeroNotSeat && !ContactSystem::s_queryEngage)
       SeatAtTouch(rb.items, bs, c, v, rb.delta0, rb.rewound);
    }
    pb->m_d.m_pos = Vertex3Ds((float)(c.x / U), (float)(c.y / U), (float)(c.z / U));
@@ -3708,7 +3957,7 @@ bool ContactSystemImpl::EngageImpl(ContactHost *const host, HitBall *const pb, c
    return true;
 }
 
-void ContactSystemImpl::Release(HitBall *const ball, const char *why)
+void ContactSystemImpl::Release(HitBall *const ball, const char *why, const bool remove)
 {
    if (ball->m_contact == nullptr)
       return;
@@ -3738,6 +3987,16 @@ void ContactSystemImpl::Release(HitBall *const ball, const char *why)
             << " speed " << std::sqrt((double)ball->m_d.m_vel.Dot(ball->m_d.m_vel)) * 0.53975e-3 / DEFAULT_STEPTIME_S << " pos " << ball->m_d.m_pos.x << ' ' << ball->m_d.m_pos.y << ' ' << ball->m_d.m_pos.z;
    if (ContactProf::On())
       ContactProf::Note(std::string("release ") + why);
+   if (ContactSystem::s_queryEngage && !remove)   // query_engage: the entry stays for the ball's life; what it held of the old position is gone (a script move, a kicker)
+   {
+      if (!itE->items.empty())
+         g_qe.cleared++;
+      BallContact fresh;
+      fresh.ball = ball;
+      fresh.posStart = ball->m_d.m_pos;
+      *itE = std::move(fresh);
+      return;
+   }
    ball->m_contact = nullptr;
    ball->m_nearSafeU = -1.f;   // scan again at the next cycle
    g_engaged.erase(itE);
@@ -3753,6 +4012,8 @@ bool ContactSystem::EngageBand(ContactSurfaceHost *const band, HitBall *const pb
    BallContact *e = pb->m_contact;
    if (e != nullptr && e->band != nullptr && e->band != band)
       return false;   // another band has the ball
+   if (e == nullptr && ContactSystem::s_queryEngage && PairEligible(pb) && !KickerHold::Held(pb))
+      e = &ContactSystemImpl::EnsureOne(pb);   // query_engage: the ball's own entry (not yet made this cycle), the band joins it
    if (e == nullptr)
    {
       if (!ContactSystemImpl::EngageImpl(nullptr, pb, "band"))
@@ -3861,7 +4122,7 @@ void ContactSystemImpl::Regather(BallContact &e, const Vertex3Ds &pos, const flo
    }
    }
    std::stable_sort(next.begin(), next.end(), [](const SurfaceContact &a, const SurfaceContact &b) { return static_cast<const ContactHost *>(a.r)->m_regOrder < static_cast<const ContactHost *>(b.r)->m_regOrder; });
-   if (!next.empty())   // never drop the whole set: the release test below decides when the ball is free
+   if (!next.empty() || ContactSystem::s_queryEngage)   // never drop the whole set: the release test below decides when the ball is free (query_engage: an empty set is legal)
       e.items = std::move(next);
 }
 
@@ -3875,11 +4136,17 @@ bool ContactSystem::Engage(ContactHost *const host, HitBall *const pb, const cha
 {
    if (KickerHold::Held(pb))
       return true;   // the kicker holds it: no surface acts on it, nothing to solve
+   if (ContactSystem::s_queryEngage)
+   {
+      g_qe.stock++;   // query_engage: a stock collider found the ball on a converted surface (a net: the query missed it); the surface joins, no seat
+      ContactSystemImpl::EnsureOne(pb);
+   }
    if (pb->m_contact == nullptr)
       return ContactSystemImpl::EngageImpl(host, pb, how);
    // Already held, and this surface is not in its set (made collidable, or the ball was moved, since the last gather): it joins the set, as Regather would add it
    std::vector<SurfaceContact> &items = pb->m_contact->items;
-   if (std::none_of(items.begin(), items.end(), [host](const SurfaceContact &it) { return it.r == host; }))
+   const bool inItems = std::any_of(items.begin(), items.end(), [host](const SurfaceContact &it) { return it.r == host; });
+   if (!inItems)
    {
       SurfaceContact it;
       it.r = host;
@@ -3890,12 +4157,59 @@ bool ContactSystem::Engage(ContactHost *const host, HitBall *const pb, const cha
       ContactSurfaceHost::FinderBindOne(pb, it);   // shared finder: its faces from the ball's query of this cycle (the inside check re-queries if the ball is outside it)
       items.push_back(std::move(it));
    }
+   if (ContactSystem::s_queryEngage)
+   {
+      // rule 8: the stock net caught the ball (the query missed this surface). Every catch is one INFO line with why the query did not keep it: was the surface in the ball's
+      // items, its gap by its own probe (faces from this cycle's query) and the ball's energy reach of the cycle; on screen and WARN once per surface per table start
+      using namespace RubberContact;
+      const BallContact &e = *pb->m_contact;
+      const auto at = std::find_if(e.items.begin(), e.items.end(), [host](const SurfaceContact &it) { return it.r == host; });
+      BallSI bs;
+      bs.R = (double)pb->m_d.m_radius * U;
+      const V3 c((double)pb->m_d.m_pos.x * U, (double)pb->m_d.m_pos.y * U, (double)pb->m_d.m_pos.z * U);
+      const bool noFaces = at == e.items.end() || at->NoFaces(c);
+      const TubeProbe pr = noFaces ? TubeProbe() : at->r->Probe(bs, *at, c);
+      const char *const name = TestDriver::BallName(pb);
+      const Vertex3Ds &p = pb->m_d.m_pos;
+      const Vertex3Ds &vel = pb->m_d.m_vel;
+      std::ostringstream o;
+      o << "Stock net: ball " << (name != nullptr ? name : "") << " caught by " << host->Name() << " (" << typeid(*host).name() << (host->FinderObjIndex() >= 0 ? ", mesh" : "") << (host->MovingPart() != nullptr ? ", moving part" : "")
+        << ", how " << (how != nullptr ? how : "?") << ") at (" << p.x << ", " << p.y << ", " << p.z << ") v (" << vel.x * VS << ", " << vel.y * VS << ", " << vel.z * VS << ") m/s, t=" << g_pplayer->m_time_msec;
+      const std::string head = o.str();
+      o << "; in the ball's items this cycle " << (inItems ? "yes" : "no") << ", gap by its probe ";
+      if (noFaces)
+         o << "none (no faces in the ball's query)";
+      else
+         o << -pr.delta * 1e3 << " mm";
+      o << ", energy reach " << (e.reachS < 0.0 ? std::string("not set") : std::to_string(e.reachS * 1e3) + " mm") << " (set t=" << e.reachMs << ")";
+      PLOGI << o.str();
+      static const void *owner = nullptr;
+      static std::vector<std::string> seen;
+      if (owner != g_pplayer)
+      {
+         owner = g_pplayer;
+         seen.clear();
+      }
+      if (std::find(seen.begin(), seen.end(), host->Name()) == seen.end())
+      {
+         seen.push_back(host->Name());
+         const std::string msg = head + ": the contact system missed this surface and stock's collider caught the ball (a net, not the model; see vpinball.log 'Stock net')";
+         PLOGW << msg;
+         if (g_pplayer->m_liveUI != nullptr)
+            g_pplayer->m_liveUI->PushNotification(msg, 6000);
+      }
+   }
    return true;
 }
 
 void ContactSystem::Release(HitBall *const ball, const char *why)
 {
    ContactSystemImpl::Release(ball, why);
+}
+
+void ContactSystem::Remove(HitBall *const ball)
+{
+   ContactSystemImpl::Release(ball, "ball deleted", true);
 }
 
 void ContactSystem::ReleaseHost(ContactHost *const host)
@@ -3912,10 +4226,26 @@ void ContactSystem::ReleaseHost(ContactHost *const host)
       else
          PLOGW << "Group step: energy steps with a ball, table end, per part in the group:" << totals;
    }
+   if (ContactSystem::s_queryEngage && g_qe.cycles > 0)   // query_engage counters at the table's end (diagnostics only)
+   {
+      QueryEngageLog("table end");
+      g_qe = QueryEngageCounts();
+   }
    // the host is going away: its engagements end without a log line (a ball can outlive the physics engine: it must not keep a pointer to the entry)
    for (BallContact &e : g_engaged)
       if (e.band == host)
          e.band = nullptr;
+   if (ContactSystem::s_queryEngage)   // query_engage: the host's items go, every entry stays (its ball's life)
+   {
+      for (BallContact &e : g_engaged)
+      {
+         if (e.host == host)
+            e.host = nullptr;
+         e.items.erase(std::remove_if(e.items.begin(), e.items.end(), [host](const SurfaceContact &it) { return it.r == host; }), e.items.end());
+         e.lastHosts.erase(std::remove(e.lastHosts.begin(), e.lastHosts.end(), (const void *)static_cast<const ContactSurface *>(host)), e.lastHosts.end());
+      }
+      return;
+   }
    for (auto it = g_engaged.begin(); it != g_engaged.end();)
       if (it->host == host)
       {
@@ -4299,7 +4629,11 @@ static void RestoreSnap()
          e = s.contacts[k++];
    }
    else
+   {
+      if (ContactSystem::s_queryEngage)
+         g_qe.snap++;   // query_engage net (0 expected): the list is one entry per ball, it changes only with a ball added or removed
       PLOGW << "Snapshot: the engaged list changed since it was taken (" << s.contacts.size() << " -> " << g_engaged.size() << "): contacts not restored";
+   }
    g_ballPairs = s.pairs;
    if (!g_snapSkipParts)
       for (const PartSnap &p : s.parts)

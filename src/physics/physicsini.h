@@ -71,6 +71,9 @@ namespace PhysicsIni
       bool energyGather = true;   // energy_gather (on while tested, rule 6; runs/2026-11-15-finder-P6b3/brief_B2-1.md): with energy_reach, every non-mesh surface joins a ball's items by the energy
                                   // reach each cycle (a moving part: its gap less its own move, or its region less R, under reachS + 0.1 mm; a fixed one: its bounding box less R under reachS + 0.1 mm),
                                   // not by Regather's box (radius + 20 U + 10 U, rescanned after 5 U or 10 ms); 0 = the box, as before
+      bool queryEngage = true;   // query_engage (on while tested, rule 6; runs/2026-11-15-finder-P6b3/brief_split.md, split_walk.md): with energy_reach and energy_gather, every ball has one contact entry
+                                 // from its first cycle until it is removed, its items filled each cycle by its query (no engaged / free split): no release test, no proximity engagement, no
+                                 // rewind to the touch, no release gap or 2 mm hold; a script-placed ball inside a surface starts from the zero rule; 0 = the engaged / free split, as before
       bool energySolveParts = true;   // energy_solve_parts (on while tested, rule 6; runs/2026-11-15-finder-P6b3/brief_B.md, paper.md sections 1.1, 1.2): 1 = a group part at rest joins an island's solve only
                                       // when a ball of the island can close its gap this cycle (gap less the part's own move, EnergyMove with no feed, under the ball's travel reachS + 0.1 mm); the
                                       // release test as before; with energy_reach 0 there is no reachS: as before; 0 = as before
@@ -203,6 +206,8 @@ namespace PhysicsIni
             f.energyReach = on;
          else if (key == "energy_gather")
             f.energyGather = on;
+         else if (key == "query_engage")
+            f.queryEngage = on;
          else if (key == "energy_solve_parts")
             f.energySolveParts = on;
          else if (key == "reach_full_feed")

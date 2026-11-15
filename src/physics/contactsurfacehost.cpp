@@ -2333,7 +2333,7 @@ void HitRubberBandBallDeleted(HitBall *ball)
 {
    if (ball->m_bandOwner != nullptr)
       ball->m_bandOwner->BandRelease(ball, "ball deleted");
-   ContactSystem::Release(ball, "ball deleted");
+   ContactSystem::Remove(ball);
 }
 
 bool ContactSurfaceHost::BandWants(const HitBall *ball) const

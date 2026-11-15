@@ -126,9 +126,12 @@ struct BallContact
    Vertex3Ds regatherPos;                // where the surfaces near the ball were last collected, and when (Regather is a Verlet list: it rescans after 5 U of travel or 10 ms)
    uint32_t regatherMs = 0;
    bool regathered = false;
+   double reachS = -1.0;                 // query_engage: the ball's energy reach (m) its query used, and the table time it was set (the stock net's log: why a surface was not kept); -1 = never set
+   uint32_t reachMs = 0;
    double endStored = -1.0;              // the energy check: what its contacts held at the end of the last cycle, J (< 0 = no cycle yet)
    bool groupLoop = false;               // ring_model: the last cycle went through the group step, so the touches' state is in SurfaceContact::gs (GroupStepDesign 14.4)
    bool seatPending = false;             // ring_model: found inside a rubber at engagement and not seated: the group counts it from zero; the old loop seats it if the island goes there (14.5)
+   std::vector<const void *> lastHosts;  // [Features] query_engage counters: the items' hosts before this cycle's gather (diagnostics only)
 };
 
 class ContactSurfaceHost;
