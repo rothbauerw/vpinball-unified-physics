@@ -63,9 +63,6 @@ namespace PhysicsIni
                                      // whatever its items, so its re-query and the mid-step join run for a ball with no static mesh item; 0 = only a static mesh item's probes check it, as before
       bool jetPulseAtCycle = true;   // jet_pulse_at_cycle (on while tested, rule 6; runs/2026-11-14-reach-p1b/brief_bumperdrv.md): 1 = a jet bumper's switch closure arms a pulse that starts at the next
                                      // cycle's start after its jet_coil_delay_ms (the sling's form), so its coil state for a cycle is known at the cycle's start; 0 = the pulse fires at the end of the step whose switch closes
-      bool energySolveParts = true;   // energy_solve_parts (on while tested, rule 6; runs/2026-11-15-finder-P6b3/brief_B.md, paper.md sections 1.1, 1.2): 1 = a group part at rest joins an island's solve only
-                                      // when a ball of the island can close its gap this cycle (gap less the part's own move, EnergyMove with no feed, under the ball's travel reachS + 0.1 mm); the
-                                      // release test as before; with the energy reach 0 there is no reachS: as before; 0 = as before
       bool reachFullFeed = true;   // reach_full_feed (on while tested, rule 6; runs/2026-11-15-finder-P6b3/brief_A.md, paper.md section 4 item 2): 1 = in the energy reach's grouping (ContactSystem
                                    // ReachEnergy) a part's move takes its group's full feed: the balls' energy plus the other grouped parts' work and squash (its own work excluded: it is
                                    // already in its move), grown with the others to a fixed point; 0 = a part's move from its group's balls' energy only, as before
@@ -191,8 +188,6 @@ namespace PhysicsIni
             f.pathTest = on;
          else if (key == "part_finder")
             f.partFinder = on;
-         else if (key == "energy_solve_parts")
-            f.energySolveParts = on;
          else if (key == "reach_full_feed")
             f.reachFullFeed = on;
          else if (key == "jet_pulse_at_cycle")

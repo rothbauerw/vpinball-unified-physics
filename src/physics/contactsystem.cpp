@@ -52,7 +52,6 @@ namespace ContactSystem
    static std::filesystem::path s_iniFile;   // the table's physics ini (PhysicsIni::FindUnified at SetTable; empty = none): every reader reads this one file
    static std::filesystem::file_time_type s_iniTime{};   // its write time when the readers last read it (SetTable, ReloadChangedIni)
    static bool s_ballInsideCheck = true;    // [Features] ball_inside_check of this table (physicsini.h), read likewise: 1 = every group ball's inside check after each attempt (the midJoin lambda); 0 = as before
-   static bool s_energySolveParts = true;   // [Features] energy_solve_parts of this table (physicsini.h), read likewise: 1 = PartsInSolve by the energy law (with the energy reach); 0 = as before
    static bool s_reachFullFeed = true;      // [Features] reach_full_feed of this table (physicsini.h), read likewise: 1 = a part's move in ReachEnergy takes its group's full feed (the other parts' work too); 0 = the balls' energy only, as before
    static bool s_aircoreInStep = false;     // [Features] aircore_in_step of this table (physicsini.h), read likewise: 1 = an air-core coil's pull is read at each step's midpoint (AircorePullForce, CordIsland); 0 = held for the cycle as before
 
@@ -79,7 +78,6 @@ namespace ContactSystem
       GroupStep::partFinder = f.partFinder;   // [Features] part_finder (groupstep.h, hingegroup.h; the group step's piece lists and CheckOverlaps)
       s_ballInsideCheck = f.ballInsideCheck;   // [Features] ball_inside_check (physicsini.h; the group step's per-ball inside check, the midJoin lambda)
       s_reachFullFeed = f.reachFullFeed;   // [Features] reach_full_feed (physicsini.h; ReachEnergy)
-      s_energySolveParts = f.energySolveParts;   // [Features] energy_solve_parts (physicsini.h; PartsInSolve)
       GroupStep::jetPulseAtCycle = f.jetPulseAtCycle;   // [Features] jet_pulse_at_cycle (physicsini.h; BumperGroup::Part::CycleStart, ContactBumperPart::EnergyMove)
       GroupStep::partFinderProf = ContactProf::CheckOn() || GroupStep::FinderCheckEnv();   // (its counters: diagnostics only)
       GroupStep::partFinderCount.clear();
@@ -94,7 +92,6 @@ namespace ContactSystem
          PLOGI << "Contact system: [Features] aircore_in_step = " << (s_aircoreInStep ? 1 : 0) << (s_aircoreInStep ? " (an air-core coil's pull read at each step's midpoint)" : " (an air-core coil's pull held for the cycle)");
          PLOGI << "Contact system: [Features] path_test = " << (GroupStep::pathTest ? 1 : 0) << (GroupStep::pathTest ? " (a skipped contact on a static surface or a ball pair tested over the whole move; engagement query by the reach rule)" : " (a skipped contact probed at the move's middle and end; engagement query 20 U)");
          PLOGI << "Contact system: [Features] part_finder = " << (GroupStep::partFinder ? 1 : 0) << (GroupStep::partFinder ? " (a hinge part's pieces listed once per cycle from their swept sectors; the overlap check by region)" : " (per-step piece lists; the overlap check probes every part)");
-         PLOGI << "Contact system: [Features] energy_solve_parts = " << (s_energySolveParts ? 1 : 0) << (s_energySolveParts ? " (a part at rest joins a solve when a ball can close its gap by the energy law)" : " (a part at rest joins by the summed-speed reach)");
          PLOGI << "Contact system: [Features] reach_full_feed = " << (s_reachFullFeed ? 1 : 0) << (s_reachFullFeed ? " (a part's move takes its group's full feed: the balls' energy and the other parts' work)" : " (a part's move from its group's balls' energy only)");
          PLOGI << "Contact system: [Features] jet_pulse_at_cycle = " << (GroupStep::jetPulseAtCycle ? 1 : 0) << (GroupStep::jetPulseAtCycle ? " (a jet's switch closure arms a pulse that starts at the next cycle's start after its jet_coil_delay_ms)" : " (a jet's pulse fires at the end of the step whose switch closes)");
          PLOGI << "Contact system: [Features] ball_inside_check = " << (s_ballInsideCheck ? 1 : 0) << (s_ballInsideCheck ? " (every group ball checked against its cycle query after each attempt)" : " (only a static mesh item's probes check the ball's query)");
@@ -635,7 +632,7 @@ struct ContactSystemImpl
             s_ballGroupLast.emplace_back(&b->m_hitBall, (uintptr_t)b->m_hitBall.m_sleepGroup);
    }
 
-   // [Features] energy_solve_parts counters (deterministic, diagnostics only; printed on the "Energy reach rounds" line): parts in island solves summed over the island solves, of them at rest,
+   // PartsInSolve counters (deterministic, diagnostics only; printed on the "Energy reach rounds" line): parts in island solves summed over the island solves, of them at rest,
    // a part at rest PartsInSolve left out whose ball is inside it at the next cycle's start (a miss: rule 8, WARN once per table start), and the release test's outcomes by reason
    static inline uint64_t s_solveParts = 0, s_solveIslands = 0, s_solveRest = 0, s_solveMiss = 0, s_relClear = 0, s_relTimeout = 0, s_relHeld = 0;
    struct Edge { int i, p; SurfaceContact *it; double gap; bool on; };   // island reach: a ball and a moving part in its list: the gap from its probe now; on = grouped
@@ -887,7 +884,7 @@ struct ContactSystemImpl
       nRounds += (uint64_t)rounds;
       worst = std::max(worst, rounds);
       if (nCyc % 10000 == 0)
-         PLOGI << "Energy reach rounds: " << nCyc << " cycles, rounds per cycle mean " << (double)nRounds / (double)nCyc << ", worst " << worst << "; reach_full_feed " << (ContactSystem::s_reachFullFeed ? 1 : 0) << ": groups with two or more parts " << nMulti << ", part moves fed by another part " << nGrown << ", parts' sweeps " << nSweeps << "; energy_solve_parts " << (ContactSystem::s_energySolveParts ? 1 : 0) << ": parts in solve " << s_solveParts << " over " << s_solveIslands << " island solves (at rest " << s_solveRest << "), PartsInSolve misses " << s_solveMiss << ", releases clear " << s_relClear << ", timeout " << s_relTimeout << ", kept within the surface.s bound " << s_relHeld;
+         PLOGI << "Energy reach rounds: " << nCyc << " cycles, rounds per cycle mean " << (double)nRounds / (double)nCyc << ", worst " << worst << "; reach_full_feed " << (ContactSystem::s_reachFullFeed ? 1 : 0) << ": groups with two or more parts " << nMulti << ", part moves fed by another part " << nGrown << ", parts' sweeps " << nSweeps << "; parts in solve " << s_solveParts << " over " << s_solveIslands << " island solves (at rest " << s_solveRest << "), PartsInSolve misses " << s_solveMiss << ", releases clear " << s_relClear << ", timeout " << s_relTimeout << ", kept within the surface.s bound " << s_relHeld;
    }
 
    static void ReachLinks(Cycle &cy)
@@ -917,7 +914,7 @@ struct ContactSystemImpl
                         g_pplayer->m_liveUI->PushNotification(o.str(), 6000);
                   }
                   it.partOutLast = false;
-                  if (it.solveOutLast && gap < 0.0)   // energy_solve_parts: PartsInSolve left this part at rest out last cycle, and the ball is inside it now: a missed contact (rule 8)
+                  if (it.solveOutLast && gap < 0.0)   // PartsInSolve left this part at rest out last cycle, and the ball is inside it now: a missed contact (rule 8)
                   {
                      static const void *owner = nullptr;
                      if (owner != g_pplayer)
@@ -936,6 +933,24 @@ struct ContactSystemImpl
                   edges.push_back({ i, p, &it, gap, false });
                }
       ReachEnergy(cy, edges, parts, nw >= 2);
+   }
+
+   // The energy reach of one ball alone: ReachLinks / ReachEnergy on a cycle of this one ball (its own kinetic energy and spin, what its contacts hold, gravity + nudge + magnets
+   // (ReachAcc), the drive work of every moving part in its list; no ball pairs). cy gets the ball as its one body, its travel in cy.bodies[0].reachS. Used by a new ball's early
+   // query (EngageNear) and a sleeping group's wake test (SleepParts)
+   static void LoneReach(Cycle &cy, BallContact &e, HitBall *const pb, const double dt)
+   {
+      cy.dt = dt;
+      cy.cs = &ContactSettings::Get();
+      Body w;
+      w.o = e.host;
+      w.e = &e;
+      LoadBody(w, pb);
+      LoadState(w);
+      w.band = e.band;
+      Sources::ReachAcc(w);
+      cy.bodies.push_back(std::move(w));
+      ReachLinks(cy);
    }
 
    // The cycle's island reach marks end with it (other searches between cycles see every part); a part left out is checked at the next cycle's start (ReachLinks)
@@ -1595,27 +1610,12 @@ struct ContactSystemImpl
       cb.slots.assign(balls, balls + n);
    }
 
-   // The group parts in this island's solve. A part at rest stays out while no ball of the island can reach it in this cycle: Group::OutOfReach's test over the whole cycle. A ball can pick up speed inside the cycle, so the
-   // speed is the bound on what it can have: all the island's balls' (a ball's hit passes it on), what its forces can add, and twice the fastest surface in the island that is not at rest (a ball leaves a moving surface at
-   // up to twice its speed). Out of the solve it moves alone (AdvanceAlone), so nothing about it stops; the script and a nudge can only act between cycles.
+   // The group parts in this island's solve. A part not at rest, or touching a ball of the island, joins. Before its first touch a part at rest moves only by its own drives, and every ball
+   // that can touch it this cycle is in this island: it joins when the ball's travel (reachS, the energy reach) can close the gap ReachLinks probed less the part's own move (EnergyMove with
+   // no feed; no reach set: it joins). Out of the solve it moves alone (AdvanceAlone), so nothing about it stops; the script and a nudge can only act between cycles.
    static void PartsInSolve(Cycle &cy, const ContactSystem::Islands::Island &isl, std::vector<const ContactMovingPart *> &in)
    {
       in.clear();
-      double sp = 0.0, acc = 0.0, vPart = 0.0;
-      for (const int i : isl.members)
-      {
-         const Body &w = cy.bodies[i];
-         sp += w.v.Length();
-         acc = std::max(acc, w.extBaseVS.Length() / PHYSICS_STEPTIME_S + w.magAcc);
-         if (w.e != nullptr)
-            for (const SurfaceContact &it : w.e->items)
-               if (ContactMovingPart *const mp = it.r->MovingPart(); mp != nullptr && !it.partOut && !mp->AtRest())
-               {
-                  mp->SetBall(w.bs);
-                  vPart = std::max(vPart, mp->SurfaceSpeedBound(cy.dt));
-               }
-      }
-      const double reach = 2.0 * (sp + acc * cy.dt + 2.0 * vPart) * cy.dt + 1e-4;
       for (const int i : isl.members)
       {
          Body &w = cy.bodies[i];
@@ -1631,15 +1631,10 @@ struct ContactSystemImpl
                   it.gsMore.resize(surfaces - 1);
                for (int sf = 0; sf < surfaces && !joins; sf++)
                   joins = it.Surf(sf).touching;
-               if (!joins && ContactSystem::s_energySolveParts)   // [Features] energy_solve_parts (its reachS): before its first touch a part at rest moves only by its own drives, and every ball that can touch it this
-               {                                                 // cycle is in this island: it joins when this ball's travel (reachS) can close the gap ReachLinks probed less the part's own move (no reach set: it joins)
+               if (!joins)
+               {
                   joins = w.reachS < 0.0 || it.reachGap - mp->EnergyMove(w.c, 0.0, cy.dt, nullptr) < w.reachS + 1e-4;
                   it.solveOutLast = !joins;
-               }
-               else if (!joins)
-               {
-                  mp->SetBall(w.bs);
-                  joins = mp->Probe(w.c).delta > -reach;
                }
                if (joins && mp->AtRest())
                   s_solveRest++;
@@ -1746,7 +1741,7 @@ struct ContactSystemImpl
       parts.clear();
       static std::vector<const ContactMovingPart *> partsIn;
       PartsInSolve(cy, isl, partsIn);
-      s_solveParts += partsIn.size();   // (energy_solve_parts counters)
+      s_solveParts += partsIn.size();   // (PartsInSolve counters)
       s_solveIslands++;
       bool gSet = false;
       static std::vector<int> order;   // the island's members, held balls last (KickerDesign 1h): a pair with a held ball has it as its b, the body forces do not move (GroupStep::Ball::held)
@@ -2936,7 +2931,8 @@ struct ContactSystemImpl
       }
       return nullptr;
    }
-   // A part the balls touch that a drive woke or that moved; a part not at rest that can reach a ball of the group within the cycle (the rule of PartsInSolve)
+   // A part the balls touch that a drive woke or that moved; a part not at rest that can reach a ball of the group within the cycle by the energy reach (the rule of PartsInSolve):
+   // its gap to the ball less its own move (EnergyMove with no feed: its kinetic energy and drives) within the ball's own travel (LoneReach) plus the contact law's approach margin
    static const char *SleepParts(SleepGroup &g, const double dt)
    {
       for (size_t k = 0; k < g.parts.size(); k++)
@@ -2950,21 +2946,26 @@ struct ContactSystemImpl
          else if (!mp->AtRest())
             return "a part it touches moved";
       }
+      std::vector<double> travel(g.balls.size(), -1.0);   // each ball's travel over the cycle (LoneReach), found when a part needs it
       for (ContactHost *const o : ContactHost::Registry())
       {
          ContactMovingPart *const mp = o->MovingPart();
          if (mp == nullptr || PartQuiet(mp))
             continue;
-         for (HitBall *const pb : g.balls)
+         for (size_t b = 0; b < g.balls.size(); b++)
          {
+            HitBall *const pb = g.balls[b];
+            if (travel[b] < 0.0)
+            {
+               Cycle cy;
+               LoneReach(cy, EnsureOne(pb), pb, dt);
+               travel[b] = std::max(cy.bodies[0].reachS, 0.0);
+            }
             Body s;
             LoadBody(s, pb);
             LoadState(s);
             mp->SetBall(s.bs);
-            const double reach = 2.0 * mp->SurfaceSpeedBound(dt) * dt + 1e-4;
-            if ((s.c - mp->Origin()).Length() > mp->Reach() + s.bs.R + reach)
-               continue;
-            if (mp->Probe(s.c).delta > -reach)
+            if (-mp->Probe(s.c).delta - mp->EnergyMove(s.c, 0.0, dt, nullptr) < travel[b] + 1e-4)
                return "a moving part can reach it";
          }
       }
@@ -3400,19 +3401,9 @@ void ContactSystemImpl::EngageNear(const double dt)
          if (pb->m_contact != nullptr || !PairEligible(pb) || KickerHold::Held(pb))
             continue;
          BallContact &e = EnsureOne(pb);
+         Regather(e, pb->m_d.m_pos, pb->m_d.m_radius, 1);
          Cycle cy;
-         cy.dt = dt;
-         cy.cs = &ContactSettings::Get();
-         Body w;
-         w.o = e.host;
-         w.e = &e;
-         LoadBody(w, pb);
-         LoadState(w);
-         w.band = e.band;
-         Regather(e, w.posStart, pb->m_d.m_radius, 1);
-         Sources::ReachAcc(w);
-         cy.bodies.push_back(std::move(w));
-         ReachLinks(cy);
+         LoneReach(cy, e, pb, dt);
          GatherStatic(cy);
       }
    }

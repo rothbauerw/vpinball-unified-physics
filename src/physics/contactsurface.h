@@ -59,8 +59,8 @@ struct SurfaceContact
    bool hcRest = false;           // hcStep came from the resting rule   // 6-ball stall: hcStep came from the resting (quasi-static) rule
    bool partOut = false;          // island reach: a moving part this ball cannot reach this cycle, solved in another island or alone: left out of this ball's solve (cleared at the cycle's end)
    bool partOutLast = false;      // it was left out last cycle (the next cycle's check: the ball must not be inside it)
-   double reachGap = 0.0;         // [Features] energy_solve_parts: the gap to this moving part ReachLinks probed at this cycle's start (m; reused by PartsInSolve, no second probe)
-   bool solveOutLast = false;     // energy_solve_parts: PartsInSolve left this part at rest out of the ball's island solve last cycle (the next cycle's check: the ball must not be inside it; diagnostics)
+   double reachGap = 0.0;         // PartsInSolve: the gap to this moving part ReachLinks probed at this cycle's start (m; reused by PartsInSolve, no second probe)
+   bool solveOutLast = false;     // PartsInSolve left this part at rest out of the ball's island solve last cycle (the next cycle's check: the ball must not be inside it; diagnostics)
    bool partTouching = false;     // a moving part's own release-gap hysteresis for its Hit event (HingePart::Part::Contact)
    double endHeld = -1.0;         // one entry per ball: the energy check: what this contact held at the end of the last cycle, J (< 0 = no cycle yet: its first sight)
    bool cycleTouched = false;     // one entry per ball counters: touched at any step of this cycle (diagnostics only)
