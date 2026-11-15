@@ -69,6 +69,9 @@ namespace PhysicsIni
                                   // reach it (ContactMovingPart::EnergyMove), a ball's travel from its group's kinetic and stored energy plus the drive work of the parts that can reach it; ReachLinks
                                   // groups a ball and a part when the ball's travel plus the part's move at the ball closes the gap, and the ball's query and the cycle's part lists take that travel;
                                   // 0 = the part's whole range of motion (MotionRange) once one ball reaches it, the 2 x surface speed term, and the island balls' energy for the hinge turn, as before
+      bool energyGather = true;   // energy_gather (on while tested, rule 6; runs/2026-11-15-finder-P6b3/brief_B2-1.md): with energy_reach, every non-mesh surface joins a ball's items by the energy
+                                  // reach each cycle (a moving part: its gap less its own move, or its region less R, under reachS + 0.1 mm; a fixed one: its bounding box less R under reachS + 0.1 mm),
+                                  // not by Regather's box (radius + 20 U + 10 U, rescanned after 5 U or 10 ms); 0 = the box, as before
       bool energySolveParts = true;   // energy_solve_parts (on while tested, rule 6; runs/2026-11-15-finder-P6b3/brief_B.md, paper.md sections 1.1, 1.2): 1 = a group part at rest joins an island's solve only
                                       // when a ball of the island can close its gap this cycle (gap less the part's own move, EnergyMove with no feed, under the ball's travel reachS + 0.1 mm); the
                                       // release test as before; with energy_reach 0 there is no reachS: as before; 0 = as before
@@ -201,6 +204,8 @@ namespace PhysicsIni
             f.partFinder = on;
          else if (key == "energy_reach")
             f.energyReach = on;
+         else if (key == "energy_gather")
+            f.energyGather = on;
          else if (key == "energy_solve_parts")
             f.energySolveParts = on;
          else if (key == "reach_full_feed")
