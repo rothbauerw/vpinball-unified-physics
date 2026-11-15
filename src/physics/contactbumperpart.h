@@ -185,7 +185,8 @@ namespace JetBumper
       // the energy reach (design_reach.md section 1, translating parts): the ring slides along the axis by at most EnergyReach(|vr|, E, ring mass, the coil at full current
       // plus the return spring plus gravity); the skirt's pivot slides by EnergyReach(|vz|, E, skirt mass, its springs plus gravity) and the skirt tilts by EnergyReach(|w|, E, I,
       // those springs' force at its farthest lever / I), a point c moving by its distance from the pivot times the tilt (at most pi) plus the slide (as SkirtMotion). The larger of the
-      // two; not clamped at the stroke (the stops are springs). work: each body's kinetic energy now plus its drive's work over its move
+      // two; each move at most what its energy allows (EnergyMove), not clamped at the stroke (the stops are springs). work: each body's kinetic energy now plus its drives' work over its move,
+      // at most the energy they can supply
       void NextCycleStart(const double cycleS) override
       {
          if (GroupStep::jetPulseAtCycle)
@@ -207,11 +208,21 @@ namespace JetBumper
          const double ringAccel = (fCoil + p.returnPreloadN + p.returnKNPerM * p.ringStrokeMm * MM) / p.ringMass + g;
          const double skirtF = p.skirtPreloadN + p.skirtKNPerM * p.skirtClearanceMm * MM, skirtAccel = skirtF / p.skirtMass + g;
          const double tiltAccel = (skirtF + p.skirtMass * g) * gp.reach / gp.TiltInertia(), wt = std::sqrt(gp.wx * gp.wx + gp.wy * gp.wy);
-         const double dr = EnergyReach(std::fabs(gp.vr), E, p.ringMass, ringAccel, T);
-         const double dz = EnergyReach(std::fabs(gp.vz), E, p.skirtMass, skirtAccel, T);
-         const double dt = EnergyReach(wt, E, gp.TiltInertia(), tiltAccel, T);
+         // the law (a body's work over T is at most its kinetic energy plus what its drives can supply): the ring's drives: the coil's field energy now 1/2 L i^2 (L at its largest, the
+         // plunger closed) plus the supply's V^2 / R T (coil on), the return spring's energy over the stroke (its largest force x the stroke) and gravity's m g over the move. The skirt's:
+         // its springs' force at most skirtF over the clearance, gravity over its move. Each move also at most what a body with all that energy as speed makes in T, plus gravity's
+         // 1/2 g T^2 (not clamped at the stroke or the clearance: past them the stops' own law only shortens it)
+         const double Ep = std::max(E, 0.0), stroke = p.ringStrokeMm * MM, clear = p.skirtClearanceMm * MM, I = gp.TiltInertia();
+         const double lMax = (gp.cfg.coilD.a + gp.cfg.coilD.b / (p.plungerClosedFrac + p.coil.x0)) * 1e-3;
+         const double dRing = 0.5 * lMax * gp.iCoil * gp.iCoil + V * V / p.coil.rOhm * T + (p.returnPreloadN + p.returnKNPerM * stroke) * stroke;
+         const double dSkirt = skirtF * clear;
+         const double dr = std::min(EnergyReach(std::fabs(gp.vr), E, p.ringMass, ringAccel, T), std::sqrt(gp.vr * gp.vr + 2.0 * (Ep + dRing) / p.ringMass) * T + 0.5 * g * T * T);
+         const double dz = std::min(EnergyReach(std::fabs(gp.vz), E, p.skirtMass, skirtAccel, T), std::sqrt(gp.vz * gp.vz + 2.0 * (Ep + dSkirt) / p.skirtMass) * T + 0.5 * g * T * T);
+         const double tiltG = p.skirtMass * g * gp.reach / I;
+         const double dt = std::min(EnergyReach(wt, E, I, tiltAccel, T), std::sqrt(wt * wt + 2.0 * (Ep + dSkirt) / I) * T + 0.5 * tiltG * T * T);
          if (work != nullptr)
-            *work = 0.5 * p.ringMass * gp.vr * gp.vr + p.ringMass * ringAccel * dr + 0.5 * p.skirtMass * gp.vz * gp.vz + p.skirtMass * skirtAccel * dz + 0.5 * gp.TiltInertia() * wt * wt + gp.TiltInertia() * tiltAccel * dt;
+            *work = 0.5 * p.ringMass * gp.vr * gp.vr + std::min(p.ringMass * ringAccel * dr, dRing + p.ringMass * g * dr) + 0.5 * p.skirtMass * gp.vz * gp.vz + 0.5 * I * wt * wt
+                  + std::min(p.skirtMass * skirtAccel * dz + I * tiltAccel * dt, dSkirt + p.skirtMass * g * dz + I * tiltG * dt);
          const V3 P = c - origin;
          const double rho = std::sqrt(P.x * P.x + P.y * P.y + (P.z - gp.z) * (P.z - gp.z));
          return std::max(dr, rho * std::min(dt, GroupStep::kPi) + dz);

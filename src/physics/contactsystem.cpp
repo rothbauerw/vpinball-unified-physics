@@ -181,6 +181,7 @@ struct QueryEngageCounts
    std::map<std::string, std::pair<uint64_t, uint64_t>> kept;   // kind -> (kept, touched)
 };
 static QueryEngageCounts g_qe;
+static std::map<std::string, std::pair<double, int>> g_partWorkMax;   // the energy reach: per part type, the largest work of one part in one cycle, J, and the table time (ms) of it (diagnostics only)
 static void QueryEngageLog(const char *const when)   // the one entry per ball counters' line (running totals; diagnostics only)
 {
    std::ostringstream o;
@@ -189,6 +190,11 @@ static void QueryEngageLog(const char *const when)   // the one entry per ball c
    for (const auto &k : g_qe.kept)
       o << " [" << k.first << " " << k.second.first << " / " << k.second.second << "]";
    PLOGI << o.str();
+   std::ostringstream w;
+   w << "Energy reach part work (" << when << "): largest per cycle per part type, J (table ms):";
+   for (const auto &k : g_partWorkMax)
+      w << " [" << k.first << " " << k.second.first << " (" << k.second.second << ")]";
+   PLOGI << w.str();
 }
 static double g_frameUsedS = 0.0;   // how much of this physics step (1 ms) the sub-intervals before this one took (the engine splits a step at a hit)
 static double g_subS = 0.0;         // the engine's current sub-interval in seconds, as ContactSystem::Step was given it (the parts and cords advanced alone after it read it)
@@ -792,6 +798,13 @@ struct ContactSystemImpl
                }
             }
          }
+         for (int p = 0; p < np; p++)
+            if (partBall[p] >= 0)
+            {
+               auto &k = g_partWorkMax[typeid(*parts[p]).name()];   // (diagnostics only)
+               if (wp[p] > k.first)
+                  k = { wp[p], g_pplayer->m_time_msec };
+            }
          for (int p = 0; p < np; p++)
             if (partBall[p] >= 0)
                ef[find(partBall[p])] += wp[p] + parts[p]->squashJ;   // (its kinetic energy is in its work; what its contacts held at the last cycle's end, MovingPartState::squashJ)

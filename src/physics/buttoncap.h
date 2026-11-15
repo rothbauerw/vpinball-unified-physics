@@ -307,12 +307,14 @@ namespace ButtonCap
       double MotionRange() const override { return part.travel; }
       double SurfaceSpeedBound(const double cycleS) const override { return std::fabs(part.rate) + part.MaxStoredForce() / part.mass * cycleS; }
       // the energy reach (design_reach.md section 1, translating parts): the cap slides along its axis by at most EnergyReach(|rate|, E, mass, MaxStoredForce / mass) (its
-      // springs and its weight as the drive); not clamped at its travel (the stops are springs). work: 1/2 m v0^2 + F x
+      // springs and its weight as the drive), and at most what a cap with all its energy (its kinetic energy, the feed and the drives' F x travel: their largest force over the travel)
+      // as speed makes in T; not clamped at its travel (the stops are springs: past it their own law only shortens it). work: 1/2 m v0^2 + F x, the drives' part at most F x travel
       double EnergyMove(const V3 &, const double E, const double T, double *const work) const override
       {
-         const double F = part.MaxStoredForce(), x = EnergyReach(std::fabs(part.rate), E, part.mass, F / part.mass, T);
+         const double F = part.MaxStoredForce(), D = F * part.travel, v0 = std::fabs(part.rate);
+         const double x = std::min(EnergyReach(v0, E, part.mass, F / part.mass, T), std::sqrt(v0 * v0 + 2.0 * (std::max(E, 0.0) + D) / part.mass) * T);
          if (work != nullptr)
-            *work = 0.5 * part.mass * part.rate * part.rate + F * x;
+            *work = 0.5 * part.mass * part.rate * part.rate + std::min(F * x, D);
          return x;
       }
       RubberContact::TubeProbe Probe(const V3 &c) const override

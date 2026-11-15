@@ -184,19 +184,19 @@ namespace BatPart
 
       // the energy reach (design_reach.md section 1): the bat turns about the vertical axis through its pivot by at most EnergyReach(|omega|, E, I, AlphaBound) (the coil and the
       // spring as the drive, AlphaBound's present state holds for the cycle), at most pi; a point c moves relative to it by the chord at c's distance from that axis, plus the pivot's own
-      // slide |vPivotX| T (given, as SurfaceSpeedBound reads it). Not clamped at the stops (rubber-faced springs: their squash is not bounded here). work: 1/2 I w0^2 + I alpha dphi
+      // slide |vPivotX| T (given, as SurfaceSpeedBound reads it). The turn is bounded by the energy (EnergyMove), not clamped at the stops; work: as EnergyMove
       double CycleRegionDist(const V3 &c, const double T) const override { return gp.RegionDist(c) - std::fabs(gp.geo.vPivotX) * T; }   // (the energy reach: its bounding radius about the pivot at any angle, the pivot's slide off)
       // the energy reach, the coil law (runs/2026-11-14-reach-p1b/brief_coil.md item 2): a winding's current cannot jump: over T, i <= min(i0 + (V / L) T, V / R), as a
       // fraction of V / R: i0 + (R / L) T, L its smallest (the plunger farthest out, at rest). The solenoid changes only between cycles: on, both windings rise from their present
-      // currents; off and off before, they only decay (their present currents); just switched off, the windings share the flux, so neither carries more than the larger present
-      // current in amperes. The force at those currents with the plunger closed (the largest gap factor, 1), at the longest lever; with the coil on and the plunger at its stop,
-      // the stop takes the push (as AlphaBound)
+      // currents; off, they only decay from their present currents (just switched off, the hold winding carries the series loop's current, which it already holds: no swap).
+      // The force at those currents with the plunger closed (the largest gap factor, 1), at the longest lever; with the coil on and the plunger at its stop, the stop takes the push
+      bool Parked() const { return gp.solenoid && gp.xp <= bat.der.xMin * 1e-3; }   // coil on, the plunger at its stop (BatGroup pins xp at xMin in metres: the test holds at equality)
       double CoilAlphaBound(const double T) const
       {
          const FlipperSettings &s = bat.set;
          const FlipperDerived &p = bat.der;
          const double inertia = std::max(p.iFlipper, 1e-9);
-         if (gp.solenoid && gp.xp * 1e3 <= p.xMin)
+         if (Parked())
             return springMax / inertia;
          double iP = gp.iHigh, iH = gp.iLow;
          if (gp.solenoid)
@@ -206,21 +206,33 @@ namespace BatPart
             iP = std::min(iP + s.rP / std::max(lP, 1e-9) * T, std::max(iP, 1.0));
             iH = s.single ? 0.0 : std::min(iH + s.rH / std::max(lH, 1e-9) * T, std::max(iH, 1.0));
          }
-         else if (!gp.coilOffPrev)
-         {
-            const double amps = std::max(iP * s.vSupply / s.rP, iH * s.vSupply / s.rH);
-            iP = amps / (s.vSupply / s.rP);
-            iH = s.single ? 0.0 : amps / (s.vSupply / s.rH);
-         }
          const double fCoil = p.strengthP * iP * iP + p.strengthH * iH * iH;
          return (fCoil * leverMax + springMax) / inertia;
       }
+      // the energy its drives can supply over T (the law: a part's work over a cycle is at most its kinetic energy plus this), J: the coil's field energy now
+      // 1/2 (L_P i_P^2 + L_H i_H^2) (amperes, L at its largest: the plunger closed) plus, the coil on, the supply's V^2 (1/R_P + 1/R_H) T, plus the return spring's stored energy
+      // (its largest torque x the larger of the stroke and the turn from rest). Parked (coil on at its stop): the stop takes the coil, the spring only
+      double DriveEnergy(const double T) const
+      {
+         const FlipperSettings &s = bat.set;
+         const FlipperDerived &p = bat.der;
+         const double spring = springMax * std::max(gp.PhiStop(), std::fabs(gp.phi));
+         if (Parked())
+            return spring;
+         const double lP = (p.aP + p.bP / s.x0P) * 1e-3, lH = s.single ? 0.0 : (p.aH + p.bH / s.x0H) * 1e-3;
+         const double aP = gp.iHigh * s.vSupply / s.rP, aH = s.single ? 0.0 : gp.iLow * s.vSupply / s.rH;
+         const double supply = gp.solenoid ? s.vSupply * s.vSupply * (1.0 / s.rP + (s.single ? 0.0 : 1.0 / s.rH)) * T : 0.0;
+         return 0.5 * (lP * aP * aP + lH * aH * aH) + supply + spring;
+      }
+      // the energy reach (design_reach.md section 1): the turn EnergyReach(|omega|, E, I, CoilAlphaBound), and at most the turn a bat with all its energy (its kinetic energy, the feed and
+      // DriveEnergy) as speed makes in T: sqrt(w0^2 + 2 (E + D) / I) T (not clamped at the stops: past them the stops' own law only shortens it). work: 1/2 I w0^2 + the drives' work
+      // over the turn, at most DriveEnergy
       double EnergyMove(const V3 &c, const double E, const double T, double *const work) const override
       {
-         const double inertia = std::max(bat.der.iFlipper, 1e-9), alpha = CoilAlphaBound(T), w0 = std::fabs(gp.omega);
-         const double dphi = EnergyReach(w0, E, inertia, alpha, T);
+         const double inertia = std::max(bat.der.iFlipper, 1e-9), alpha = CoilAlphaBound(T), w0 = std::fabs(gp.omega), D = DriveEnergy(T);
+         const double dphi = std::min(EnergyReach(w0, E, inertia, alpha, T), std::sqrt(w0 * w0 + 2.0 * (std::max(E, 0.0) + D) / inertia) * T);
          if (work != nullptr)
-            *work = 0.5 * inertia * w0 * w0 + inertia * alpha * dphi;
+            *work = 0.5 * inertia * w0 * w0 + std::min(inertia * alpha * dphi, D);
          const V3 &pv = gp.geo.pivot;
          const double rho = std::hypot(c.x - pv.x, c.y - pv.y);
          return 2.0 * rho * std::sin(0.5 * std::min(dphi, GroupStep::kPi)) + std::fabs(gp.geo.vPivotX) * T;
