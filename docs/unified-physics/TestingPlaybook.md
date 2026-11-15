@@ -22,15 +22,14 @@ No dates, no "learned", no superseded text. What a test is for, its cap and hand
   bench.ps1 refuses it when it is older than the branch's BGFX build: run `python bench_snapshot.py`).
   Options: `-Trace 1`, `-Vbs file`, `-StopMs N`, `-PreRollMs N` (default 3000). Output: `run_x\out\balls.csv, report.txt, cycles.csv, done.txt`, `run_x\vpinball.log`.
 - The `VPXBench_*` name keeps run.ps1 and wait loops from taking it for a VPX. Many runs at once is fine, except on a table new to `runs\_tables`: run one first (the first runs race on INDEX.csv).
-- Confirm a run started: the log says `Test driver: N actions` with N above 0. Run alone for cost numbers; the report marks its cost as bench cost.
-- **Patch not yet in the branch** (about 2 min): copy the bench's `src\`, patch it, `python bench_build.py bgfx <out> <folder holding src\> <changed .cpp names>`, run `<out>\exe\VPXBench_BGFX64.exe`.
-  A changed header: list every .cpp that includes it, then compare the compiled count with `grep -l` of the includers. A missed includer gives a mixed exe with no error; the lead checks the count before any result counts.
-  After main is built, `python bench_snapshot.py` refreshes `src\`, `obj_*\` and `main_exe\` (check no session is building from them).
+- Confirm a run started: the log says `Test driver: N actions` with N above 0. Cost on vs off: compare work counts (VPX_GROUP_STATS, finder totals), not wall time.
+- **Patch not yet in the branch** (shared tree holds others' work): `git archive HEAD src` into a run folder, patch it, full compile with
+  `runs\2026-11-14-reach-p1b\commit\bench_build_commit.py` pointed there (315 .cpp, about 6 min, ~10 GB; only the 24 non-src objects come from main). Never link a src object from main.
 - **Accuracy bench**: `runs\2026-11-01-roll-smooth` (report.md run 1). 750 real hits (stress p1-p3, Gorgar), each replayed alone: `run_replay.py <tag> <exe> <mode>`; the reference is the same with `-env VPX_GROUP_HFIX=1` (1 us steps);
   runs with `-env VPX_TEST_IMPULSES=1`; `judge_hit.py <ref> <ref 0.5 us> <build> <build k 0.5> <build k 0.25>` (VPX_STEP_SCALE) judges each hit by the impulse its surface gave
   (bounce, slide, spin; runs\2026-11-10-hit-judge\design.md): noise floor from the 0.5 us twin, step error or fault by convergence, and pass = the exit
   direction error moves the ball under 1 mm by its next contact. `check_imp.py <run out folder>` checks the log adds up to each ball's momentum change.
-- **Not covered by the bench** (use a VPX run): cost against the frame limit, drawing, real input, table restart and teardown, magnets on, scripts that act on the game, script and frame timers,
+- **Not covered by the bench** (use a VPX run): cost against the frame limit, drawing, real input, table restart and teardown, scripts that act on the game, script and frame timers,
   drop targets (they fall per frame), ROM tables. A pile with address-order splits (Gorgar pile) does not repeat on the bench, nor in VPX.
 
 ## 4. VPX driver run

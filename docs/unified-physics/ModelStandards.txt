@@ -130,6 +130,12 @@ e. Every test run writes its pass/fail report to disk the day it runs.
 - A touch stop that watches only balls with a positive gap: a released ball overlapping the face by rounding (4e-17 m) went unwatched, the face ran 50 um into it,
   and the carried constraint pushed it out: +821 uJ. Catches it: the group's energy book (between steps).
 - A limit sized by a bit mask: 16 balls per stop mask (stand-up target) repeated the group surface limit (ball through the face past it). Catches it: none yet.
+- A trace read on the wrong clock: the bumper trace runs on the log clock (driver t + the ~3 s pre-roll); a script read it on the driver clock and reported five jets that fired
+  as "never left rest". Catches it: none yet (match one event in the trace against balls.csv before judging a drive).
+- A worst cycle from an unfocused run on a busy machine: the same exe and setting, byte-identical balls, worst 7-cycle window 22.4 ms in one run and 9.0 ms in the next.
+  Catches it: compare deterministic work counts (steps, rounds, evaluations, queries), not wall time.
+- An energy bound built term by term misses the terms nobody listed (band post squash, ball-part squash, a soft stop, a magnet off the playfield): each showed only as a re-look.
+  Catches it: the inside check's re-look count with the bound's terms printed at each re-look.
 Each trap names the test that now catches it ("none yet" until one exists); the older entries above get theirs as they are reviewed.
 
 

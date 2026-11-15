@@ -12,7 +12,7 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-In flight: 1.34 finder piece 6: 6a, 6a2 + group A pushed; self-check fix and per-ball inside check (ball_inside_check, on while tested) committed, not pushed. Next: drive set findings, then 6b (OutOfReach added). Lead log runs/2026-11-14-lead.
+In flight: 1.34 finder piece 6: 6a, 6a2 pushed; inside check, 6b-1 (energy_reach, jet_pulse_at_cycle) committed e44c3568b, not pushed. Next: 6b-2 (OutOfReach by the same law), 6b-3. Design runs/2026-11-13-finder-P6/design_reach.md. Lead log runs/2026-11-14-lead.
 Judge a change by one exe, its setting on vs off; never by an older exe's md5 (ModelStandards trap 112). Query outliers 0.3-9 ms are the OS (measured). Owed: snapshot hashes refresh; GL main rebuild (bench obj_gl stale). 1.33: cut B kept.
 Stand-up targets: building, uncommitted. State and next piece: StandupTargetDesign.txt section 8 "BUILD STATE" (faults, standards review, settings for the user). Lead log runs/2026-11-13-lead.
 Air-core coil fix (pull read at the step's midpoint, aircore_in_step, on while tested): merged d9629bc4b and pushed. Lead log runs/2026-11-13-lead.
@@ -40,6 +40,8 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 33. Several contacts on one object (mesh faces and edges, tube folds, cut rims): each true local minimum of the ball-surface distance its own contact and friction, merged only where patches overlap; replaces the fold-sum fade. Also: sling post cos (cordfixed.h:949). Check: 750-bench rubber hits.
 31. After G1: check every converted part (flipper, gates, spinners, bumper, disc, rubbers, cord) against the ModelStandards definition of done (top of the file).
 30. part_guess_accel (default off): design evaluation for all moving parts, then a test plan if kept. After the shared-engine items, unless one of them needs it.
+40. Jet skirt resting on its seat is stepped as a stiff spring and sets short steps whenever the jet is grouped (bumpergroup.h ~283): ModelStandards 3a resting constraint. Gorgar +6 % steps with energy_reach (runs/2026-11-14-reach-p1b).
+41. Magnet pull in the energy reach is taken at the ball's place, not the largest over its travel: a true bound needs current, saturation, in-winding and per-type terms. Re-looks while a magnet is on (stress C1).
 
 ## 2. Flippers
 1. Rubber separation at the end stop: details from the user.
