@@ -52,6 +52,7 @@ namespace ContactSystem
    static std::filesystem::path s_iniFile;   // the table's physics ini (PhysicsIni::FindUnified at SetTable; empty = none): every reader reads this one file
    static std::filesystem::file_time_type s_iniTime{};   // its write time when the readers last read it (SetTable, ReloadChangedIni)
    static bool s_ballInsideCheck = true;    // [Features] ball_inside_check of this table (physicsini.h), read likewise: 1 = every group ball's inside check after each attempt (the midJoin lambda); 0 = as before
+   static bool s_reachFullFeed = true;      // [Features] reach_full_feed of this table (physicsini.h), read likewise: 1 = a part's move in ReachEnergy takes its group's full feed (the other parts' work too); 0 = the balls' energy only, as before
    static bool s_energyReach = true;        // [Features] energy_reach of this table (physicsini.h), read likewise: 1 = grouping and the finder's look-ahead by the one energy reach (ReachEnergy); 0 = as before
    static bool s_aircoreInStep = false;     // [Features] aircore_in_step of this table (physicsini.h), read likewise: 1 = an air-core coil's pull is read at each step's midpoint (AircorePullForce, CordIsland); 0 = held for the cycle as before
 
@@ -80,6 +81,7 @@ namespace ContactSystem
       s_ballInsideCheck = f.ballInsideCheck;   // [Features] ball_inside_check (physicsini.h; the group step's per-ball inside check, the midJoin lambda)
       s_energyReach = f.energyReach;   // [Features] energy_reach (physicsini.h; ReachLinks, the finder's look-ahead, the group step's cycle turns and lists)
       GroupStep::energyReach = f.energyReach;
+      s_reachFullFeed = f.reachFullFeed;   // [Features] reach_full_feed (physicsini.h; ReachEnergy)
       GroupStep::jetPulseAtCycle = f.jetPulseAtCycle;   // [Features] jet_pulse_at_cycle (physicsini.h; BumperGroup::Part::CycleStart, ContactBumperPart::EnergyMove)
       GroupStep::partFinderProf = ContactProf::CheckOn() || GroupStep::FinderCheckEnv();   // (its counters: diagnostics only)
       GroupStep::partFinderCount.clear();
@@ -95,6 +97,7 @@ namespace ContactSystem
          PLOGI << "Contact system: [Features] path_test = " << (GroupStep::pathTest ? 1 : 0) << (GroupStep::pathTest ? " (a skipped contact on a static surface or a ball pair tested over the whole move; engagement query by the reach rule)" : " (a skipped contact probed at the move's middle and end; engagement query 20 U)");
          PLOGI << "Contact system: [Features] part_finder = " << (GroupStep::partFinder ? 1 : 0) << (GroupStep::partFinder ? " (a hinge part's pieces listed once per cycle from their swept sectors; the overlap check by region)" : " (per-step piece lists; the overlap check probes every part)");
          PLOGI << "Contact system: [Features] energy_reach = " << (s_energyReach ? 1 : 0) << (s_energyReach ? " (grouping and the finder's look-ahead by one energy reach: a part's turn or travel and a ball's travel from the energy that can feed them)" : " (a part's whole range once a ball reaches it, 2 x surface speed in the ball's bound)");
+         PLOGI << "Contact system: [Features] reach_full_feed = " << (s_reachFullFeed ? 1 : 0) << (s_reachFullFeed ? " (a part's move takes its group's full feed: the balls' energy and the other parts' work)" : " (a part's move from its group's balls' energy only)");
          PLOGI << "Contact system: [Features] jet_pulse_at_cycle = " << (GroupStep::jetPulseAtCycle ? 1 : 0) << (GroupStep::jetPulseAtCycle ? " (a jet's switch closure arms a pulse that starts at the next cycle's start after its jet_coil_delay_ms)" : " (a jet's pulse fires at the end of the step whose switch closes)");
          PLOGI << "Contact system: [Features] ball_inside_check = " << (s_ballInsideCheck ? 1 : 0) << (s_ballInsideCheck ? " (every group ball checked against its cycle query after each attempt)" : " (only a static mesh item's probes check the ball's query)");
       }
@@ -606,8 +609,10 @@ struct ContactSystemImpl
             pairHeld[k] = std::max(PairHolds(cy, A, B, *ps), 0.0);
       }
       const size_t nPairs0 = cy.pairs.size();
-      std::vector<double> eb(nw), af(nw), hv(nw), ef(nw), sb(nw), wp(np);
-      int rounds = 0;
+      std::vector<double> eb(nw), af(nw), hv(nw), ef(nw), sb(nw), wp(np), gw(nw);
+      std::vector<int> np2(nw);   // [Features] reach_full_feed: the grouped parts of each group (by its root ball); gw: their work and squash
+      constexpr double kFeedTol = 1e-9;   // reach_full_feed: the parts' fixed point stops when no part's work grows by more than this fraction of itself (a convergence test, not a law)
+      int rounds = 0, feedRounds = 0;
       for (bool grew = true; grew;)
       {
          grew = false;
@@ -640,11 +645,44 @@ struct ContactSystemImpl
          {
             wp[p] = 0.0;
             if (partBall[p] >= 0)
-            {
                parts[p]->EnergyMove(parts[p]->Origin(), eb[find(partBall[p])], T, &wp[p]);
-               ef[find(partBall[p])] += wp[p] + parts[p]->squashJ;   // (its kinetic energy is in its work; what its contacts held at the last cycle's end, MovingPartState::squashJ)
+         }
+         if (ContactSystem::s_reachFullFeed)   // [Features] reach_full_feed: a part's move takes its group's full feed: the balls' energy and the OTHER parts' work and squash (its own work
+         {                                     // is its own energy, already in its move: fed back it would count twice). In a group with one part this is the move above
+            std::fill(np2.begin(), np2.end(), 0);
+            for (int p = 0; p < np; p++)
+               if (partBall[p] >= 0)
+                  np2[find(partBall[p])]++;
+            // the parts of a group with two or more feed each other: grown to their own fixed point (each move only grows with its feed; each part's work grows less than its feed,
+            // the drive's work over a move that grows as the square root of the feed, or a stroke's end), stopped when no part's work grows by more than kFeedTol of itself
+            for (bool more = true; more;)
+            {
+               more = false;
+               std::fill(gw.begin(), gw.end(), 0.0);
+               for (int p = 0; p < np; p++)
+                  if (partBall[p] >= 0 && np2[find(partBall[p])] >= 2)
+                     gw[find(partBall[p])] += wp[p] + parts[p]->squashJ;
+               for (int p = 0; p < np; p++)
+               {
+                  if (partBall[p] < 0 || np2[find(partBall[p])] < 2)
+                     continue;
+                  const int g = find(partBall[p]);
+                  double w = 0.0;
+                  parts[p]->EnergyMove(parts[p]->Origin(), eb[g] + gw[g] - wp[p] - parts[p]->squashJ, T, &w);
+                  if (w > wp[p] * (1.0 + kFeedTol))
+                     more = true;
+                  wp[p] = std::max(w, wp[p]);
+               }
+               if (++feedRounds == 1000)   // (a fixed point that does not end is a fault: logged, and stopped here so the run reports it)
+               {
+                  PLOGW << "Energy reach: reach_full_feed parts' fixed point not converged after 1000 sweeps";
+                  more = false;
+               }
             }
          }
+         for (int p = 0; p < np; p++)
+            if (partBall[p] >= 0)
+               ef[find(partBall[p])] += wp[p] + parts[p]->squashJ;   // (its kinetic energy is in its work; what its contacts held at the last cycle's end, MovingPartState::squashJ)
          for (int i = 0; i < nw; i++)
          {
             const int g = find(i);
@@ -715,11 +753,26 @@ struct ContactSystemImpl
       }
       static uint64_t nCyc = 0, nRounds = 0;   // the fixed point's rounds per cycle (diagnostics: logged every 10000 cycles)
       static int worst = 0;
+      static uint64_t nMulti = 0, nGrown = 0, nSweeps = 0;   // reach_full_feed diagnostics: groups with two or more grouped parts, part moves fed by another part's work or squash, the parts' sweeps
+      std::fill(np2.begin(), np2.end(), 0);
+      std::fill(gw.begin(), gw.end(), 0.0);
+      for (int p = 0; p < np; p++)
+         if (partBall[p] >= 0)
+         {
+            np2[find(partBall[p])]++;
+            gw[find(partBall[p])] += wp[p] + parts[p]->squashJ;
+         }
+      for (int i = 0; i < nw; i++)
+         nMulti += np2[i] >= 2 ? 1 : 0;
+      for (int p = 0; p < np; p++)
+         if (ContactSystem::s_reachFullFeed && partBall[p] >= 0 && np2[find(partBall[p])] >= 2 && gw[find(partBall[p])] - wp[p] - parts[p]->squashJ > 0.0)
+            nGrown++;
+      nSweeps += (uint64_t)feedRounds;
       nCyc++;
       nRounds += (uint64_t)rounds;
       worst = std::max(worst, rounds);
       if (nCyc % 10000 == 0)
-         PLOGI << "Energy reach rounds: " << nCyc << " cycles, rounds per cycle mean " << (double)nRounds / (double)nCyc << ", worst " << worst;
+         PLOGI << "Energy reach rounds: " << nCyc << " cycles, rounds per cycle mean " << (double)nRounds / (double)nCyc << ", worst " << worst << "; reach_full_feed " << (ContactSystem::s_reachFullFeed ? 1 : 0) << ": groups with two or more parts " << nMulti << ", part moves fed by another part " << nGrown << ", parts' sweeps " << nSweeps;
    }
 
    static void ReachLinks(Cycle &cy)

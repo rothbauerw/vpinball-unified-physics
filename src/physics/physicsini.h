@@ -69,6 +69,9 @@ namespace PhysicsIni
                                   // reach it (ContactMovingPart::EnergyMove), a ball's travel from its group's kinetic and stored energy plus the drive work of the parts that can reach it; ReachLinks
                                   // groups a ball and a part when the ball's travel plus the part's move at the ball closes the gap, and the ball's query and the cycle's part lists take that travel;
                                   // 0 = the part's whole range of motion (MotionRange) once one ball reaches it, the 2 x surface speed term, and the island balls' energy for the hinge turn, as before
+      bool reachFullFeed = true;   // reach_full_feed (on while tested, rule 6; runs/2026-11-15-finder-P6b3/brief_A.md, paper.md section 4 item 2): 1 = in the energy reach's grouping (ContactSystem
+                                   // ReachEnergy) a part's move takes its group's full feed: the balls' energy plus the other grouped parts' work and squash (its own work excluded: it is
+                                   // already in its move), grown with the others to a fixed point; 0 = a part's move from its group's balls' energy only, as before
       bool seatEditorBalls = true; // seat_editor_balls (on while tested, rule 6; runs/2026-11-13-editor-balls): 1 = at play start each ball placed in the table editor is moved out of any surface it overlaps
                                   // (playfield, walls, ramps, primitives, rubbers, moving parts at rest; not other balls) by the shortest move, the no-past seating (ContactSystem::PushOutAtStart); 0 = left where it was placed, as today
       bool hitSpeed = true;       // PROTOTYPE: Ball.HitSpeed (normal speed before an impact) and the table's Hit event for the playfield; off = neither
@@ -195,6 +198,8 @@ namespace PhysicsIni
             f.partFinder = on;
          else if (key == "energy_reach")
             f.energyReach = on;
+         else if (key == "reach_full_feed")
+            f.reachFullFeed = on;
          else if (key == "jet_pulse_at_cycle")
             f.jetPulseAtCycle = on;
          else if (key == "ball_inside_check")
