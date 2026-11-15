@@ -30,6 +30,7 @@ struct MovingPartState
 {
    double steppedS = 0.0;           // how long the contact system stepped the part with its balls in this sub-interval (s); the host advances it alone for the rest
    bool steppedThisCycle = false;   // the contact system stepped the part with the balls of an island this cycle (the host's own advance skips it once)
+   double eOwnJ = -1.0;             // [Features] energy_skip: what it can hold this cycle before a ball touches it (its kinetic energy and drive work, EnergyMove with no feed, plus squashJ), J; -1 = not set (ContactSystem ReachEnergy)
    double squashJ = 0.0;            // [Features] energy_reach: what its contacts hold at the cycle's end, J: each ball-part contact's stored energy by the contact law and its compliant stops' squash (GroupStep::Part::StopSquashJ); fed to the balls that can reach it (ContactSystem ReachEnergy)
    bool restTouched = false;        // a ball asleep in a pile touches it (the engine's pile sleep): the part does not sleep while one does (GroupStep::RestWatch)
 };

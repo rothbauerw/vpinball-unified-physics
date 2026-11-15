@@ -80,9 +80,11 @@ namespace ContactSystem
       s_ballInsideCheck = f.ballInsideCheck;   // [Features] ball_inside_check (physicsini.h; the group step's per-ball inside check, the midJoin lambda)
       s_energyReach = f.energyReach;   // [Features] energy_reach (physicsini.h; ReachLinks, the finder's look-ahead, the group step's cycle turns and lists)
       GroupStep::energyReach = f.energyReach;
+      GroupStep::energySkip = f.energySkip;   // [Features] energy_skip (physicsini.h; GroupStep::OutOfReach, SkipCycleStart)
       GroupStep::jetPulseAtCycle = f.jetPulseAtCycle;   // [Features] jet_pulse_at_cycle (physicsini.h; BumperGroup::Part::CycleStart, ContactBumperPart::EnergyMove)
       GroupStep::partFinderProf = ContactProf::CheckOn() || GroupStep::FinderCheckEnv();   // (its counters: diagnostics only)
       GroupStep::partFinderCount.clear();
+      GroupStep::skipOwnTested = GroupStep::skipOwnSkipped = GroupStep::skipEsComputed = GroupStep::skipTripItems = GroupStep::skipDeferred = GroupStep::skipTripAttempts = 0;
       GroupStep::partFinderFirstMiss.clear();
       const char *const px = getenv("VPX_PROXIMITY");   // (diagnostic override, TestingPlaybook)
       s_proximity = s_unified && (px != nullptr ? atoi(px) != 0 : f.proximityEngage);
@@ -94,6 +96,7 @@ namespace ContactSystem
          PLOGI << "Contact system: [Features] path_test = " << (GroupStep::pathTest ? 1 : 0) << (GroupStep::pathTest ? " (a skipped contact on a static surface or a ball pair tested over the whole move; engagement query by the reach rule)" : " (a skipped contact probed at the move's middle and end; engagement query 20 U)");
          PLOGI << "Contact system: [Features] part_finder = " << (GroupStep::partFinder ? 1 : 0) << (GroupStep::partFinder ? " (a hinge part's pieces listed once per cycle from their swept sectors; the overlap check by region)" : " (per-step piece lists; the overlap check probes every part)");
          PLOGI << "Contact system: [Features] energy_reach = " << (s_energyReach ? 1 : 0) << (s_energyReach ? " (grouping and the finder's look-ahead by one energy reach: a part's turn or travel and a ball's travel from the energy that can feed them)" : " (a part's whole range once a ball reaches it, 2 x surface speed in the ball's bound)");
+         PLOGI << "Contact system: [Features] energy_skip = " << (GroupStep::energySkip ? 1 : 0) << (GroupStep::energySkip ? " (a contact not touching is skipped in a step only past what the energy law lets both sides close in it; a static surface by the ball's own energy when its pair and part contacts are skipped)" : " (skipped past 2 x the speeds now x the step)");
          PLOGI << "Contact system: [Features] jet_pulse_at_cycle = " << (GroupStep::jetPulseAtCycle ? 1 : 0) << (GroupStep::jetPulseAtCycle ? " (a jet's switch closure arms a pulse that starts at the next cycle's start after its jet_coil_delay_ms)" : " (a jet's pulse fires at the end of the step whose switch closes)");
          PLOGI << "Contact system: [Features] ball_inside_check = " << (s_ballInsideCheck ? 1 : 0) << (s_ballInsideCheck ? " (every group ball checked against its cycle query after each attempt)" : " (only a static mesh item's probes check the ball's query)");
       }
@@ -216,6 +219,8 @@ struct ContactSystemImpl
       bool held = false;           // a ball a kicker holds (parked) or carries (KickerDesign 1h): infinite mass in the pair law, its velocity given (v), no gravity, spin 0
       V3 heldA;                    // its given acceleration, m/s2 (the arm's path's centripetal pull; 0 parked)
       double feedE = -1.0, reachS = -1.0;   // [Features] energy_reach (ReachEnergy): its group's feed energy (J) and its travel over the cycle (m); -1 = not set
+      double vTop = -1.0, eTop = -1.0;      // [Features] energy_skip (ReachEnergy): its top speed over the cycle (m/s, EnergyReach's v_max plus a held ball's given speed) and its group's energy at that speed, 1/2 m v_max^2 (J); -1 = not set
+      int eGroup = -1;                      // [Features] energy_skip: its energy group (ReachEnergy's root)
       double magReach = 0.0;  // [Features] energy_reach: |a magnet's pull| on it now, m/s2 (Sources::Begin; on or off the playfield model)
       double gravAcc = 0.0;   // [Features] energy_reach: |gravity + nudge| on it, m/s2 (Sources::Begin; 0 for a held ball, whose motion is given), whether or not the substeps take it
    };
@@ -698,6 +703,17 @@ struct ContactSystemImpl
          Body &w = cy.bodies[i];
          w.reachS = sb[i];
          w.feedE = ef[find(i)];
+         double vm = 0.0;   // [Features] energy_skip: the top speed (rubbercontact.h EnergyReach) and the group's energy at it, Etot = feed + the forces' work over the cycle
+         EnergyReach(0.0, ef[find(i)], w.bs.m, af[find(i)], T, &vm);
+         w.vTop = vm + hv[find(i)];
+         w.eTop = 0.5 * w.bs.m * vm * vm;
+         w.eGroup = find(i);
+      }
+      for (int p = 0; p < np; p++)   // [Features] energy_skip: what each part can hold before any ball touches it: its own kinetic energy and drive work (EnergyMove with no feed) and its contacts' squash
+      {
+         double w0 = 0.0;
+         parts[p]->EnergyMove(parts[p]->Origin(), 0.0, T, &w0);
+         parts[p]->eOwnJ = w0 + parts[p]->squashJ;
       }
       static uint64_t nCyc = 0, nRounds = 0;   // the fixed point's rounds per cycle (diagnostics: logged every 10000 cycles)
       static int worst = 0;
@@ -1620,6 +1636,10 @@ struct ContactSystemImpl
          b.heldA = w.heldA;
          b.feedE = w.feedE;   // ([Features] energy_reach: -1 when not set)
          b.reachS = w.reachS;
+         b.vTop = w.vTop;   // ([Features] energy_skip: -1 when not set)
+         b.eTop = w.eTop;
+         b.eGroup = w.eGroup;
+         b.aOwn = w.vTop >= 0.0 ? w.gravAcc + w.magReach : -1.0;   // ([Features] energy_skip: its own bound's acceleration; -1 when ReachEnergy did not set it)
          if (w.held)
             b.w = V3();   // (spin zero)
          if (!gSet && w.extBaseVS.Length() > 0.0)
@@ -1713,6 +1733,8 @@ struct ContactSystemImpl
                            rw->Restart(mp->RestPose());
                         mp->CycleBegin();
                         parts.push_back(mp);
+                        mp->GroupPart()->eOwnJ = mp->eOwnJ;   // ([Features] energy_skip: this cycle's only; -1 when ReachEnergy did not set it this cycle)
+                        mp->eOwnJ = -1.0;
                         g.AddPart(mp->GroupPart());
                      }
                   }

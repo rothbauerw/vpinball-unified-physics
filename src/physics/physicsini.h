@@ -64,6 +64,11 @@ namespace PhysicsIni
                                      // whatever its items, so its re-query and the mid-step join run for a ball with no static mesh item; 0 = only a static mesh item's probes check it, as before
       bool jetPulseAtCycle = true;   // jet_pulse_at_cycle (on while tested, rule 6; runs/2026-11-14-reach-p1b/brief_bumperdrv.md): 1 = a jet bumper's switch closure arms a pulse that starts at the next
                                      // cycle's start after its jet_coil_delay_ms (the sling's form), so its coil state for a cycle is known at the cycle's start; 0 = the pulse fires at the end of the step whose switch closes
+      bool energySkip = true;   // energy_skip (on while tested, rule 6; runs/2026-11-15-finder-P6b2/paper.md candidate c, paper_stage3.md): 1 = the group step skips a contact not touching in a step of h
+                                // only when its gap is more than what the energy law lets both sides close in h plus the contact law's approach margin: a ball pair or a moving part by the cycle's
+                                // top speeds (a part from its own energy alone while one ball is in the group); a static surface by the ball's own bound when all its ball-pair and moving-part
+                                // items are skipped (its kinetic energy with spin, what its static contacts hold and the forces' work over h), else the cycle's; no feed: skip nothing;
+                                // 0 = 2 x the speeds now x h + 0.1 mm, as before (deleted once the user accepts 1)
       bool energyReach = true;   // energy_reach (on while tested, rule 6; runs/2026-11-14-reach-p1/brief.md, design runs/2026-11-13-finder-P6/design_reach.md sections 1, 4a, 4b): 1 = one energy reach
                                   // (rubbercontact.h EnergyReach) for grouping and the finder's look-ahead: a part's turn or travel from its own motion, its drives and the kinetic energy of the balls that can
                                   // reach it (ContactMovingPart::EnergyMove), a ball's travel from its group's kinetic and stored energy plus the drive work of the parts that can reach it; ReachLinks
@@ -195,6 +200,8 @@ namespace PhysicsIni
             f.partFinder = on;
          else if (key == "energy_reach")
             f.energyReach = on;
+         else if (key == "energy_skip")
+            f.energySkip = on;
          else if (key == "jet_pulse_at_cycle")
             f.jetPulseAtCycle = on;
          else if (key == "ball_inside_check")

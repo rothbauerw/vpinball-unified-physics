@@ -290,6 +290,7 @@ namespace GroupStep
    // [Features] energy_reach of this table (physicsini.h; set by ContactSystem::SetTable): 1 = the cycle's part turns and the balls' query reach take the island's feed energy and each
    // ball's travel from the contact system's grouping (Ball::feedE, Ball::reachS: rubbercontact.h EnergyReach); 0 = the island balls' kinetic energy and ContactReachM, as before
    inline bool energyReach = true;
+   inline bool energySkip = true;        // [Features] energy_skip (physicsini.h): OutOfReach by the energy law (SkipCycleStart); 0 = 2 x the speeds now x h
    inline bool jetPulseAtCycle = true;   // [Features] jet_pulse_at_cycle (physicsini.h): a jet's pulse starts at a cycle's start (BumperGroup::Part::CycleStart); 0 = at the step whose switch closes
    // part_finder's counters per kind of part (its type's name; diagnostics only: VPX_CHECK_PROFILE or VPX_FINDER_CHECK, set by the owner in partFinderProf)
    struct PartFinderCount
@@ -303,6 +304,12 @@ namespace GroupStep
       long long pathTested = 0, pathClear = 0, pathReached = 0, pathTwo = 0, pathFixed = 0, pathChecks = 0, pathBad = 0;
    };
    inline std::map<std::string, PartFinderCount> partFinderCount;
+   // [Features] energy_skip: static items of an own ball (all its ball-pair and moving-part items skipped in the attempt) not skipped by its cycle speed, tested on its own bound; skipped by it (diagnostics only)
+   inline long long skipOwnTested = 0, skipOwnSkipped = 0;
+   // [Features] energy_skip: own balls whose stored static-contact energy E_static was summed (at most once per ball per attempt, only when an own test needs it; diagnostics only)
+   inline long long skipEsComputed = 0;
+   // [Features] energy_skip: in one-trip attempts (BeginAttempt), the items looked at, the static items left past the cycle's speed for the own test after the trip (deferred), and the attempts (diagnostics only)
+   inline long long skipTripItems = 0, skipDeferred = 0, skipTripAttempts = 0;
    inline bool partFinderProf = false;
    inline std::string partFinderFirstMiss;   // check mode: the first miss, for the owner's report
    inline std::string partFinderFirstPathBad;   // check mode: the swept region's first disagreement with its probe (P6a2)
@@ -321,6 +328,9 @@ namespace GroupStep
                   c.pathChecks, c.pathBad);
          s += b;
       }
+      snprintf(b, sizeof b, " | energy_skip own bound: static items tested %lld, skipped by it %lld, E_static sums %lld; one trip: attempts %lld, items %lld, deferred %lld", skipOwnTested, skipOwnSkipped,
+               skipEsComputed, skipTripAttempts, skipTripItems, skipDeferred);
+      s += b;
       if (!partFinderFirstMiss.empty())
          s += " | first miss: " + partFinderFirstMiss;
       if (!partFinderFirstPathBad.empty())
@@ -362,6 +372,12 @@ namespace GroupStep
       // [Features] energy_reach: from the contact system's grouping this cycle (ReachLinks): the energy that can feed the ball's island (its balls' kinetic and stored energy plus the
       // drive work of its parts, J) and the ball's travel over the cycle (m, EnergyReach); -1 = not given (the island balls' kinetic energy and ContactReachM)
       double feedE = -1.0, reachS = -1.0;
+      // [Features] energy_skip: its top speed over the cycle (m/s; a held ball's given speed included) and its group's energy at that speed (J), its energy group; -1 = not given (skip nothing)
+      double vTop = -1.0, eTop = -1.0;
+      int eGroup = -1;
+      // [Features] energy_skip: the bound on its acceleration by forces other than its contacts (m/s2): |gravity + nudge| + |a magnet's pull| now (ContactSystem Sources::Begin; 0 held);
+      // -1 = not given (no own bound: the cycle's vTop)
+      double aOwn = -1.0;
       double I() const { return 0.4 * m * R * R; }
       double InvM() const { return held ? 0.0 : 1.0 / m; }      // inverse mass (0: held)
       V3 Given(const double h) const { return v * h + heldA * (0.5 * h * h); }   // a held ball's move over h
@@ -714,6 +730,7 @@ namespace GroupStep
       mutable const std::vector<int> *nearNow = nullptr;   // [Contact] hinge_piece_sum: the probe of a surface it carries takes only these pieces (this attempt's list); null = all
       // [Features] part_finder: at the cycle's start, how far it can turn in the cycle of T s with the balls of its island holding E J of kinetic energy (design_reach.md section 1). None: no lists
       virtual void CycleTurn(double /*E*/, double /*T*/) {}
+      double eOwnJ = -1.0;   // [Features] energy_skip: what it can hold this cycle before a ball touches it (its kinetic energy, drive work, squash; J); -1 = not given (the host sets it each cycle)
       // [Features] part_finder (group A): the range of its coordinates its cycle lists were sized for is a size only, made complete by this check after each solve: false = the solved
       // move qe (the end trial) left it; CycleRegrow then sets the range again from its state now (CycleTurn over T with E) joined to the old range and the solved place
       virtual bool CycleRangeHolds(const double * /*qe*/) const { return true; }
@@ -1656,6 +1673,8 @@ namespace GroupStep
          struct CycOff { bool &f; explicit CycOff(bool &b) : f(b) {} ~CycOff() { f = false; } } cycOff(cycOn);   // part_finder: the cycle's lists end with it
          if (partFinder)
             FinderCycleStart(dt);
+         if (energySkip)
+            SkipCycleStart();
          while (done < dt - 1e-12)
          {
             const double hChoice = std::min(ChooseStep(), dt - done);
@@ -2781,10 +2800,114 @@ namespace GroupStep
       }
       Buf<double> fieldE0;       // what each ball's place stores at the start of the attempt
       // out of reach: the gap is more than both bodies' speeds can close in twice the step, with a margin. A body that picks up speed inside the step is what the check after the solve is for
+      // [Features] energy_skip (runs/2026-11-15-finder-P6b2/paper.md candidate c), at the cycle's start from the grouping's feed: each part's top point speed (m/s) over the cycle,
+      // sum over its coordinates of reach x sqrt(2 E invM) (1/2 I w^2 <= E), with E its own (what it holds before a ball touches it: one ball in the group, the item's own) or the most any
+      // ball's group can hold (more balls; any held ball: a given motion, no energy bound). A coordinate with no mass (no unknown and none free) or no energy given: no bound
+      std::vector<double> skPOwn, skPAll;
+      int skNb = -1;
+      void SkipCycleStart()
+      {
+         skNb = nb;
+         double E = 0.0;
+         bool held = false, given = true;
+         for (int i = 0; i < nb; i++)
+         {
+            E = std::max(E, ball[i].eTop);
+            held = held || ball[i].held;
+            given = given && ball[i].vTop >= 0.0;
+         }
+         if (!given)
+            skNb = -1;   // (a ball with no feed: skip nothing this cycle)
+         skPOwn.assign((size_t)np, INFINITY);
+         skPAll.assign((size_t)np, INFINITY);
+         for (int p = 0; p < np; p++)
+         {
+            double so = 0.0, sa = 0.0;
+            for (int c = 0; c < part[p]->NumCoords(); c++)
+            {
+               const CoordInfo q = part[p]->Coord(c);
+               const double im = q.invM > 0.0 ? q.invM : q.invMFree;
+               if (im <= 0.0 || q.given != 0.0)
+               {
+                  so = sa = INFINITY;
+                  break;
+               }
+               so += q.reach * std::sqrt(2.0 * std::max(part[p]->eOwnJ, 0.0) * im);
+               sa += q.reach * std::sqrt(2.0 * E * im);
+            }
+            if (part[p]->eOwnJ >= 0.0)
+               skPOwn[(size_t)p] = so;
+            if (!held)
+               skPAll[(size_t)p] = sa;
+         }
+      }
+      // [Features] energy_skip: ball A's own bound on its speed over the step when all its ball-pair and moving-part items are skipped (paper_stage3.md section 1: before any of them
+      // touches, only its static contacts, gravity, the nudge and magnets act on it, so 1/2 m v^2 <= its kinetic energy with spin + what its static contacts hold + the forces' work):
+      // sqrt(v^2 + I w^2 / m + 2 E_static / m) + a h, a = aOwn + |fExt| / m; a held ball: its given speed |v| + |heldA| h. Taken only past the cycle's speed (both are bounds: the least holds)
+      std::vector<char> skOwn;     // per ball: own in this attempt (set in the trip through the items)
+      std::vector<int> skDef;      // the attempt's deferred items: static, not touching, not skipped by the cycle's speed (index only; own test and law after the trip)
+      std::vector<Hit> skDefH;     // their start probes, for the law (as the trip took them)
+      std::vector<double> skEs;    // per ball: what its touching static items hold at the attempt's start, J (-1: not summed yet; summed on the first own test that needs it)
+      bool OwnFar(const Item &it, const double d0, const double h)
+      {
+         constexpr double kApproachM = 100e-6;   // the contact law's approach margin (as OutOfReach)
+         const Ball &A = ball[it.a];
+         const double g = -d0 - kApproachM;
+         if (g <= 0.0 || A.aOwn < 0.0)
+            return false;
+         skipOwnTested++;
+         if (!A.held && skEs[(size_t)it.a] < 0.0)   // (a touching static item: what it holds now, as ItemHeldJ from this start's depth d0s; the trip probed them all)
+         {
+            skipEsComputed++;
+            double es = 0.0;
+            for (int k = 0; k < ni; k++)
+            {
+               const Item &q = item[k];
+               if (q.a != it.a || q.b >= 0 || q.s < 0 || shape[q.s] == nullptr || shape[q.s]->part >= 0 || !q.touching)
+                  continue;
+               const double d = d0s[k];
+               double e = q.V(d) + 0.5 * q.Kt(d) * q.xi.Dot(q.xi);
+               if (set.rollModel == 1)
+                  e += 0.5 * q.Kr(d) * q.ra.th.Dot(q.ra.th) + 0.5 * q.Ktw(d) * q.ra.tw * q.ra.tw;
+               es += std::max(e, 0.0);
+            }
+            skEs[(size_t)it.a] = es;
+         }
+         const double vo = A.held ? A.v.Length() + A.heldA.Length() * h
+                                  : std::sqrt(A.v.Dot(A.v) + A.I() / A.m * A.w.Dot(A.w) + 2.0 * skEs[(size_t)it.a] / A.m) + (A.aOwn + A.fExt.Length() / A.m) * h;
+         const bool beyond = g > vo * h;
+         if (beyond)
+            skipOwnSkipped++;
+         return beyond;
+      }
       bool OutOfReach(const Item &it, const double d0, const double h, const Hit &h0) const
       {
          if (it.touching || d0 > 0.0)
             return false;
+         if (energySkip)   // gap > what both sides can close in h by the energy law + the contact law's approach margin (contactsystem.cpp ReachEnergy kApproachM)
+         {
+            constexpr double kApproachM = 100e-6;
+            if (skNb != nb || it.a >= skNb || (it.b >= skNb))
+               return false;
+            const Ball &A = ball[it.a];
+            const double g = -d0 - kApproachM;
+            if (g <= 0.0)
+               return false;
+            if (it.b >= 0)
+            {
+               const Ball &B = ball[it.b];
+               if (!A.held && !B.held && A.eGroup == B.eGroup)   // (Cauchy-Schwarz: (|va| + |vb|)^2 <= 2 Etot (1/ma + 1/mb), squared: no sqrt)
+                  return g * g > 2.0 * std::max(A.eTop, B.eTop) * (1.0 / A.m + 1.0 / B.m) * h * h;
+               return g > (A.vTop + B.vTop) * h;
+            }
+            double sp = A.vTop;
+            if (h0.nc > 0)
+            {
+               const int p = shape[it.s]->part;
+               sp += nb == 1 ? skPOwn[(size_t)p] : skPAll[(size_t)p];
+            }
+            return g > sp * h;
+         }
          double sp = ball[it.a].v.Length();
          if (it.b >= 0)
             sp += ball[it.b].v.Length();
@@ -4559,6 +4682,18 @@ namespace GroupStep
          PhaseScope ps(phBegin);
          const int nU = nUnk = NumUnk();
          BuildNear(h);
+         // [Features] energy_skip: one trip through the items (runs/2026-11-15-finder-P6b2/paper_stage3.md section 1). A ball is own when all its ball-pair and moving-part items are
+         // skipped by the cycle's speed. A ball's static items not touching and not skipped by it are deferred; after the trip, an own ball's are tested on its own bound (OwnFar)
+         const bool oneTrip = energySkip && !farOff && skNb == nb;
+         if (oneTrip)
+         {
+            skOwn.assign((size_t)nb, 1);
+            skEs.assign((size_t)nb, -1.0);
+            skDef.clear();
+            skDefH.clear();
+            skipTripAttempts++;
+            skipTripItems += ni;
+         }
          for (int k = 0; k < ni; k++)
          {
             Hit h0;
@@ -4574,9 +4709,42 @@ namespace GroupStep
             farNow[k] = !farOff && OutOfReach(item[k], h0.delta, h, h0);
             if (farNow[k])
                continue;
+            if (oneTrip)
+            {
+               if (item[k].b < 0 && item[k].s >= 0 && shape[item[k].s] != nullptr && shape[item[k].s]->part < 0)
+               {
+                  if (!item[k].touching)
+                  {
+                     skDef.push_back(k);
+                     skDefH.push_back(h0);
+                     continue;
+                  }
+               }
+               else   // (a ball pair or a moving part not skipped: it can feed both its balls in the step)
+               {
+                  skOwn[(size_t)item[k].a] = 0;
+                  if (item[k].b >= 0)
+                     skOwn[(size_t)item[k].b] = 0;
+               }
+            }
             law[k] = item[k];
             if (!item[k].touching)
                TakeLaw(law[k], h0);
+         }
+         if (oneTrip)   // (the law is per item: taking it after the trip changes no sum)
+         {
+            skipDeferred += (long long)skDef.size();
+            for (size_t j = 0; j < skDef.size(); j++)
+            {
+               const int k = skDef[j];
+               if (skOwn[(size_t)item[k].a] && OwnFar(item[k], d0s[k], h))
+               {
+                  farNow[k] = true;
+                  continue;
+               }
+               law[k] = item[k];
+               TakeLaw(law[k], skDefH[j]);
+            }
          }
          for (int i = 0; nf > 0 && i < nb; i++)
             fieldE0[i] = ball[i].fieldScale != 0.0 ? FieldEnergy(ball[i]) : 0.0;
