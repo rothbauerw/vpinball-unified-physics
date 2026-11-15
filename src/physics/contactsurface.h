@@ -57,13 +57,13 @@ struct SurfaceContact
    double hcStep = 0.0, hcSpeed = 0.0, hcDelta = 0.0;   // the arrival-time loop's step for this contact and the speed and compression it was computed for (it is reused while they hold)
    double fnLast = 0.0;           // normal force of this contact at the last substep (N): the resting test compares the ball's leftover force with it
    bool hcRest = false;           // hcStep came from the resting rule   // 6-ball stall: hcStep came from the resting (quasi-static) rule
-   bool partOut = false;          // island_reach: a moving part this ball cannot reach this cycle, solved in another island or alone: left out of this ball's solve (cleared at the cycle's end)
+   bool partOut = false;          // island reach: a moving part this ball cannot reach this cycle, solved in another island or alone: left out of this ball's solve (cleared at the cycle's end)
    bool partOutLast = false;      // it was left out last cycle (the next cycle's check: the ball must not be inside it)
    double reachGap = 0.0;         // [Features] energy_solve_parts: the gap to this moving part ReachLinks probed at this cycle's start (m; reused by PartsInSolve, no second probe)
    bool solveOutLast = false;     // energy_solve_parts: PartsInSolve left this part at rest out of the ball's island solve last cycle (the next cycle's check: the ball must not be inside it; diagnostics)
    bool partTouching = false;     // a moving part's own release-gap hysteresis for its Hit event (HingePart::Part::Contact)
-   double endHeld = -1.0;         // [Features] query_engage: the energy check: what this contact held at the end of the last cycle, J (< 0 = no cycle yet: its first sight)
-   bool cycleTouched = false;     // [Features] query_engage counters: touched at any step of this cycle (diagnostics only)
+   double endHeld = -1.0;         // one entry per ball: the energy check: what this contact held at the end of the last cycle, J (< 0 = no cycle yet: its first sight)
+   bool cycleTouched = false;     // one entry per ball counters: touched at any step of this cycle (diagnostics only)
    // The last probe of this surface in the arrival loop: the gap (m, < 0 = overlap; probeT < 0 = none yet this cycle), where the ball was and when (s into the cycle). A static
    // surface's gap can shrink by no more than the ball has moved since, so a surface the ball cannot reach in the rest of the cycle is not probed again (ProbeBody).
    double probeGap = 0.0, probeT = -1.0;

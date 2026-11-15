@@ -182,7 +182,7 @@ namespace JetBumper
          return std::max(ring, skirt);
       }
 
-      // [Features] energy_reach (design_reach.md section 1, translating parts): the ring slides along the axis by at most EnergyReach(|vr|, E, ring mass, the coil at full current
+      // the energy reach (design_reach.md section 1, translating parts): the ring slides along the axis by at most EnergyReach(|vr|, E, ring mass, the coil at full current
       // plus the return spring plus gravity); the skirt's pivot slides by EnergyReach(|vz|, E, skirt mass, its springs plus gravity) and the skirt tilts by EnergyReach(|w|, E, I,
       // those springs' force at its farthest lever / I), a point c moving by its distance from the pivot times the tilt (at most pi) plus the slide (as SkirtMotion). The larger of the
       // two; not clamped at the stroke (the stops are springs). work: each body's kinetic energy now plus its drive's work over its move

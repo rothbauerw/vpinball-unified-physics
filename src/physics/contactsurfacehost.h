@@ -126,12 +126,12 @@ struct BallContact
    Vertex3Ds regatherPos;                // where the surfaces near the ball were last collected, and when (Regather is a Verlet list: it rescans after 5 U of travel or 10 ms)
    uint32_t regatherMs = 0;
    bool regathered = false;
-   double reachS = -1.0;                 // query_engage: the ball's energy reach (m) its query used, and the table time it was set (the stock net's log: why a surface was not kept); -1 = never set
+   double reachS = -1.0;                 // one entry per ball: the ball's energy reach (m) its query used, and the table time it was set (the stock net's log: why a surface was not kept); -1 = never set
    uint32_t reachMs = 0;
    double endStored = -1.0;              // the energy check: what its contacts held at the end of the last cycle, J (< 0 = no cycle yet)
    bool groupLoop = false;               // ring_model: the last cycle went through the group step, so the touches' state is in SurfaceContact::gs (GroupStepDesign 14.4)
    bool seatPending = false;             // ring_model: found inside a rubber at engagement and not seated: the group counts it from zero; the old loop seats it if the island goes there (14.5)
-   std::vector<const void *> lastHosts;  // [Features] query_engage counters: the items' hosts before this cycle's gather (diagnostics only)
+   std::vector<const void *> lastHosts;  // one entry per ball counters: the items' hosts before this cycle's gather (diagnostics only)
 };
 
 class ContactSurfaceHost;
@@ -196,7 +196,7 @@ public:
    // shared_finder piece P2a (runs/2026-11-11-finder/design.md section 3): the per-cycle query of one engaged ball at the cycle start (centre c, radius R + reach, v the
    // ball's velocity at the cycle start, dt the cycle), kept for the cycle; the ball's surface items point at it (SurfaceContact::finderQ). In P2a nothing reads its result
    // except check mode and the timing counters, so no result changes.
-   // [Features] energy_reach: travelM >= 0 is the ball's travel from its energy (ContactSystem ReachEnergy, the cycle's grouping), the query's reach, once at the cycle start before any
+   // the energy reach: travelM >= 0 is the ball's travel from its energy (ContactSystem ReachEnergy, the cycle's grouping), the query's reach, once at the cycle start before any
    // solve; -1 = the speed and last cycle's acceleration (ContactReachM), as before
    static void FinderQuery(const HitBall *ball, const RubberContact::V3 &c, const RubberContact::V3 &v, double ballR, double dt, double travelM = -1.0);
    // shared finder P2b: the query finds every static mesh contact. FinderQueryAt: a query of a ball around c, radius ballR + extM, with no
@@ -228,7 +228,7 @@ public:
    RubberContact::FaceTable *FinderTable(const SurfaceContact &it, const RubberContact::V3 &c) const;
    static void FinderTabTake(uint64_t &checks, uint64_t &fills, uint64_t &reads);
    double m_tableMu = 0.3;   // a playfield host: the table's friction (the default mu of its material)
-   static bool ContactPairModel(const HitBall *a, const BallS &b);   // both balls are contact-held and [Contact] ball_contact is on: the force model handles the pair, not the stock collision
+   static bool ContactPairModel(const HitBall *a, const BallS &b);   // both balls are contact-held and ball contact is on: the force model handles the pair, not the stock collision
 
    float HitTest(const BallS &ball, const float dtime, CollisionEvent &coll) const override;
    BandInfo GetBandInfo() const { return m_info; }

@@ -54,7 +54,7 @@ void ContactPartHost::PartAdvance()
       if (rest > 1e-9)
       {
          m_part->AdvanceAlone(rest);
-         const GroupStep::Part *const gp = m_part->GroupPart();   // [Features] energy_reach: alone, no ball touches it: what its compliant stops hold (MovingPartState::squashJ)
+         const GroupStep::Part *const gp = m_part->GroupPart();   // the energy reach: alone, no ball touches it: what its compliant stops hold (MovingPartState::squashJ)
          m_part->squashJ = gp != nullptr ? gp->StopSquashJ() : 0.0;
       }
       m_part->steppedS = 0.0;
@@ -94,7 +94,7 @@ void ContactPartHost::Refresh(SurfaceContact &it, double, double, const RubberCo
 
 RubberContact::TubeProbe ContactPartHost::Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const
 {
-   if (it.partOut)   // (island_reach: solved in another island or alone this cycle; the ball cannot reach it)
+   if (it.partOut)   // (island reach: solved in another island or alone this cycle; the ball cannot reach it)
    {
       RubberContact::TubeProbe pr;
       pr.dist = INFINITY;

@@ -306,7 +306,7 @@ namespace ButtonCap
       double Reach() const override { return part.R + 2.0 * part.travel + 2.0 * part.rc; }   // every point of the cap at any sink
       double MotionRange() const override { return part.travel; }
       double SurfaceSpeedBound(const double cycleS) const override { return std::fabs(part.rate) + part.MaxStoredForce() / part.mass * cycleS; }
-      // [Features] energy_reach (design_reach.md section 1, translating parts): the cap slides along its axis by at most EnergyReach(|rate|, E, mass, MaxStoredForce / mass) (its
+      // the energy reach (design_reach.md section 1, translating parts): the cap slides along its axis by at most EnergyReach(|rate|, E, mass, MaxStoredForce / mass) (its
       // springs and its weight as the drive); not clamped at its travel (the stops are springs). work: 1/2 m v0^2 + F x
       double EnergyMove(const V3 &, const double E, const double T, double *const work) const override
       {

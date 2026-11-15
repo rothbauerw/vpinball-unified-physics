@@ -148,7 +148,7 @@ namespace
       uint64_t vPrevCycle = 0;
       bool queried = false;
       int reqThis = 0;           // re-queries in the current cycle
-      bool energy = false;       // [Features] energy_reach: this cycle's query reached the ball's energy travel (a re-look is then a fault, logged)
+      bool energy = false;       // the energy reach: this cycle's query reached the ball's energy travel (a re-look is then a fault, logged)
       double reqNs = 0.0;        // time spent in re-queries, ns (summed at the totals)
       uint64_t reqNew = 0;       // P2b: objects a re-query found that were not among the ball's surfaces (summed at the totals); re-engage: each counted once per cycle, as recorded below
       std::vector<int> pend;     // re-engage: those objects, recorded for engagement in the cycle (the group step takes them: FinderTakeNew)
@@ -2292,7 +2292,7 @@ bool PairEligible(const HitBall *x)
 
 bool ContactSurfaceHost::ContactPairModel(const HitBall *a, const BallS &b)
 {
-   if (!ContactSettings::Get().ballContact || !PairEligible(a))
+   if (!ContactSystem::Unified() || !PairEligible(a))   // (on the unified engine a ball pair is the contact system's, never the stock collision's)
       return false;
    const HitBall *hb = nullptr;
    for (const auto *const ball : g_pplayer->m_vball)
@@ -3208,7 +3208,7 @@ void ContactSurfaceHost::FinderQuery(const HitBall *const ball, const RubberCont
    q.queried = true;
    q.c0 = c;
    q.R = ballR;
-   q.reach = travelM >= 0.0 ? travelM : ContactReachM(v.Length(), accel, dt);   // [Features] energy_reach: the ball's travel from its energy (ContactSystem ReachEnergy)
+   q.reach = travelM >= 0.0 ? travelM : ContactReachM(v.Length(), accel, dt);   // the energy reach: the ball's travel from its energy (ContactSystem ReachEnergy)
    q.ext = q.reach;
    q.energy = travelM >= 0.0;
    q.reqThis = 0;
@@ -3246,7 +3246,7 @@ void ContactSurfaceHost::FinderInsideQ(void *const qv, const RubberContact::V3 &
    const double stray = (c - q->c0).Length();
    if (stray <= q->ext)
       return;
-   if (q->energy)   // [Features] energy_reach: the query reached the ball's energy travel, a true bound: a ball outside it is a bound too small (a fault, logged with its numbers)
+   if (q->energy)   // the energy reach: the query reached the ball's energy travel, a true bound: a ball outside it is a bound too small (a fault, logged with its numbers)
    {
       static int warned = 0;
       if (warned++ < 30)

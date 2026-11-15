@@ -63,20 +63,9 @@ namespace PhysicsIni
                                      // whatever its items, so its re-query and the mid-step join run for a ball with no static mesh item; 0 = only a static mesh item's probes check it, as before
       bool jetPulseAtCycle = true;   // jet_pulse_at_cycle (on while tested, rule 6; runs/2026-11-14-reach-p1b/brief_bumperdrv.md): 1 = a jet bumper's switch closure arms a pulse that starts at the next
                                      // cycle's start after its jet_coil_delay_ms (the sling's form), so its coil state for a cycle is known at the cycle's start; 0 = the pulse fires at the end of the step whose switch closes
-      bool energyReach = true;   // energy_reach (on while tested, rule 6; runs/2026-11-14-reach-p1/brief.md, design runs/2026-11-13-finder-P6/design_reach.md sections 1, 4a, 4b): 1 = one energy reach
-                                  // (rubbercontact.h EnergyReach) for grouping and the finder's look-ahead: a part's turn or travel from its own motion, its drives and the kinetic energy of the balls that can
-                                  // reach it (ContactMovingPart::EnergyMove), a ball's travel from its group's kinetic and stored energy plus the drive work of the parts that can reach it; ReachLinks
-                                  // groups a ball and a part when the ball's travel plus the part's move at the ball closes the gap, and the ball's query and the cycle's part lists take that travel;
-                                  // 0 = the part's whole range of motion (MotionRange) once one ball reaches it, the 2 x surface speed term, and the island balls' energy for the hinge turn, as before
-      bool energyGather = true;   // energy_gather (on while tested, rule 6; runs/2026-11-15-finder-P6b3/brief_B2-1.md): with energy_reach, every non-mesh surface joins a ball's items by the energy
-                                  // reach each cycle (a moving part: its gap less its own move, or its region less R, under reachS + 0.1 mm; a fixed one: its bounding box less R under reachS + 0.1 mm),
-                                  // not by Regather's box (radius + 20 U + 10 U, rescanned after 5 U or 10 ms); 0 = the box, as before
-      bool queryEngage = true;   // query_engage (on while tested, rule 6; runs/2026-11-15-finder-P6b3/brief_split.md, split_walk.md): with energy_reach and energy_gather, every ball has one contact entry
-                                 // from its first cycle until it is removed, its items filled each cycle by its query (no engaged / free split): no release test, no proximity engagement, no
-                                 // rewind to the touch, no release gap or 2 mm hold; a script-placed ball inside a surface starts from the zero rule; 0 = the engaged / free split, as before
       bool energySolveParts = true;   // energy_solve_parts (on while tested, rule 6; runs/2026-11-15-finder-P6b3/brief_B.md, paper.md sections 1.1, 1.2): 1 = a group part at rest joins an island's solve only
                                       // when a ball of the island can close its gap this cycle (gap less the part's own move, EnergyMove with no feed, under the ball's travel reachS + 0.1 mm); the
-                                      // release test as before; with energy_reach 0 there is no reachS: as before; 0 = as before
+                                      // release test as before; with the energy reach 0 there is no reachS: as before; 0 = as before
       bool reachFullFeed = true;   // reach_full_feed (on while tested, rule 6; runs/2026-11-15-finder-P6b3/brief_A.md, paper.md section 4 item 2): 1 = in the energy reach's grouping (ContactSystem
                                    // ReachEnergy) a part's move takes its group's full feed: the balls' energy plus the other grouped parts' work and squash (its own work excluded: it is
                                    // already in its move), grown with the others to a fixed point; 0 = a part's move from its group's balls' energy only, as before
@@ -202,12 +191,6 @@ namespace PhysicsIni
             f.pathTest = on;
          else if (key == "part_finder")
             f.partFinder = on;
-         else if (key == "energy_reach")
-            f.energyReach = on;
-         else if (key == "energy_gather")
-            f.energyGather = on;
-         else if (key == "query_engage")
-            f.queryEngage = on;
          else if (key == "energy_solve_parts")
             f.energySolveParts = on;
          else if (key == "reach_full_feed")

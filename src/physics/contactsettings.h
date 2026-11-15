@@ -19,7 +19,6 @@ struct ContactSettings
    bool twist = true;                // drilling friction: spin about the contact normal is resisted
    double twistPatchMm = 0.5;        // contact patch radius used for the twist torque (3 pi / 16) * mu * a * N; steel on hard wood ~ 0.3 - 0.6 mm
    // Ball-to-ball contact in the force model (two contact-held balls are stepped together; the stock impulse and position push are skipped for the pair)
-   bool ballContact = false;         // ball_contact
    double ballEMpa = 200000.0;       // ball_e_mpa: Young's modulus of the ball steel (the pair's effective modulus is half of it)
    double ballNu = 0.3;              // ball_nu
    double ballAlpha = 0.05;          // ball_alpha: Hunt-Crossley damping, s/m (rebound ratio about 1 - alpha * v)
@@ -27,8 +26,6 @@ struct ContactSettings
    double ballRollingResistance = 0.003; // ball_rolling_resistance: one ball rolling on another, torque = coefficient * reff * N (steel on steel, same class as rolling_resistance)
    double ballMu = 0.15;             // ball_mu: steel on steel friction
    double ballReachMm = 1.0;         // ball_reach_mm: balls closer than this (surface gap) are stepped as one cluster
-   bool islandReach = true;          // island_reach (default 1 since 2026-11-05): 1 = a ball and a moving part share an island only if the ball can reach the part's surface within the cycle (runs/2026-11-05-island-reach/design.md); 0 = any part in the ball's near list
-   bool ballPairReach = true;        // ball_pair_reach (default 1 since 2026-11-05; needs island_reach): 1 = two balls share an island when the gap can close within the cycle at their speed bounds (the island_reach closure, energy bound, BallsMayMeet); 0 = the pairwise ball_reach_mm + 2|vi-vj|T rule only
    bool sleep = false;               // sleep: 1 = a group of touching balls at rest sleeps (not stepped) until something can change it (runs/2026-11-03-pile-sleep/design.md)
    double sleepSpeedMmS = 0.1;       // sleep_speed_mm_s: every ball of the group under this speed and surface speed of spin (requirement 4.1, 'still')
    double sleepHoldMs = 100.0;       // sleep_hold_ms: for this long without a break (a ball only passing through zero speed does not sleep)

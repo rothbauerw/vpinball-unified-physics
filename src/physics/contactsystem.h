@@ -105,7 +105,7 @@ void NotePlaced(const HitBall *ball);   // a script or the driver put this ball 
    bool EngageBand(ContactSurfaceHost *band, HitBall *pb);               // a band takes the ball: its nodes join the ball's contact (the ball stays in the other contacts it has)
    void StepCordAlone(ContactSurfaceHost *band);   // a cord with no ball on it this cycle (its plate moving by itself, a ball just gone), for the engine's current sub-interval (SubIntervalS)
    void Release(HitBall *ball, const char *why);                  // no-op if the contact system does not hold the ball
-   void Remove(HitBall *ball);                                     // the ball leaves play: its entry is erased (query_engage: the only way an entry ends)
+   void Remove(HitBall *ball);                                     // the ball leaves play: its entry is erased (one entry per ball: the only way an entry ends)
    void ReleaseHost(ContactHost *host);                            // the host is destroyed
    bool Holds(const HitBall *ball);
    bool Owns(const BallS &ball, const ContactSurface *surface);  // the contact that holds the ball includes this surface

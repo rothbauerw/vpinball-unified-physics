@@ -96,7 +96,7 @@ namespace BumperGroup
       static constexpr int kZ = 0, kThx = 1, kThy = 2, kR = 3;   // the coordinates
       JB::Bumper cfg;           // its geometry, masses and materials
       double reach = 0.05;      // m, the lever that turns a tilt rate into a speed
-      double TiltInertia() const { return I; }   // the skirt's tilt inertia about its pivot, kg m^2 ([Features] energy_reach)
+      double TiltInertia() const { return I; }   // the skirt's tilt inertia about its pivot, kg m^2 (the energy reach)
       bool coilEnabled = true;  // the table's (between cycles)
       std::vector<char> swLog;  // the switch's changes in order, until the owner reads them: 1 closed, 0 opened
       struct CoilStepBook { bool free = false; double dx = 0.0, v0 = 0.0, v1 = 0.0, i0 = 0.0, i1 = 0.0, h = 0.0, load = 0.0, elec = 0.0, res = 0.0, dField = 0.0, work = 0.0; };
