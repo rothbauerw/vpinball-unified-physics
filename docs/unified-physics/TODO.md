@@ -12,9 +12,9 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-In flight: 1.34 finder piece 6: 6a, 6a2 pushed; inside check, 6b-1 (energy_reach, jet_pulse_at_cycle) committed e44c3568b, not pushed. Next: 6b-2 (OutOfReach by the same law), 6b-3. Design runs/2026-11-13-finder-P6/design_reach.md. Lead log runs/2026-11-14-lead.
+In flight: 1.34 piece 6b-3, B2 = delete the engaged/free split (A, B1, B2-1, free_flight 0 committed, not pushed). Patch fixsplit2 (runs/2026-11-15-finder-P6b3) has 4 commit blockers: design_reach.md "P6b-3 B2". Then C (SleepParts).
 Judge a change by one exe, its setting on vs off; never by an older exe's md5 (ModelStandards trap 112). Query outliers 0.3-9 ms are the OS (measured). Owed: snapshot hashes refresh; GL main rebuild (bench obj_gl stale). 1.33: cut B kept.
-Stand-up targets: building, uncommitted. State and next piece: StandupTargetDesign.txt section 8 "BUILD STATE" (faults, standards review, settings for the user). Lead log runs/2026-11-13-lead.
+Stand-up targets: code pulled from the tree 2026-11-15 (crashed VPX; user), backup backups/2026-11-15-standup-pulled; piece 5 in backups/2026-11-14-standup-build6. Next step is the user's call. Rebuild main before VPX play.
 Air-core coil fix (pull read at the step's midpoint, aircore_in_step, on while tested): merged d9629bc4b and pushed. Lead log runs/2026-11-13-lead.
 Parked with playfield holes (Button and Star committed): a ball on a flush Button lands on the wood through the cap (no hole), bounce e 0.86; user expects much more loss on a Button.
 N3. Playfield cuts (slot, groove, rectangle, meets: bbdee9278). Open: slot-in-groove 256 us/cycle; normal jump at slot tips (cut-junction/results_ramp.txt); ball held where a slot crosses a rect's edge gains energy (finder-P4b S20, S06). Later: draw new shapes, triangle, holes.
@@ -41,6 +41,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 31. After G1: check every converted part (flipper, gates, spinners, bumper, disc, rubbers, cord) against the ModelStandards definition of done (top of the file).
 30. part_guess_accel (default off): design evaluation for all moving parts, then a test plan if kept. After the shared-engine items, unless one of them needs it.
 40. Jet skirt resting on its seat is stepped as a stiff spring and sets short steps whenever the jet is grouped (bumpergroup.h ~283): ModelStandards 3a resting constraint. Gorgar +6 % steps with energy_reach (runs/2026-11-14-reach-p1b).
+42. Step halvings (failed solves, groupstep.h:2190): stress v2 ~560 at 34e4185da (519 near 77 s). Repro: slow ball rocking on a slope below the flippers, 1,269 halvings (runs/2026-11-15-finder-P6b3/drive_burst.txt). Find surface and cause.
 41. Magnet pull in the energy reach is taken at the ball's place, not the largest over its travel: a true bound needs current, saturation, in-winding and per-type terms. Re-looks while a magnet is on (stress C1).
 
 ## 2. Flippers
