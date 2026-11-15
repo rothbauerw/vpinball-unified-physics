@@ -47,7 +47,7 @@ namespace
 namespace ContactSystem
 {
    static bool s_unified = false, s_unifiedSet = false;
-   static bool s_freeFlight = false, s_proximity = false;   // [Features] free_flight and proximity_engage of this table: read at each table load (SetTable), not once per process
+   static bool s_proximity = false;   // [Features] proximity_engage of this table: read at each table load (SetTable), not once per process
    static bool s_seatEditorBalls = false;   // [Features] seat_editor_balls of this table (physicsini.h), read likewise; off with the unified engine off
    static std::filesystem::path s_iniFile;   // the table's physics ini (PhysicsIni::FindUnified at SetTable; empty = none): every reader reads this one file
    static std::filesystem::file_time_type s_iniTime{};   // its write time when the readers last read it (SetTable, ReloadChangedIni)
@@ -75,7 +75,6 @@ namespace ContactSystem
       const bool found = !file.empty() && PhysicsIni::ReadFeatures(file, f);
       s_unified = found && f.unified;   // no file, no [Features] or no  unified = 1  = stock VPX physics
       s_unifiedSet = true;
-      s_freeFlight = s_unified && f.freeFlight;
       s_seatEditorBalls = s_unified && f.seatEditorBalls;
       s_aircoreInStep = s_unified && f.aircoreInStep;
       GroupStep::pathTest = f.pathTest;   // [Features] path_test (groupstep.h; read by the group step and the engagement query only)
@@ -520,20 +519,12 @@ struct ContactSystemImpl
       }
    }
 
-   // A free ball (not held by any contact) that can reach another ball, held or free, this cycle joins the island with no surface contacts of its own: the engine has given it
-   // gravity already, and the stock collision is skipped for the pair, so the two are solved together here. Chains grow until no free ball is within reach of a member.
-   // [Features] free_flight (physicsini.h): every free ball is a body of the step, not only one within reach of another ball, so no ball is moved by the stock flight
-   static bool FreeFlightOn()
-   {
-      return ContactSystem::s_freeFlight;
-   }
-
+   // Every free ball (not held by any contact) is a body of the step with no surface contacts of its own, so no ball is moved by the stock flight (on the unified engine;
+   // on the stock engine none): its pair contacts, if any, are found as for any body (FindIslands)
    static void GatherFree(Cycle &cy)
    {
       CPROF(GatherFree);
-      const ContactSettings &cs = *cy.cs;
-      const bool every = FreeFlightOn();
-      if (!cs.ballContact && !every)
+      if (!ContactSystem::s_unified)
          return;
       std::vector<Body> cand;
       for (auto *const ball : g_pplayer->m_vball)
@@ -546,44 +537,10 @@ struct ContactSystemImpl
          LoadState(w);
          cand.push_back(std::move(w));
       }
-      if (every)   // free_flight: each one a body with no contacts (its pair contacts, if any, are found as for any body: FindIslands)
+      for (Body &w : cand)
       {
-         for (Body &w : cand)
-         {
-            Sources::Begin(w, cy.dt);   // (its gravity, nudge and magnet pull: taken back, then given in the substeps)
-            cy.bodies.push_back(std::move(w));
-         }
-         return;
-      }
-      if (cand.empty() || (cy.bodies.empty() && cand.size() < 2))
-         return;
-      const auto reaches = [&](const Body &x, const Body &y) {
-         const double gap = (x.c - y.c).Length() - x.bs.R - y.bs.R;
-         return gap < cs.ballReachMm * 1e-3 + 2.0 * (x.v - y.v).Length() * cy.dt;
-      };
-      std::vector<char> taken(cand.size(), 0);
-      for (bool grew = true; grew;)
-      {
-         grew = false;
-         const size_t end = cy.bodies.size();
-         for (size_t k = 0; k < cand.size(); k++)
-         {
-            if (taken[k])
-               continue;
-            bool close = false;
-            for (size_t i = 0; i < end && !close; i++)
-               close = reaches(cy.bodies[i], cand[k]);
-            if (!close)   // (a pair of candidates that are close to each other but to nothing else starts a cluster of free balls)
-               for (size_t m = 0; m < cand.size() && !close; m++)
-                  close = m != k && reaches(cand[m], cand[k]);
-            if (close)
-            {
-               taken[k] = 1;
-               Sources::Begin(cand[k], cy.dt);   // (its gravity, nudge and magnet pull: taken back, then given in the substeps)
-               cy.bodies.push_back(cand[k]);
-               grew = true;
-            }
-         }
+         Sources::Begin(w, cy.dt);   // (its gravity, nudge and magnet pull: taken back, then given in the substeps)
+         cy.bodies.push_back(std::move(w));
       }
    }
 
@@ -3234,7 +3191,7 @@ struct ContactSystemImpl
       static const bool on = []() { const char *const e = getenv("VPX_PREVENT"); return !(e != nullptr && atoi(e) == 0); }();
       return on;
    }
-   static void CheckOverlaps(float hittime, double hS);   // hittime: engine time units (the free flight only); hS: the same in seconds
+   static void CheckOverlaps(float hittime, double hS);   // hittime: engine time units; hS: the same in seconds
    static void SeatAtTouch(const std::vector<SurfaceContact> &items, const BallSI &bs, V3 &c, const V3 &v, double &delta0, double &rewound);
    static void SeatKeepsOthers(const std::vector<SurfaceContact> &items, const ContactSurface *self, const BallSI &bs, const V3 &c0, V3 &c);
    // The surfaces a ball at its position may touch, as an engagement takes them: host, the surface whose collider found the ball (taken without the checks below; null = none, the
@@ -3268,7 +3225,7 @@ void ContactSystemImpl::StepBalls(const double dt)
    if (!s_append)
       DispatchPending();   // (the engine dispatches after every step; this keeps a step that was not followed by one from losing its events)
    g_last = ContactSystem::CycleStats();
-   if (g_engaged.empty() && !(ContactSettings::Get().ballContact && g_pplayer->m_vball.size() >= 2) && !(FreeFlightOn() && !g_pplayer->m_vball.empty()))   // (two free balls are solved here too; with free_flight every ball)
+   if (g_engaged.empty() && !(ContactSystem::s_unified && !g_pplayer->m_vball.empty()))   // (on the unified engine every ball is stepped here, held or free)
       return;
    if (dt <= 0.0)
       return;
@@ -4307,8 +4264,8 @@ unsigned ContactSystem::LastSaveUs()
    return g_snap.us;
 }
 
-// Puts the snapshot back. Balls: all of them (only == nullptr), or the engaged ones and those in `only` (a replay: the free balls have been moved on, and stay)
-static void RestoreSnap(const std::vector<HitBall *> *only)
+// Puts the snapshot back, every ball
+static void RestoreSnap()
 {
    StartSnap &s = g_snap;
    if (!s.valid)
@@ -4325,8 +4282,6 @@ static void RestoreSnap(const std::vector<HitBall *> *only)
       b.pb->m_sleepHoldS = b.sleepHoldS;
       b.pb->m_sleepCreepS = b.sleepCreepS;
       b.pb->m_sleepPos = b.sleepPos;
-      if (only != nullptr && b.pb->m_contact == nullptr && std::find(only->begin(), only->end(), b.pb) == only->end())
-         continue;
       b.pb->m_d.m_pos = b.pos;
       b.pb->m_d.m_vel = b.vel;
       b.pb->m_angularmomentum = b.angm;
@@ -4363,7 +4318,7 @@ static void RestoreSnap(const std::vector<HitBall *> *only)
 
 void ContactSystem::RestoreStart()
 {
-   RestoreSnap(nullptr);
+   RestoreSnap();
 }
 
 bool ContactSystem::SnapshotTestOn()
@@ -4479,7 +4434,7 @@ void ContactSystem::SnapshotTest(const double hS)
 
 
 // ---- The overlap check and the replay of the sub-interval (docs/unified-physics/archive/UnifiedContactDesign.txt section 11, point 2) ------------------------------------------------------------------------
-// Run after UpdateDisplacements, before the events are dispatched. A free ball found overlapping a moving part was born inside this sub-interval: it moved on a straight line (stock free flight)
+// Run after UpdateDisplacements, before the events are dispatched. A free ball found overlapping a moving part was born inside this sub-interval: it moved as a body with no contacts
 // while the part moved by its own motion. Find the time t* in the sub-interval at which the gap was zero with BOTH of them where they really were, put the snapshot of the start back, step the
 // system to t* (the engaged balls and the parts), engage the ball there with its true position and velocity, and step on to the end. The contact starts at zero depth with the real velocities.
 // Several balls: the earliest first contact first, the others are found again on the new end state (chained, at most the free balls and parts near + 1 times).
@@ -4500,7 +4455,7 @@ void ContactSystem::CheckOverlaps(const float hittime, const double hS)
    ContactSystemImpl::CheckOverlaps(hittime, hS);
 }
 
-// hittime: the sub-interval in the engine's time units, only for the free balls' straight flight (velocity x stock time); hS: the same sub-interval in seconds, for everything else
+// hittime: the sub-interval in the engine's time units (only to skip an empty one); hS: the same sub-interval in seconds
 void ContactSystemImpl::CheckOverlaps(const float hittime, const double hS)
 {
    using namespace RubberContact;
@@ -4584,22 +4539,12 @@ void ContactSystemImpl::CheckOverlaps(const float hittime, const double hS)
       double t;   // the share of the sub-interval at which the ball is engaged
    };
    std::vector<Rp> list;
-   auto snapBall = [&](const HitBall *pb) -> const BallSnap * {
-      for (const BallSnap &b : g_snap.balls)
-         if (b.pb == pb)
-            return &b;
-      return nullptr;
-   };
    // The system at share tEnd of the sub-interval: the snapshot put back, the engaged balls and the parts stepped to each engagement, the balls of `list` engaged there, then on to tEnd
    auto simulate = [&](const double tEnd) {
-      std::vector<HitBall *> only;
       for (const Rp &e : list)
-      {
          if (e.pb->m_contact != nullptr)
             Release(e.pb, "replay");   // engaged by an earlier simulation: the snapshot has no entry for it
-         only.push_back(e.pb);
-      }
-      RestoreSnap(FreeFlightOn() ? nullptr : &only);   // free_flight: every free ball is stepped again by StepSeconds below, so each starts from the snapshot (else one outside `only` would move twice)
+      RestoreSnap();   // every free ball is stepped again by StepSeconds below, so each starts from the snapshot
       double t = 0.0;
       bool first = true;
       for (Rp &e : list)
@@ -4624,8 +4569,7 @@ void ContactSystemImpl::CheckOverlaps(const float hittime, const double hS)
                   mp->steppedS += idle;   // (PartAdvance advances it for the rest of the sub-interval only)
                }
             }
-         if (const BallSnap *const b0 = snapBall(e.pb); b0 != nullptr && !FreeFlightOn())   // (free_flight: the step above has already flown it to the engagement)
-            e.pb->m_d.m_pos = b0->pos + b0->vel * (float)(e.t * (double)hittime);   // its free flight to the engagement
+         // (the step above has already flown the ball to the engagement)
          EngageImpl(e.host, e.pb, "overlap");
       }
       if (tEnd > t)
@@ -4635,13 +4579,12 @@ void ContactSystemImpl::CheckOverlaps(const float hittime, const double hS)
          s_append = false;
       }
    };
-   // The gap between a free ball (on its straight flight from the snapshot) and the nearest part, at share t, in the system simulate(t) left. A part that was stepped for less than t is advanced alone
+   // The gap between a free ball (where simulate(t) stepped it) and the nearest part, at share t, in the system simulate(t) left. A part that was stepped for less than t is advanced alone
    // for the rest on a scratch copy of its state.
    auto gapAt = [&](HitBall *pb, const double t) {
-      const BallSnap *const b0 = snapBall(pb);
       BallSI bs;
       bs.R = (double)pb->m_d.m_radius * U;
-      const Vertex3Ds p = FreeFlightOn() ? pb->m_d.m_pos : b0->pos + b0->vel * (float)(t * (double)hittime);   // free_flight: where simulate(t) stepped it
+      const Vertex3Ds p = pb->m_d.m_pos;
       const V3 c((double)p.x * U, (double)p.y * U, (double)p.z * U);
       double gmin = 1e9;
       for (ContactHost *const o : parts)

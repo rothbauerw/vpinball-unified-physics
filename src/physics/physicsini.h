@@ -47,7 +47,6 @@ namespace PhysicsIni
       bool magnets = true;        // electromagnets ([Magnet:<name>] sections); off = none
       bool turntables = true;     // turntables ([Turntable:<name>] sections); off = none
       bool playfieldCuts = true;  // playfield_cuts: holes cut in the playfield ([PlayfieldCut:<name>] sections, playfieldcut.h; the slot under a wire switch); off = every cut ignored, the playfield solid (on while tested, rule 6)
-      bool freeFlight = true;     // free_flight (on while tested, rule 6; runs/2026-11-12-freeflight/log.md): 1 = every ball the contact system does not hold is still stepped by it each cycle, as a body with no contacts (its gravity, nudge and magnets in the substeps), so no ball is ever moved by the stock flight (pos += time x end velocity); 0 = such a ball is moved by stock as before
       bool aircoreInStep = true;  // aircore_in_step (on while tested, rule 6; runs/2026-11-13-aircore-ff/design.md): 1 = an air-core coil's pull on a ball in the contact system's step is read at the
                                   // step's midpoint in every evaluation (Magnets::AircoreForce, its slope in Newton's Jacobian); 0 = held at the cycle-start place for the whole cycle (Ball::fExt), as today
       bool pathTest = true;       // path_test (on while tested, rule 6; runs/2026-11-13-finder-exactpath/design.md): 1 = after each solve a skipped contact on a static surface (mesh faces,
@@ -194,8 +193,6 @@ namespace PhysicsIni
             f.turntables = on;
          else if (key == "playfield_cuts")
             f.playfieldCuts = on;
-         else if (key == "free_flight")
-            f.freeFlight = on;
          else if (key == "aircore_in_step")
             f.aircoreInStep = on;
          else if (key == "path_test")
@@ -234,7 +231,7 @@ namespace PhysicsIni
       if (!ContactSystem::Unified())
       {
          f.flippers = f.flipperRubber = f.rubbers = f.playfieldContact = f.surfaceRubbers = f.hardSurfaces = f.proximityEngage = f.hinges = f.triggers = false;
-         f.bands = f.slings = f.contact = f.magnets = f.turntables = f.playfieldCuts = f.hitSpeed = f.freeFlight = f.aircoreInStep = f.seatEditorBalls = false;
+         f.bands = f.slings = f.contact = f.magnets = f.turntables = f.playfieldCuts = f.hitSpeed = f.aircoreInStep = f.seatEditorBalls = false;
          return f;
       }
       if (!file.empty())
