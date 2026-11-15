@@ -40,7 +40,7 @@ No dates, no "learned", no superseded text. What a test is for, its cap and hand
   Other options: `-NoTrace` (trace is on by default, a huge log), `-Mass`, `-TimeoutS`, `-Seed`, `-Focused`, `-Timing`.
 - Behaviour runs are unfocused (run.ps1 sets VPX_PLAY_UNFOCUSED=1, which also turns off the anti-hung time skip). Cost runs: `-Focused -Timing` (prefs\stress-timing: vsync off, 144 fps cap); tell the user first so the machine is idle.
 - run.ps1 writes `[Features] unified = <VPX_UNIFIED, default 1>` into the run's ini and points VPX_PHYSICS_INI at it. Check every run: the ini has one `[Features]`, the log says `loaded from` (not `wrote default settings`) and `unified engine on`.
-- The table is stored once in `runs\_tables\<hash>.vpx`; `run_X\t.vpx` is a hard link to it (`t.vpx.table.txt` names the source). Never open and save a run's t.vpx in the editor.
+- Never copy a table: run.ps1 plays `runs\_tables\<hash>.vpx` itself; a -Vbs or bench run links it as t.vpx (a full link limit adds `<hash>-2.vpx`). Never save these in the editor.
 - Another session's VPX may be open: wait for it, never close it. A leftover VPX may be closed unless the user said they are using it. Never start a run that can show a window while the user plays.
 - Ini variants: copy the table's ini and change one key; a key name can repeat in other sections (`contact = 1` is in [Features] and [Rubbers]), so match the section.
 
