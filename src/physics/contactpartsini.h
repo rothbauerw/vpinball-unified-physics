@@ -137,6 +137,7 @@ namespace PartsIni
          else if (k == "switch_hyst_mm") p.switchHystMm = v;
          else if (k == "coil_drive") p.mode = lv == "held" ? DriveMode::Held : lv == "external" ? DriveMode::External : DriveMode::Pulse;
          else if (k == "pulse_ms") p.pulseMs = v;
+         else if (k == "jet_coil_delay_ms") p.coilDelayMs = std::max(v, 0.0);
          else if (k == "coil") { if (lv != "ae-23-800") PLOGW << "Bumper " << name << ": coil '" << lv << "' is not in the table (only AE-23-800); set coil_r_ohm, coil_l_air_mh, coil_l_arm_mh, coil_bobbin_mm, coil_x0 instead"; }
          else if (k == "coil_v_supply") p.coil.vSupply = v;
          else if (k == "coil_r_ohm") p.coil.rOhm = v;

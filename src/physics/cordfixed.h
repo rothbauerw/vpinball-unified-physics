@@ -1292,6 +1292,22 @@ public:
       Limit(PhiStop(), y, dy);
       return std::max(y, 0.0);
    }
+   // [Features] energy_reach, the coil law (runs/2026-11-14-reach-p1b/brief_coil.md items 2-3): the most work the sling's coil can do on the plate in the coming cycle T. Its driver
+   // reads the switches once per cycle and starts a pulse after its delay, so the coil is on in the cycle only if it is on now, its pending pulse starts within T, or (armed, its delay
+   // shorter than T) a switch can start it now. The current cannot jump: i <= min(i0 + V / L T, V / R), L its smallest (the plunger at rest, farthest out); the force at that current
+   // with the plunger closed (the largest gap factor); the work at most that force over the plunger's whole remaining stroke (it cannot pass its stop)
+   double CoilWorkBound(const double T) const
+   {
+      if (!pl.on)
+         return 0.0;
+      const bool on = driver.Coil() || (driver.pending > 0.0 && driver.pending < T) || (driver.armed && driver.pending <= 0.0 && sl.coilDelayMs * 1e-3 < T);
+      const double V = on ? coilS.vSupply : 0.0;
+      const FlipperSettings &s = sl.mech;
+      const FlipperModel::Kin k = FlipperModel::Kinematics(s, der, der.theta0 + phi);
+      const double lMin = (coilD.a + coilD.b / (std::max((der.xRest - der.xMin) / coilS.bobbinMm, 0.0) + coilS.x0)) * 1e-3;
+      const double iMax = std::min(std::fabs(iCoil) + V / std::max(lMin, 1e-9) * T, std::max(V / coilS.rOhm, std::fabs(iCoil)));
+      return CoilModel::Force(coilS, coilD, 0.0, iMax) * std::max(k.x - der.xMin, 0.0) * 1e-3;
+   }
    double Inertia(const double ph) const
    {
       const FlipperModel::Kin k = FlipperModel::Kinematics(sl.mech, der, der.theta0 + ph);

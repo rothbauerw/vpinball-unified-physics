@@ -148,6 +148,7 @@ namespace
       uint64_t vPrevCycle = 0;
       bool queried = false;
       int reqThis = 0;           // re-queries in the current cycle
+      bool energy = false;       // [Features] energy_reach: this cycle's query reached the ball's energy travel (a re-look is then a fault, logged)
       double reqNs = 0.0;        // time spent in re-queries, ns (summed at the totals)
       uint64_t reqNew = 0;       // P2b: objects a re-query found that were not among the ball's surfaces (summed at the totals); re-engage: each counted once per cycle, as recorded below
       std::vector<int> pend;     // re-engage: those objects, recorded for engagement in the cycle (the group step takes them: FinderTakeNew)
@@ -3180,7 +3181,7 @@ static void FinderP4Log(const uint64_t cycles)
    PLOGI << o.str();
 }
 
-void ContactSurfaceHost::FinderQuery(const HitBall *const ball, const RubberContact::V3 &c, const RubberContact::V3 &v, const double ballR, const double dt)
+void ContactSurfaceHost::FinderQuery(const HitBall *const ball, const RubberContact::V3 &c, const RubberContact::V3 &v, const double ballR, const double dt, const double travelM)
 {
    FinderIndex &g = g_finder;
    if (!g.on)
@@ -3207,8 +3208,9 @@ void ContactSurfaceHost::FinderQuery(const HitBall *const ball, const RubberCont
    q.queried = true;
    q.c0 = c;
    q.R = ballR;
-   q.reach = ContactReachM(v.Length(), accel, dt);
+   q.reach = travelM >= 0.0 ? travelM : ContactReachM(v.Length(), accel, dt);   // [Features] energy_reach: the ball's travel from its energy (ContactSystem ReachEnergy)
    q.ext = q.reach;
+   q.energy = travelM >= 0.0;
    q.reqThis = 0;
    q.items = nullptr;
    FinderRun(&q, ballR + q.reach);
@@ -3244,6 +3246,13 @@ void ContactSurfaceHost::FinderInsideQ(void *const qv, const RubberContact::V3 &
    const double stray = (c - q->c0).Length();
    if (stray <= q->ext)
       return;
+   if (q->energy)   // [Features] energy_reach: the query reached the ball's energy travel, a true bound: a ball outside it is a bound too small (a fault, logged with its numbers)
+   {
+      static int warned = 0;
+      if (warned++ < 30)
+         PLOGW << "Energy reach re-look: ball query at (" << q->c0.x * 1e3 << ", " << q->c0.y * 1e3 << ", " << q->c0.z * 1e3 << ") mm, t " << (g_pplayer != nullptr ? g_pplayer->m_time_msec : 0u)
+               << " ms: the ball is " << stray * 1e3 << " mm from where it started, its travel bound " << q->reach * 1e3 << " mm (query " << q->ext * 1e3 << " mm)";
+   }
    const auto t0 = std::chrono::steady_clock::now();
    q->ext = 2.0 * stray;   // the factor 2 bounds the repeats; completeness comes from this check (design.md section 4)
    FinderRun(q, q->R + q->ext);   // (P2b: every item of the ball reads its object's faces in place, so the lists are refreshed before this evaluation measures)

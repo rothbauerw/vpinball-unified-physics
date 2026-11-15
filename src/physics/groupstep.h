@@ -287,6 +287,10 @@ namespace GroupStep
    // list (Shape::CycleNear) in every attempt of the cycle, and a ball centre outside its query volume at a move's middle or end queries again (Group::NearStillNear); 0 = the
    // per-step lists (Shape::NearPieces, NearHolds, nearGrow), as before
    inline bool partFinder = true;
+   // [Features] energy_reach of this table (physicsini.h; set by ContactSystem::SetTable): 1 = the cycle's part turns and the balls' query reach take the island's feed energy and each
+   // ball's travel from the contact system's grouping (Ball::feedE, Ball::reachS: rubbercontact.h EnergyReach); 0 = the island balls' kinetic energy and ContactReachM, as before
+   inline bool energyReach = true;
+   inline bool jetPulseAtCycle = true;   // [Features] jet_pulse_at_cycle (physicsini.h): a jet's pulse starts at a cycle's start (BumperGroup::Part::CycleStart); 0 = at the step whose switch closes
    // part_finder's counters per kind of part (its type's name; diagnostics only: VPX_CHECK_PROFILE or VPX_FINDER_CHECK, set by the owner in partFinderProf)
    struct PartFinderCount
    {
@@ -355,6 +359,9 @@ namespace GroupStep
       // contacts' forces on it do over its move is a drive (books.driveJ: 0 for a parked ball). The caller puts held balls after the others, so a pair with one has it as its b.
       bool held = false;
       V3 heldA;
+      // [Features] energy_reach: from the contact system's grouping this cycle (ReachLinks): the energy that can feed the ball's island (its balls' kinetic and stored energy plus the
+      // drive work of its parts, J) and the ball's travel over the cycle (m, EnergyReach); -1 = not given (the island balls' kinetic energy and ContactReachM)
+      double feedE = -1.0, reachS = -1.0;
       double I() const { return 0.4 * m * R * R; }
       double InvM() const { return held ? 0.0 : 1.0 / m; }      // inverse mass (0: held)
       V3 Given(const double h) const { return v * h + heldA * (0.5 * h * h); }   // a held ball's move over h
@@ -756,6 +763,7 @@ namespace GroupStep
       virtual void AfterRestore() {}   // its state put back: what is derived from it is made again (the bat's pivot)
       const unsigned char *SavedState() const { return sv.data(); }   // the net's saved records, in the order the part declared them (its notes)
       virtual double KineticJ() const { return 0.0; }
+      virtual double StopSquashJ() const { return 0.0; }   // [Features] energy_reach: what its compliant stops hold above their unloaded state, by each stop's own law (J); a stop that acts by restitution holds nothing
       virtual void ScaleSpeeds(double) {}
       virtual void AfterEnergyStep() {}
       virtual void HoldArcs() {}   // no solve in this attempt: what the part solves within itself stays as it is
@@ -1186,6 +1194,7 @@ namespace GroupStep
       std::vector<V3> cycC0;
       std::vector<double> cycReach;
       double cycT = 1e-3;
+      double cycE = 0.0;   // [Features] energy_reach: the energy the cycle's part turns were given (FinderCycleStart)
       bool cycOn = false, nearCyc = false;
    };
 
@@ -1584,6 +1593,34 @@ namespace GroupStep
          for (int p = 0; p < np; p++)
             e += part[p]->Energy(ball, nb);
          e += FormEnergy(ball);
+         return e;
+      }
+      // [Features] energy_reach: what part p's contacts hold now: each touching ball-part item's stored energy (the same terms as Energy) and its compliant stops' squash (J)
+      double PartContactJ(const int p) const
+      {
+         double e = part[p]->StopSquashJ();
+         for (int k = 0; k < ni; k++)
+            if (item[k].touching && item[k].b < 0 && item[k].s >= 0 && shape[item[k].s] != nullptr && shape[item[k].s]->part == p)
+               e += ItemHeldJ(k);
+         return std::max(e, 0.0);
+      }
+      // [Features] energy_reach: what the balls' touching items on shapes s0 .. s1 - 1 hold now (a cord's posts and plate: CordBand::heldJ) (J)
+      double ShapesContactJ(const int s0, const int s1) const
+      {
+         double e = 0.0;
+         for (int k = 0; k < ni; k++)
+            if (item[k].touching && item[k].b < 0 && item[k].s >= s0 && item[k].s < s1)
+               e += ItemHeldJ(k);
+         return std::max(e, 0.0);
+      }
+      // one item's stored energy now: its squash and its shear (and rolling and twist) springs, as Energy counts them
+      double ItemHeldJ(const int k) const
+      {
+         Hit hp;
+         Probe(item[k], ball, hp);
+         double e = item[k].Energy(hp) + 0.5 * item[k].Kt(hp.delta) * item[k].xi.Dot(item[k].xi);
+         if (set.rollModel == 1)
+            e += 0.5 * item[k].Kr(hp.delta) * item[k].ra.th.Dot(item[k].ra.th) + 0.5 * item[k].Ktw(hp.delta) * item[k].ra.tw * item[k].ra.tw;
          return e;
       }
       // What the ball's place stores in the group's fields; its slopes when wanted
@@ -2619,6 +2656,10 @@ namespace GroupStep
          double E = 0.0;
          for (int i = 0; i < nb; i++)
             E += 0.5 * ball[i].m * ball[i].v.Dot(ball[i].v) + 0.5 * ball[i].I() * ball[i].w.Dot(ball[i].w);
+         if (energyReach)   // the island's feed energy from the grouping (its balls' kinetic and stored energy and its parts' drive work), never less than its balls' energy now
+            for (int i = 0; i < nb; i++)
+               E = std::max(E, ball[i].feedE);
+         cycE = E;
          for (int p = 0; p < np; p++)
             part[p]->CycleTurn(E, T);
          cycC0.resize((size_t)nb);
@@ -2627,6 +2668,8 @@ namespace GroupStep
          {
             cycC0[(size_t)i] = ball[i].c;
             cycReach[(size_t)i] = ContactReachM(ball[i].v.Length(), 0.0, T);
+            if (energyReach)   // (the grouping's travel: the feed energy given all to this ball, its forces as the drive)
+               cycReach[(size_t)i] = std::max(cycReach[(size_t)i], ball[i].reachS);
          }
          std::fill(cycHas.begin(), cycHas.end(), (char)0);
       }
@@ -2674,6 +2717,8 @@ namespace GroupStep
                E = 0.0;
                for (int i = 0; i < nb; i++)
                   E += 0.5 * ball[i].m * ball[i].v.Dot(ball[i].v) + 0.5 * ball[i].I() * ball[i].w.Dot(ball[i].w);
+               if (energyReach)   // (and never less than the cycle's feed energy)
+                  E = std::max(E, cycE);
             }
             part[p]->CycleRegrow(qe, E, cycT);
             for (int j = 0; j < ni; j++)

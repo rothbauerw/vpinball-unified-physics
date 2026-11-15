@@ -52,6 +52,16 @@
 // acceleration, reach = speed x dt + 1/2 x accel x dt^2 (m; speed m/s, accel m/s^2, dt s). Used by the shared finder's per-cycle query (to-do 1.34 P2a) and the
 // group step's part_finder lists (P6a). Here, not in contactsurface.h, so the group step needs no VPX types (ModelStandards 2e).
 inline double ContactReachM(const double speed, const double accel, const double dt) { return speed * dt + 0.5 * accel * dt * dt; }
+// [Features] energy_reach (runs/2026-11-13-finder-P6/design_reach.md sections 1, 4b; to-do N5's one reach rule): how far a body (a ball, a part's turn or travel) can get in T.
+// Energy enters only through the drives and what feeds it: 1/2 m v^2 <= 1/2 m v0^2 + E + m a x, so dx/dt <= sqrt(c^2 + 2 a x), c^2 = v0^2 + 2 E / m:
+// x <= c T + 1/2 a T^2, v_max = c + a T (m and v0 in the body's own units: kg and m/s, or kg m^2 and rad/s; E J; a the largest drive acceleration). E 0: the reach rule above
+inline double EnergyReach(const double v0, const double E, const double m, const double a, const double T, double *const vMax = nullptr)
+{
+   const double c = std::sqrt(v0 * v0 + 2.0 * std::max(E, 0.0) / m);
+   if (vMax != nullptr)
+      *vMax = c + a * T;
+   return c * T + 0.5 * a * T * T;
+}
 
 namespace RubberContact
 {

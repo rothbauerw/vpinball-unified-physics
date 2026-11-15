@@ -222,9 +222,10 @@ namespace BatGroup
       {
          return KineticJ() + Vbat(phi) + (rigid ? 0.0 : VLink(xp - X(phi)));
       }
+      double StopSquashJ() const override { return VRest(phi); }   // [Features] energy_reach: the rest stop's squash (its spring law, VRest); the return spring is a drive (the work term)
       double KineticJ() const override
       {
-         return rigid ? 0.5 * Inertia(phi) * omega * omega : 0.5 * If * omega * omega + 0.5 * mp * vp * vp;
+         return rigid ?0.5 * Inertia(phi) * omega * omega : 0.5 * If * omega * omega + 0.5 * mp * vp * vp;
       }
       // The step's facts, from the state now (accuracy only): the group holds the factors
       void StepFacts(const Ball *, int, const GroupStep::Settings &gs, GroupStep::StepFactList &f) override

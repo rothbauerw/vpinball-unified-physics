@@ -193,7 +193,9 @@ public:
    // shared_finder piece P2a (runs/2026-11-11-finder/design.md section 3): the per-cycle query of one engaged ball at the cycle start (centre c, radius R + reach, v the
    // ball's velocity at the cycle start, dt the cycle), kept for the cycle; the ball's surface items point at it (SurfaceContact::finderQ). In P2a nothing reads its result
    // except check mode and the timing counters, so no result changes.
-   static void FinderQuery(const HitBall *ball, const RubberContact::V3 &c, const RubberContact::V3 &v, double ballR, double dt);
+   // [Features] energy_reach: travelM >= 0 is the ball's travel from its energy (ContactSystem ReachEnergy, the cycle's grouping), the query's reach, once at the cycle start before any
+   // solve; -1 = the speed and last cycle's acceleration (ContactReachM), as before
+   static void FinderQuery(const HitBall *ball, const RubberContact::V3 &c, const RubberContact::V3 &v, double ballR, double dt, double travelM = -1.0);
    // shared finder P2b: the query finds every static mesh contact. FinderQueryAt: a query of a ball around c, radius ballR + extM, with no
    // cycle bookkeeping (a free ball's engagement test, a new contact). FinderBind: the ball's items point at its query, and each static mesh item reads that object's faces from it.
    // FinderHosts: the static mesh hosts the ball's query found, in load order.

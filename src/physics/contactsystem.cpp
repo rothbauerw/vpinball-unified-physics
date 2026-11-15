@@ -52,6 +52,7 @@ namespace ContactSystem
    static std::filesystem::path s_iniFile;   // the table's physics ini (PhysicsIni::FindUnified at SetTable; empty = none): every reader reads this one file
    static std::filesystem::file_time_type s_iniTime{};   // its write time when the readers last read it (SetTable, ReloadChangedIni)
    static bool s_ballInsideCheck = true;    // [Features] ball_inside_check of this table (physicsini.h), read likewise: 1 = every group ball's inside check after each attempt (the midJoin lambda); 0 = as before
+   static bool s_energyReach = true;        // [Features] energy_reach of this table (physicsini.h), read likewise: 1 = grouping and the finder's look-ahead by the one energy reach (ReachEnergy); 0 = as before
    static bool s_aircoreInStep = false;     // [Features] aircore_in_step of this table (physicsini.h), read likewise: 1 = an air-core coil's pull is read at each step's midpoint (AircorePullForce, CordIsland); 0 = held for the cycle as before
 
    void SetTable(const std::filesystem::path &tableFile)
@@ -77,6 +78,9 @@ namespace ContactSystem
       GroupStep::pathTest = f.pathTest;   // [Features] path_test (groupstep.h; read by the group step and the engagement query only)
       GroupStep::partFinder = f.partFinder;   // [Features] part_finder (groupstep.h, hingegroup.h; the group step's piece lists and CheckOverlaps)
       s_ballInsideCheck = f.ballInsideCheck;   // [Features] ball_inside_check (physicsini.h; the group step's per-ball inside check, the midJoin lambda)
+      s_energyReach = f.energyReach;   // [Features] energy_reach (physicsini.h; ReachLinks, the finder's look-ahead, the group step's cycle turns and lists)
+      GroupStep::energyReach = f.energyReach;
+      GroupStep::jetPulseAtCycle = f.jetPulseAtCycle;   // [Features] jet_pulse_at_cycle (physicsini.h; BumperGroup::Part::CycleStart, ContactBumperPart::EnergyMove)
       GroupStep::partFinderProf = ContactProf::CheckOn() || GroupStep::FinderCheckEnv();   // (its counters: diagnostics only)
       GroupStep::partFinderCount.clear();
       GroupStep::partFinderFirstMiss.clear();
@@ -89,6 +93,8 @@ namespace ContactSystem
          PLOGI << "Contact system: [Features] aircore_in_step = " << (s_aircoreInStep ? 1 : 0) << (s_aircoreInStep ? " (an air-core coil's pull read at each step's midpoint)" : " (an air-core coil's pull held for the cycle)");
          PLOGI << "Contact system: [Features] path_test = " << (GroupStep::pathTest ? 1 : 0) << (GroupStep::pathTest ? " (a skipped contact on a static surface or a ball pair tested over the whole move; engagement query by the reach rule)" : " (a skipped contact probed at the move's middle and end; engagement query 20 U)");
          PLOGI << "Contact system: [Features] part_finder = " << (GroupStep::partFinder ? 1 : 0) << (GroupStep::partFinder ? " (a hinge part's pieces listed once per cycle from their swept sectors; the overlap check by region)" : " (per-step piece lists; the overlap check probes every part)");
+         PLOGI << "Contact system: [Features] energy_reach = " << (s_energyReach ? 1 : 0) << (s_energyReach ? " (grouping and the finder's look-ahead by one energy reach: a part's turn or travel and a ball's travel from the energy that can feed them)" : " (a part's whole range once a ball reaches it, 2 x surface speed in the ball's bound)");
+         PLOGI << "Contact system: [Features] jet_pulse_at_cycle = " << (GroupStep::jetPulseAtCycle ? 1 : 0) << (GroupStep::jetPulseAtCycle ? " (a jet's switch closure arms a pulse that starts at the next cycle's start after its jet_coil_delay_ms)" : " (a jet's pulse fires at the end of the step whose switch closes)");
          PLOGI << "Contact system: [Features] ball_inside_check = " << (s_ballInsideCheck ? 1 : 0) << (s_ballInsideCheck ? " (every group ball checked against its cycle query after each attempt)" : " (only a static mesh item's probes check the ball's query)");
       }
       else
@@ -181,7 +187,8 @@ struct ContactSystemImpl
 {
    static void StepBalls(double dt);   // dt: seconds
    static void Release(HitBall *ball, const char *why);
-   static void Regather(BallContact &e, const Vertex3Ds &pos, float radiusU);   // the static mesh hosts come from the ball's query (shared finder), the others from a Verlet list
+   static void Regather(BallContact &e, const Vertex3Ds &pos, float radiusU, int part = 0);   // the static mesh hosts come from the ball's query (shared finder), the others from a Verlet list
+   // ([Features] energy_reach, part: 1 = the others only (before the grouping), 2 = the static mesh hosts only (from the query at the ball's energy travel, after it); 0 = both)
    static bool EngageImpl(ContactHost *host, HitBall *pb, const char *how);
    static void EngageNear(double dt);   // dt: the cycle in seconds
    static void CordNear(double dt);     // likewise
@@ -208,6 +215,9 @@ struct ContactSystemImpl
       ContactSurfaceHost *band = nullptr;   // a band that holds the ball (the group step takes the whole island)
       bool held = false;           // a ball a kicker holds (parked) or carries (KickerDesign 1h): infinite mass in the pair law, its velocity given (v), no gravity, spin 0
       V3 heldA;                    // its given acceleration, m/s2 (the arm's path's centripetal pull; 0 parked)
+      double feedE = -1.0, reachS = -1.0;   // [Features] energy_reach (ReachEnergy): its group's feed energy (J) and its travel over the cycle (m); -1 = not set
+      double magReach = 0.0;  // [Features] energy_reach: |a magnet's pull| on it now, m/s2 (Sources::Begin; on or off the playfield model)
+      double gravAcc = 0.0;   // [Features] energy_reach: |gravity + nudge| on it, m/s2 (Sources::Begin; 0 for a held ball, whose motion is given), whether or not the substeps take it
    };
 
    struct BallHit
@@ -259,6 +269,18 @@ struct ContactSystemImpl
             w.magAcc = 0.0;
             w.extBaseVS = w.extOwe = V3();
             return;
+         }
+         {   // [Features] energy_reach: gravity and the nudge act on every ball every cycle, whichever model gives them (the stock engine's kick or the substeps): the drive's acceleration
+            const Vertex3Ds g = pb->ExternalVelocityIncrement(false);
+            w.gravAcc = V3(g.x * VS, g.y * VS, g.z * VS).Length() / PHYSICS_STEPTIME_S;
+            // a magnet's pull on a magnetic ball while a coil carries current, whether or not the substeps give it (the stock increment gives it to a ball off the playfield model);
+            // at the ball's place now (the field's change over the cycle's travel is not bounded here)
+            w.magReach = 0.0;
+            if (pb->m_magnetic && Magnets::Active())
+            {
+               const Vertex3Ds a = pb->ExternalVelocityIncrement(true);
+               w.magReach = V3((a.x - g.x) * VS, (a.y - g.y) * VS, (a.z - g.z) * VS).Length() / PHYSICS_STEPTIME_S;
+            }
          }
          // A free ball (no contact of its own, in an island only through a ball pair) has nothing of the stock engine under it: its gravity, nudge and magnet pull act in the substeps like an engaged ball's.
          const bool onPlayfieldModel = always || w.e == nullptr || std::any_of(w.e->items.begin(), w.e->items.end(), [](const SurfaceContact &it) { return it.r->IsFloor(); });
@@ -355,22 +377,56 @@ struct ContactSystemImpl
             w.e = &e;
             LoadBody(w, pb);
             LoadState(w);
-            ContactSurfaceHost::FinderQuery(pb, w.c, w.v, w.bs.R, dt);   // the shared finder's per-cycle query (design.md section 3): the ball's static mesh surfaces, before the gather that reads it
+            const bool energy = ContactSystem::s_energyReach && cy.cs->islandReach;   // [Features] energy_reach: the static mesh query waits for the ball's energy travel (GatherStatic)
+            if (!energy)
+               ContactSurfaceHost::FinderQuery(pb, w.c, w.v, w.bs.R, dt);   // the shared finder's per-cycle query (design.md section 3): the ball's static mesh surfaces, before the gather that reads it
             {
                CPROF(Regather);
-               Regather(e, w.posStart, pb->m_d.m_radius);
+               Regather(e, w.posStart, pb->m_d.m_radius, energy ? 1 : 0);
             }
-            ContactSurfaceHost::FinderBind(pb, e.items, true);   // shared finder: each static mesh item reads its faces from the ball's query (its Refresh below does nothing)
+            if (!energy)
+               ContactSurfaceHost::FinderBind(pb, e.items, true);   // shared finder: each static mesh item reads its faces from the ball's query (its Refresh below does nothing)
             w.band = e.band;
             Sources::Begin(w, dt);
             {
                CPROF(RefreshCycle);
                for (SurfaceContact &it : e.items)
-                  it.r->Refresh(it, w.bs.R, 2.0 * w.v.Length() * dt + 0.005, w.c);   // a surface: the faces the ball can reach this cycle
+                  if (!energy || it.r->FinderObjIndex() < 0)
+                     it.r->Refresh(it, w.bs.R, 2.0 * w.v.Length() * dt + 0.005, w.c);   // a surface: the faces the ball can reach this cycle
             }
-            ContactSurfaceHost::FinderCheckGather(pb, e.items, w.c, w.bs.R);   // check mode only (VPX_FINDER_CHECK=1)
+            if (!energy)
+               ContactSurfaceHost::FinderCheckGather(pb, e.items, w.c, w.bs.R);   // check mode only (VPX_FINDER_CHECK=1)
             cy.bodies.push_back(std::move(w));
          }
+      }
+   }
+
+   // [Features] energy_reach (runs/2026-11-14-reach-p1b/brief.md; design.md section 3, "result per ball"): after the grouping (ReachEnergy: each ball's travel from its energy, grown
+   // to a fixed point by what it can reach and be fed by), each engaged ball's one query of the cycle, out to that travel: its static mesh surfaces come from it, before any solve.
+   // Nothing joins later except by the inside check (a ball outside its query: a bound too small, logged as a fault)
+   static void GatherStatic(Cycle &cy)
+   {
+      if (!ContactSystem::s_energyReach || !cy.cs->islandReach)
+         return;
+      for (Body &w : cy.bodies)
+      {
+         if (w.e == nullptr)
+            continue;
+         HitBall *const pb = w.pb;
+         BallContact &e = *w.e;
+         ContactSurfaceHost::FinderQuery(pb, w.c, w.v, w.bs.R, cy.dt, std::max(w.reachS, 0.0));
+         {
+            CPROF(Regather);
+            Regather(e, w.posStart, pb->m_d.m_radius, 2);
+         }
+         ContactSurfaceHost::FinderBind(pb, e.items, true);
+         {
+            CPROF(RefreshCycle);
+            for (SurfaceContact &it : e.items)
+               if (it.r->FinderObjIndex() >= 0)
+                  it.r->Refresh(it, w.bs.R, 2.0 * w.v.Length() * cy.dt + 0.005, w.c);
+         }
+         ContactSurfaceHost::FinderCheckGather(pb, e.items, w.c, w.bs.R);   // check mode only (VPX_FINDER_CHECK=1)
       }
    }
 
@@ -497,12 +553,166 @@ struct ContactSystemImpl
             s_ballGroupLast.emplace_back(&b->m_hitBall, (uintptr_t)b->m_hitBall.m_sleepGroup);
    }
 
+   struct Edge { int i, p; SurfaceContact *it; double gap; bool on; };   // island_reach: a ball and a moving part in its list: the gap from its probe now; on = grouped
+   // [Features] energy_reach (runs/2026-11-14-reach-p1/brief.md; design_reach.md sections 1, 4a, 4b): ReachLinks with the one energy reach (rubbercontact.h EnergyReach). Grown to a
+   // fixed point (the bounds only grow), each round from the groups as they are:
+   //  - a group's energy: its balls' kinetic energy (spin included) and what their contacts hold (the stored energy at the last cycle's end, endStored, and the ball pairs' now);
+   //    a held ball's given motion as a speed (a ball leaves it at up to twice its speed); its balls' forces (gravity and nudge, magnets) as the drive
+   //  - each grouped part's work: its kinetic energy and its drives' work over its move, the move from its group's balls' energy (EnergyMove); the group's feed energy is the
+   //    group's energy plus its parts' work, all given to one ball: its travel EnergyReach(0, feed, m, forces, T) plus the held balls' given speed x T
+   //  - a ball joins a part when gap < its travel + the part's move at the ball (the feed energy of the ball's group and of the part's) + the contact law's approach margin;
+   //    two balls when gap < the sum of their travels + that margin (ball_pair_reach)
+   // Each body keeps its travel and its group's feed energy (Body::reachS, feedE: the group step's cycle turns and lists); the ball's one static mesh query of the cycle reaches its
+   // travel (GatherStatic, after this). Static surfaces feed no energy (what a contact holds is in endStored), so they do not change the fixed point
+   // NOTE: the fixed point stops at the first round that adds nothing: each round adds a part edge or ball pair or stops (no round cap)
+   static void ReachEnergy(Cycle &cy, std::vector<Edge> &edges, const std::vector<ContactMovingPart *> &parts, const bool ballPairs)
+   {
+      constexpr double kApproachM = 100e-6;   // m: the contact law's approach margin (SetupIsland kApproachMarginM): a gap under it is stepped as a contact
+      const int nw = (int)cy.bodies.size(), np = (int)parts.size();
+      const double T = cy.dt;
+      if (nw == 0)
+         return;
+      std::vector<int> root(nw);
+      for (int i = 0; i < nw; i++)
+         root[i] = i;
+      const auto find = [&](int i) { while (root[i] != i) i = root[i] = root[root[i]]; return i; };
+      const auto unite = [&](const int a, const int b) { root[find(a)] = find(b); };
+      for (const auto &pr : cy.pairs)
+         unite(pr.first, pr.second);
+      for (const auto &lk : cy.links)
+         unite(lk.first, lk.second);
+      std::vector<int> partBall(np, -1);   // the first ball that can reach it
+      std::vector<char> paired;
+      std::vector<double> bgap;
+      if (ballPairs)
+      {
+         paired.assign((size_t)nw * nw, 0);
+         bgap.resize((size_t)nw * nw);
+         for (const auto &pr : cy.pairs)
+            paired[(size_t)pr.first * nw + pr.second] = 1;
+         for (int i = 0; i < nw; i++)
+            for (int j = i + 1; j < nw; j++)
+               bgap[(size_t)i * nw + j] = (cy.bodies[i].c - cy.bodies[j].c).Length() - cy.bodies[i].bs.R - cy.bodies[j].bs.R;
+         BallPairMissCheck(cy, bgap);
+      }
+      std::vector<double> pairHeld(cy.pairs.size(), 0.0);   // what each ball pair holds now (its stored energy)
+      for (size_t k = 0; k < cy.pairs.size(); k++)
+      {
+         const Body &A = cy.bodies[cy.pairs[k].first], &B = cy.bodies[cy.pairs[k].second];
+         if (const BallPairState *const ps = FindPair(A.pb, B.pb))
+            pairHeld[k] = std::max(PairHolds(cy, A, B, *ps), 0.0);
+      }
+      const size_t nPairs0 = cy.pairs.size();
+      std::vector<double> eb(nw), af(nw), hv(nw), ef(nw), sb(nw), wp(np);
+      int rounds = 0;
+      for (bool grew = true; grew;)
+      {
+         grew = false;
+         rounds++;
+         std::fill(eb.begin(), eb.end(), 0.0);
+         std::fill(af.begin(), af.end(), 0.0);
+         std::fill(hv.begin(), hv.end(), 0.0);
+         for (int i = 0; i < nw; i++)
+         {
+            const Body &w = cy.bodies[i];
+            const int g = find(i);
+            if (w.held)
+               hv[g] += 2.0 * (w.v.Length() + w.heldA.Length() * T);
+            else
+               eb[g] += 0.5 * w.bs.m * w.v.Dot(w.v) + 0.5 * w.bs.Inertia() * w.w.Dot(w.w) + (w.e != nullptr ? std::max(w.e->endStored, 0.0) : 0.0);
+            af[g] += w.gravAcc + w.magReach;
+            if (w.band != nullptr && w.band->CordOn())   // a band that holds the ball: what its cord holds (CordBand::heldJ), once per group
+            {
+               bool first = true;
+               for (int j = 0; j < i && first; j++)
+                  first = cy.bodies[j].band != w.band;
+               if (first)   // (and its sling coil's work bound for this cycle: CordFixed::Part::CoilWorkBound)
+                  eb[g] += w.band->Cord()->heldJ + w.band->Cord()->fixed->CoilWorkBound(T);
+            }
+         }
+         for (size_t k = 0; k < nPairs0; k++)
+            eb[find(cy.pairs[k].first)] += pairHeld[k];
+         ef = eb;
+         for (int p = 0; p < np; p++)
+         {
+            wp[p] = 0.0;
+            if (partBall[p] >= 0)
+            {
+               parts[p]->EnergyMove(parts[p]->Origin(), eb[find(partBall[p])], T, &wp[p]);
+               ef[find(partBall[p])] += wp[p] + parts[p]->squashJ;   // (its kinetic energy is in its work; what its contacts held at the last cycle's end, MovingPartState::squashJ)
+            }
+         }
+         for (int i = 0; i < nw; i++)
+         {
+            const int g = find(i);
+            sb[i] = EnergyReach(0.0, ef[g], cy.bodies[i].bs.m, af[g], T) + hv[g] * T;
+         }
+         for (Edge &ed : edges)
+         {
+            if (ed.on)
+               continue;
+            const int gi = find(ed.i), pb = partBall[ed.p];
+            const double E = ef[gi] + (pb >= 0 && find(pb) != gi ? ef[find(pb)] : 0.0);
+            const Body &w = cy.bodies[ed.i];
+            if (std::max(ed.gap - parts[ed.p]->EnergyMove(w.c, E, T, nullptr), parts[ed.p]->CycleRegionDist(w.c, T) - w.bs.R) < sb[ed.i] + kApproachM)
+            {
+               ed.on = grew = true;
+               if (pb < 0)
+                  partBall[ed.p] = ed.i;
+               else if (find(ed.i) != find(pb))
+                  unite(ed.i, pb);
+            }
+         }
+         if (ballPairs)
+            for (int i = 0; i < nw; i++)
+               for (int j = i + 1; j < nw; j++)
+                  if (!paired[(size_t)i * nw + j] && bgap[(size_t)i * nw + j] < sb[i] + sb[j] + kApproachM)
+                  {
+                     BallPairReachLog(cy, i, j, bgap[(size_t)i * nw + j], [&](const int k) {   // (the terms of the travel, read before the pair joins the groups)
+                        const int g = find(k);
+                        std::ostringstream o;
+                        o << "travel " << sb[k] * 1e3 << " mm = energy " << eb[g] * 1e3 << " mJ + parts' work " << (ef[g] - eb[g]) * 1e3 << " mJ, forces " << af[g] << " m/s2, held " << hv[g] << " m/s, |v| " << cy.bodies[k].v.Length();
+                        return o.str(); });
+                     paired[(size_t)i * nw + j] = 1;
+                     cy.pairs.emplace_back(i, j);
+                     unite(i, j);
+                     grew = true;
+                  }
+      }
+      if (ballPairs)
+      {
+         BallPairMissKeep(cy, find);
+         std::swap(s_pairReachLast, s_pairReachNow);
+         s_pairReachNow.clear();
+      }
+      for (const Edge &ed : edges)
+      {
+         const int pb = partBall[ed.p];
+         if (pb < 0 || find(ed.i) != find(pb))
+            ed.it->partOut = true;   // solved in another island, or alone
+         else if (ed.on && ed.i != pb)
+            cy.links.emplace_back(pb, ed.i);
+      }
+      for (int i = 0; i < nw; i++)
+      {
+         Body &w = cy.bodies[i];
+         w.reachS = sb[i];
+         w.feedE = ef[find(i)];
+      }
+      static uint64_t nCyc = 0, nRounds = 0;   // the fixed point's rounds per cycle (diagnostics: logged every 10000 cycles)
+      static int worst = 0;
+      nCyc++;
+      nRounds += (uint64_t)rounds;
+      worst = std::max(worst, rounds);
+      if (nCyc % 10000 == 0)
+         PLOGI << "Energy reach rounds: " << nCyc << " cycles, rounds per cycle mean " << (double)nRounds / (double)nCyc << ", worst " << worst;
+   }
+
    static void ReachLinks(Cycle &cy)
    {
       constexpr double kApproachM = 100e-6;   // m: the contact law's approach margin (SetupIsland kApproachMarginM): a gap under it is stepped as a contact
       const int nw = (int)cy.bodies.size();
       const double T = cy.dt;
-      struct Edge { int i, p; SurfaceContact *it; double gap; bool on; };
       std::vector<Edge> edges;
       std::vector<ContactMovingPart *> parts;
       for (int i = 0; i < nw; i++)
@@ -531,6 +741,11 @@ struct ContactSystemImpl
                   edges.push_back({ i, p, &it, gap, false });
                }
       const bool ballPairs = cy.cs->ballPairReach && cy.cs->ballContact && nw >= 2;
+      if (ContactSystem::s_energyReach)
+      {
+         ReachEnergy(cy, edges, parts, ballPairs);
+         return;
+      }
       if (edges.empty() && !ballPairs)
          return;
       std::vector<int> root(nw);
@@ -1403,6 +1618,8 @@ struct ContactSystemImpl
          b.fExt = V3();
          b.held = w.held;
          b.heldA = w.heldA;
+         b.feedE = w.feedE;   // ([Features] energy_reach: -1 when not set)
+         b.reachS = w.reachS;
          if (w.held)
             b.w = V3();   // (spin zero)
          if (!gSet && w.extBaseVS.Length() > 0.0)
@@ -2057,6 +2274,16 @@ struct ContactSystemImpl
             PLOGI << "Cord energy: largest rise over a cycle so far " << riseE * 1e6 << " uJ, t=" << g_pplayer->m_time_msec;
          }
       }
+      if (ContactSystem::s_energyReach)   // [Features] energy_reach: each cord's energy above its no-ball state and its plate's motion, for the next cycle's feed (CordBand::heldJ)
+         for (ContactSurfaceHost *const c : cords)
+         {
+            CordBand &cb = *c->Cord();
+            const int s0 = cb.fixed->postFirst, s1 = s0 + (int)cb.fixed->postShape.size() + (cb.fixed->pl.on ? 1 : 0);   // (its posts, then its plate: AddPostShapes)
+            cb.heldJ = std::max(cb.fixed->Energy(&g.ball[0], g.nb) - cb.fixed->Energy(&g.ball[0], 0) + cb.fixed->KineticJ() + g.ShapesContactJ(s0, s1), 0.0);   // (and each ball's squash on its posts and plate)
+         }
+      if (ContactSystem::s_energyReach)   // [Features] energy_reach: what each moving part's contacts hold (its ball contacts' and compliant stops' stored energy), for the next cycle's feed
+         for (size_t p = 0; p < parts.size(); p++)   // (parts[p] is the group's part p: the cords are added after them)
+            parts[p]->squashJ = g.PartContactJ((int)p);
       book.End((int)g_pplayer->m_time_msec, false, cy.dt, !ok);
       for (ContactMovingPart *const mp : parts)
       {
@@ -2852,6 +3079,7 @@ void ContactSystemImpl::StepBalls(const double dt)
    GatherBalls(cy);
    GatherFree(cy);
    FindIslands(cy);
+   GatherStatic(cy);   // ([Features] energy_reach: each ball's static mesh query at its travel from the grouping)
    PairFirstSight(cy);
    EnergyCheckStart(cy);
    lap(g_last.gatherUs);
@@ -3352,18 +3580,24 @@ bool ContactSystem::EngageBand(ContactSurfaceHost *const band, HitBall *const pb
    return true;
 }
 
-void ContactSystemImpl::Regather(BallContact &e, const Vertex3Ds &pos, const float radiusU)
+void ContactSystemImpl::Regather(BallContact &e, const Vertex3Ds &pos, const float radiusU, const int part)
 {
    const float reach = radiusU + 20.0f;   // as at engagement
    // A Verlet list: the surfaces within reach + 10 U are kept and collected again only after the ball has moved 5 U (or 10 ms have passed: a part can become collidable)
    constexpr float kMarginU = 10.0f, kMoveU = 5.0f;
    const uint32_t nowMs = g_pplayer->m_time_msec;
-   const bool rescan = !(e.regathered && nowMs - e.regatherMs < 10 && (pos - e.regatherPos).LengthSquared() < kMoveU * kMoveU);
+   const bool rescan = part != 2 && !(e.regathered && nowMs - e.regatherMs < 10 && (pos - e.regatherPos).LengthSquared() < kMoveU * kMoveU);
    std::vector<SurfaceContact> next;
    // shared finder (design.md section 3): the static mesh hosts every cycle from the ball's query (a face within R + reach), the others from the Verlet list below;
    // kept in the registry's order, as the registry loop gave them
    thread_local std::vector<ContactHost *> found;
-   ContactSurfaceHost::FinderHosts(e.ball, found);
+   if (part == 1)   // the others only: the static mesh items as they are (the query at the ball's energy travel replaces them after the grouping)
+      found.clear();
+   else
+      ContactSurfaceHost::FinderHosts(e.ball, found);
+   for (SurfaceContact &it : e.items)
+      if (part != 0 && it.r != nullptr && (it.r->FinderObjIndex() >= 0) == (part == 1))
+         next.push_back(std::move(it));   // (the part not gathered now, kept)
    for (ContactHost *const o : found)
    {
       if (!o->m_set.contact)
@@ -3383,7 +3617,7 @@ void ContactSystemImpl::Regather(BallContact &e, const Vertex3Ds &pos, const flo
       it.st.Reset();
       next.push_back(std::move(it));
    }
-   if (!rescan)   // the other surfaces: the set as it is
+   if (!rescan && part != 2)   // the other surfaces: the set as it is (part 2: kept above)
       for (SurfaceContact &it : e.items)
          if (it.r != nullptr && it.r->FinderObjIndex() < 0)
             next.push_back(std::move(it));

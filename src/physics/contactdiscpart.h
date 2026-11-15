@@ -53,6 +53,14 @@ namespace DiscModel
       double RegionDist(const V3 &c) const override { return (c - gp.centre).Length() - std::hypot(gp.R, gp.centre.z - std::min(gp.zBottom, gp.centre.z)); }   // ([Features] part_finder, group A: its solid's farthest point from its top centre)
       double SurfaceSpeedBound(double) const override { return 0.0; }   // no point of the disc moves along its own normal (discgroup.h)
       double MotionRange() const override { return 0.0; }               // (nor over any time: turning moves no gap)
+      // [Features] energy_reach: its outline does not change as it turns (design_reach.md section 1): no move. work 0: what its motor hands a ball through friction is not bounded here (as the 2 x 0 surface speed term before)
+      double CycleRegionDist(const V3 &c, double) const override { return RegionDist(c); }   // ([Features] energy_reach: its solid does not move)
+      double EnergyMove(const V3 &, double, double, double *const work) const override
+      {
+         if (work != nullptr)
+            *work = 0.0;
+         return 0.0;
+      }
       RubberContact::TubeProbe Probe(const V3 &c) const override
       {
          GroupStep::Hit h;

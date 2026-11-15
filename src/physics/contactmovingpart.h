@@ -30,6 +30,7 @@ struct MovingPartState
 {
    double steppedS = 0.0;           // how long the contact system stepped the part with its balls in this sub-interval (s); the host advances it alone for the rest
    bool steppedThisCycle = false;   // the contact system stepped the part with the balls of an island this cycle (the host's own advance skips it once)
+   double squashJ = 0.0;            // [Features] energy_reach: what its contacts hold at the cycle's end, J: each ball-part contact's stored energy by the contact law and its compliant stops' squash (GroupStep::Part::StopSquashJ); fed to the balls that can reach it (ContactSystem ReachEnergy)
    bool restTouched = false;        // a ball asleep in a pile touches it (the engine's pile sleep): the part does not sleep while one does (GroupStep::RestWatch)
 };
 
@@ -96,6 +97,15 @@ public:
    // can add in a cycle. Balls are not counted (their contact is the contact). The engine adds it to the ball's closing speed when it decides to engage a ball and when it decides to let one go
    // (UnifiedContactDesign.txt 11 point 1, 12.1 d). A part may answer its whole point speed (an upper bound); a disc turning about its own axis answers 0 (its surfaces slide along themselves).
    virtual double SurfaceSpeedBound(double cycleS) const = 0;
+   // [Features] energy_reach (design_reach.md sections 1, 4b; rubbercontact.h EnergyReach): the most any point of the part's surface can move relative to a point c over a cycle of T
+   // seconds (m), its turn or travel bounded by energy: its own motion, its drives (gravity, springs, blades, cams, coil) and E, the kinetic energy (J) of the balls that can reach it
+   // this cycle. work (if not null): what the part can hand to the balls in the cycle beyond E, its kinetic energy now plus its drives' work over that move (J). Each part its own law
+   virtual double EnergyMove(const V3 &c, double E, double T, double *work) const = 0;
+   // between cycles (the host's advance, after the cycle): what starts at the next cycle's start (a jet's pending pulse: [Features] jet_pulse_at_cycle); cycleS: that cycle's length
+   virtual void NextCycleStart(double /*cycleS*/) {}
+   // [Features] energy_reach: a lower bound on the distance from c to the part at any pose it can take in the cycle (m; its region, design_reach.md section 3 in its bounding form);
+   // -INFINITY = none (the move above alone). Grouping takes the larger of this less R and the gap now less EnergyMove
+   virtual double CycleRegionDist(const V3 &, double /*T*/) const { return -INFINITY; }
    // the part's state as a short text for the log (an engagement of a ball with a part that is moving is the case to look at)
    virtual std::string StateNote() const { return std::string(); }
    // A part on the group step (docs/unified-physics/GroupStepDesign.txt 18): the engine moves it with the balls in one solve and holds its shapes. Null: the part is on the old loop until it moves over. No part implements these yet.

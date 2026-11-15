@@ -21,7 +21,10 @@ struct CordBand
    bool attached = false;          // the part is in a group's solve (AttachGroup done)
    std::vector<HitBall *> slots;   // the group's balls in the part's order, last cycle
    bool warnedHeld = false;
-   int heldCycles = 0;             // cycles in a row whose step could not be solved: the balls are held where they are for the rest of each
+   // [Features] energy_reach: what the cord holds above its state with no ball on it, plus its plate's kinetic energy, at the end of its last step (J; CordFixed::Part::Energy,
+   // as the cord's energy check reads it): fed to the balls it holds (ContactSystem ReachEnergy)
+   double heldJ = 0.0;
+   int heldCycles = 0;            // cycles in a row whose step could not be solved: the balls are held where they are for the rest of each
    std::vector<HitBall *> onCord;  // the balls on the cord at the end of the last cycle
    std::vector<std::pair<HitBall *, float>> hits;   // a ball that came onto the cord this cycle, and its closing speed (VPX units): the script's Hit event, after the step
 };

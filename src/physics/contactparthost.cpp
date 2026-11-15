@@ -52,9 +52,14 @@ void ContactPartHost::PartAdvance()
       // the contact system stepped it with its balls for steppedS; the rest of the sub-interval it moves alone
       const double rest = ContactSystem::SubIntervalS() - m_part->steppedS;
       if (rest > 1e-9)
+      {
          m_part->AdvanceAlone(rest);
+         const GroupStep::Part *const gp = m_part->GroupPart();   // [Features] energy_reach: alone, no ball touches it: what its compliant stops hold (MovingPartState::squashJ)
+         m_part->squashJ = gp != nullptr ? gp->StopSquashJ() : 0.0;
+      }
       m_part->steppedS = 0.0;
       m_part->steppedThisCycle = false;
+      m_part->NextCycleStart(ContactSystem::SubIntervalS());   // (what starts at the next cycle's start: a jet's pending pulse)
    }
    m_adapter->Publish();
    // the part's events, in the order they happened: queued, the engine fires them after the free balls have moved (ContactSystem::Dispatch)

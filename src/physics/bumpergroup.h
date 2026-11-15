@@ -61,6 +61,8 @@ namespace BumperGroup
       double iCoil = 0.0;       // A
       bool pulseActive = false, pulseArmed = true;
       double pulseLeft = 0.0;
+      bool pulsePending = false;   // [Features] jet_pulse_at_cycle: a closure armed a pulse that starts at a cycle's start (CycleStart), pendingS after the next cycle's start
+      double pendingS = 0.0;
       bool extOn = false;       // external drive: the script's command
       double extVolts = -1.0, extDuty = 1.0;
       double coilOnS = 0.0, coilOnMaxS = 0.0;   // how long the coil has been commanded on, this episode and the longest (a detector's)
@@ -94,6 +96,7 @@ namespace BumperGroup
       static constexpr int kZ = 0, kThx = 1, kThy = 2, kR = 3;   // the coordinates
       JB::Bumper cfg;           // its geometry, masses and materials
       double reach = 0.05;      // m, the lever that turns a tilt rate into a speed
+      double TiltInertia() const { return I; }   // the skirt's tilt inertia about its pivot, kg m^2 ([Features] energy_reach)
       bool coilEnabled = true;  // the table's (between cycles)
       std::vector<char> swLog;  // the switch's changes in order, until the owner reads them: 1 closed, 0 opened
       struct CoilStepBook { bool free = false; double dx = 0.0, v0 = 0.0, v1 = 0.0, i0 = 0.0, i1 = 0.0, h = 0.0, load = 0.0, elec = 0.0, res = 0.0, dField = 0.0, work = 0.0; };
@@ -175,6 +178,8 @@ namespace BumperGroup
          ringStop = -1;
          pulseActive = false;
          pulseArmed = true;
+         pulsePending = false;
+         pendingS = 0.0;
          extOn = false;
          extVolts = -1.0;
          extDuty = 1.0;
@@ -192,6 +197,20 @@ namespace BumperGroup
          if (bk.tPulseStart < 0.0)
             bk.tPulseStart = t;
          bk.pulses++;
+      }
+      // [Features] jet_pulse_at_cycle (the sling's form, hitsling.h): between cycles, a pending pulse starts at this cycle's start once the bumper's delay (jet_coil_delay_ms) has
+      // passed; cycleS: the cycle about to start. So the coil's state for a cycle is known at its start (ContactBumperPart::EnergyMove)
+      void CycleStart(const double cycleS)
+      {
+         if (!pulsePending)
+            return;
+         if (pendingS > 1e-12)
+         {
+            pendingS -= cycleS;
+            return;
+         }
+         pulsePending = false;
+         FirePulse();
       }
       // The coil's command now, by drive mode: held follows the switch, pulse its timer, external the script. It changes between steps only
       bool CoilOn() const { return cfg.p.mode == JB::DriveMode::Held ? coilEnabled && closed : cfg.p.mode == JB::DriveMode::External ? extOn : pulseActive; }
@@ -519,15 +538,24 @@ namespace BumperGroup
             if (tClose < 0.0)
                tClose = t;
             swLog.push_back(1);
-            if (cfg.p.mode == JB::DriveMode::Pulse && coilEnabled && pulseArmed && !pulseActive)
-               FirePulse();
+            if (cfg.p.mode == JB::DriveMode::Pulse && coilEnabled && pulseArmed && !pulseActive && !pulsePending)
+            {
+               if (GroupStep::jetPulseAtCycle)   // [Features] jet_pulse_at_cycle: armed here, started at a cycle's start (CycleStart)
+               {
+                  pulsePending = true;
+                  pulseArmed = false;
+                  pendingS = cfg.p.coilDelayMs * 1e-3;
+               }
+               else
+                  FirePulse();
+            }
          }
          else if (closed && d <= dOpen)
          {
             closed = false;
             swLog.push_back(0);
          }
-         if (!pulseActive && !closed)
+         if (!pulseActive && !pulsePending && !closed)
             pulseArmed = true;
       }
       void ScaleSpeeds(const double f) override { vz *= f; wx *= f; wy *= f; vr *= f; }

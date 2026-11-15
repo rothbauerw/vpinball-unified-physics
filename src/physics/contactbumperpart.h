@@ -182,6 +182,41 @@ namespace JetBumper
          return std::max(ring, skirt);
       }
 
+      // [Features] energy_reach (design_reach.md section 1, translating parts): the ring slides along the axis by at most EnergyReach(|vr|, E, ring mass, the coil at full current
+      // plus the return spring plus gravity); the skirt's pivot slides by EnergyReach(|vz|, E, skirt mass, its springs plus gravity) and the skirt tilts by EnergyReach(|w|, E, I,
+      // those springs' force at its farthest lever / I), a point c moving by its distance from the pivot times the tilt (at most pi) plus the slide (as SkirtMotion). The larger of the
+      // two; not clamped at the stroke (the stops are springs). work: each body's kinetic energy now plus its drive's work over its move
+      void NextCycleStart(const double cycleS) override
+      {
+         if (GroupStep::jetPulseAtCycle)
+            gp.CycleStart(cycleS);
+      }
+      double EnergyMove(const V3 &c, const double E, const double T, double *const work) const override
+      {
+         const Params &p = gp.cfg.p;
+         const double g = partSet.g.Length();
+         // the coil law (runs/2026-11-14-reach-p1b/brief_coil.md item 2): the current cannot jump, i <= min(i0 + V / L T, V / R), L its smallest (the ring up, the plunger farthest out);
+         // the force at that current with the plunger closed (the largest gap factor). The coil's state for the cycle: [Features] jet_pulse_at_cycle on, a pulse starts only at a cycle's
+         // start (BumperGroup::Part::CycleStart) and the script's command lands between cycles, so an off coil stays off this cycle (its current only decays: V 0); held mode follows the
+         // switch inside the cycle, and with the key off a pulse fires inside the step whose switch closes: there an off coil is taken as switched on at the cycle's start
+         const bool offStays = GroupStep::jetPulseAtCycle && p.mode != DriveMode::Held;
+         const double V = gp.CoilOn() ? gp.CoilVolts() : offStays ? 0.0 : p.coil.vSupply;
+         const double lMin = (gp.cfg.coilD.a + gp.cfg.coilD.b / (p.ringStrokeMm / p.coil.bobbinMm + p.plungerClosedFrac + p.coil.x0)) * 1e-3;
+         const double iMax = std::min(std::fabs(gp.iCoil) + V / std::max(lMin, 1e-9) * T, std::max(V / p.coil.rOhm, std::fabs(gp.iCoil)));
+         const double fCoil = CoilModel::Force(p.coil, gp.cfg.coilD, p.plungerClosedFrac, iMax);
+         const double ringAccel = (fCoil + p.returnPreloadN + p.returnKNPerM * p.ringStrokeMm * MM) / p.ringMass + g;
+         const double skirtF = p.skirtPreloadN + p.skirtKNPerM * p.skirtClearanceMm * MM, skirtAccel = skirtF / p.skirtMass + g;
+         const double tiltAccel = (skirtF + p.skirtMass * g) * gp.reach / gp.TiltInertia(), wt = std::sqrt(gp.wx * gp.wx + gp.wy * gp.wy);
+         const double dr = EnergyReach(std::fabs(gp.vr), E, p.ringMass, ringAccel, T);
+         const double dz = EnergyReach(std::fabs(gp.vz), E, p.skirtMass, skirtAccel, T);
+         const double dt = EnergyReach(wt, E, gp.TiltInertia(), tiltAccel, T);
+         if (work != nullptr)
+            *work = 0.5 * p.ringMass * gp.vr * gp.vr + p.ringMass * ringAccel * dr + 0.5 * p.skirtMass * gp.vz * gp.vz + p.skirtMass * skirtAccel * dz + 0.5 * gp.TiltInertia() * wt * wt + gp.TiltInertia() * tiltAccel * dt;
+         const V3 P = c - origin;
+         const double rho = std::sqrt(P.x * P.x + P.y * P.y + (P.z - gp.z) * (P.z - gp.z));
+         return std::max(dr, rho * std::min(dt, GroupStep::kPi) + dz);
+      }
+
       // the nearest surface as the engine's probe: dist = the ball centre's distance from the surface, rho 0 (the surface is a sheet, its thickness is in the profile)
       RubberContact::TubeProbe Probe(const V3 &c) const override
       {

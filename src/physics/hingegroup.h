@@ -263,8 +263,50 @@ namespace HingeGroup
       // the balls: 1/2 I w^2 <= 1/2 I w0^2 + E + I alpha theta, so dtheta <= c T + 1/2 alpha T^2, c^2 = w0^2 + 2 E / I, alpha = MaxStoredTorque / I, w_max = c + alpha T.
       // Clamped at each enabled, armed stop (a driven one at the far end of its move): a Hertz stop squashes at most what the part can carry into it,
       // 2/5 k d^2.5 = 1/2 I w_max^2 at its lever; never past where the part is now
+      // [Features] energy_reach: the same law, one place (rubbercontact.h EnergyReach): the turn range [lo, hi] over T with E, and the work it can hand on beyond E (its kinetic
+      // energy now and its drives' work over the turn, 1/2 I w0^2 + I alpha dtheta). A driven stop moving at s carries the part at up to s: its start speed |w0| + s
+      void TurnRange(const double En, const double T, double &lo, double &hi, double *const work) const
+      {
+         double drive = 0.0;
+         for (const GroupStep::BodyStop &s : stops)
+            drive = std::max(drive, std::fabs(s.SpeedNow()));
+         const double I = mass, alpha = MaxStoredTorque() / I, w0 = std::fabs(rate) + drive;
+         double wMax = 0.0;
+         const double dth = EnergyReach(w0, En, I, alpha, T, &wMax);
+         if (work != nullptr)
+            *work = 0.5 * I * w0 * w0 + I * alpha * dth;
+         lo = q - dth;
+         hi = q + dth;
+         for (const GroupStep::BodyStop &st : stops)
+         {
+            if (!st.enabled || !st.armed)
+               continue;
+            const double at = st.side > 0 ? (st.rate != 0.0 ? std::max(st.at, st.target) : st.at) : (st.rate != 0.0 ? std::min(st.at, st.target) : st.at);
+            const double over = st.k > 0.0 ? std::pow(0.5 * I * wMax * wMax / (0.4 * st.k), 0.4) / st.lever : INFINITY;
+            if (st.side > 0)
+               hi = std::min(hi, std::max(q, at + over));
+            else
+               lo = std::max(lo, std::min(q, at - over));
+         }
+      }
+      // the most a point c moves relative to the part over its turn range (in the part's frame c turns about the axis: the chord 2 rho sin(dth / 2), rho its distance from the axis,
+      // dth the range's farther end from the angle now, at most pi)
+      double EnergyMove(const V3 &c, const double En, const double T, double *const work) const
+      {
+         double lo = 0.0, hi = 0.0;
+         TurnRange(En, T, lo, hi, work);
+         const V3 rel = c - A, ax = rel - E * rel.Dot(E);
+         const double dth = std::min(GroupStep::kPi, std::max(q - lo, hi - q));
+         return 2.0 * ax.Length() * std::sin(0.5 * std::max(dth, 0.0));
+      }
       void CycleTurn(const double En, const double T) override
       {
+         if (GroupStep::energyReach)
+         {
+            TurnRange(En, T, cycLo, cycHi, nullptr);
+            cycQ0 = q;
+            return;
+         }
          const double I = mass, alpha = MaxStoredTorque() / I, c = std::sqrt(rate * rate + 2.0 * En / I), dth = c * T + 0.5 * alpha * T * T, wMax = c + alpha * T;
          double lo = q - dth, hi = q + dth;
          for (const GroupStep::BodyStop &st : stops)
