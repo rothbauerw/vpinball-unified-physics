@@ -67,7 +67,7 @@ No dates, no "learned", no superseded text. What a test is for, its cap and hand
 - PowerShell: a function named `R` is shadowed by the alias `r`; an array of arrays is built with `@(,@(...))` and `+= ,@(...)`; pass table and ini to run.ps1 by hashtable splat, not array.
 - Offline C++ benches from Bash: `timeout 250 cmd //c '<full path>\b3.bat <name>'`; PowerShell Start-Process -Wait can hang on the compiler's child processes. Hinge benches need `/FIcassert`.
 - `dumpvpx.py` (olefile, runs\2026-10-31-parts-check) reads object positions and rotations from a .vpx.
-- Bench group book t_ms = balls.csv t_ms + 4004 ms (pre-roll).
+- Bench group book t = balls.csv t + 4004 ms; log t = drive t + 3003 ms. Drives, stock runs, overlap tests: runs\2026-11-15-starts-fix\README.md.
 
 ## 8. Environment switches
 Every switch the engine reads, one line each. A switch added, changed or removed in the code is changed here in the same commit. Settings that are ini keys are described beside the key in the code.

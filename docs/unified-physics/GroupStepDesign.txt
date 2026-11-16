@@ -52,10 +52,12 @@ books only the change of its own stored energy. The engine does the solving. Cod
 
 2. How groups form
 ------------------
-Balls and parts that can touch within the cycle are solved together as one group (contactsystem.cpp, island_reach and ball_pair_reach, both on by default).
+Balls and parts that can touch within the cycle are solved together as one group (contactsystem.cpp ReachEnergy, the energy reach; design runs/2026-11-13-finder-P6/design_reach.md).
+The reach is a bound from energy: the ball's kinetic and spin energy, the stored energy of its contacts, gravity, nudge and magnet pull, and each part's work capped by what its
+drives can supply in the cycle (coil field + supply + springs). No margin is added (the old 0.1 mm "approach margin" had no law and was removed 2026-11-15).
 A ball joins a moving part's group only if it can reach the part's surface within the cycle. Two balls share a group when their gap can close within the cycle at
 their speed bounds, or when they are on the same band. Fixed surfaces (playfield, walls, posts) link no balls: they are contacts of each ball inside its group.
-Open (to-do N5): the reach must come from physics, speed plus force; today a touched gate counts its whole swing (81 mm on Gate001) as one cycle's travel.
+Open (to-do N5): the step length still comes from speed only, not the energy reach.
 
 
 == C. Contact: push-back and sideways grip ==
