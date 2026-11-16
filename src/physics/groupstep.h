@@ -2791,7 +2791,7 @@ namespace GroupStep
          return true;
       }
       Buf<double> fieldE0;       // what each ball's place stores at the start of the attempt
-      // out of reach: the gap is more than both bodies' speeds can close in twice the step, with a margin. A body that picks up speed inside the step is what the check after the solve is for
+      // out of reach: the gap is more than both bodies' speeds can close in twice the step. A body that picks up speed inside the step is what the check after the solve is for
       // energy skip test (runs/2026-11-15-finder-P6b2/paper.md candidate c), at the cycle's start from the grouping's feed: each part's top point speed (m/s) over the cycle,
       // sum over its coordinates of reach x sqrt(2 E invM) (1/2 I w^2 <= E), with E its own (what it holds before a ball touches it: one ball in the group, the item's own) or the most any
       // ball's group can hold (more balls; any held ball: a given motion, no energy bound). A coordinate with no mass (no unknown and none free) or no energy given: no bound
@@ -2842,9 +2842,8 @@ namespace GroupStep
       std::vector<double> skEs;    // per ball: what its touching static items hold at the attempt's start, J (-1: not summed yet; summed on the first own test that needs it)
       bool OwnFar(const Item &it, const double d0, const double h)
       {
-         constexpr double kApproachM = 100e-6;   // the contact law's approach margin (as OutOfReach)
          const Ball &A = ball[it.a];
-         const double g = -d0 - kApproachM;
+         const double g = -d0;
          if (g <= 0.0 || A.aOwn < 0.0)
             return false;
          skipOwnTested++;
@@ -2876,12 +2875,11 @@ namespace GroupStep
       {
          if (it.touching || d0 > 0.0)
             return false;
-         // gap > what both sides can close in h by the energy law + the contact law's approach margin (contactsystem.cpp ReachEnergy kApproachM)
-         constexpr double kApproachM = 100e-6;
+         // gap > what both sides can close in h by the energy law (a gap equal to it is in reach)
          if (skNb != nb || it.a >= skNb || (it.b >= skNb))
             return false;
          const Ball &A = ball[it.a];
-         const double g = -d0 - kApproachM;
+         const double g = -d0;
          if (g <= 0.0)
             return false;
          if (it.b >= 0)

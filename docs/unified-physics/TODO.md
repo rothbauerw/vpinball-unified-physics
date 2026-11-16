@@ -12,7 +12,7 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-In flight: 1.34 piece 6b-3: split, its six keys and energy_solve_parts deleted; C (SleepParts) done; part work capped by drive energy; not pushed. Next: the 0.1 mm kApproachM removal (design_reach.md "P6b-3 B2").
+In flight: 1.34 piece 6b-3: split, its six keys and energy_solve_parts deleted; C (SleepParts) done; part work capped; 0.1 mm margin removed; not pushed. Next: a group gained 48.8 mJ beyond its drives (stress sleep on, t 156503), then the turntable's stock hand-off triangles.
 Judge a change by one exe, its setting on vs off; never by an older exe's md5 (ModelStandards trap 112). Query outliers 0.3-9 ms are the OS (measured). Owed: snapshot hashes refresh; GL main rebuild (bench obj_gl stale). 1.33: cut B kept.
 Stand-up targets: code pulled from the tree 2026-11-15 (crashed VPX; user), backup backups/2026-11-15-standup-pulled; piece 5 in backups/2026-11-14-standup-build6. Next step is the user's call. Rebuild main before VPX play.
 Air-core coil fix (pull read at the step's midpoint, aircore_in_step, on while tested): merged d9629bc4b and pushed. Lead log runs/2026-11-13-lead.

@@ -471,13 +471,12 @@ struct ContactSystemImpl
    // Nothing joins later except by the inside check (a ball outside its query: a bound too small, logged as a fault)
    // the energy gather (runs/2026-11-15-finder-P6b3/brief_B2-1.md): after the grouping, a ball's non-mesh surfaces are those its travel this cycle (reachS) can reach.
    // A moving part (every one a grouping candidate, Regather part 1): kept when grouped with the ball, or when its gap less its own move (EnergyMove at the ball's group feed) or its
-   // region at the cycle's turn less R (CycleRegionDist) is under reachS + the law's approach margin (the grouping's own test). A fixed analytic surface: its bounding box less R, a
+   // region at the cycle's turn less R (CycleRegionDist) is within reachS (<=: the grouping's own test). A fixed analytic surface: its bounding box less R, a
    // true lower bound of its distance. A band joins only by the band model (kept, never added). No margin, no rescan: every cycle from the grouping.
    static void GatherNonMesh(Body &w, const double T)
    {
-      constexpr double kApproachM = 100e-6;   // m: the contact law's approach margin (ReachLinks)
       BallContact &e = *w.e;
-      const double reach = std::max(w.reachS, 0.0) + kApproachM;
+      const double reach = std::max(w.reachS, 0.0);
       const Vertex3Ds &pos = w.posStart;
       const float boxU = w.pb->m_d.m_radius + 20.0f + 10.0f;   // (counters only: the old box)
       static std::map<std::string, std::pair<uint64_t, uint64_t>> s_kind;   // per host kind: kept that the box would not hold; held by the box that cannot be reached (diagnostics)
@@ -500,14 +499,14 @@ struct ContactSystemImpl
                if (old != e.items.end())
                {
                   mp->SetBall(w.bs);
-                  keep = !old->partOut || std::max(old->reachGap - mp->EnergyMove(w.c, w.feedE, T, nullptr), mp->CycleRegionDist(w.c, T) - w.bs.R) < reach;
+                  keep = !old->partOut || std::max(old->reachGap - mp->EnergyMove(w.c, w.feedE, T, nullptr), mp->CycleRegionDist(w.c, T) - w.bs.R) <= reach;
                }
             }
             else
             {
                const double dx = std::max({ (double)bb.left - pos.x, 0.0, (double)pos.x - bb.right }), dy = std::max({ (double)bb.top - pos.y, 0.0, (double)pos.y - bb.bottom }),
                             dz = std::max({ (double)bb.zlow - pos.z, 0.0, (double)pos.z - bb.zhigh });
-               keep = std::sqrt(dx * dx + dy * dy + dz * dz) * U - w.bs.R < reach;
+               keep = std::sqrt(dx * dx + dy * dy + dz * dz) * U - w.bs.R <= reach;
             }
          }
          if (keep != box)
@@ -589,7 +588,7 @@ struct ContactSystemImpl
    // ball pair reach: the one ball-ball reach test (island pairing in ReachLinks, the sleep wake in SleepInStep). V = a ball's speed bound over the cycle: the kinetic energy
    // that can reach it (spin included) given all to it, sqrt(2 E / m), plus what forces and moving parts add; a held (sleeping) ball has V = 0 at its held position
    static double BallSpeedBound(const double e, const double m, const double add) { return std::sqrt(2.0 * e / m) + add; }
-   static bool BallsMayMeet(const double gap, const double vi, const double vj, const double T) { return gap < (vi + vj) * T + 100e-6; }   // (100 um: the contact law's approach margin)
+   static bool BallsMayMeet(const double gap, const double vi, const double vj, const double T) { return gap <= (vi + vj) * T; }   // (a gap equal to the reach can meet)
 
    // ball pair reach rule 8: two balls in different islands last cycle that overlap at this cycle's start were missed by the bound
    inline static std::vector<std::pair<const HitBall *, uintptr_t>> s_ballGroupLast;   // (ball, its group) of the last cycle: its island's root ball, or its sleep group (held balls)
@@ -648,14 +647,13 @@ struct ContactSystemImpl
    //    a held ball's given motion as a speed (a ball leaves it at up to twice its speed); its balls' forces (gravity and nudge, magnets) as the drive
    //  - each grouped part's work: its kinetic energy and its drives' work over its move, the move from its group's balls' energy (EnergyMove); the group's feed energy is the
    //    group's energy plus its parts' work, all given to one ball: its travel EnergyReach(0, feed, m, forces, T) plus the held balls' given speed x T
-   //  - a ball joins a part when gap < its travel + the part's move at the ball (the feed energy of the ball's group and of the part's) + the contact law's approach margin;
-   //    two balls when gap < the sum of their travels + that margin (ball pair reach)
+   //  - a ball joins a part when gap <= its travel + the part's move at the ball (the feed energy of the ball's group and of the part's);
+   //    two balls when gap <= the sum of their travels (ball pair reach)
    // Each body keeps its travel and its group's feed energy (Body::reachS, feedE: the group step's cycle turns and lists); the ball's one static mesh query of the cycle reaches its
    // travel (GatherStatic, after this). Static surfaces feed no energy (what a contact holds is in endStored), so they do not change the fixed point
    // NOTE: the fixed point stops at the first round that adds nothing: each round adds a part edge or ball pair or stops (no round cap)
    static void ReachEnergy(Cycle &cy, std::vector<Edge> &edges, const std::vector<ContactMovingPart *> &parts, const bool ballPairs)
    {
-      constexpr double kApproachM = 100e-6;   // m: the contact law's approach margin (SetupIsland kApproachMarginM): a gap under it is stepped as a contact
       const int nw = (int)cy.bodies.size(), np = (int)parts.size();
       const double T = cy.dt;
       if (nw == 0)
@@ -820,7 +818,7 @@ struct ContactSystemImpl
             const int gi = find(ed.i), pb = partBall[ed.p];
             const double E = ef[gi] + (pb >= 0 && find(pb) != gi ? ef[find(pb)] : 0.0);
             const Body &w = cy.bodies[ed.i];
-            if (std::max(ed.gap - parts[ed.p]->EnergyMove(w.c, E, T, nullptr), parts[ed.p]->CycleRegionDist(w.c, T) - w.bs.R) < sb[ed.i] + kApproachM)
+            if (std::max(ed.gap - parts[ed.p]->EnergyMove(w.c, E, T, nullptr), parts[ed.p]->CycleRegionDist(w.c, T) - w.bs.R) <= sb[ed.i])
             {
                ed.on = grew = true;
                if (pb < 0)
@@ -832,7 +830,7 @@ struct ContactSystemImpl
          if (ballPairs)
             for (int i = 0; i < nw; i++)
                for (int j = i + 1; j < nw; j++)
-                  if (!paired[(size_t)i * nw + j] && bgap[(size_t)i * nw + j] < sb[i] + sb[j] + kApproachM)
+                  if (!paired[(size_t)i * nw + j] && bgap[(size_t)i * nw + j] <= sb[i] + sb[j])
                   {
                      BallPairReachLog(cy, i, j, bgap[(size_t)i * nw + j], [&](const int k) {   // (the terms of the travel, read before the pair joins the groups)
                         const int g = find(k);
@@ -902,7 +900,6 @@ struct ContactSystemImpl
 
    static void ReachLinks(Cycle &cy)
    {
-      constexpr double kApproachM = 100e-6;   // m: the contact law's approach margin (SetupIsland kApproachMarginM): a gap under it is stepped as a contact
       const int nw = (int)cy.bodies.size();
       const double T = cy.dt;
       std::vector<Edge> edges;
@@ -1646,7 +1643,7 @@ struct ContactSystemImpl
                   joins = it.Surf(sf).touching;
                if (!joins)
                {
-                  joins = w.reachS < 0.0 || it.reachGap - mp->EnergyMove(w.c, 0.0, cy.dt, nullptr) < w.reachS + 1e-4;
+                  joins = w.reachS < 0.0 || it.reachGap - mp->EnergyMove(w.c, 0.0, cy.dt, nullptr) <= w.reachS;
                   it.solveOutLast = !joins;
                }
                if (joins && mp->AtRest())
@@ -2945,7 +2942,7 @@ struct ContactSystemImpl
       return nullptr;
    }
    // A part the balls touch that a drive woke or that moved; a part not at rest that can reach a ball of the group within the cycle by the energy reach (the rule of PartsInSolve):
-   // its gap to the ball less its own move (EnergyMove with no feed: its kinetic energy and drives) within the ball's own travel (LoneReach) plus the contact law's approach margin
+   // its gap to the ball less its own move (EnergyMove with no feed: its kinetic energy and drives) within the ball's own travel (LoneReach) (<=)
    static const char *SleepParts(SleepGroup &g, const double dt)
    {
       for (size_t k = 0; k < g.parts.size(); k++)
@@ -2978,7 +2975,7 @@ struct ContactSystemImpl
             LoadBody(s, pb);
             LoadState(s);
             mp->SetBall(s.bs);
-            if (-mp->Probe(s.c).delta - mp->EnergyMove(s.c, 0.0, dt, nullptr) < travel[b] + 1e-4)
+            if (-mp->Probe(s.c).delta - mp->EnergyMove(s.c, 0.0, dt, nullptr) <= travel[b])
                return "a moving part can reach it";
          }
       }
