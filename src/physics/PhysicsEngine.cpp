@@ -36,6 +36,8 @@ void ContactTraceBall(const char *stage, const HitBall *pb, bool items, int isla
 #include "parts/flipper.h"
 #include "parts/primitive.h"
 #include "physics/carvedholes.h"
+#include "physics/meshholes.h"
+#include <fstream>
 static unsigned s_ctReplays = 0, s_ctReplayUs = 0;   // VPX_CONTACT_TIMING: overlap replays and their time since the last cost-log row
 static uint64_t s_ctMagUs = 0;   // VPX_CONTACT_TIMING: time of Magnets::Step since the last cost-log row, us
 // VPX_TRACE_BALL: a stock Collide or Contact on the traced ball: the object, whether the contact system owns it (a surface host) and owns it for this ball, and what it did to the ball
@@ -76,6 +78,24 @@ PhysicsEngine::PhysicsEngine(PinTable *const table)
    else
       PLOGI << "Physics: no surface hosts left over from the previous table";
    CarvedHoles::Clear();   // the playfield's carved holes (turntables, physical kickers): they add theirs in PhysicSetup, below
+   {   // mesh_holes: the holes cut into the mesh under them at load (meshholes.h); with running [PlayfieldCut:<name>] sections the carved holes stay (until piece 3)
+      const PhysicsIni::Features feat = PhysicsIni::Active(ContactSurfaceHost::IniPathFor(table->m_filename));
+      bool cuts = false;
+      if (const std::filesystem::path file = PhysicsIni::FindUnified(table->m_filename); feat.meshHoles && feat.playfieldCuts && !file.empty())
+      {
+         std::ifstream in(file);
+         for (std::string line; !cuts && std::getline(in, line);)
+            cuts = PhysicsIni::Lower(PhysicsIni::Trim(line)).rfind("[playfieldcut:", 0) == 0;
+      }
+      MeshHoles::Clear(feat.meshHoles && !cuts);
+      if (cuts)
+      {
+         const std::string msg = "Mesh holes off: playfield cuts present (until piece 3)";
+         PLOGW << msg;
+         if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+            g_pplayer->m_liveUI->PushNotification(msg, 8000);
+      }
+   }
 
    // Collect all hit objects
    const FRect3D tableBounds = table->GetBoundingBox();
@@ -403,6 +423,7 @@ void PhysicsEngine::AddCabinetBoundingHitShapes(PinTable *const table)
    m_hitPlayfield.m_surfaceHost = m_playfieldHost;
    Turntables::Setup(table, m_vmover, m_ownedHosts);   // discs set into the playfield (the holes are read by the playfield host)
    PlayfieldCuts::Setup(this, table);                        // holes cut in the playfield: exact rims read by the playfield host's probe (after the playfield host, whose height they read)
+   MeshHoles::Build();                                       // mesh_holes: every declared outline cut into the static mesh under it, in place, before the finder's tree (FinderBuild, after this in the load)
    {
       const std::filesystem::path ini = ContactSurfaceHost::IniPathFor(table->m_filename);
       const PhysicsIni::Features feat = PhysicsIni::Active(ini);

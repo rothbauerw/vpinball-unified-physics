@@ -19,6 +19,7 @@
 #include "physics/contactsurfacehost.h"
 #include "physics/cordband.h"
 #include "physics/carvedholes.h"
+#include "physics/meshholes.h"
 #include "physics/playfieldcut.h"
 #include "physics/contactsystem.h"
 #include "physics/hitball.h"
@@ -1912,7 +1913,7 @@ RubberContact::TubeProbe ContactSurfaceHost::ProbePatch(const RubberContact::Bal
       CarvedHoles::Get(holes, nHoles);
       return PlayfieldCuts::Probe(this, bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, it.candR >= 0.0 ? it.candR : 1e30, holes, nHoles, true, it.gs.zero, ft, FinderCutsOf(it));
    }
-   if (ContactSettings::Get().multiContact && !(m_surface != nullptr && m_surfaceKind == "playfield"))   // every pressed part its own Hertz bar (rubbercontact.h BarsTube / BarsTriangles); the playfield (turntable holes) keeps the patch sum
+   if (ContactSettings::Get().multiContact && !(m_surface != nullptr && m_surfaceKind == "playfield" && !MeshHoles::On()))   // (mesh_holes 1: the playfield too, its holes are in its faces)   // every pressed part its own Hertz bar (rubbercontact.h BarsTube / BarsTriangles); the playfield (turntable holes) keeps the patch sum
    {
       if (m_surface != nullptr)
          return RubberContact::BarsTriangles(bs, m_surface->tris, m_surface->vid, m_surface->nb, *prL, m_set.edgeRadiusMm * 1e-3, c, it.gs.zero, pPr, &m_surface->fold);   // P3b: the near pass's faces (bars only use faces within R)

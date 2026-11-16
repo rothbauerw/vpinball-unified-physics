@@ -32,7 +32,7 @@ namespace
       { "sling_gap_mm", &RubberObjectSettings::slingGapMm },
       { "band_ring_in", &RubberObjectSettings::bandRingIn }, { "band_section_mm", &RubberObjectSettings::bandSectionMm },
       { "band_stretch_alpha_s_per_m", &RubberObjectSettings::bandStretchAlpha }, { "band_twist_scale", &RubberObjectSettings::bandTwistScale },
-      { "surface_layer_mm", &RubberObjectSettings::surfaceLayerMm }, { "edge_radius_mm", &RubberObjectSettings::edgeRadiusMm },
+      { "surface_layer_mm", &RubberObjectSettings::surfaceLayerMm }, { "edge_radius_mm", &RubberObjectSettings::edgeRadiusMm }, { "thickness_mm", &RubberObjectSettings::thicknessMm },
       { "e_mpa", &RubberObjectSettings::eMpa }, { "layer_mm", &RubberObjectSettings::layerMm },
       { "alpha_s_per_m", &RubberObjectSettings::alphaSPerM }, { "restitution", &RubberObjectSettings::restitution }, { "plate_areal_density_kg_m2", &RubberObjectSettings::plateArealKgM2 }, { "plate_mass_g", &RubberObjectSettings::plateMassG }, { "plate_clearance_u", &RubberObjectSettings::plateClearanceU }, { "restitution_ref_speed_ms", &RubberObjectSettings::restitutionRefMs }, { "beta_layer", &RubberObjectSettings::betaLayer },
       { "mu", &RubberObjectSettings::mu }, { "sideways_stiffness", &RubberObjectSettings::shearScale },

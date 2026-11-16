@@ -247,6 +247,8 @@ set(VPX_SOURCES
    src/physics/contactsurfacehost.h
    src/physics/carvedholes.cpp
    src/physics/carvedholes.h
+   src/physics/meshholes.cpp
+   src/physics/meshholes.h
    src/physics/kickerarm.h
    src/physics/coilmodel.h
    src/physics/hitsling.cpp

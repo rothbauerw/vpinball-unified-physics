@@ -25,6 +25,7 @@ struct RubberObjectSettings
    bool surfaceRubber = false;
    double surfaceLayerMm = 5.4;   // layer thickness of a flat rubber face when layer_mm is 0: a typical ring's diameter (5.4 mm on the Gorgar rings)
    double edgeRadiusMm = 1.0;     // convex edges and corners of a rubber face are treated as rounded to this radius (Hertz effective radius)
+   double thicknessMm = 12.7;     // thickness_mm: a static mesh's thickness under its top, the depth of the walls of a hole cut through it (meshholes.h); 12.7 mm = the playfield's 1/2 in plywood (user 2026-11-09)
    double eMpa = 12.0;            // effective Young's modulus
    double layerMm = 0.0;          // rubber layer thickness for the thin-layer stiffening; 0 = the tube diameter
    double alphaSPerM = 0.18;      // normal damping; rebound ratio ~ 1 - alpha*v (0.18 fits the user's rebound targets 0.97 / 0.87 / 0.64 at 0.1 / 0.86 / 3 m/s, 2026-10-29; not measured)

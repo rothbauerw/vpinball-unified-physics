@@ -224,6 +224,11 @@ public:
    static void FinderCuts(PlayfieldCuts::CutQuery &cq, const RubberContact::V3 &c0, double r);
    static PlayfieldCuts::CutQuery *FinderCutsOf(const SurfaceContact &it);
    int FinderObjIndex() const override { return m_surface != nullptr ? m_surface->fobj : -1; }
+   // mesh_holes (meshholes.cpp): the faces, cut in place at load before the finder's tree; then linked again and the box recomputed
+   const std::shared_ptr<RubberSurface> &MeshSurface() const { return m_surface; }
+   const std::string &MeshKind() const { return m_surfaceKind; }
+   double ThicknessMm() const { return m_set.thicknessMm; }
+   void MeshRelink() { m_linkOver = m_surface->Link(); CalcHitBBox(); }
    // the finder's totals (query cost, re-queries), once a second of table time and when the table closes
    static void FinderTotals(bool force);
    // shared_finder P3a: the ball's measurement table of this object at c (null: the item does not read the ball's query); the cost log's counters since its last row
