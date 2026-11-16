@@ -31,7 +31,7 @@ class ContactHost;   // (global: an elaborated name inside the namespace below w
 
 namespace Turntables
 {
-   void Setup(PhysicsEngine *physics, PinTable *table, std::vector<MoverObject *> &movers, std::vector<class ContactHost *> &hosts);   // builds the discs, their colliders and the holes (called when the physics engine is built)
+   void Setup(PinTable *table, std::vector<MoverObject *> &movers, std::vector<class ContactHost *> &hosts);   // builds the discs, their hosts and the holes (called when the physics engine is built)
    bool Active();                                            // at least one turntable exists
    bool SetVoltage(const char *name, float volts);           // false = no such turntable
    bool SetDuty(const char *name, float duty);               // PWM: mean voltage = duty x rated volts (-1..1)

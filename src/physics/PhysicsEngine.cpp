@@ -400,7 +400,7 @@ void PhysicsEngine::AddCabinetBoundingHitShapes(PinTable *const table)
       }
    }
    m_hitPlayfield.m_surfaceHost = m_playfieldHost;
-   Turntables::Setup(this, table, m_vmover, m_ownedHosts);   // discs set into the playfield (the holes are read by the playfield host)
+   Turntables::Setup(table, m_vmover, m_ownedHosts);   // discs set into the playfield (the holes are read by the playfield host)
    PlayfieldCuts::Setup(this, table);                        // holes cut in the playfield: exact rims read by the playfield host's probe (after the playfield host, whose height they read)
    {
       const std::filesystem::path ini = ContactSurfaceHost::IniPathFor(table->m_filename);

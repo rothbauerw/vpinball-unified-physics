@@ -6,6 +6,7 @@
 #include "physics/contactparthost.h"
 #include "physics/contactdiscpart.h"
 #include "physics/physicsini.h"
+#include "physics/contactsystem.h"
 #include "physics/physconst.h"
 #include "physics/PhysicsEngine.h"
 #include "physics/collideex.h"
@@ -255,7 +256,7 @@ namespace Turntables
 
    }
 
-   void Setup(PhysicsEngine *const physics, PinTable *const table, std::vector<MoverObject *> &movers, std::vector<ContactHost *> &hosts)
+   void Setup(PinTable *const table, std::vector<MoverObject *> &movers, std::vector<ContactHost *> &hosts)
    {
       g_tt.clear();
       g_byName.clear();
@@ -269,6 +270,16 @@ namespace Turntables
       Parse(file);
       if (g_tt.empty())
          return;
+      if (!ContactSystem::Unified())
+      {
+         // the disc is a part of the unified contact model only (the contact finder takes it from the host registry): stock physics has no collider for it
+         const std::string msg = "Turntables: " + std::to_string(g_tt.size()) + " [Turntable:<name>] section(s) in " + file.filename().string() + " ignored: turntables need unified physics ([Features] unified = 1)";
+         PLOGW << msg;
+         if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+            g_pplayer->m_liveUI->PushNotification(msg, 10000);
+         g_tt.clear();
+         return;
+      }
       if (!feat.playfieldContact)
       {
          // the disc is a surface of the playfield's force model and the playfield is cut round it: with the stock playfield contact the plane would still carry the ball
@@ -309,7 +320,7 @@ namespace Turntables
          const double hole = (t.radiusMm + t.gapMm) * 1e-3;
          CarvedHoles::Add({ t.x * UM, t.y * UM, hole, t.playfieldZ * UM });   // the playfield's carved holes (carvedholes.h; cleared when the engine is built)
 
-         // the disc: a flat polygon at the top height, plus a skirt down to the playfield when it stands proud of it: the stock colliders that find the ball, and the host's box
+         // the disc: a flat polygon at the top height, plus a skirt down to the playfield when it stands proud of it: the host's box (the contact finder takes the disc from the host registry; no stock collider)
          std::vector<Vertex3Ds> top;
          for (int k = 0; k < SEG; k++)
          {
@@ -353,18 +364,6 @@ namespace Turntables
          host->CalcHitBBox();
          if (MoverObject *const pmo = host->GetMoverObject(); pmo != nullptr && pmo->AddToList())
             movers.push_back(pmo);
-         for (const Tri &tr : tris)   // the stock colliders that find the ball and hand it to the host
-         {
-            Vertex3Ds v[3] = { tr.v[0], tr.v[1], tr.v[2] };
-            HitTriangle *const ht = new HitTriangle(table, v);
-            if (ht->IsDegenerate())
-            {
-               delete ht;
-               continue;
-            }
-            ht->m_surfaceHost = host;
-            physics->AddCollider(ht, false);
-         }
          PLOGI << "Turntable " << t.name << ": centre " << t.x << ", " << t.y << ", top z " << t.z << ", radius " << t.radiusMm << " mm, gap " << t.gapMm << " mm, "
                << (t.clockwise ? "clockwise" : "counter-clockwise") << ", " << t.freeRpm << " rpm at " << t.ratedVolts << " V, friction " << t.frictionNm << " N m, ramp up " << t.spinupS << " s, ramp down " << t.rampDownS << " s, I " << t.part->gp.motor.I << " kg m^2, stall torque " << t.part->gp.motor.Ts
                << " N m, drag " << t.part->gp.motor.b << " N m s, mu " << t.mu << ", rolling resistance " << (t.rollingResistance >= 0.0 ? t.rollingResistance : ContactSettings::Get().rollingResistance) << (proud ? ", disc stands proud of the playfield" : ", disc flush with the playfield");
