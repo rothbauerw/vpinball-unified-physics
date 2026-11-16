@@ -20,7 +20,7 @@ N3. Holes as meshes in ANY static mesh (user 2026-11-16): paper runs/2026-11-16-
 N5. One reach rule from physics (speed plus force) for grouping and step length; first built in 1.34 P2. Grouping: Gate001's 81 mm swing as one-cycle travel joins two lanes. Step length: speed only, no force. Check all parts; ball pairs of unequal mass and resting-ball wake (read only).
 N7. Stress v2 bench: ball travel energy +2 % at 57 ms; spin not counted. Check total energy in the saved run (no new run).
 N8. Test driver must refuse a ball placed inside any object, unless the file declares the overlap (rule 10b: then judged on recovery, no energy gained).
-N9. Fork at bb02a5abe (pushed 11-16); later local commits unpushed until the user says.
+N9. Push only on the user's word; check git status -sb against fork/unified-physics for what is unpushed (no commit hash here: it goes stale).
 N10. Performance tests: not built; review TestMatrixDesign with the user when building them. Includes the stress table driver clock after start-up and the 144 Hz frame budget. Any safety-net trip (e.g. the cord's hold and let-go) fails the run.
 
 ## 1. Contact system (tasks)
