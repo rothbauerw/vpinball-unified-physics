@@ -26,6 +26,8 @@ struct SurfaceState
    double kb = 0.0;         // the bend in series this touch started with (a part's surface)
    double ktb = 0.0;        // and its bend across the normal, in series with the shear spring (a wire switch's bent wire)
    double endDepth = 0.0;   // a part's surface: its depth at the cycle's end, from its zero (a fixed surface's is SurfaceContact::endDepth, the energy check's)
+   std::vector<std::pair<int, double>> tZero;   // a part's union of terms found inside: each term's own zero (GroupStep::Item::tZero), kept with zero
+   std::vector<std::pair<int, double>> tEnd;    // a part's union of terms: each term's depth at the cycle's end, from its own zero (piece id, as endDepth is the union's)
 };
 
 // What one ball has with ONE surface: the material parameters, the shear state kept between cycles, and the faces near the ball this cycle.

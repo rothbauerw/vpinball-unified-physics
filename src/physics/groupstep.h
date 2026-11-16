@@ -198,6 +198,7 @@ namespace GroupStep
    {
       double d, slope, s;
       V3 n;
+      int id = -1;   // the piece it comes from (the same piece at every place and in every list): its found-inside zero is kept under it (Item::tZero)
    };
    // a contact's terms: kInline held in the Hit (no allocation for a usual list), the rest on the heap, grown as needed (storage, not a limit). A Hit copies only its nt terms
    struct HitTerms
@@ -808,6 +809,16 @@ namespace GroupStep
       V3 xi;                          // the shear spring's stretch (in the contact plane)
       RubberContact::RollAngle ra;    // the rolling and twist springs' angles (roll_model 1)
       double dZero = 0.0;             // the depth its squash counts from: a ball found inside has stored nothing (no energy without the work that stored it; only ever down)
+      // a union of terms (hinge_piece_sum) found inside: each term's own zero (piece id, its raw depth then), so force and book read one potential U = sum_t s_t V(a_t - z_t).
+      // While it is not empty the terms carry the zeros and dZero is only their largest (the item's "has a zero" mark); each follows its term out (BackOut), dropped once clear
+      std::vector<std::pair<int, double>> tZero;
+      double TermZero(const int id) const
+      {
+         for (const std::pair<int, double> &z : tZero)
+            if (z.first == id)
+               return z.second;
+         return 0.0;
+      }
       // the held law
       double kH = 0.0, cL = 0.0, hL = 0.0, reff = 0.0, ktPerA = 0.0, E = 0.0, mRed = 0.0, mt = 0.0;
       double alpha = 0.0, gammaKK = 0.0, tanDelta = 0.0, shearTan = 0.0, mu = 0.0, rollingMu = 0.0;
@@ -1733,18 +1744,34 @@ namespace GroupStep
          return vs;
       }
       // After Configure: a part's own contact goes on as it was kept (touching, stretch, zero); one not touching that is already inside has stored nothing, its depth is its zero
-      void SetShapeItem(const int k, const bool wasTouching, const double zero, const V3 &xi, const RubberContact::RollAngle &ra = RubberContact::RollAngle())
+      void SetShapeItem(const int k, const bool wasTouching, const double zero, const V3 &xi, const RubberContact::RollAngle &ra = RubberContact::RollAngle(),
+                        const std::vector<std::pair<int, double>> *tZero = nullptr)
       {
          Item &it = item[k];
          Hit hp;
          it.dZero = 0.0;
+         it.tZero.clear();
          if (!wasTouching && zero <= 0.0)
          {
             Probe(it, ball, hp);
             it.dZero = std::max(hp.delta, 0.0);
+            if (it.dZero > 0.0 && hp.nt > 0)   // a union of terms: each term takes its own raw depth as its zero
+            {
+               it.dZero = 0.0;
+               for (int t = 0; t < hp.nt; t++)
+                  if (hp.t[t].d > 0.0)
+                  {
+                     it.tZero.emplace_back(hp.t[t].id, hp.t[t].d);
+                     it.dZero = std::max(it.dZero, hp.t[t].d);
+                  }
+            }
          }
          else
+         {
             it.dZero = zero;
+            if (zero > 0.0 && tZero != nullptr)
+               it.tZero = *tZero;
+         }
          it.xi = xi;
          it.ra = ra;
          Probe(it, ball, hp);
@@ -3031,14 +3058,15 @@ namespace GroupStep
                pp->nearNow = &nearL[(size_t)it.nearK];
             sh.Probe(P, Rr, lawHit);
             pp->nearNow = nullptr;
-            r = lawHit.delta - it.dZero + sh.PathSlope() * (0.5 * dLen + 0.5 * m) > 0.0 ? 1 : 0;
+            ZeroHit(it, lawHit);
+            r = lawHit.delta + sh.PathSlope() * (0.5 * dLen + 0.5 * m) > 0.0 ? 1 : 0;
          }
          sh.trial = nullptr;
          return r;
       }
       // VPX_FINDER_CHECK=1 (diagnostics only: the counters are put back, nothing else changes), the law above against the probe: at the path's end with the part at its end trial, and at
       // the path's middle with the part at its middle trial, the probe's gap g there (R + g: its distance from the surface, this attempt's list). Both places are in the step, so the law
-      // at a zero-length path there must reach with a ball of R + g + 1 um (its zero added back; a one-way bound). A probe that answers "not there" (-1 or less: a part switched off) or a
+      // at a zero-length path there must reach with a ball of R + g + 1 um (g from the zeroed probe, as the law reads it; a one-way bound). A probe that answers "not there" (-1 or less: a part switched off) or a
       // centre inside the surface (R + g + 1 um <= 0) is not checked
       void PathSelfCheckSwept(const Item &it, const Shape &sh, const V3 &c, const V3 &d, const double R, PartFinderCount &pc) const
       {
@@ -3054,10 +3082,13 @@ namespace GroupStep
             sh.Probe(e, R, h);
             pp->nearNow = nullptr;
             sh.trial = nullptr;
-            const double g = -h.delta, rIn = R + g + 1e-6;
-            if (h.delta <= -1.0 || rIn <= 0.0)
+            if (h.delta <= -1.0)
                continue;
-            const int a = SweptLaw(it, sh, e, 0.0, rIn + it.dZero);
+            ZeroHit(it, h);   // the gap the step reads: the probe less the item's zero (a union of terms: each term less its own zero)
+            const double g = -h.delta, rIn = R + g + 1e-6;
+            if (rIn <= 0.0)
+               continue;
+            const int a = SweptLaw(it, sh, e, 0.0, rIn);
             pc.pathChecks++;
             if (a == 1)
                continue;
@@ -3187,6 +3218,50 @@ namespace GroupStep
          return e;
       }
 
+      // A shape's raw hit less the item's zero. A union of terms with term zeros: each term's depth less its own zero (a_t - z_t), the union rebuilt from the zeroed terms as
+      // the probe builds it from raw ones (hingegroup ProbeTerms: (sum_t s_t d_t^2.5)^0.4 over the pressing terms, else the deepest + term), so force (the terms' chords),
+      // book (V of the union) and gating read the one potential sum_t s_t V(a_t - z_t)
+      void ZeroHit(const Item &it, Hit &hp) const
+      {
+         if (hp.nt == 0 || it.tZero.empty())
+         {
+            hp.delta -= it.dZero;
+            return;
+         }
+         double s25 = 0.0, best = -INFINITY;
+         V3 g, bestN = hp.n;
+         for (int t = 0; t < hp.nt; t++)
+         {
+            HitTerm &ht = hp.t[t];
+            ht.d -= it.TermZero(ht.id);
+            if (ht.d > 0.0)
+            {
+               const double d15 = ht.d * std::sqrt(ht.d);
+               s25 += ht.s * ht.d * d15;
+               g = g + ht.n * (ht.s * d15);
+            }
+            if (ht.s > 0.0 && ht.d > best)
+            {
+               best = ht.d;
+               bestN = ht.n;
+            }
+         }
+         hp.delta = best;
+         hp.n = bestN;
+         hp.grad = 1.0;
+         if (s25 > 0.0)
+         {
+            const double d = std::pow(s25, 0.4);
+            const V3 gr = g / (d * std::sqrt(d));
+            const double gl = gr.Length();
+            hp.delta = d;
+            if (gl > 1e-6)
+            {
+               hp.n = gr / gl;
+               hp.grad = gl;
+            }
+         }
+      }
       void Probe(const Item &it, const Ball *bs, Hit &hp) const
       {
          const Ball &A = bs[it.a];
@@ -3202,7 +3277,7 @@ namespace GroupStep
             sh->Probe(A.c, A.R, hp);
             if (listed)
                part[sh->part]->nearNow = nullptr;
-            hp.delta -= it.dZero;
+            ZeroHit(it, hp);
             return;
          }
          const Ball &B = bs[it.b];
@@ -5430,7 +5505,29 @@ namespace GroupStep
                it.xi = V3();
                it.ra = RubberContact::RollAngle();
             }
-            if (it.dZero > 0.0)   // backing out, with nothing stored: the zero follows
+            if (!it.tZero.empty())   // a union of terms: each term's zero follows its term out (its raw depth at the step's end), dropped once the term is clear
+            {
+               Hit hr;
+               Probe(it, ball, hr);
+               it.dZero = 0.0;
+               for (int t = 0; t < hr.nt; t++)
+                  for (size_t j = 0; j < it.tZero.size(); j++)
+                     if (it.tZero[j].first == hr.t[t].id)
+                     {
+                        double &z = it.tZero[j].second;
+                        z = std::max(0.0, std::min(z, z + hr.t[t].d));
+                        break;
+                     }
+               size_t n = 0;
+               for (size_t j = 0; j < it.tZero.size(); j++)
+                  if (it.tZero[j].second > 0.0)
+                  {
+                     it.tZero[n++] = it.tZero[j];
+                     it.dZero = std::max(it.dZero, it.tZero[j].second);
+                  }
+               it.tZero.resize(n);
+            }
+            else if (it.dZero > 0.0)   // backing out, with nothing stored: the zero follows
             {
                it.dZero = std::max(0.0, std::min(it.dZero, it.dZero + e.d1));
             }

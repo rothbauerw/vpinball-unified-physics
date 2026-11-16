@@ -1996,7 +1996,12 @@ struct ContactSystemImpl
             continue;
          const SurfaceShape *const sh = static_cast<const SurfaceShape *>((const GroupStep::Shape *)g.shape[it.s]);
          const SurfaceState &kept = sh->it->Surf(sh->surface);
-         g.SetShapeItem(k, kept.touching, kept.zero, kept.xi, kept.ra);
+         g.SetShapeItem(k, kept.touching, kept.zero, kept.xi, kept.ra, &kept.tZero);
+         if (sh->mp != nullptr && !kept.touching && kept.zero <= 0.0 && it.dZero > 0.0)   // rule 8 for a moving part: its item took a found-inside zero here
+         {
+            g_qe.firstSightZero++;
+            FoundInside(balls[it.a], sh->r->Name(), it.dZero);
+         }
       }
       // ... then each kept touch's depth now against its end depth, with every contact set (a massless part's angle is solved from all of them, as it was at the step's end)
       for (int k = 0; k < g.ni; k++)
@@ -2011,7 +2016,30 @@ struct ContactSystemImpl
             GroupStep::Hit hp;
             g.ProbeItem(k, hp);
             const double was = sh->mp != nullptr ? kept.endDepth : sh->it->endDepth;
-            if (hp.delta > was + 1e-9)
+            if (hp.nt > 0 && sh->mp != nullptr)   // a union of terms: each term by the same rule, its depth now (raw less its own zero) against its own end depth; the excess goes
+            {                                     // into that term's zero, so force (the terms) and book (the union of the zeroed terms) read one U = sum_t s_t V(a_t - z_t)
+               for (int t = 0; t < hp.nt; t++)
+               {
+                  double end = 0.0;   // a term with no end depth kept was not pressing then (V = 0 there)
+                  for (const std::pair<int, double> &e : kept.tEnd)
+                     if (e.first == hp.t[t].id)
+                     {
+                        end = std::max(e.second, 0.0);
+                        break;
+                     }
+                  if (hp.t[t].d > end + 1e-9)
+                  {
+                     size_t j = 0;
+                     while (j < it.tZero.size() && it.tZero[j].first != hp.t[t].id)
+                        j++;
+                     if (j == it.tZero.size())
+                        it.tZero.emplace_back(hp.t[t].id, 0.0);
+                     it.tZero[j].second += hp.t[t].d - end;
+                     it.dZero = std::max(it.dZero, it.tZero[j].second);
+                  }
+               }
+            }
+            else if (hp.delta > was + 1e-9)
                it.dZero += hp.delta - was;
          }
          // what the zero took this cycle, by who moved the ball
@@ -2605,6 +2633,9 @@ struct ContactSystemImpl
             GroupStep::Hit hp;
             g.ProbeItem(k, hp);
             kept.endDepth = hp.delta;
+            kept.tEnd.clear();
+            for (int t = 0; t < hp.nt; t++)
+               kept.tEnd.emplace_back(hp.t[t].id, hp.t[t].d);
             if (!gi.touching && it.partTouching && hp.delta < -sh->r->ReleaseGapM() && !ContactSystem::s_unified)   // (one entry per ball: it clears when the item leaves the query)
                it.partTouching = false;
          }
@@ -2634,10 +2665,17 @@ struct ContactSystemImpl
          {
             GroupStep::Hit hr;
             g.ProbeItem(k, hr);
-            if (hr.delta + gi.dZero <= 0.0)
+            bool termsInside = false;
+            for (int t = 0; t < hr.nt; t++)
+               if (gi.TermZero(hr.t[t].id) > 0.0 && hr.t[t].d + gi.TermZero(hr.t[t].id) > 0.0)
+                  termsInside = true;
+            if (gi.tZero.empty() ? hr.delta + gi.dZero <= 0.0 : !termsInside)   // a union of terms: clear when every zeroed term's raw depth is <= 0
                zeroKept = 0.0;
          }
          kept.zero = zeroKept;
+         kept.tZero.clear();
+         if (zeroKept > 0.0)
+            kept.tZero = gi.tZero;
       }
       for (ContactSurfaceHost *const c : cords)
       {

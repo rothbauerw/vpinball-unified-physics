@@ -372,9 +372,11 @@ namespace HingeGroup
          V3 bestN(0.0, 1.0, 0.0);
          double bestD = -INFINITY, bestReff = 0.0;
          int bestW = -1;   // the deepest piece's wire (-1: a face), for its bend
+         int pieceId = -1;   // the piece being added: its index in the surface's list, the same in every list (a term's zero is kept under it)
          const auto add = [&](const double d, const V3 &nb, const double s, const double reff, const int wi) {
             const V3 pb = cb - nb * (R - 0.5 * std::max(d, 0.0));
             GroupStep::HitTerm &t = h.t[h.nt++];
+            t.id = pieceId;
             t.d = d;
             t.n = E * nb.x + dn * nb.y + fr * nb.z;
             t.slope = nb.z * pb.y - nb.y * pb.z;
@@ -399,7 +401,8 @@ namespace HingeGroup
          h.t.Fit(nList);
          for (int li = 0; li < nList; li++)
          {
-            const Piece &pc = ps[(size_t)(nearNow != nullptr ? (*nearNow)[(size_t)li] : li)];
+            pieceId = nearNow != nullptr ? (*nearNow)[(size_t)li] : li;
+            const Piece &pc = ps[(size_t)pieceId];
             if (pc.kind == 0)
             {
                const Seg &w = wires[(size_t)pc.i];
