@@ -100,7 +100,6 @@ public:
    virtual bool IsFloor() const = 0;        // a surface a ball rests on: gravity acts in the contact's substeps while one is in the contact
    virtual bool GroupModel() const { return false; }   // a ball on it goes through the group step ([Rubbers] ring_model, GroupStepDesign 14)
    virtual bool IsPlayfield() const = 0;
-   virtual double ReleaseGapM() const = 0;  // a ball this close to the surface stays engaged (hysteresis)
    // The fastest the surface itself can move toward a ball within a cycle (m/s, ContactMovingPart::SurfaceSpeedBound); 0 for a surface that does not move
    virtual double SurfaceSpeedBoundMS(double /*cycleS*/) const { return 0.0; }
    // The part object whose script hit event, threshold and duplicate filter a first touch of this surface fires (null = none)

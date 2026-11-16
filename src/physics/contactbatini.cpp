@@ -39,7 +39,6 @@ namespace FlipperModel
       { "rubber_thin_layer_beta", &FlipperSettings::rubberBetaLayer }, { "rubber_mu", &FlipperSettings::rubberMu },
       { "rubber_sideways_stiffness", &FlipperSettings::rubberShearScale },
       { "rubber_z_lo_mm", &FlipperSettings::rubberZLoMm }, { "rubber_height_mm", &FlipperSettings::rubberHeightMm },
-      { "rubber_release_gap_mm", &FlipperSettings::rubberReleaseGapMm },
       { "rubber_tan_delta", &FlipperSettings::rubberTanDelta },
       { "nudge_gain", &FlipperSettings::nudgeGain }, { "nudge_rise_ms", &FlipperSettings::nudgeRiseMs }, { "nudge_fall_ms", &FlipperSettings::nudgeFallMs },
    };
@@ -161,7 +160,6 @@ namespace FlipperModel
       clampKey("rubber_sideways_stiffness", s.rubberShearScale, 0.01, 100.0);
       clampKey("rubber_z_lo_mm", s.rubberZLoMm, 0.0, 60.0);
       clampKey("rubber_height_mm", s.rubberHeightMm, 1.0, 60.0);
-      clampKey("rubber_release_gap_mm", s.rubberReleaseGapMm, 0.0, 5.0);
       clampKey("rubber_tan_delta", s.rubberTanDelta, 0.0, 2.0);
       clampKey("nudge_gain", s.nudgeGain, 0.0, 10000.0);
       clampKey("nudge_rise_ms", s.nudgeRiseMs, 0.1, 100.0);

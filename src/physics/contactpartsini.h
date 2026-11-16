@@ -84,7 +84,6 @@ namespace PartsIni
          else if (k == "hold_angle_deg") s.holdAngleDeg = v;
          else if (k == "hold_speed_dps") s.holdSpeedDps = v;
          else if (k == "steel_e_gpa") s.steelEGpa = v;
-         else if (k == "release_gap_mm") {}   // the part host reads it (ContactHost::LoadHardSurfaceSettings)
          else if (k == "hit_window_deg") s.hitWindowDeg = v;
          else if (k == "rubber") {}   // the opt-out key (ContactSurfaceHost::HingeWanted)
          else if (ContactHost::IsSurfaceKey(k)) {}   // the surface material's (ContactHost::LoadHardSurfaceSettings reads it)
@@ -178,7 +177,6 @@ namespace PartsIni
          else if (k == "stop_e") s.stopE = v;
          else if (k == "bracket_edge_mm") s.bracketEdgeMm = v;
          else if (k == "steel_e_gpa") s.steelEGpa = v;
-         else if (k == "release_gap_mm") {}   // the part host reads it (ContactHost::LoadHardSurfaceSettings)
          else if (k == "hit_window_deg") s.hitWindowDeg = v;
          else if (k == "rubber") {}
          else if (ContactHost::IsSurfaceKey(k)) {}   // the surface material's (ContactHost::LoadHardSurfaceSettings reads it)
@@ -222,7 +220,7 @@ namespace PartsIni
          else if (k == "stop_e") s.stopE = v;
          else if (k == "cap_h_mm") s.capHMm = v;
          else if (k == "heightoffset_mm" || k == "stop_below_mm" || k == "release_mm" || k == "wire_d_mm" || k == "bend_step_deg" || k == "arch_step_deg" || k == "wire_model" || k == "wire_sum" || k == "wire_bend") {}   // (the wire triggers')
-         else if (ContactHost::IsSurfaceKey(k)) {}   // the surface material's, release_gap_mm among them (ContactHost::LoadHardSurfaceSettings reads it)
+         else if (ContactHost::IsSurfaceKey(k)) {}   // the surface material's (ContactHost::LoadHardSurfaceSettings reads it)
       });
    }
 }

@@ -62,9 +62,6 @@ namespace PhysicsIni
                                      // whatever its items, so its re-query and the mid-step join run for a ball with no static mesh item; 0 = only a static mesh item's probes check it, as before
       bool jetPulseAtCycle = true;   // jet_pulse_at_cycle (on while tested, rule 6; runs/2026-11-14-reach-p1b/brief_bumperdrv.md): 1 = a jet bumper's switch closure arms a pulse that starts at the next
                                      // cycle's start after its jet_coil_delay_ms (the sling's form), so its coil state for a cycle is known at the cycle's start; 0 = the pulse fires at the end of the step whose switch closes
-      bool bandQuery = true;       // band_query (on while tested, rule 6; runs/2026-11-15-finder-P6b3/paper_P7.md): 1 = a band is a part of every ball's energy query: taken when the ball's energy travel
-                                   // reaches the cord's own geometry less what the cord can move in the cycle, let go when it no longer does; BandHit fires at the first touch; 0 = the near search
-                                   // (CordNear), the release gap rule and BandHit on release, as before
       bool reachFullFeed = true;   // reach_full_feed (on while tested, rule 6; runs/2026-11-15-finder-P6b3/brief_A.md, paper.md section 4 item 2): 1 = in the energy reach's grouping (ContactSystem
                                    // ReachEnergy) a part's move takes its group's full feed: the balls' energy plus the other grouped parts' work and squash (its own work excluded: it is
                                    // already in its move), grown with the others to a fixed point; 0 = a part's move from its group's balls' energy only, as before
@@ -192,8 +189,6 @@ namespace PhysicsIni
             f.reachFullFeed = on;
          else if (key == "jet_pulse_at_cycle")
             f.jetPulseAtCycle = on;
-         else if (key == "band_query")
-            f.bandQuery = on;
          else if (key == "ball_inside_check")
             f.ballInsideCheck = on;
          else if (key == "hit_speed")

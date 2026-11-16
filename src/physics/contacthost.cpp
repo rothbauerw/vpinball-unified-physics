@@ -37,13 +37,13 @@ namespace
       { "alpha_s_per_m", &RubberObjectSettings::alphaSPerM }, { "restitution", &RubberObjectSettings::restitution }, { "plate_areal_density_kg_m2", &RubberObjectSettings::plateArealKgM2 }, { "plate_mass_g", &RubberObjectSettings::plateMassG }, { "plate_clearance_u", &RubberObjectSettings::plateClearanceU }, { "restitution_ref_speed_ms", &RubberObjectSettings::restitutionRefMs }, { "beta_layer", &RubberObjectSettings::betaLayer },
       { "mu", &RubberObjectSettings::mu }, { "sideways_stiffness", &RubberObjectSettings::shearScale },
       { "tan_delta", &RubberObjectSettings::tanDelta },
-      { "max_ms",&RubberObjectSettings::maxMs }, { "release_gap_mm", &RubberObjectSettings::releaseGapMm },
+      { "max_ms",&RubberObjectSettings::maxMs },
       { "band_curve_radius_mm", &RubberObjectSettings::bandCurveRadiusMm }, { "band_min_span_mm", &RubberObjectSettings::bandMinSpanMm },
       { "band_ref_hz", &RubberObjectSettings::bandRefHz },
    };
    const BoolKey BOOL_KEYS[] = {
       { "contact", &RubberObjectSettings::contact }, { "rubber", &RubberObjectSettings::surfaceRubber }, { "normal_loss", &RubberObjectSettings::normalLoss }, { "viscoelastic_damping", &RubberObjectSettings::viscoelastic }, { "twist", &RubberObjectSettings::twist },
-      { "band_twist_loss", &RubberObjectSettings::bandTwistLoss }, { "band_plate_reach", &RubberObjectSettings::bandPlateReach },
+      { "band_twist_loss", &RubberObjectSettings::bandTwistLoss },
    };
 
    using PhysicsIni::Trim;
@@ -187,7 +187,6 @@ namespace
       clampKey("sideways_stiffness", s.shearScale, 0.01, 100.0);
       clampKey("tan_delta", s.tanDelta, 0.0, 2.0);
       clampKey("max_ms", s.maxMs, 1.0, 200.0);
-      clampKey("release_gap_mm", s.releaseGapMm, 0.0, 5.0);
       clampKey("band_curve_radius_mm", s.bandCurveRadiusMm, 2.0, 500.0);
       clampKey("band_min_span_mm", s.bandMinSpanMm, 0.0, 500.0);
       clampKey("band_ref_hz", s.bandRefHz, 1.0, 10000.0);

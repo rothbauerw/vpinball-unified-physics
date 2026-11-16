@@ -63,7 +63,7 @@ namespace ContactProf
       static const bool on = getenv("VPX_CHECK_PROFILE") != nullptr;
       return on;
    }
-   enum StageId { StOther, StHolds, StGroupShape, StRingHandIn, StRingCap, StLoadState, StCordNear, StEngageNear, StSeatAtTouch, StEngageImpl, StWriteBack, StReleaseTest, StCount };
+   enum StageId { StOther, StHolds, StGroupShape, StRingHandIn, StRingCap, StLoadState, StEngageNear, StSeatAtTouch, StEngageImpl, StWriteBack, StReleaseTest, StCount };
    struct CheckData
    {
       uint64_t inside = 0, begin = 0, loop = 0, loopOut = 0, loopFaces = 0, loopFacesOut = 0, loops = 0;

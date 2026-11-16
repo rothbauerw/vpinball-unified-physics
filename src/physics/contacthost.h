@@ -44,7 +44,6 @@ struct RubberObjectSettings
    double rollingMu = 0.0;        // floor of the rolling-resistance coefficient (the playfield: [Contact] rolling_resistance, because the hysteresis law below gives almost nothing on hard wood); 0 = none
    bool normalLoss = false;       // the same tan_delta also damps the normal force (a dashpot at the contact's own natural frequency); off for rubbers (2026-10-29: it caps a gentle bounce near 0.78), on for the hard surfaces, playfield and turntable (their loaders)
    double maxMs = 30.0;           // give up after this much simulated contact time
-   double releaseGapMm = 0.2;     // an engaged ball is released only once it is farther than this from every rubber (and receding): a resting ball must not engage and release over and over
 
    // Band (a rubber stretched between posts): the posts and free spans are found at load (logged); a ball on a span deflects it (cordfixed.h: the fixed-height cord)
    bool band = false;             // this rubber is a band: found from its shape at load (DetectBand), not an ini key
@@ -53,7 +52,6 @@ struct RubberObjectSettings
    double bandStretchAlpha = 0.09; // Hunt-Crossley on the cord's stretch, s/m: half the ring's 0.18, for half its drop-off with speed. Fitted to the user's best guess (about 0.8 at 3 m/s), not measured
    double bandTwistScale = 1.0;    // the twist spring against its calculated stiffness (kT / 6)
    bool bandTwistLoss = true;      // the twist spring takes the rubber's tan_delta
-   bool bandPlateReach = true;     // band_plate_reach (default 1 since 2026-11-05): 1 = a ball is taken into a sling's band within the plate's own stroke at the cord (CordFixed::PlateReachM), and the band's near search reaches as far as its engage rule needs; 0 = the fixed 30 mm and the search's 4 U pad
    double bandRefHz = 20.0;       // frequency at which tan_delta (the rubber's own loss tangent, shared with the rings) applies to the stretch
    double bandCurveRadiusMm = 40.0; // a centreline vertex whose local bend radius is below this belongs to a post wrap
    double bandMinSpanMm = 20.0;   // a straight run shorter than this between two posts is not a free span
@@ -129,7 +127,6 @@ public:
    bool IsPlayfieldKind() const { return m_surfaceKind == "playfield"; }
    bool IsPlayfield() const override { return IsPlayfieldKind(); }
    bool IsFloor() const override { return m_surfaceKind == "playfield" || m_surfaceKind == "turntable"; }   // a surface a ball rests on: gravity acts in the contact substeps while one is in the contact
-   double ReleaseGapM() const override { return m_set.releaseGapMm * 1e-3; }
    bool GroupModel() const override;
    const RubberObjectSettings *Settings() const override { return &m_set; }
    // The height (VPX units) of the highest upward-facing face of this host at table point (x, y); false if there is none there. Used to seat a turntable in the playfield.

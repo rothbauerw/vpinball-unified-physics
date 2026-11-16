@@ -46,7 +46,6 @@ struct FlipperSettings
    double rubberTanDelta = 0.05;        // rubber loss tangent for the rolling resistance, 0 = off. PROVISIONAL: starts low on purpose (typical elastomer 0.1-0.3), to be tuned
    double rubberZLoMm = 9.144;          // rubber bottom above the playfield surface (0.36 in)
    double rubberHeightMm = 11.176;      // rubber height (0.44 in)
-   double rubberReleaseGapMm = 0.2;     // ...and be farther than this from the rubber surface (release hysteresis for a resting ball)
    // flipper nudge: when this flipper's plunger hits the coil stop, the named flipper's pivot is displaced along x, away from this one, by a
    // single pulse (fast rise, slow return) of nudgeGain * (angular momentum at the stop, kg m^2/s) millimetres. nudgeGain 0 = off.
    std::string nudgeTarget;             // name of the flipper that is nudged ("" = none)

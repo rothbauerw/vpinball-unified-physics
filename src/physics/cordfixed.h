@@ -1068,7 +1068,7 @@ public:
       }
       return gap;
    }
-   // [Features] band_query (paper_P7.md 2): how far a ball (centre c, radius R) is from where this cord can be in the coming cycle, on the cord's own geometry: each span's rest line with
+   // (paper_P7.md 2) how far a ball (centre c, radius R) is from where this cord can be in the coming cycle, on the cord's own geometry: each span's rest line with
    // radius rc, less that span's move D_j + its own bend at rest (a body holding it off its line); each post's cord circle (PostShape's distance; a twin is never met), less the largest
    // move of the spans that end on it; and the plate's face where it is now (PlateTube's segment), less plateMove. D_j, per span (the span's ends are fixed on their posts, so a push
    // moves only its own span): the deepest deflection now on that span by its held balls (dNow[j]) plus the largest move of what can push that span in the cycle, the held balls whose
@@ -1109,7 +1109,7 @@ public:
       }
       return gap;
    }
-   // [Features] band_query: a ball (centre c, radius R, travel reach this cycle) this cord holds, per span: how far past the span's rest line it holds it now (its centre within R + rc
+   // a ball (centre c, radius R, travel reach this cycle) this cord holds, per span: how far past the span's rest line it holds it now (its centre within R + rc
    // of the line: dNow[j]) and, when its travel reaches the span (gap to the rest line <= reach), its travel as a push on that span (push[j]). The caller clears both per cord. m
    void SpanPush(const V3 &c, const double R, const double reach, std::vector<double> &dNow, std::vector<double> &push) const
    {
@@ -1124,7 +1124,7 @@ public:
             push[j] = std::max(push[j], std::max(reach, 0.0));
       }
    }
-   // [Features] band_query: the most the plate face can carry the cord in the coming cycle T, by the energy reach (design_reach.md section 1, as the bat's EnergyMove): nothing while it
+   // the most the plate face can carry the cord in the coming cycle T, by the energy reach (design_reach.md section 1, as the bat's EnergyMove): nothing while it
    // is quiet (PlateQuiet: at rest, no coil, no pulse pending) and its coil cannot start within T (CoilWorkBound 0); otherwise its turn is at most what all its energy as speed makes in
    // T, sqrt(w0^2 + 2 E / I) T with E its spring's stored energy now (PlateV) plus its coil's work bound (CoilWorkBound) and I its smallest inertia over the stroke (rest, now, stop),
    // the turn clamped at its rest (phi 0) and its coil stop (the stops are hard); the face move is the larger change of the face (Limit) over that range. m
@@ -1370,15 +1370,6 @@ public:
    std::vector<std::shared_ptr<StopBody>> stopBodies;   // what the obstacles point at
    // the plate's laws
    double PhiStop() const { return sl.mech.stopDeg * FlipperModel::DEG; }
-   // how far the plate can carry the cord past its rest line: the face at the coil stop (the cord is massless and the stops are hard, so it is never farther; Limit rises with the angle)
-   double PlateReachM() const
-   {
-      if (!pl.on)
-         return 0.0;
-      double y = 0.0, dy = 0.0;
-      Limit(PhiStop(), y, dy);
-      return std::max(y, 0.0);
-   }
    // the energy reach, the coil law (runs/2026-11-14-reach-p1b/brief_coil.md items 2-3): the most work the sling's coil can do on the plate in the coming cycle T. Its driver
    // reads the switches once per cycle and starts a pulse after its delay, so the coil is on in the cycle only if it is on now, its pending pulse starts within T, or (armed, its delay
    // shorter than T) a switch can start it now. The current cannot jump: i <= min(i0 + V / L T, V / R), L its smallest (the plunger at rest, farthest out); the force at that current

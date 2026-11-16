@@ -78,7 +78,6 @@ namespace ContactSystem
       s_ballInsideCheck = f.ballInsideCheck;   // [Features] ball_inside_check (physicsini.h; the group step's per-ball inside check, the midJoin lambda)
       s_reachFullFeed = f.reachFullFeed;   // [Features] reach_full_feed (physicsini.h; ReachEnergy)
       GroupStep::jetPulseAtCycle = f.jetPulseAtCycle;   // [Features] jet_pulse_at_cycle (physicsini.h; BumperGroup::Part::CycleStart, ContactBumperPart::EnergyMove)
-      GroupStep::bandQuery = f.bandQuery;   // [Features] band_query (physicsini.h; BandQuery, SleepParts, the release rule, CordNear, ContactSurfaceHost::CordFinish / BandRelease)
       GroupStep::partFinderProf = ContactProf::CheckOn() || GroupStep::FinderCheckEnv();   // (its counters: diagnostics only)
       GroupStep::partFinderCount.clear();
       GroupStep::skipOwnTested = GroupStep::skipOwnSkipped = GroupStep::skipEsComputed = GroupStep::skipTripItems = GroupStep::skipDeferred = GroupStep::skipTripAttempts = 0;
@@ -92,7 +91,6 @@ namespace ContactSystem
          PLOGI << "Contact system: [Features] part_finder = " << (GroupStep::partFinder ? 1 : 0) << (GroupStep::partFinder ? " (a hinge part's pieces listed once per cycle from their swept sectors; the overlap check by region)" : " (per-step piece lists; the overlap check probes every part)");
          PLOGI << "Contact system: [Features] reach_full_feed = " << (s_reachFullFeed ? 1 : 0) << (s_reachFullFeed ? " (a part's move takes its group's full feed: the balls' energy and the other parts' work)" : " (a part's move from its group's balls' energy only)");
          PLOGI << "Contact system: [Features] jet_pulse_at_cycle = " << (GroupStep::jetPulseAtCycle ? 1 : 0) << (GroupStep::jetPulseAtCycle ? " (a jet's switch closure arms a pulse that starts at the next cycle's start after its jet_coil_delay_ms)" : " (a jet's pulse fires at the end of the step whose switch closes)");
-         PLOGI << "Contact system: [Features] band_query = " << (GroupStep::bandQuery ? 1 : 0) << (GroupStep::bandQuery ? " (a band taken and let go by the ball's energy query; BandHit at first touch)" : " (the band's near search and release gap; BandHit on release)");
          PLOGI << "Contact system: [Features] ball_inside_check = " << (s_ballInsideCheck ? 1 : 0) << (s_ballInsideCheck ? " (every group ball checked against its cycle query after each attempt)" : " (only a static mesh item's probes check the ball's query)");
       }
       else
@@ -236,7 +234,6 @@ struct ContactSystemImpl
             EnsureOne(pb);
       }
    }
-   static void CordNear(double dt);     // likewise
 
    // A ball in the step: its SI state, the substep's forces, and what the step needs to know about it.
    struct Body
@@ -296,7 +293,6 @@ struct ContactSystemImpl
       RubberParams rpBall;               // steel on steel: Hertz with the pair's effective modulus (half of one ball's), no thin layer, no loss tangent
       int steps = 1;                     // the current island's substeps
       std::vector<std::pair<int, int>> links;
-      std::vector<std::pair<HitBall *, const char *>> bandReleases;   // balls the band lets go of (after the write-back: the release can fire the script)
    };
 
    // Sources: anything that acts on one body with no partner. Gravity and the nudge act in the substeps, not as one kick per physics step (a contact stepped without gravity
@@ -701,7 +697,7 @@ struct ContactSystemImpl
                   eb[g] += w.band->Cord()->heldJ + w.band->Cord()->fixed->CoilWorkBound(T);
             }
             if (w.e != nullptr)
-               for (ContactSurfaceHost *const b : w.e->bandsMore)   // band_query: each other band that holds it, likewise once per group
+               for (ContactSurfaceHost *const b : w.e->bandsMore)   // each other band that holds it, likewise once per group
                   if (b->CordOn())
                   {
                      bool first = true;
@@ -966,11 +962,11 @@ struct ContactSystemImpl
          }
    }
 
-   // [Features] band_query (runs/2026-11-15-finder-P6b3/paper_P7.md 2): a band is a part of every ball's energy query. How far each span of the cord can move in the coming cycle T:
+   // (runs/2026-11-15-finder-P6b3/paper_P7.md 2) a band is a part of every ball's energy query. How far each span of the cord can move in the coming cycle T:
    // its balls' deepest deflection now on that span plus the largest move of what can push that span, its balls' travels that reach it (SpanPush, m) and, on the plate's span, the
    // plate's energy move (PlateMoveM); the cord is massless, its span ends fixed on their posts and its stops hard, so it is nowhere else. The ball's distance less that move
    // (QueryGap) is what the ball's own travel must reach to touch it. m
-   // whether a band holds the body's ball: its first band, or (band_query) one of its others
+   // whether a band holds the body's ball: its first band, or one of its others
    static bool HoldsBand(const Body &w, const ContactSurfaceHost *const b)
    {
       return w.band == b || (w.e != nullptr && !w.e->bandsMore.empty() && std::find(w.e->bandsMore.begin(), w.e->bandsMore.end(), b) != w.e->bandsMore.end());
@@ -991,8 +987,8 @@ struct ContactSystemImpl
             band->Cord()->fixed->SpanPush(w.c, w.bs.R, w.reachS, dNow, push);
    }
    static inline uint64_t s_bandBallCycles = 0;   // ball-cycles held by a band (FindIslands), either key: the take rule's cost (diagnostics)
-   static inline uint64_t s_bandSecond = 0;   // band_query: takes of a ball by a second band while another holds it (BandQuery; diagnostics)
-   // band_query: after the energy reach (ReachLinks), each ball's band membership is its query's: a ball whose travel (reachS) reaches the band (BandQueryGap <= reachS, the grouping's
+   static inline uint64_t s_bandSecond = 0;   // takes of a ball by a second band while another holds it (BandQuery; diagnostics)
+   // after the energy reach (ReachLinks), each ball's band membership is its query's: a ball whose travel (reachS) reaches the band (BandQueryGap <= reachS, the grouping's
    // own test) is taken, a held one that no longer reaches it is let go (no hit: BandHit fires at the first touch, ContactSurfaceHost::CordFinish). A take links the band's balls and feeds
    // the cord's energy to the group (ReachEnergy), so the reach is grown again until no ball joins: a fixed point (the releases on the first pass only, so it ends). Returns whether the
    // links changed
@@ -1072,7 +1068,7 @@ struct ContactSystemImpl
                   break;
                }
             if (cy.bodies[i].e != nullptr)
-               for (ContactSurfaceHost *const b : cy.bodies[i].e->bandsMore)   // (band_query: its other bands)
+               for (ContactSurfaceHost *const b : cy.bodies[i].e->bandsMore)   // (its other bands)
                   for (int j = 0; j < i; j++)
                      if (HoldsBand(cy.bodies[j], b))
                      {
@@ -1100,8 +1096,7 @@ struct ContactSystemImpl
             }
       BandLinks(cy);
       ReachLinks(cy);
-      if (GroupStep::bandQuery)
-         BandQuery(cy);   // (a band's balls by their query; the links and the reach again when they change)
+      BandQuery(cy);   // (a band's balls by their query; the links and the reach again when they change)
       for (const Body &w : cy.bodies)
          s_bandBallCycles += w.band != nullptr ? 1 : 0;   // (the cost of the band's take rule: ball-cycles stepped with a cord, told with the running counters)
       cy.islands.Build(nw, cy.pairs, cy.links);
@@ -1144,27 +1139,7 @@ struct ContactSystemImpl
          pb->m_drsq = ds.LengthSquared();
 #endif
          pb->m_rubberAdvanced = true;   // the ball has been moved for the whole cycle
-         // release: one entry per ball, the entry lasts the ball's life and its items are the query's; only a band lets a ball go, by its own rule
-         if (ep == nullptr)
-            continue;   // a free ball has nothing to release
-         BallContact &e = *ep;
-         if (e.band != nullptr && GroupStep::bandQuery)
-            continue;   // band_query: the band lets go when the ball's query no longer reaches it (BandQuery, next cycle)
-         if (e.band != nullptr)   // the band holds the ball until its own release rule lets go (the ball stays in its other contacts)
-         {
-            // off the cord and clear of it; a plate on its way out can still catch a ball close by, so it stays in the group until the plate is back at its rest angle and still, or the ball is far
-            // (band_plate_reach: beyond the plate's stroke at the cord, CordFixed::PlateReachM, and this rule's 1 mm; otherwise 30 mm)
-            CordBand &cb = *e.band->Cord();
-            int slot = -1;
-            for (int k = 0; k < (int)cb.slots.size(); k++)
-               if (cb.slots[k] == pb)
-                  slot = k;
-            const double gap = slot >= 0 ? cb.Gap(slot) : 1.0;
-            const double clearM = e.band->m_set.bandPlateReach ? 0.001 + cb.fixed->PlateReachM() : 0.03;
-            if (gap > clearM || (gap > 0.001 && cb.PlateAtRest()))
-               cy.bandReleases.emplace_back(pb, "clear");
-            continue;
-         }
+         // release: a band lets go of a ball when the ball's query no longer reaches it (BandQuery, next cycle)
       }
    }
 
@@ -1906,7 +1881,7 @@ struct ContactSystemImpl
          if (w.band != nullptr && std::find(cords.begin(), cords.end(), w.band) == cords.end())
             cords.push_back(w.band);
          if (w.e != nullptr)
-            for (ContactSurfaceHost *const b : w.e->bandsMore)   // (band_query: each other band that holds it steps with this island)
+            for (ContactSurfaceHost *const b : w.e->bandsMore)   // (each other band that holds it steps with this island)
                if (std::find(cords.begin(), cords.end(), b) == cords.end())
                   cords.push_back(b);
          if (ring)
@@ -2899,11 +2874,7 @@ struct ContactSystemImpl
    {
       for (const auto &r : cy.releases)
          Release(r.first, r.second);
-      for (const auto &r : cy.bandReleases)
-         if (r.first->m_bandOwner != nullptr)
-            r.first->m_bandOwner->BandRelease(r.first, r.second);
       cy.releases.clear();
-      cy.bandReleases.clear();
       for (size_t i = 0; i < g_ballPairs.size();)
          if (!g_ballPairs[i].used)
             g_ballPairs.erase(g_ballPairs.begin() + (long)i);
@@ -3095,41 +3066,40 @@ struct ContactSystemImpl
                return "a moving part can reach it";
          }
       }
-      // band_query: a cord that can move this cycle (its plate can, or balls hold it) wakes a sleeping ball it can reach, by the take's own test (BandQueryGap <= the ball's travel); the
+      // a cord that can move this cycle (its plate can, or balls hold it) wakes a sleeping ball it can reach, by the take's own test (BandQueryGap <= the ball's travel); the
       // held balls' travels are their last cycle's (BallContact::reachS)
-      if (GroupStep::bandQuery)
-         for (ContactHost *const o : ContactHost::Registry())
-         {
-            ContactSurfaceHost *const band = o->m_set.band && o->m_enabled ? o->BandHost() : nullptr;
-            if (band == nullptr || !band->CordModel() || !band->CordOn())
-               continue;
-            std::vector<double> dNow, push;
-            bool held = false;
-            for (auto *const ball : g_pplayer->m_vball)
-               if (ball->m_hitBall.m_bandOwner == band || (ball->m_hitBall.m_contact != nullptr && std::find(ball->m_hitBall.m_contact->bandsMore.begin(), ball->m_hitBall.m_contact->bandsMore.end(), band) != ball->m_hitBall.m_contact->bandsMore.end()))
-               {
-                  const HitBall &h = ball->m_hitBall;
-                  held = true;
-                  band->Cord()->fixed->SpanPush(V3((double)h.m_d.m_pos.x * U, (double)h.m_d.m_pos.y * U, (double)h.m_d.m_pos.z * U), (double)h.m_d.m_radius * U, h.m_contact != nullptr ? h.m_contact->reachS : 0.0, dNow, push);
-               }
-            if (!held && band->Cord()->fixed->PlateMoveM(dt) <= 0.0)
-               continue;   // a cord at rest with nothing to move it: the sleeping balls are where they were when they slept
-            for (size_t b = 0; b < g.balls.size(); b++)
+      for (ContactHost *const o : ContactHost::Registry())
+      {
+         ContactSurfaceHost *const band = o->m_set.band && o->m_enabled ? o->BandHost() : nullptr;
+         if (band == nullptr || !band->CordModel() || !band->CordOn())
+            continue;
+         std::vector<double> dNow, push;
+         bool held = false;
+         for (auto *const ball : g_pplayer->m_vball)
+            if (ball->m_hitBall.m_bandOwner == band || (ball->m_hitBall.m_contact != nullptr && std::find(ball->m_hitBall.m_contact->bandsMore.begin(), ball->m_hitBall.m_contact->bandsMore.end(), band) != ball->m_hitBall.m_contact->bandsMore.end()))
             {
-               HitBall *const pb = g.balls[b];
-               if (travel[b] < 0.0)
-               {
-                  Cycle cy;
-                  LoneReach(cy, EnsureOne(pb), pb, dt);
-                  travel[b] = std::max(cy.bodies[0].reachS, 0.0);
-               }
-               Body s;
-               LoadBody(s, pb);
-               LoadState(s);
-               if (BandQueryGap(band, s.c, s.bs.R, dNow, push, dt) <= travel[b])
-                  return "a band can reach it";
+               const HitBall &h = ball->m_hitBall;
+               held = true;
+               band->Cord()->fixed->SpanPush(V3((double)h.m_d.m_pos.x * U, (double)h.m_d.m_pos.y * U, (double)h.m_d.m_pos.z * U), (double)h.m_d.m_radius * U, h.m_contact != nullptr ? h.m_contact->reachS : 0.0, dNow, push);
             }
+         if (!held && band->Cord()->fixed->PlateMoveM(dt) <= 0.0)
+            continue;   // a cord at rest with nothing to move it: the sleeping balls are where they were when they slept
+         for (size_t b = 0; b < g.balls.size(); b++)
+         {
+            HitBall *const pb = g.balls[b];
+            if (travel[b] < 0.0)
+            {
+               Cycle cy;
+               LoneReach(cy, EnsureOne(pb), pb, dt);
+               travel[b] = std::max(cy.bodies[0].reachS, 0.0);
+            }
+            Body s;
+            LoadBody(s, pb);
+            LoadState(s);
+            if (BandQueryGap(band, s.c, s.bs.R, dNow, push, dt) <= travel[b])
+               return "a band can reach it";
          }
+      }
       return nullptr;
    }
    // Once per cycle, before the magnets and the balls' velocity update: gravity and nudge, coil currents, moves outside the step, parts
@@ -3424,8 +3394,6 @@ void ContactSystemImpl::StepBalls(const double dt)
       cy.partHits.clear();
    }
    cy.hitFloor = std::min(0.5f, g_pplayer->m_physics->HitSpeedMin());
-   if (!s_append)
-      cy.bandReleases.clear();
    for (BallPairState &p : g_ballPairs)
       p.used = false;
    cy.rpBall = RubberParams();
@@ -3452,7 +3420,7 @@ void ContactSystemImpl::StepBalls(const double dt)
    {
       nextLogMs = g_pplayer->m_time_msec - g_pplayer->m_time_msec % 10000 + 10000;
       QueryEngageLog("running");
-      PLOGI << "Bands: " << s_bandBallCycles << " ball-cycles held by a band, " << s_bandSecond << " second-band takes (band_query " << (GroupStep::bandQuery ? 1 : 0) << ")";
+      PLOGI << "Bands: " << s_bandBallCycles << " ball-cycles held by a band, " << s_bandSecond << " second-band takes";
    }
    GatherBalls(cy);
    FindIslands(cy);
@@ -3496,54 +3464,9 @@ void ContactSystemImpl::StepBalls(const double dt)
 // A free ball that can touch a surface this cycle is taken into the contact before the stock hit search runs: the surface is engaged when the ball is within its release gap, or
 // closing on it faster than it can cross the gap in two cycles (reach 2 vn dt + the release gap; a ball released at the gap, receding, is not taken back). The first touch is
 // then found by the substeps, and the part's hit event is queued from there (PartHit).
-// A cord takes a ball before it touches, and the group steps it from there (GroupStepDesign 15): the band is never found by the stock collision, and the ball does not start inside the cord.
-// Every ball, one already held for the playfield included: its contact is handed over to the band. dt: the cycle in seconds (CordNear and EngageNear).
-void ContactSystemImpl::CordNear(const double dt)
-{
-   const ContactProf::Stage profStage(ContactProf::StCordNear);   // P3a profile: the calling stage of the checks here (diagnostics only)
-   for (auto *const ball : g_pplayer->m_vball)
-   {
-      HitBall *const pb = &ball->m_hitBall;
-      if (pb->m_bandOwner != nullptr || KickerHold::Held(pb))
-         continue;
-      const Vertex3Ds &pos = pb->m_d.m_pos;
-      const double speed = std::sqrt((double)pb->m_d.m_vel.Dot(pb->m_d.m_vel)) * VS;
-      BallSI bs;
-      bs.R = (double)pb->m_d.m_radius * U;
-      const V3 c((double)pos.x * U, (double)pos.y * U, (double)pos.z * U);
-      const V3 v((double)pb->m_d.m_vel.x * VS, (double)pb->m_d.m_vel.y * VS, (double)pb->m_d.m_vel.z * VS);
-      for (ContactHost *const o : ContactHost::Registry())
-      {
-         ContactSurfaceHost *const band = o->m_set.band && o->m_enabled ? o->BandHost() : nullptr;
-         if (band == nullptr || !band->CordModel())
-            continue;
-         // a plate on its way out carries the cord this far past its rest line (as the release rule): band_plate_reach, the plate's stroke at the cord (CordFixed::PlateReachM); otherwise 30 mm
-         const bool bound = band->m_set.bandPlateReach;
-         const double plateReach = band->CordOn() && !band->Cord()->PlateAtRest() ? (bound ? band->Cord()->fixed->PlateReachM() : 0.03) : 0.0;
-         // a real section thicker than the table's: the cord's surface stands out from the table's tube by twice the difference (its centre moves out by it, and its radius grows by it); the probe below reads the table's tube
-         const double fixedRc = band->CordOn() ? band->Cord()->fixed->rc : 0.0;
-         // band_plate_reach: as far past the band's box (its points and the table's tube radius) as the engage rule below can take a ball: the real section standing out, the release gap, and the farther of the plate's stroke and two cycles' closing
-         const float reachU = bound ? pb->m_d.m_radius + (float)((std::max(2.0 * (fixedRc - band->m_radiusSI), 0.0) + o->ReleaseGapM() + std::max(plateReach, 2.0 * speed * dt)) / U)
-                                    : pb->m_d.m_radius + (float)((2.0 * speed * dt + plateReach + (fixedRc > 0.0 ? 2.0 * fixedRc : 0.0)) / U) + 4.0f;
-         const FRect3D &bb = o->m_hitBBox;
-         if (pos.x < bb.left - reachU || pos.x > bb.right + reachU || pos.y < bb.top - reachU || pos.y > bb.bottom + reachU || pos.z < bb.zlow - reachU || pos.z > bb.zhigh + reachU)
-            continue;
-         SurfaceContact it;
-         it.r = o;
-         const TubeProbe pr = o->Probe(bs, it, c);
-         if (pr.dist <= 0.0)
-            continue;
-         const double gap = pr.dist - (bs.R + pr.rho) - (fixedRc > 0.0 ? 2.0 * (fixedRc - pr.rho) : 0.0), rel = o->ReleaseGapM(), closing = -v.Dot(pr.normal);
-         if ((gap <= rel + plateReach || (closing > 0.0 && gap < closing * 2.0 * dt + rel)) && (pb->m_sleepGroup == 0 || (SleepWakeBall(pb, "a band can take it", true), true)) && band->BandEngage(pb))
-            break;
-      }
-   }
-}
-
+// A band takes its balls by their energy query (BandQuery). dt: the cycle in seconds.
 void ContactSystemImpl::EngageNear(const double dt)
 {
-   if (!GroupStep::bandQuery)
-      CordNear(dt);   // (band_query: a band takes its balls by their query, BandQuery)
    CPROF(EngageNear);
    const ContactProf::Stage profStage(ContactProf::StEngageNear);   // P3a profile: the calling stage of the checks here (diagnostics only)
    ContactProf::Cycle();
@@ -3819,7 +3742,7 @@ void ContactSystemImpl::Release(HitBall *const ball, const char *why, const bool
    const auto itE = std::find_if(g_engaged.begin(), g_engaged.end(), [ball](const BallContact &r) { return &r == ball->m_contact; });
    if (itE == g_engaged.end())
       return;
-   while (itE->band != nullptr && ball->m_bandOwner == itE->band)   // (band_query: each band that holds it, the next one becoming the first)
+   while (itE->band != nullptr && ball->m_bandOwner == itE->band)   // (each band that holds it, the next one becoming the first)
    {
       ContactSurfaceHost *const first = itE->band;
       first->BandRelease(ball, why);   // clears itE->band and the ball's band owner
@@ -4094,7 +4017,7 @@ void ContactSystem::ReleaseHost(ContactHost *const host)
    // the host is going away: its engagements end without a log line (a ball can outlive the physics engine: it must not keep a pointer to the entry)
    for (BallContact &e : g_engaged)
    {
-      e.bandsMore.erase(std::remove(e.bandsMore.begin(), e.bandsMore.end(), host), e.bandsMore.end());   // (band_query: a second band that holds it)
+      e.bandsMore.erase(std::remove(e.bandsMore.begin(), e.bandsMore.end(), host), e.bandsMore.end());   // (a second band that holds it)
       if (e.band == host)
       {
          e.band = e.bandsMore.empty() ? nullptr : e.bandsMore.front();   // (another band that holds it becomes its first)
@@ -4512,7 +4435,6 @@ static void RestoreSnap()
       ContactSystemImpl::s_pendingCy->hitEvents.clear();
       ContactSystemImpl::s_pendingCy->partHits.clear();
       ContactSystemImpl::s_pendingCy->releases.clear();
-      ContactSystemImpl::s_pendingCy->bandReleases.clear();
       ContactSystemImpl::s_pendingCy = nullptr;
    }
 }

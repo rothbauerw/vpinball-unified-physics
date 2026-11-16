@@ -250,7 +250,7 @@ namespace
    // the calling stage of a re-query, one word (ContactProf::StageId; "other": a stage that sets none)
    const char *StageWord(const int s)
    {
-      static const char *const w[ContactProf::StCount] = { "other", "holds", "groupshape", "ringhandin", "ringcap", "loadstate", "cordnear", "engagenear", "seatattouch", "engage", "writeback", "release" };
+      static const char *const w[ContactProf::StCount] = { "other", "holds", "groupshape", "ringhandin", "ringcap", "loadstate", "engagenear", "seatattouch", "engage", "writeback", "release" };
       return s >= 0 && s < ContactProf::StCount ? w[s] : "?";
    }
    // an object recorded for the ball and not taken before its next query: not handled mid-cycle (a ball not on the group step this cycle)
@@ -1376,7 +1376,7 @@ float ContactSurfaceHost::HitTest(const BallS &ball, const float dtime, Collisio
    if (!m_enabled || m_pts.size() < 2)
       return -1.0f;
    if (CordModel())
-      return -1.0f;   // the cord never meets the stock collision: the contact system takes the ball before it touches (CordNear; GroupStepDesign 15)
+      return -1.0f;   // the cord never meets the stock collision: the contact system takes the ball before it touches (BandQuery; GroupStepDesign 15)
    if (ContactOwns(ball))
       return -1.0f;   // the contact model owns this ball until it is released
    g_segStats.hitTestLoop++;   // P5 counter (diagnostics only): the stock swept test's segment loop below reached
@@ -2330,7 +2330,7 @@ void HitRubberContactRelease(HitBall *ball, const char *why)
 
 void HitRubberBandBallDeleted(HitBall *ball)
 {
-   while (ball->m_bandOwner != nullptr)   // (band_query: each band that holds it; the next one becomes the owner)
+   while (ball->m_bandOwner != nullptr)   // (each band that holds it; the next one becomes the owner)
    {
       ContactSurfaceHost *const owner = ball->m_bandOwner;
       owner->BandRelease(ball, "ball deleted");
@@ -2373,7 +2373,7 @@ void ContactSurfaceHost::BandRelease(HitBall *const ball, const char *why)
    const double speedOut = std::hypot(std::hypot(vel.x, vel.y), vel.z) * VS;
    PLOGI << "Band " << m_name << ": released ball (" << why << ") at t=" << g_pplayer->m_time_msec << " ms, speed in " << e.vin.Length() << " m/s, out " << speedOut << " m/s, vel out ("
          << vel.x * VS << ", " << vel.y * VS << ", " << vel.z * VS << ") m/s, balls left on the band " << m_engaged.size() - 1;
-   if (GroupStep::bandQuery && ball->m_contact != nullptr)   // band_query: a ball can be held by several bands; another one that holds it becomes its first (band, the owner)
+   if (ball->m_contact != nullptr)   // a ball can be held by several bands; another one that holds it becomes its first (band, the owner)
    {
       BallContact &bc = *ball->m_contact;
       bc.bandsMore.erase(std::remove(bc.bandsMore.begin(), bc.bandsMore.end(), this), bc.bandsMore.end());
@@ -2386,17 +2386,11 @@ void ContactSurfaceHost::BandRelease(HitBall *const ball, const char *why)
       ball->m_bandOwner = bc.band;
    }
    else
-   {
-      if (ball->m_contact != nullptr && ball->m_contact->band == this)
-         ball->m_contact->band = nullptr;   // (the ball may stay in its other contacts)
       ball->m_bandOwner = nullptr;
-   }
    m_engaged.erase(m_engaged.begin() + (long)i);
    m_info.hitTimeMs = (int)g_pplayer->m_time_msec;
    m_info.speedIn = (float)e.vin.Length();
    m_info.speedOut = (float)speedOut;
-   if (!GroupStep::bandQuery && std::strcmp(why, "ball deleted") != 0 && std::strcmp(why, "band switched off") != 0 && m_editable != nullptr)   // (band_query: fired at the first touch, CordFinish)
-      static_cast<Rubber *>(m_editable)->FireVoidEventParm(DISPID_RubberEvents_BandHit, m_info.peakMm);   // the script handler may do anything: nothing of ours is in flight
 }
 
 void ContactSurfaceHost::BandReleaseAll(const char *why)
@@ -2655,7 +2649,7 @@ void ContactSurfaceHost::CordEnsure()
          PLOGI << "Band " << m_name << ": span " << j << " from (" << p.span[j].A.x / U << ", " << p.span[j].A.y / U << ") to (" << p.span[j].B.x / U << ", " << p.span[j].B.y / U << ") U";
       PLOGI << "Band " << m_name << ": fixed-height cord, " << np << " posts, " << stopBodies.size() << " stops, " << (p.pl.on ? "plate, " : "") << p.geo.nSwitches << " switches, cord " << 2e3 * rc << " mm at " << zc * 1e3
             << " mm, E " << m_set.eMpa << " MPa, EA " << p.EA << " N, tan delta " << p.tanD << ", loop " << loop * 1e3 << " mm, stretch " << stretch * 100.0 << " %, tension " << p.T0 << " N"
-            << (p.pl.on ? ", plate edges " : "") << (p.pl.on ? std::to_string(p.pl.x0 * 1e3) + " - " + std::to_string(p.pl.x1 * 1e3) + " mm of " + std::to_string(p.span[p.pl.span].len * 1e3) + " mm, originN " + std::to_string(p.pl.originN * 1e3) + " a " + std::to_string(p.pl.a * 1e3) + " h " + std::to_string(p.pl.h * 1e3) + " rest " + std::to_string(p.pl.rest * 57.29578) + " deg, " + std::to_string(p.sl.mech.vSupply) + " V, stroke at the cord " + std::to_string(p.PlateReachM() * 1e3) + " mm (band_plate_reach " + (m_set.bandPlateReach ? "1" : "0") + ")" : "");
+            << (p.pl.on ? ", plate edges " : "") << (p.pl.on ? std::to_string(p.pl.x0 * 1e3) + " - " + std::to_string(p.pl.x1 * 1e3) + " mm of " + std::to_string(p.span[p.pl.span].len * 1e3) + " mm, originN " + std::to_string(p.pl.originN * 1e3) + " a " + std::to_string(p.pl.a * 1e3) + " h " + std::to_string(p.pl.h * 1e3) + " rest " + std::to_string(p.pl.rest * 57.29578) + " deg, " + std::to_string(p.sl.mech.vSupply) + " V" : "");
    }
 }
 
@@ -2711,28 +2705,27 @@ void ContactSurfaceHost::CordFinish(const float /*dtime*/)
          m_obj->m_currentHitThreshold = h.second;
          FireHitEvent(h.first);
       }
-   if (GroupStep::bandQuery)   // band_query: BandHit at the ball's first touch of the cord since the band took it (the physical hit; a ball taken by its query that never touches fires none)
-      for (const auto &h : m_cord->hits)
-         for (BandBall &e : m_engaged)
-            if (e.ball == h.first && !e.touched)
+   for (const auto &h : m_cord->hits)   // BandHit at the ball's first touch of the cord since the band took it (the physical hit; a ball taken by its query that never touches fires none)
+      for (BandBall &e : m_engaged)
+         if (e.ball == h.first && !e.touched)
+         {
+            e.touched = true;
+            m_info.hitTimeMs = (int)g_pplayer->m_time_msec;
+            m_info.speedIn = (float)e.vin.Length();
+            PLOGI << "Band " << m_name << ": BandHit at first touch, t=" << g_pplayer->m_time_msec << " ms, speed in " << m_info.speedIn << " m/s";   // (one line per hit, as the release line)
+            if (const BallContact *const bc = h.first->m_contact; bc != nullptr && !bc->bandsMore.empty())   // held by two cords at once: has the other touched it too (diagnostics: second-band takes that are real)
             {
-               e.touched = true;
-               m_info.hitTimeMs = (int)g_pplayer->m_time_msec;
-               m_info.speedIn = (float)e.vin.Length();
-               PLOGI << "Band " << m_name << ": BandHit at first touch, t=" << g_pplayer->m_time_msec << " ms, speed in " << m_info.speedIn << " m/s";   // (one line per hit, as the release line)
-               if (const BallContact *const bc = h.first->m_contact; bc != nullptr && !bc->bandsMore.empty())   // held by two cords at once: has the other touched it too (diagnostics: second-band takes that are real)
-               {
-                  bool both = false;
-                  for (ContactSurfaceHost *const o : bc->bandsMore)
-                     for (const ContactSurfaceHost *const b : { (const ContactSurfaceHost *)bc->band, (const ContactSurfaceHost *)o })
-                        if (b != nullptr && b != this)
-                           for (const BandBall &x : b->m_engaged)
-                              both = both || (x.ball == h.first && x.touched);
-                  PLOGI << "Band " << m_name << ": touch while held by " << 1 + bc->bandsMore.size() << " cords, the other touched too: " << (both ? "yes" : "no");
-               }
-               if (m_editable != nullptr)
-                  static_cast<Rubber *>(m_editable)->FireVoidEventParm(DISPID_RubberEvents_BandHit, m_info.peakMm);   // after the step, as the Hit event above
+               bool both = false;
+               for (ContactSurfaceHost *const o : bc->bandsMore)
+                  for (const ContactSurfaceHost *const b : { (const ContactSurfaceHost *)bc->band, (const ContactSurfaceHost *)o })
+                     if (b != nullptr && b != this)
+                        for (const BandBall &x : b->m_engaged)
+                           both = both || (x.ball == h.first && x.touched);
+               PLOGI << "Band " << m_name << ": touch while held by " << 1 + bc->bandsMore.size() << " cords, the other touched too: " << (both ? "yes" : "no");
             }
+            if (m_editable != nullptr)
+               static_cast<Rubber *>(m_editable)->FireVoidEventParm(DISPID_RubberEvents_BandHit, m_info.peakMm);   // after the step, as the Hit event above
+         }
    m_cord->hits.clear();
    CordFixed::Part &p = *m_cord->fixed;
    std::vector<std::pair<int, bool>> changes;
@@ -3655,7 +3648,7 @@ void ContactProf::CheckDump(const uint64_t cycles, const double nsPerTick)
      << ", table begin " << (double)d.begin * k / cyc * 1e-3 << ", face loops in checks " << (double)d.loop * k / cyc * 1e-3 << " (" << (double)d.loops / cyc << " loops, " << (double)d.loopFaces / cyc
      << " faces looped per cycle), loops outside checks " << (double)d.loopOut * k / cyc * 1e-3 << " (" << (double)d.loopFacesOut / cyc << " faces); fills " << (double)d.fills / cyc << ", reads "
      << (double)d.reads / cyc << " per cycle; fit whole ns = " << ta << " + " << tb << " fills + " << tc << " reads; fit loops ns = " << la << " + " << lb << " fills + " << lc << " reads; by stage (probe/patch/arrival checks per cycle, us/cycle):";
-   static const char *const nm[StCount] = { "other", "ContactHolds", "GroupShape", "RingHandIn", "RingCap", "LoadState", "CordNear", "EngageNear", "SeatAtTouch", "EngageImpl", "WriteBack", "ReleaseTest" };
+   static const char *const nm[StCount] = { "other", "ContactHolds", "GroupShape", "RingHandIn", "RingCap", "LoadState", "EngageNear", "SeatAtTouch", "EngageImpl", "WriteBack", "ReleaseTest" };
    for (int st = 0; st < StCount; st++)
       if (d.st[st][0] + d.st[st][1] + d.st[st][2] > 0)
          o << " " << nm[st] << " " << (double)d.st[st][0] / cyc << "/" << (double)d.st[st][1] / cyc << "/" << (double)d.st[st][2] / cyc << " "

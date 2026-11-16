@@ -89,7 +89,6 @@ namespace
       s.twist = f.rubberTwist;
       s.tanDelta = f.rubberTanDelta;
       s.normalLoss = false;   // (MakeRubberParams: the bat rubber keeps its tuned rebound)
-      s.releaseGapMm = f.rubberReleaseGapMm;
       return s;
    }
 

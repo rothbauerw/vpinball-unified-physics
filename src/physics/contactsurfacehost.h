@@ -77,7 +77,7 @@ struct BandBall
 {
    HitBall *ball = nullptr;
    RubberContact::V3 vin;                // its velocity at engagement
-   bool touched = false;                 // [Features] band_query: the cord has touched it since it was taken (its BandHit fired, CordFinish)
+   bool touched = false;                 // the cord has touched it since it was taken (its BandHit fired, CordFinish)
 };
 
 // The faces of a wall or primitive flagged as rubber, in the world frame (metres). Owned by the ContactSurfaceHost that hosts the object's contact.
@@ -116,7 +116,7 @@ struct BallContact
 {
    class ContactHost *host = nullptr;   // the surface or part that engaged the ball (its settings drive the step)
    class ContactSurfaceHost *band = nullptr;       // a band that holds this ball (its BandBall is in band->m_engaged); null = none
-   std::vector<class ContactSurfaceHost *> bandsMore;   // [Features] band_query: the other bands that hold it at once (a ball within reach of two cords; each one's BandBall in its m_engaged). Empty while band is null
+   std::vector<class ContactSurfaceHost *> bandsMore;   // the other bands that hold it at once (a ball within reach of two cords; each one's BandBall in its m_engaged). Empty while band is null
    HitBall *ball = nullptr;
    std::vector<SurfaceContact> items;
    RubberContact::V3 vin, win;           // velocity (m/s) and spin (rad/s) at engagement
@@ -286,7 +286,7 @@ private:
    // The cord in the group step (cordband.h; docs/unified-physics/GroupStepDesign.txt 8, 11): the contact system steps it with its balls
    ContactSurfaceHost *BandHost() override { return this; }
    bool CordOn() const { return m_cord != nullptr; }
-   bool CordModel() const { return m_set.band && m_bandPosts.size() >= 2; }   // this band runs on the cord: the contact system takes its balls (CordNear), no stock collision
+   bool CordModel() const { return m_set.band && m_bandPosts.size() >= 2; }   // this band runs on the cord: the contact system takes its balls (BandQuery), no stock collision
    CordBand *Cord() const { return m_cord.get(); }
    void CordEnsure();                  // the cord from the band's posts, plate and switches
    double CordRing(double loopM, double rcM, double EA) const;   // the ring's inner diameter, inches: band_ring_in, or the standard size for this loop
