@@ -853,6 +853,15 @@ public:
             if (farS[j])
                continue;
             Touch &u = tch[(size_t)i * ns + j];
+            if (u.on && !u.top)
+            {
+               // behind an end the energy is even in y: the side is the ball's actual one, so it steps back in front with no jump
+               const Span &sp = span[j];
+               const V3 w0 = g.ball[i].c - sp.A;
+               const double aRaw = w0.Dot(sp.t);
+               if (aRaw < 0.0 || aRaw > sp.len)
+                  u.nh = sp.yh * (w0.Dot(sp.yh) - BaseY(sp, std::min(std::max(aRaw, 0.0), sp.len)).y >= 0.0 ? 1.0 : -1.0);
+            }
             Out o;
             Length(span[j], u, g.ball[i].c, g.ball[i].R, false, o);
             u.on = o.Deff > 0.0;
@@ -1134,7 +1143,8 @@ public:
          return 0.0;
       const double inertia = std::max(std::min({ Inertia(0.0), Inertia(phi), Inertia(PhiStop()) }), 1e-12);
       const double E = std::max(PlateV(phi), 0.0) + CoilWorkBound(T);
-      const double dphi = std::sqrt(omega * omega + 2.0 * E / inertia) * T;
+      const double dphi = DriveCappedReach(std::fabs(omega), 0.0, inertia, std::numeric_limits<double>::infinity(), E, T);   // (no feed: E is its drives' bound; no drive
+                                                                                                                               // acceleration bound known: the cap alone decides)
       const double lo = std::max(std::min(phi - dphi, phi), 0.0), hi = std::min(std::max(phi + dphi, phi), std::max(PhiStop(), phi));
       double y = 0.0, yl = 0.0, yh = 0.0, dy = 0.0;
       Limit(phi, y, dy);
@@ -1544,17 +1554,22 @@ public:
          }
          else
          {
-            const double yy = std::sqrt(ys * ys + over * over), sq = ys >= 0.0 ? 1.0 : -1.0;
-            cen = sq * yy;
-            gC = (sp.yh * (sgn * ys) + sp.t * over) * (sq / std::max(yy, 1e-12));
+            // behind the span's end the nearest cord point is the end, on the post: the distance to it, either side (as from above), so nothing jumps where y changes sign
+            const double yy = std::sqrt(y * y + over * over);
+            cen = yy;
+            gC = (sp.yh * y + sp.t * over) * (1.0 / std::max(yy, 1e-12));
          }
-         o.pastLine = u.on && ys < 0.0;
+         o.pastLine = u.on && ys < 0.0 && over == 0.0;
       }
       o.D = Rr - cen;
       o.Deff = o.D - u.d0;
       o.gap = -o.Deff;
       // the cord's place from the ball's centre
-      const V3 q = sp.yh * (-sgn * Rr) + sp.up * -dz;
+      // behind an end the cord lies toward the end point, the way the distance is taken
+      const double yo = std::sqrt(y * y + over * over);
+      if (over != 0.0)
+         o.ohat = (sp.yh * y + sp.t * over) * (1.0 / std::max(yo, 1e-12));
+      const V3 q = (over != 0.0 ? (sp.yh * y + sp.t * over) * (-Rr / std::max(yo, 1e-12)) : sp.yh * (-sgn * Rr)) + sp.up * -dz;
       o.qLen = q.Length();
       o.n = o.qLen > 1e-12 ? q * (1.0 / o.qLen) : sp.up * -1.0;
       o.sq = 0.0;

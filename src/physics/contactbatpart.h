@@ -230,7 +230,7 @@ namespace BatPart
       double EnergyMove(const V3 &c, const double E, const double T, double *const work) const override
       {
          const double inertia = std::max(bat.der.iFlipper, 1e-9), alpha = CoilAlphaBound(T), w0 = std::fabs(gp.omega), D = DriveEnergy(T);
-         const double dphi = std::min(EnergyReach(w0, E, inertia, alpha, T), std::sqrt(w0 * w0 + 2.0 * (std::max(E, 0.0) + D) / inertia) * T);
+         const double dphi = DriveCappedReach(w0, E, inertia, alpha, D, T);
          if (work != nullptr)
             *work = 0.5 * inertia * w0 * w0 + std::min(inertia * alpha * dphi, D);
          const V3 &pv = gp.geo.pivot;

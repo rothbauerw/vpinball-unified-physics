@@ -25,7 +25,6 @@ struct ContactSettings
    double ballTanDelta = 0.0;        // ball_tan_delta: loss tangent of the steel pair (0 = elastic; a damping ratio tan_delta / 2 at the contact's own frequency, so a slow bounce loses energy too)
    double ballRollingResistance = 0.003; // ball_rolling_resistance: one ball rolling on another, torque = coefficient * reff * N (steel on steel, same class as rolling_resistance)
    double ballMu = 0.15;             // ball_mu: steel on steel friction
-   double ballReachMm = 1.0;         // ball_reach_mm: balls closer than this (surface gap) are stepped as one cluster
    bool sleep = false;               // sleep: 1 = a group of touching balls at rest sleeps (not stepped) until something can change it (runs/2026-11-03-pile-sleep/design.md)
    double sleepSpeedMmS = 0.1;       // sleep_speed_mm_s: every ball of the group under this speed and surface speed of spin (requirement 4.1, 'still')
    double sleepHoldMs = 100.0;       // sleep_hold_ms: for this long without a break (a ball only passing through zero speed does not sleep)

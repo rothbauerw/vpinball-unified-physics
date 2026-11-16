@@ -216,10 +216,10 @@ namespace JetBumper
          const double lMax = (gp.cfg.coilD.a + gp.cfg.coilD.b / (p.plungerClosedFrac + p.coil.x0)) * 1e-3;
          const double dRing = 0.5 * lMax * gp.iCoil * gp.iCoil + V * V / p.coil.rOhm * T + (p.returnPreloadN + p.returnKNPerM * stroke) * stroke;
          const double dSkirt = skirtF * clear;
-         const double dr = std::min(EnergyReach(std::fabs(gp.vr), E, p.ringMass, ringAccel, T), std::sqrt(gp.vr * gp.vr + 2.0 * (Ep + dRing) / p.ringMass) * T + 0.5 * g * T * T);
-         const double dz = std::min(EnergyReach(std::fabs(gp.vz), E, p.skirtMass, skirtAccel, T), std::sqrt(gp.vz * gp.vz + 2.0 * (Ep + dSkirt) / p.skirtMass) * T + 0.5 * g * T * T);
+         const double dr = DriveCappedReach(std::fabs(gp.vr), E, p.ringMass, ringAccel, dRing, T, 0.5 * g * T * T);
+         const double dz = DriveCappedReach(std::fabs(gp.vz), E, p.skirtMass, skirtAccel, dSkirt, T, 0.5 * g * T * T);
          const double tiltG = p.skirtMass * g * gp.reach / I;
-         const double dt = std::min(EnergyReach(wt, E, I, tiltAccel, T), std::sqrt(wt * wt + 2.0 * (Ep + dSkirt) / I) * T + 0.5 * tiltG * T * T);
+         const double dt = DriveCappedReach(wt, E, I, tiltAccel, dSkirt, T, 0.5 * tiltG * T * T);
          if (work != nullptr)
             *work = 0.5 * p.ringMass * gp.vr * gp.vr + std::min(p.ringMass * ringAccel * dr, dRing + p.ringMass * g * dr) + 0.5 * p.skirtMass * gp.vz * gp.vz + 0.5 * I * wt * wt
                   + std::min(p.skirtMass * skirtAccel * dz + I * tiltAccel * dt, dSkirt + p.skirtMass * g * dz + I * tiltG * dt);

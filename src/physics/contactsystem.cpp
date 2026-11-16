@@ -293,6 +293,8 @@ struct ContactSystemImpl
       RubberParams rpBall;               // steel on steel: Hertz with the pair's effective modulus (half of one ball's), no thin layer, no loss tangent
       int steps = 1;                     // the current island's substeps
       std::vector<std::pair<int, int>> links;
+      std::vector<int> ballOrder;        // the bodies sorted along the table's x axis by their centre at the cycle start (SortBallsX; ball pair candidates)
+      std::vector<std::pair<int, int>> near0;   // the ball pairs whose x intervals [x - R, x + R] overlap (i < j, in i, j order): every pair that may touch now (FindIslands)
    };
 
    // Sources: anything that acts on one body with no partner. Gravity and the nudge act in the substeps, not as one kick per physics step (a contact stepped without gravity
@@ -563,10 +565,79 @@ struct ContactSystemImpl
    // A ball's travel: the speeds of every ball of its group (a hit hands speed on), what their forces add, and twice the speed of each part in the group (a ball leaves a moving surface at up to twice
    // its speed). A part's travel: its whole range of motion once a ball can reach it (a hit can move it anywhere it can go), else what its own drives give it (SurfaceSpeedBound). Grown to a fixed point:
    // the bounds only grow. A part no ball can reach is left out of every ball's solve (partOut) and moves alone; one a ball reaches is in that ball's island only. The gap is to its real surface (Probe).
-   // ball pair reach: the one ball-ball reach test (island pairing in ReachLinks, the sleep wake in SleepInStep). V = a ball's speed bound over the cycle: the kinetic energy
-   // that can reach it (spin included) given all to it, sqrt(2 E / m), plus what forces and moving parts add; a held (sleeping) ball has V = 0 at its held position
-   static double BallSpeedBound(const double e, const double m, const double add) { return std::sqrt(2.0 * e / m) + add; }
-   static bool BallsMayMeet(const double gap, const double vi, const double vj, const double T) { return gap <= (vi + vj) * T; }   // (a gap equal to the reach can meet)
+
+   // ball pairs by a sorted list (to-do 1.34 P8; finder design.md section 3): the bodies kept sorted along the table's x axis by their centre at the cycle start, from last cycle's
+   // order (insertion sort: the list is nearly sorted). Two balls can touch in the cycle only if their x intervals [x - R - r, x + R + r] overlap (r: each one's travel over the cycle):
+   // |dx| <= |ci - cj|, so gap = |ci - cj| - Ri - Rj <= ri + rj needs |dx| <= Ri + ri + Rj + rj. The list only finds the candidates; the pair's own test decides.
+   // Diagnostic (VPX_PAIR_CHECK=1): the old every-pair tests run beside the candidate ones and count each pair the candidates missed (logged with the running counters)
+   inline static std::vector<const HitBall *> s_ballOrderLast;
+   static inline uint64_t s_pairCheckTests = 0, s_pairCheckMissed = 0;
+   static bool PairCheckOn() { static const bool on = [] { const char *const e = std::getenv("VPX_PAIR_CHECK"); return e != nullptr && e[0] == '1'; }(); return on; }
+   static void PairCheckMiss(const Cycle &cy, const int i, const int j, const char *const what, const double gap, const double reach)
+   {
+      s_pairCheckMissed++;
+      static int lines = 0;
+      if (lines++ >= 30)
+         return;
+      const char *const ni = TestDriver::BallName(cy.bodies[i].pb), *const nj = TestDriver::BallName(cy.bodies[j].pb);
+      PLOGW << "Pair check: " << what << " pair " << (ni != nullptr ? ni : "?") << " and " << (nj != nullptr ? nj : "?") << " gap " << gap * 1e3 << " mm, reach " << reach * 1e3
+            << " mm, not among the sorted list's candidates (t " << g_pplayer->m_time_msec << " ms)";
+   }
+   static void SortBallsX(Cycle &cy)
+   {
+      const int nw = (int)cy.bodies.size();
+      std::vector<int> &ord = cy.ballOrder;
+      ord.clear();
+      std::vector<char> in((size_t)nw, 0);
+      for (const HitBall *const pb : s_ballOrderLast)   // last cycle's order, the balls still bodies; then the new ones
+         for (int i = 0; i < nw; i++)
+            if (!in[(size_t)i] && cy.bodies[i].pb == pb)
+            {
+               ord.push_back(i);
+               in[(size_t)i] = 1;
+               break;
+            }
+      for (int i = 0; i < nw; i++)
+         if (!in[(size_t)i])
+            ord.push_back(i);
+      for (int a = 1; a < nw; a++)   // insertion sort by x (ties keep their order)
+      {
+         const int k = ord[(size_t)a];
+         int b = a - 1;
+         for (; b >= 0 && cy.bodies[ord[(size_t)b]].c.x > cy.bodies[k].c.x; b--)
+            ord[(size_t)b + 1] = ord[(size_t)b];
+         ord[(size_t)b + 1] = k;
+      }
+      s_ballOrderLast.resize((size_t)nw);
+      for (int a = 0; a < nw; a++)
+         s_ballOrderLast[(size_t)a] = cy.bodies[ord[(size_t)a]].pb;
+   }
+   // the candidate pairs (i < j), sorted in i, j order (the order the every-pair loops used): x intervals overlap with r[i] each ball's travel (null: 0)
+   static void BallPairCandidates(const Cycle &cy, const double *const r, std::vector<std::pair<int, int>> &out)
+   {
+      out.clear();
+      const std::vector<int> &ord = cy.ballOrder;
+      const int nw = (int)ord.size();
+      const auto hw = [&](const int i) { return cy.bodies[i].bs.R + (r != nullptr ? r[i] : 0.0); };
+      double hwMax = 0.0;
+      for (int i = 0; i < nw; i++)
+         hwMax = std::max(hwMax, hw(i));
+      for (int a = 0; a < nw; a++)
+      {
+         const int i = ord[(size_t)a];
+         const double hi = hw(i);
+         for (int b = a + 1; b < nw; b++)
+         {
+            const int j = ord[(size_t)b];
+            const double dx = cy.bodies[j].c.x - cy.bodies[i].c.x;   // (>= 0: sorted)
+            if (dx > hi + hwMax)
+               break;   // every later ball is farther along x
+            if (dx <= hi + hw(j))
+               out.emplace_back(std::min(i, j), std::max(i, j));
+         }
+      }
+      std::sort(out.begin(), out.end());
+   }
 
    // ball pair reach rule 8: two balls in different islands last cycle that overlap at this cycle's start were missed by the bound
    inline static std::vector<std::pair<const HitBall *, uintptr_t>> s_ballGroupLast;   // (ball, its group) of the last cycle: its island's root ball, or its sleep group (held balls)
@@ -574,9 +645,8 @@ struct ContactSystemImpl
    {
       const int nw = (int)cy.bodies.size();
       const auto rootOf = [](const HitBall *pb) -> uintptr_t { for (const auto &g : s_ballGroupLast) if (g.first == pb) return g.second; return 0; };
-      for (int i = 0; i < nw; i++)
-         for (int j = i + 1; j < nw; j++)
-            if (bgap[(size_t)i * nw + j] < 0.0)
+      for (const auto &pr : cy.near0)   // (an overlap is among the touch candidates)
+         if (const int i = pr.first, j = pr.second; bgap[(size_t)i * nw + j] < 0.0)
             {
                const uintptr_t ri = rootOf(cy.bodies[i].pb), rj = rootOf(cy.bodies[j].pb);
                if (ri == 0 || rj == 0 || ri == rj)
@@ -590,7 +660,7 @@ struct ContactSystemImpl
                   g_pplayer->m_liveUI->PushNotification(o.str(), 6000);
             }
    }
-   // ball pair reach diagnostic: a pair only the closure groups (the pairwise rule would not), logged when that grouping starts, with the terms of each V (200 lines at most)
+   // ball pair reach diagnostic: a pair the energy test groups (not in contact at the cycle start), logged when that grouping starts, with the terms of each V (200 lines at most)
    inline static std::vector<std::pair<const HitBall *, const HitBall *>> s_pairReachLast, s_pairReachNow;
    template <class Terms> static void BallPairReachLog(const Cycle &cy, const int i, const int j, const double gap, Terms terms)
    {
@@ -648,16 +718,25 @@ struct ContactSystemImpl
       std::vector<int> partBall(np, -1);   // the first ball that can reach it
       std::vector<char> paired;
       std::vector<double> bgap;
+      std::vector<std::pair<int, int>> cand;   // a round's candidate ball pairs (BallPairCandidates)
       if (ballPairs)
       {
          paired.assign((size_t)nw * nw, 0);
-         bgap.resize((size_t)nw * nw);
+         bgap.assign((size_t)nw * nw, std::numeric_limits<double>::quiet_NaN());   // (each pair's gap, measured when it is first a candidate)
          for (const auto &pr : cy.pairs)
             paired[(size_t)pr.first * nw + pr.second] = 1;
-         for (int i = 0; i < nw; i++)
-            for (int j = i + 1; j < nw; j++)
-               bgap[(size_t)i * nw + j] = (cy.bodies[i].c - cy.bodies[j].c).Length() - cy.bodies[i].bs.R - cy.bodies[j].bs.R;
+         for (const auto &pr : cy.near0)
+            bgap[(size_t)pr.first * nw + pr.second] = (cy.bodies[pr.first].c - cy.bodies[pr.second].c).Length() - cy.bodies[pr.first].bs.R - cy.bodies[pr.second].bs.R;
          BallPairMissCheck(cy, bgap);
+         if (PairCheckOn())   // (diagnostic: every overlapping pair among the candidates)
+            for (int i = 0; i < nw; i++)
+               for (int j = i + 1; j < nw; j++)
+               {
+                  const double gap = (cy.bodies[i].c - cy.bodies[j].c).Length() - cy.bodies[i].bs.R - cy.bodies[j].bs.R;
+                  s_pairCheckTests++;
+                  if (gap < 0.0 && std::isnan(bgap[(size_t)i * nw + j]))
+                     PairCheckMiss(cy, i, j, "overlapping (rule 8 check)", gap, 0.0);
+               }
       }
       std::vector<double> pairHeld(cy.pairs.size(), 0.0);   // what each ball pair holds now (its stored energy)
       for (size_t k = 0; k < cy.pairs.size(); k++)
@@ -816,9 +895,24 @@ struct ContactSystemImpl
             }
          }
          if (ballPairs)
-            for (int i = 0; i < nw; i++)
-               for (int j = i + 1; j < nw; j++)
-                  if (!paired[(size_t)i * nw + j] && bgap[(size_t)i * nw + j] <= sb[i] + sb[j])
+         {
+            BallPairCandidates(cy, sb.data(), cand);
+            if (PairCheckOn())   // (diagnostic: the every-pair energy test, before this round joins anything; sb is fixed for the round)
+               for (int i = 0; i < nw; i++)
+                  for (int j = i + 1; j < nw; j++)
+                  {
+                     const double gap = (cy.bodies[i].c - cy.bodies[j].c).Length() - cy.bodies[i].bs.R - cy.bodies[j].bs.R;
+                     s_pairCheckTests++;
+                     if (!paired[(size_t)i * nw + j] && gap <= sb[i] + sb[j] && !std::binary_search(cand.begin(), cand.end(), std::make_pair(i, j)))
+                        PairCheckMiss(cy, i, j, "energy", gap, sb[i] + sb[j]);
+                  }
+            for (const auto &pr : cand)
+               if (const int i = pr.first, j = pr.second; !paired[(size_t)i * nw + j])
+               {
+                  double &gij = bgap[(size_t)i * nw + j];
+                  if (std::isnan(gij))
+                     gij = (cy.bodies[i].c - cy.bodies[j].c).Length() - cy.bodies[i].bs.R - cy.bodies[j].bs.R;
+                  if (gij <= sb[i] + sb[j])
                   {
                      BallPairReachLog(cy, i, j, bgap[(size_t)i * nw + j], [&](const int k) {   // (the terms of the travel, read before the pair joins the groups)
                         const int g = find(k);
@@ -830,6 +924,8 @@ struct ContactSystemImpl
                      unite(i, j);
                      grew = true;
                   }
+               }
+         }
       }
       if (ballPairs)
       {
@@ -1082,18 +1178,41 @@ struct ContactSystemImpl
    static void FindIslands(Cycle &cy)
    {
       CPROF(FindIslands);
-      const ContactSettings &cs = *cy.cs;
       const int nw = (int)cy.bodies.size();
       cy.pairs.clear();
+      cy.near0.clear();
+      // the seed pairs: the pairs in contact now (gap <= 0, or a live pair state: it may hold stored energy), so ReachEnergy reads what they hold before the reach is known;
+      // the energy test (ReachEnergy) decides every other pair
+      SortBallsX(cy);
       if (nw >= 2)
-         for (int i = 0; i < nw; i++)
-            for (int j = i + 1; j < nw; j++)
+      {
+         BallPairCandidates(cy, nullptr, cy.near0);
+         for (const auto &pr : cy.near0)
+            if ((cy.bodies[pr.first].c - cy.bodies[pr.second].c).Length() - cy.bodies[pr.first].bs.R - cy.bodies[pr.second].bs.R <= 0.0)
+               cy.pairs.push_back(pr);
+         for (const BallPairState &ps : g_ballPairs)   // a live pair state (its balls may be apart): both balls bodies this cycle
+         {
+            int ia = -1, ib = -1;
+            for (int i = 0; i < nw; i++)
             {
-               const double gap = (cy.bodies[i].c - cy.bodies[j].c).Length() - cy.bodies[i].bs.R - cy.bodies[j].bs.R;
-               const double reach = cs.ballReachMm * 1e-3 + 2.0 * (cy.bodies[i].v - cy.bodies[j].v).Length() * cy.dt;
-               if (gap < reach)
-                  cy.pairs.emplace_back(i, j);
+               ia = cy.bodies[i].pb == ps.a ? i : ia;
+               ib = cy.bodies[i].pb == ps.b ? i : ib;
             }
+            if (ia >= 0 && ib >= 0)
+               cy.pairs.emplace_back(std::min(ia, ib), std::max(ia, ib));
+         }
+         std::sort(cy.pairs.begin(), cy.pairs.end());   // (the every-pair loop's order)
+         cy.pairs.erase(std::unique(cy.pairs.begin(), cy.pairs.end()), cy.pairs.end());
+         if (PairCheckOn())   // (diagnostic: every pair in contact among the seeds)
+            for (int i = 0; i < nw; i++)
+               for (int j = i + 1; j < nw; j++)
+               {
+                  const double gap = (cy.bodies[i].c - cy.bodies[j].c).Length() - cy.bodies[i].bs.R - cy.bodies[j].bs.R;
+                  s_pairCheckTests++;
+                  if ((gap <= 0.0 || FindPair(cy.bodies[i].pb, cy.bodies[j].pb) != nullptr) && !std::binary_search(cy.pairs.begin(), cy.pairs.end(), std::make_pair(i, j)))
+                     PairCheckMiss(cy, i, j, "seed (in contact)", gap, 0.0);
+               }
+      }
       BandLinks(cy);
       ReachLinks(cy);
       BandQuery(cy);   // (a band's balls by their query; the links and the reach again when they change)
@@ -3155,23 +3274,31 @@ struct ContactSystemImpl
       for (bool woke = !g_sleep.empty(); woke;)
       {
          woke = false;
-         // ball pair reach: the islands' test (BallsMayMeet) with the groups not built yet: the energy of every awake ball can reach an awake ball, J (spin included)
-         const bool pairReach = true;
-         double eAwake = 0.0;
-         if (pairReach)
-            for (auto *const a : g_pplayer->m_vball)
+         // ball pair reach: the islands' reach (ReachLinks, EnergyReach) with the groups not built yet, all awake balls as one group: the energy of every awake ball can reach an
+         // awake ball, J (spin included), and their forces, m/s2 (gravity, nudge and a magnet's pull, as Sources::ReachAcc); a sleeping ball's travel is 0
+         double eAwake = 0.0, aAwake = 0.0;
+         for (auto *const a : g_pplayer->m_vball)
+         {
+            const HitBall &h = a->m_hitBall;
+            if (h.m_sleepGroup == 0 && !KickerHold::Held(&h))
             {
-               const HitBall &h = a->m_hitBall;
-               if (h.m_sleepGroup == 0 && !KickerHold::Held(&h))
-                  eAwake += 0.5 * (h.m_d.m_mass * ContactSystem::kMassUnitKg * h.m_d.m_vel.Dot(h.m_d.m_vel) * VS * VS + h.m_angularmomentum.Dot(h.m_angularmomentum) / h.Inertia() * ContactSystem::kMassUnitKg * VS * VS);
+               eAwake += 0.5 * (h.m_d.m_mass * ContactSystem::kMassUnitKg * h.m_d.m_vel.Dot(h.m_d.m_vel) * VS * VS + h.m_angularmomentum.Dot(h.m_angularmomentum) / h.Inertia() * ContactSystem::kMassUnitKg * VS * VS);
+               const Vertex3Ds g = h.ExternalVelocityIncrement(false);
+               aAwake += V3(g.x * VS, g.y * VS, g.z * VS).Length() / PHYSICS_STEPTIME_S;
+               if (h.m_magnetic && Magnets::Active())
+               {
+                  const Vertex3Ds am = h.ExternalVelocityIncrement(true);
+                  aAwake += V3((am.x - g.x) * VS, (am.y - g.y) * VS, (am.z - g.z) * VS).Length() / PHYSICS_STEPTIME_S;
+               }
             }
+         }
          for (auto *const a : g_pplayer->m_vball)
          {
             const HitBall *const pa = &a->m_hitBall;
             if (pa->m_sleepGroup != 0 || KickerHold::Held(pa))
                continue;
-            const double ra = (double)pa->m_d.m_radius * U, va = std::sqrt((double)pa->m_d.m_vel.Dot(pa->m_d.m_vel)) * VS;
-            const double va2 = pairReach ? BallSpeedBound(eAwake, pa->m_d.m_mass * ContactSystem::kMassUnitKg, 0.0) : 0.0;
+            const double ra = (double)pa->m_d.m_radius * U;
+            const double reach = EnergyReach(0.0, eAwake, pa->m_d.m_mass * ContactSystem::kMassUnitKg, aAwake, cy.dt);
             for (auto *const b : g_pplayer->m_vball)
             {
                const HitBall *const pb = &b->m_hitBall;
@@ -3179,7 +3306,7 @@ struct ContactSystemImpl
                   continue;
                const Vertex3Ds d = pa->m_d.m_pos - pb->m_d.m_pos;
                const double gap = std::sqrt((double)d.Dot(d)) * U - ra - (double)pb->m_d.m_radius * U;
-               if (gap < cy.cs->ballReachMm * 1e-3 + 2.0 * va * cy.dt || (pairReach && BallsMayMeet(gap, va2, 0.0, cy.dt)))   // the islands' pairing: the pairwise rule, or the closure (sleeper V = 0)
+               if (gap <= reach)   // the islands' energy pairing (a gap equal to the reach can meet)
                {
                   SleepWakeBall(pb, "an awake ball within reach", true);
                   woke = true;
@@ -3421,6 +3548,8 @@ void ContactSystemImpl::StepBalls(const double dt)
       nextLogMs = g_pplayer->m_time_msec - g_pplayer->m_time_msec % 10000 + 10000;
       QueryEngageLog("running");
       PLOGI << "Bands: " << s_bandBallCycles << " ball-cycles held by a band, " << s_bandSecond << " second-band takes";
+      if (PairCheckOn())
+         PLOGI << "Pair check (VPX_PAIR_CHECK): " << s_pairCheckTests << " every-pair tests, " << s_pairCheckMissed << " pairs the sorted list missed";
    }
    GatherBalls(cy);
    FindIslands(cy);

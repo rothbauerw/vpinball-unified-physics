@@ -312,7 +312,7 @@ namespace ButtonCap
       double EnergyMove(const V3 &, const double E, const double T, double *const work) const override
       {
          const double F = part.MaxStoredForce(), D = F * part.travel, v0 = std::fabs(part.rate);
-         const double x = std::min(EnergyReach(v0, E, part.mass, F / part.mass, T), std::sqrt(v0 * v0 + 2.0 * (std::max(E, 0.0) + D) / part.mass) * T);
+         const double x = DriveCappedReach(v0, E, part.mass, F / part.mass, D, T);
          if (work != nullptr)
             *work = 0.5 * part.mass * part.rate * part.rate + std::min(F * x, D);
          return x;

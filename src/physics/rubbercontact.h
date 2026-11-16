@@ -62,6 +62,13 @@ inline double EnergyReach(const double v0, const double E, const double m, const
       *vMax = c + a * T;
    return c * T + 0.5 * a * T * T;
 }
+// the drive-capped move (design_reach.md section 1; one law for every part's EnergyMove): the energy reach above, and at most what the body makes in T with all its energy as speed:
+// its kinetic energy, the feed E and its drives' work bound D (J, the drives' largest work over the move): sqrt(v0^2 + 2 (E + D) / m) T, plus add (a term the caller's law adds, e.g.
+// gravity's 1/2 g T^2 on a part it pulls beyond its drives' bound; 0 none). a: the largest drive acceleration (+infinity: none known, the cap alone decides)
+inline double DriveCappedReach(const double v0, const double E, const double m, const double a, const double D, const double T, const double add = 0.0)
+{
+   return std::min(EnergyReach(v0, E, m, a, T), std::sqrt(v0 * v0 + 2.0 * (std::max(E, 0.0) + D) / m) * T + add);
+}
 
 namespace RubberContact
 {

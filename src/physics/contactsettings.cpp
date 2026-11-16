@@ -142,8 +142,6 @@ namespace
          }
          else if (key == "arrival_depth_um" && num)
             s.arrivalDepthUm = d;
-         else if (key == "ball_reach_mm" && num)
-            s.ballReachMm = d;
          else if (key == "sleep")
             s.sleep = on;
          else if (key == "sleep_speed_mm_s" && num)
@@ -164,7 +162,6 @@ namespace
       ClampKey("ball_tan_delta", s.ballTanDelta, 0.0, 0.5);
       ClampKey("ball_mu", s.ballMu, 0.0, 1.5);
       ClampKey("ball_rolling_resistance", s.ballRollingResistance, 0.0, 0.1);
-      ClampKey("ball_reach_mm", s.ballReachMm, 0.0, 20.0);
       ClampKey("arrival_depth_um", s.arrivalDepthUm, 0.1, 100.0);
       ClampKey("roll_smooth_rad_s", s.rollSmoothRadS, 0.001, 100.0);
       ClampKey("sleep_speed_mm_s", s.sleepSpeedMmS, 0.001, 10.0);

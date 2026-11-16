@@ -886,6 +886,7 @@ void ContactSurfaceHost::DetectBand()
       }
    }
 
+   std::vector<std::string> fitNote;   // (the load print: how each post was fitted)
    // runs of post vertices around the loop, starting just after a free vertex
    int start = -1;
    for (int i = 0; i < n; i++)
@@ -916,42 +917,70 @@ void ContactSurfaceHost::DetectBand()
          bp.x = given[owner[i % n]].x;
          bp.y = given[owner[i % n]].y;
          bp.r = given[owner[i % n]].r;
+         fitNote.push_back("given");
       }
       else
       {
-         // algebraic circle fit (Kasa) to the run, with the vertex on each side (the tangent points) included
-         std::vector<std::pair<double, double>> q;
-         for (int m = i - 1; m <= j + 1; m++)
-            q.emplace_back(at(m).x, at(m).y);
-         double mx = 0, my = 0;
-         for (const auto &p : q) { mx += p.first; my += p.second; }
-         mx /= (double)q.size();
-         my /= (double)q.size();
-         double suu = 0, suv = 0, svv = 0, suuu = 0, svvv = 0, suvv = 0, svuu = 0;
-         for (const auto &p : q)
+         // algebraic circle fit (Kasa) to the wrap: the run of post vertices, all at one radius from the post's centre. A vertex on either side joins only if it lies on that
+         // circle (within the given-post tolerance): a drawn polyline's side vertex is the far end of a straight segment, on the tangent point only by chance, and an equal
+         // weight for it pulls the radius. With fewer than 3 run vertices there is no circle to test against: the run and both sides, their mean centre
+         auto fit = [&](const std::vector<std::pair<double, double>> &q, const bool kasa, double &x, double &y, double &r) -> bool
          {
-            const double u = p.first - mx, v = p.second - my;
-            suu += u * u; suv += u * v; svv += v * v; suuu += u * u * u; svvv += v * v * v; suvv += u * v * v; svuu += v * u * u;
-         }
-         const double det = suu * svv - suv * suv;
-         bp.fitted = cnt >= 3 && std::fabs(det) > 1e-9 * (suu + svv) * (suu + svv);
-         if (bp.fitted)
-         {
-            const double b1 = 0.5 * (suuu + suvv), b2 = 0.5 * (svvv + svuu);
-            const double uc = (b1 * svv - b2 * suv) / det, vc = (b2 * suu - b1 * suv) / det;
-            bp.x = mx + uc;
-            bp.y = my + vc;
-            bp.r = std::sqrt(uc * uc + vc * vc + (suu + svv) / (double)q.size());
-         }
-         else
-         {
-            bp.x = mx;
-            bp.y = my;
+            double mx = 0, my = 0;
+            for (const auto &p : q) { mx += p.first; my += p.second; }
+            mx /= (double)q.size();
+            my /= (double)q.size();
+            double suu = 0, suv = 0, svv = 0, suuu = 0, svvv = 0, suvv = 0, svuu = 0;
+            for (const auto &p : q)
+            {
+               const double u = p.first - mx, v = p.second - my;
+               suu += u * u; suv += u * v; svv += v * v; suuu += u * u * u; svvv += v * v * v; suvv += u * v * v; svuu += v * u * u;
+            }
+            const double det = suu * svv - suv * suv;
+            if (kasa && q.size() >= 3 && std::fabs(det) > 1e-9 * (suu + svv) * (suu + svv))
+            {
+               const double b1 = 0.5 * (suuu + suvv), b2 = 0.5 * (svvv + svuu);
+               const double uc = (b1 * svv - b2 * suv) / det, vc = (b2 * suu - b1 * suv) / det;
+               x = mx + uc;
+               y = my + vc;
+               r = std::sqrt(uc * uc + vc * vc + (suu + svv) / (double)q.size());
+               return true;
+            }
+            x = mx;
+            y = my;
             double rr = 0;
             for (const auto &p : q)
                rr += std::hypot(p.first - mx, p.second - my);
-            bp.r = rr / (double)q.size();
+            r = rr / (double)q.size();
+            return false;
+         };
+         std::vector<std::pair<double, double>> run, all;
+         for (int m = i; m <= j; m++)
+            run.emplace_back(at(m).x, at(m).y);
+         for (int m = i - 1; m <= j + 1; m++)
+            all.emplace_back(at(m).x, at(m).y);
+         double ox, oy, orr;   // (diagnostics only: the run and both sides, as before, for the load print)
+         fit(all, cnt >= 3, ox, oy, orr);
+         int sides = 0;
+         bp.fitted = cnt >= 3 && fit(run, true, bp.x, bp.y, bp.r);
+         if (bp.fitted)
+         {
+            std::vector<std::pair<double, double>> q = run;
+            for (const int m : { i - 1, j + 1 })
+               if (std::fabs(std::hypot((double)at(m).x - bp.x, (double)at(m).y - bp.y) - bp.r) <= std::max(0.15 * bp.r, 1.0))
+               {
+                  q.emplace_back(at(m).x, at(m).y);
+                  sides++;
+               }
+            if (sides > 0)
+               bp.fitted = fit(q, true, bp.x, bp.y, bp.r);
          }
+         else
+            bp.fitted = fit(all, cnt >= 3, bp.x, bp.y, bp.r);   // (a run on one line: as before, the run and both sides)
+         std::ostringstream fo;
+         fo << (bp.fitted ? "fit" : "mean") << " from " << (bp.fitted ? cnt + sides : (int)all.size()) << " points (" << cnt << " wrap + " << (bp.fitted ? sides : (int)all.size() - cnt)
+            << " side), radius " << bp.r * mmPerU << " mm; the run and both sides " << all.size() << " points: " << orr * mmPerU << " mm";
+         fitNote.push_back(fo.str());
       }
       m_bandPosts.push_back(bp);
       k = j - start + 1;
@@ -992,7 +1021,7 @@ void ContactSurfaceHost::DetectBand()
    for (size_t a = 0; a < np; a++)
       PLOGI << "  post " << a << ": centre (" << m_bandPosts[a].x << ", " << m_bandPosts[a].y << ") VPX units, centreline radius " << m_bandPosts[a].r << " U = "
             << m_bandPosts[a].r * mmPerU << " mm, post radius ~" << (m_bandPosts[a].r - m_radius) * mmPerU << " mm, vertices " << m_bandPosts[a].first << ".." << m_bandPosts[a].last
-            << (m_bandPosts[a].fitted ? "" : " (too few vertices to fit a circle: centre is the mean)");
+            << (m_bandPosts[a].fitted ? "" : " (too few vertices to fit a circle: centre is the mean)") << "; " << fitNote[a];
    for (size_t a = 0; a < m_bandSpans.size(); a++)
    {
       // how far the drawn run strays from its chord: a span the table draws curved shows here
