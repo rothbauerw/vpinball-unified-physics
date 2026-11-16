@@ -91,9 +91,6 @@ public:
 
    bool m_rubberAdvanced = false;               // the rubber model already moved this ball for the current cycle (UpdateDisplacements skips the straight-line move)
    class ContactSurfaceHost *m_bandOwner = nullptr;      // band rubber whose engine-stepped contact currently drives this ball (null = none)
-   Vertex3Ds m_nearPos;                                 // proximity engagement: where the registry was last scanned for this ball, and how far it may move before the next scan (VPX units, the nearest surface box less a margin); < 0 = scan
-   float m_nearSafeU = -1.f;
-   uint32_t m_nearMs = 0;
    struct BallContact *m_contact = nullptr;             // the contact system's engagement that holds this ball (a post, a wall rubber, the playfield, a disc); null = none
    bool m_magnetic = true;                      // Ball.Magnetic: false = non-magnetic (ceramic): no pull from the magnets, no field of its own
    int m_sleepGroup = 0;                        // pile sleep: the group this ball sleeps in, 0 = awake (contactsystem.cpp, Pile sleep)

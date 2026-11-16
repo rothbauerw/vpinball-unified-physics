@@ -2282,12 +2282,11 @@ bool HitRubberContactHolds(const HitBall *ball);
 
 std::vector<BallPairState> g_ballPairs;
 
-// A ball the pair model can take part in: not a flipper's, not in a kicker, not held by a band; a contact-held ball or a free one.
+// A ball the pair model can take part in: every ball except one held by a kicker (a state of its own, until the kicker is redesigned); the bat and the band are stepped
+// with the island, so their balls are members like any other.
 bool PairEligible(const HitBall *x)
 {
-   // Every ball takes part in pair contact except one held by a kicker (a state of its own, until the kicker is redesigned). Unified: the bat and the band are stepped
-   // with the island, so their balls are members like any other; the legacy engine steps them apart and keeps its balls out.
-   return !x->m_d.m_lockedInKicker && (ContactSystem::Unified() || x->m_bandOwner == nullptr);
+   return !x->m_d.m_lockedInKicker;
 }
 
 bool ContactSurfaceHost::ContactPairModel(const HitBall *a, const BallS &b)
@@ -2298,8 +2297,8 @@ bool ContactSurfaceHost::ContactPairModel(const HitBall *a, const BallS &b)
    for (const auto *const ball : g_pplayer->m_vball)
       if (&ball->m_hitBall.m_d == &b)
          hb = &ball->m_hitBall;
-   // Unified: the contact system owns every pair (two free balls too). The legacy engine only solves pairs with a held ball.
-   return hb != nullptr && PairEligible(hb) && (ContactSystem::Unified() || HitRubberContactHolds(a) || HitRubberContactHolds(hb));
+   // the contact system owns every pair (two free balls too)
+   return hb != nullptr && PairEligible(hb);
 }
 
 bool HitRubberContactPairModel(const HitBall *a, const BallS &b)
@@ -2804,15 +2803,6 @@ void ContactSurfaceHost::FinderBuild(const bool atLoad)
    if (hosts.empty() || !ContactSystem::Unified())   // (the stock engine: no finder)
       return;
    g.on = true;
-   if (!PhysicsIni::Active(hosts[0]->m_ini).proximityEngage)
-   {
-      // stock's copies of converted meshes are out of stock's trees (P9), and proximity_engage = 0 leaves the contact system nothing that engages a free ball
-      // with them: balls pass through walls, ramps and the playfield (old-law switch, to-do 10.13)
-      const std::string msg = "[Features] proximity_engage = 0: no engagement path for converted surfaces, balls will fall through (set proximity_engage = 1)";
-      PLOGW << msg;
-      if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
-         g_pplayer->m_liveUI->PushNotification(msg, 10000);
-   }
    {
       int i = 0;   // P2b: the registry's order, kept for a ball's surfaces (Regather and EngageImpl sort them by it)
       for (ContactHost *const o : ContactHost::Registry())

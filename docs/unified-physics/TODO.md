@@ -13,7 +13,7 @@ G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
 In flight: 1.34 piece 6b-3: split, its six keys and energy_solve_parts deleted; C (SleepParts) done; part work capped; 0.1 mm margin removed; per-term zeros; turntable's stock triangles deleted. Next: the user's pick. To-do candidates for the user: lead log 2026-11-15 CANDIDATES.
-Next code change (user 2026-11-15): band found-inside rules and delete every ini ignored-key warning (finder design P7 line); unified 0 = plain stock: delete the contact system's run on the stock engine and its old engaged/free code (cs !s_unified).
+Finder P7 (bands) first: two band contacts missed in play, found inside by the new band warning: stress drive_S_lc29 Bumper2_rest 0.595 mm in Rubber4, R_tap 0.0585 mm in Rubber2 (runs/2026-11-15-finder-P6b3/run_SB2).
 Judge a change by one exe, its setting on vs off; never by an older exe's md5 (ModelStandards trap 112). Query outliers 0.3-9 ms are the OS (measured). Owed: snapshot hashes refresh; GL main rebuild (bench obj_gl stale). 1.33: cut B kept.
 Stand-up targets: code pulled from the tree 2026-11-15 (crashed VPX; user), backup backups/2026-11-15-standup-pulled; piece 5 in backups/2026-11-14-standup-build6. Next step is the user's call. Rebuild main before VPX play.
 Air-core coil fix (pull read at the step's midpoint, aircore_in_step, on while tested): merged d9629bc4b and pushed. Lead log runs/2026-11-13-lead.
@@ -37,7 +37,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 17. Shared-loop cost per cycle (waits until models work). Measured: evaluations per object per cycle median 4, p90 16, worst 598 over 144 steps (750 bench, Hgo2_19; time3/results.txt); cause unknown.
 26. Ball started inside: the solve must never keep a runaway answer. May be handled already: check.
 27. Shared stop piece (gate, spinner, disc, ring, bat, plunger).
-32. Env switches that change behaviour (rule: diagnostics only): VPX_HINGES (=0 gives the stock kick), VPX_PREVENT, VPX_PROXIMITY, VPX_VISCOELASTIC, VPX_OVERLAP_REPLAY; VPX_BUMPERS only warns. Remove each or make it an ini key.
+32. Env switches that change behaviour (rule: diagnostics only): VPX_HINGES (=0 gives the stock kick), VPX_PREVENT, VPX_VISCOELASTIC, VPX_OVERLAP_REPLAY; VPX_BUMPERS only warns. Remove each or make it an ini key.
 33. Several contacts on one object (mesh faces and edges, tube folds, cut rims): each true local minimum of the ball-surface distance its own contact and friction, merged only where patches overlap; replaces the fold-sum fade. Also: sling post cos (cordfixed.h:949). Check: 750-bench rubber hits.
 31. After G1: check every converted part (flipper, gates, spinners, bumper, disc, rubbers, cord) against the ModelStandards definition of done (top of the file).
 30. part_guess_accel (default off): design evaluation for all moving parts, then a test plan if kept. After the shared-engine items, unless one of them needs it.
@@ -99,7 +99,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 6. Editor changes to replace the ini files (panels, settings saved in the .vpx); unified off per table for release.
 7. Old keys in 14 inis.
 10. Review ReleasePlan with the user, then PR to the official repo after 3-5.
-13. Old-law switches to delete once accepted (CLAUDE.md): roll/pivot/step_model 0, proximity_engage 0 (stock's copies of converted parts are out of the path: balls fall through; load warns).
+13. Old-law switches to delete once accepted (CLAUDE.md): roll/pivot/step_model 0 (stock's copies of converted parts are out of the path: balls fall through; load warns).
 
 ## 11. Switches and triggers
 1. Light-part contact cost (ball on a part of a few grams): worst cycle wire switch 54-181 us, Button 271 us (runs/2026-11-10-rollover/S1); limit 30 us. Midpoint solver must follow the ball-on-part contact clock: needs another solver class (rigid contact + impact law, or L-stable). Parked to N10.

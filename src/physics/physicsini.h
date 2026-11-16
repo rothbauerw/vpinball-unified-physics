@@ -36,7 +36,6 @@ namespace PhysicsIni
       bool playfieldContact = true; // the playfield (plane) on the force model: one material ([Playfield]); off = the stock plane contact
       bool surfaceRubbers = true; // walls and primitives flagged rubber = 1 in [Wall:<name>] / [Primitive:<name>]; off = stock collisions
       bool hardSurfaces = true;   // unified engine: every other wall and primitive is a hard surface of the contact model (material from the part's elasticity and friction, [Surfaces] and [Wall:<name>] / [Primitive:<name>] override); off = stock collisions
-      bool proximityEngage = true; // unified engine: a free ball is taken into the contact model when it is about to touch a surface (reach 2 v dt + the release gap), before the stock hit search can find it; the part hit events come from the contact
       bool triggers = true;       // unified engine: wire triggers (WireA-D) are rollover wire switches of the contact system (design-wire.md); off = stock sensors. On by default (user 2026-11-04)
       bool hinges = true;         // unified engine: gates and spinners are hinged plates of the contact model (mass, torque from the balls touching them); off = the stock kick of the plate by the ball
       bool bumpers = true;        // read only so bumpers = 0 can be told as ignored (bumper.cpp): a unified table has no other bumper
@@ -162,8 +161,6 @@ namespace PhysicsIni
             f.surfaceRubbers = on;
          else if (key == "hard_surfaces")
             f.hardSurfaces = on;
-         else if (key == "proximity_engage")
-            f.proximityEngage = on;
          else if (key == "hinges")
             f.hinges = on;
          else if (key == "triggers")
@@ -199,9 +196,7 @@ namespace PhysicsIni
          else if (key == "seat_editor_balls")
             f.seatEditorBalls = on;
          else if (key == "hit_speed_min")
-            f.hitSpeedMin = (float)atof(v.c_str());
-         else
-            PLOGW << "Physics settings: [Features] ignored line '" << line << "'";
+            f.hitSpeedMin = (float)atof(v.c_str());   // (a key not listed here is ignored)
       }
       return found;
    }
@@ -213,7 +208,7 @@ namespace PhysicsIni
       Features f;
       if (!ContactSystem::Unified())
       {
-         f.flippers = f.flipperRubber = f.rubbers = f.playfieldContact = f.surfaceRubbers = f.hardSurfaces = f.proximityEngage = f.hinges = f.triggers = false;
+         f.flippers = f.flipperRubber = f.rubbers = f.playfieldContact = f.surfaceRubbers = f.hardSurfaces = f.hinges = f.triggers = false;
          f.bands = f.slings = f.contact = f.magnets = f.turntables = f.playfieldCuts = f.hitSpeed = f.aircoreInStep = f.seatEditorBalls = false;
          return f;
       }

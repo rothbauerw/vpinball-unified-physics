@@ -580,7 +580,7 @@ namespace Magnets
             else if (key == "ball_eddy") cur->eddyScale = v;
             else if (key == "core_model") { const std::string t = PhysicsIni::Lower(PhysicsIni::Trim(line.substr(eq + 1))); cur->cells = t != "circuit"; if (t != "circuit" && t != "cells") PLOGW << "Magnet " << cur->name << ": core_model '" << t << "' unknown, using cells"; }
             else if (key == "core_exposed_mm") cur->coreExposedMm = v;
-            else if (key == "ball_model") { const std::string msg = "Magnet " + cur->name + ": key ball_model is no longer used (the multipole ball-ball model was removed 2026-10-19); core_model = cells magnets use the ball-ball model Option A (2026-10-20), the others the induced dipoles."; PLOGW << msg; if (g_pplayer && g_pplayer->m_liveUI) g_pplayer->m_liveUI->PushNotification(msg, 8000); }
+            else if (key == "ball_model") {}   // removed 2026-10-19 (the multipole ball-ball model): read and ignored
             else if (key == "operating_volts")
             {
                cur->operatingVolts.clear();
@@ -589,7 +589,6 @@ namespace Magnets
                std::istringstream ls(list); double vv;
                while (ls >> vv) cur->operatingVolts.push_back(vv);
             }
-            else PLOGW << "Magnet " << cur->name << ": unknown key, ignored line '" << line << "'";
          }
          if (g_magnets.empty())
             PLOGI << "Magnets: " << file.string() << " has no [Magnet:<name>] section";

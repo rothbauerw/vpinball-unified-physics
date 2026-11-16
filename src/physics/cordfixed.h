@@ -188,7 +188,8 @@ public:
       farS.assign(ns, 0);
    }
    // With the ball off the cord (or joining): which way it comes, and where it counts from so that nothing is stored. V is zero before and after: the label can't alter it
-   void Label(const Span &sp, Touch &u, const Ball &b) const
+   // Returns how far the ball's sphere is inside the cord there (0: clear): a ball first seen that deep took it as its zero (found inside, rule 8)
+   double Label(const Span &sp, Touch &u, const Ball &b) const
    {
       const V3 w0 = b.c - sp.A;
       phiQ = phi;
@@ -203,6 +204,16 @@ public:
       // from the side above the plane the circle in the plane is smaller than Rc: it touches where the sphere does
       const double dPhys = !u.top && dz > 0.0 ? Rc - std::sqrt(std::max(Rc * Rc - dz * dz, 0.0)) : 0.0;
       u.d0 = std::max({ dPhys, o.D, 0.0 });
+      return std::max(o.D - dPhys, 0.0);
+   }
+   // a ball seen for the first time (it joins, or it was off the cord and is now deeper than its zero): already inside, its stretch from there is its zero (Label); noted for the
+   // found-inside warning (rule 8): ball index, depth (m). The contact system reads and clears it (contactsystem.cpp CordIsland)
+   std::vector<std::pair<int, double>> found;
+   void FirstSight(const Span &sp, Touch &u, const Ball &b, const int i)
+   {
+      const double was = u.d0, in = Label(sp, u, b);
+      if (in > 1e-6 && u.d0 > was + 1e-6)
+         found.emplace_back(i, in);
    }
    // a ball that joins: its side, and if it is found on the cord, nothing stored
    void Join(const Ball *b)
@@ -212,7 +223,7 @@ public:
          {
             Touch &u = tch[(size_t)i * ns + j];
             u = Touch();
-            Label(span[j], u, b[i]);
+            FirstSight(span[j], u, b[i], i);
          }
    }
 
@@ -901,7 +912,7 @@ public:
             if (o >= 0 && o < ob)
                u = oldT[(size_t)o * ns + j];
             else
-               Label(span[j], u, b[i]);
+               FirstSight(span[j], u, b[i], i);
          }
          for (int s = 0; s < nShapes && o >= 0 && o < ob; s++)
             keep[(size_t)i * nShapes + s] = oldK[(size_t)o * nShapes + s];
@@ -922,7 +933,7 @@ public:
          {
             Touch &u = tch[(size_t)i * ns + j];
             if (!u.on)
-               Label(span[j], u, b[i]);
+               FirstSight(span[j], u, b[i], i);
          }
       }
    }
@@ -996,8 +1007,8 @@ public:
          g.AddShape(&tube);
       }
    }
-   // After its Configure: what each ball kept on each. One not touching that is found inside has stored nothing (the shared law's rule, SetShapeItem)
-   void RestorePostItems(GroupStep::Group &g) const
+   // After its Configure: what each ball kept on each. One not touching that is found inside has stored nothing (the shared law's rule, SetShapeItem): added to found (rule 8)
+   void RestorePostItems(GroupStep::Group &g)
    {
       for (int k = 0; k < g.ni; k++)
       {
@@ -1006,6 +1017,8 @@ public:
             continue;
          const Keep &kp = keep[(size_t)it.a * nShapes + (it.s - postFirst)];
          g.SetShapeItem(k, kp.touching, kp.zero, kp.xi, kp.ra);
+         if (!kp.touching && kp.zero <= 0.0 && g.item[k].dZero > 0.0)
+            found.emplace_back(it.a, g.item[k].dZero);
       }
    }
    bool OnCord(const int i) const

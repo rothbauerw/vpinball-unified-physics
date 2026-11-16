@@ -77,61 +77,21 @@ namespace
          return true;
       }
       if (key == "slow_contact")   // a key that no longer acts (2026-10-31): a slow touch is on the surface's law like a hit, never the stock contact. Old files still load
-      {
-         static bool told = false;
-         if (!told)
-            PLOGW << "Rubber settings: slow_contact no longer acts (a slow touch always stays on the force model)";
-         told = true;
          return true;
-      }
       static const char *const OLD_BAND_KEYS[] = { "band", "band_model", "band_prestretch_pct", "band_tension_n", "band_node_zeta", "band_ring_zeta", "band_rest_mm", "band_substep_us", "band_shear_zeta", "band_node_mass_g", "band_max_ms", "band_flipper_margin_u", "band_follow",
          "band_follow_mm", "band_node_mm", "band_ringing", "band_lock_z", "switch_gap_mm", "switch_min_closed_ms", "sling_min_closed_ms", "sling_plate_contact_zeta" };
       for (const char *const old : OLD_BAND_KEYS)   // keys taken out with the old band models (2026-11-01): the fixed-height cord is the only band, every rubber with a straight span is one, its ring is band_ring_in or automatic. Old files still load
          if (key == old)
-         {
-            static std::set<std::string> told;
-            if (told.insert(key).second)
-               PLOGW << "Rubber settings: " << key << " no longer acts (the fixed-height cord is the only band; a rubber with a straight span is one by itself)";
             return true;
-         }
-      // keys taken out with the old island loop (2026-11-10, runs/2026-11-10-old-loop/design.md): every ball is stepped by the group step's own rule. Old files still load; each key is said
-      // once per table start, in the log and on screen (rule 8), not once per section
+      // keys taken out with the old island loop (2026-11-10, runs/2026-11-10-old-loop/design.md): every ball is stepped by the group step's own rule. Old files still load
       static const char *const OLD_LOOP_KEYS[] = { "substep_us", "rest_substep_us", "rest_omega_h", "rest_speed_mm_s", "roll_travel_um" };
       for (const char *const old : OLD_LOOP_KEYS)
          if (key == old)
-         {
-            static const void *owner = nullptr;
-            static std::set<std::string> told;
-            if (owner != g_pplayer)
-            {
-               owner = g_pplayer;
-               told.clear();
-            }
-            if (told.insert(key).second)
-            {
-               const std::string msg = "Rubber settings: " + key + " no longer acts (the old island loop is gone: the group step sets every step). Remove it from the physics ini";
-               PLOGW << msg;
-               if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
-                  g_pplayer->m_liveUI->PushNotification(msg, 6000);
-            }
             return true;
-         }
-      if (key == "ring_model")   // removed 2026-11-10 (the old island loop is gone: every rubber and hard surface is on the group step; runs/2026-11-10-old-loop/design.md): read and ignored, said once
-      {
-         static bool said = false;
-         if (!said)
-            PLOGI << "Rubber settings: ring_model is no longer used (2026-11-10): ignored";
-         said = true;
+      if (key == "ring_model")   // removed 2026-11-10 (the old island loop is gone: every rubber and hard surface is on the group step; runs/2026-11-10-old-loop/design.md): read and ignorede
          return true;
-      }
       if (key == "shear_zeta" || key == "shear_scale")   // keys that no longer act (2026-10-31): the damping comes from tan_delta, the stiffness from sideways_stiffness. Old files still load
-      {
-         static bool told = false;
-         if (!told)
-            PLOGW << "Rubber settings: shear_zeta and shear_scale no longer act (zeta = tan_delta / 2; sideways_stiffness sets the stiffness)";
-         told = true;
          return true;
-      }
       const std::string v = Lower(val);
       for (const BoolKey &k : BOOL_KEYS)
          if (key == k.name)
@@ -171,8 +131,7 @@ namespace
       return false;
    }
 
-   // reportUnknown false: a section the part's own loader also reads (contactpartsini.h), which names every key neither reader knows; or a probe (the real load reports)
-   bool ApplySection(RubberObjectSettings &s, const std::filesystem::path &file, const std::string &section, const std::string &who, const char *keyPrefix = "", const bool reportUnknown = true)
+   bool ApplySection(RubberObjectSettings &s, const std::filesystem::path &file, const std::string &section, const char *keyPrefix = "")
    {
       std::ifstream in(file);
       if (!in)
@@ -198,8 +157,8 @@ namespace
          std::string key = eq == std::string::npos ? std::string() : Lower(Trim(line.substr(0, eq)));
          if (*keyPrefix != 0 && key.rfind("sling_", 0) != 0)   // in a [Slings] / [Sling:<name>] section the keys are written without sling_
             key = keyPrefix + key;
-         if ((eq == std::string::npos || !ApplyKey(s, key, Trim(line.substr(eq + 1)))) && reportUnknown)
-            PLOGW << "Rubber settings (" << who << "): ignored line '" << line << "'";
+         if (eq != std::string::npos)   // a key it does not know, or a line with no =, is ignored
+            ApplyKey(s, key, Trim(line.substr(eq + 1)));
       }
       return true;
    }
@@ -271,10 +230,10 @@ bool ContactHost::LoadSettings(RubberObjectSettings &s, const std::filesystem::p
    // Whether it is a band or a ring is found from its shape (ContactSurfaceHost::DetectBand), which also takes the [Features] rubbers / bands switch for that kind
    const PhysicsIni::Features feat = PhysicsIni::Active(file);
    s.contact = true;
-   ApplySection(s, file, "rubbers", name);
-   ApplySection(s, file, "slings", name, "sling_");
-   ApplySection(s, file, "rubber:" + name, name);
-   ApplySection(s, file, "sling:" + name, name, "sling_");
+   ApplySection(s, file, "rubbers");
+   ApplySection(s, file, "slings", "sling_");
+   ApplySection(s, file, "rubber:" + name);
+   ApplySection(s, file, "sling:" + name, "sling_");
    Clamp(s, name);
    if (!feat.rubbers && !feat.bands)
       s.contact = false;
@@ -288,9 +247,9 @@ bool ContactHost::LoadSurfaceSettings(RubberObjectSettings &s, const std::filesy
    if (file.empty() || !PhysicsIni::Active(file).surfaceRubbers)   // the rubber = 1 flag is in the object's own section: needs the file
       return false;
    const std::string section = std::string(kind) + ":" + name;
-   ApplySection(s, file, "rubbers", name);
+   ApplySection(s, file, "rubbers");
    s.surfaceRubber = false;   // the flag is read from the object's own section only: [Rubbers] is the default for the numbers, not a switch for every wall
-   ApplySection(s, file, section, name);
+   ApplySection(s, file, section);
    Clamp(s, name);
    s.contact = s.surfaceRubber;
    return s.surfaceRubber;
@@ -310,7 +269,7 @@ bool ContactHost::HingeWanted(const std::filesystem::path &file, const char *kin
       return false;
    RubberObjectSettings probe;
    probe.surfaceRubber = true;
-   ApplySection(probe, file, std::string(kind) + ":" + name, name, "", false);
+   ApplySection(probe, file, std::string(kind) + ":" + name);
    return probe.surfaceRubber;
 }
 
@@ -326,7 +285,7 @@ bool ContactHost::HardSurfaceWanted(const std::filesystem::path &file, const cha
       return false;
    RubberObjectSettings probe;
    probe.surfaceRubber = true;   // a hard surface unless the object's own section says rubber = 0
-   ApplySection(probe, file, std::string(kind) + ":" + name, name, "", false);
+   ApplySection(probe, file, std::string(kind) + ":" + name);
    return probe.surfaceRubber;
 }
 
@@ -345,12 +304,11 @@ bool ContactHost::LoadHardSurfaceSettings(RubberObjectSettings &s, const std::fi
    s.mu = friction;
    s.rollingMu = ContactSettings::Get().enable ? ContactSettings::Get().rollingResistance : 0.0;
    s.surfaceRubber = true;
-   ApplySection(s, file, "surfaces", name);
+   ApplySection(s, file, "surfaces");
    // [Trigger:<name>], [Gate:<name>], [Spinner:<name>], [Bumper:<name>], [Kicker:<name>] are also read by the part's own loader (contactpartsini.h), which reports every key neither reader knows:
    // not reported here, so the part's own keys (spring_n, close_mm, ...) are not called ignored
    const std::string k = kind;
-   const bool partReads = k == "trigger" || k == "gate" || k == "spinner" || k == "bumper" || k == "kicker";
-   ApplySection(s, file, k + ":" + name, name, "", !partReads);
+   ApplySection(s, file, k + ":" + name);
    Clamp(s, name, 1.0e6);
    s.contact = s.surfaceRubber;
    // Viscoelastic normal damping (the default for hard surfaces; VPX_VISCOELASTIC=0 or viscoelastic_damping = 0 restores the alpha law): gamma is calibrated so that a ball of the default
@@ -390,7 +348,7 @@ bool ContactHost::LoadPlayfieldSettings(RubberObjectSettings &s, const std::file
    s.normalLoss = true;   // (the rubber default is off; wood is not measured, to-do 1.21)
    s.mu = tableMu;
    s.rollingMu = ContactSettings::Get().enable ? ContactSettings::Get().rollingResistance : 0.0;   // a ball rolling on hard wood: the measured coefficient of [Contact], not the rubber hysteresis law
-   ApplySection(s, file, "playfield", "playfield");
+   ApplySection(s, file, "playfield");
    Clamp(s, "playfield", 1.0e6);
    s.surfaceRubber = true;
    s.contact = true;

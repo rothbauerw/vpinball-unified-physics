@@ -784,11 +784,8 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          // the real wire (PartData S7): a steel wire on a micro switch lever, the switch on a bracket under the playfield (GroupStepDesign 23.4); no stock sensor, mover or volume
          constexpr double U = ContactSystem::kMetresPerUnit;
          WireSwitchModel::Settings s;
-         std::string ignoredKeys;
-         PartsIni::LoadWireSwitch(s, ini, GetName(), &ignoredKeys);
+         PartsIni::LoadWireSwitch(s, ini, GetName());
          std::vector<std::string> notices;   // load-time detectors (rule 8): on screen at the first cycle and in the log as WARN
-         if (!ignoredKeys.empty())
-            notices.push_back("Wire trigger " + GetName() + ": ini key(s) " + ignoredKeys + " not used (removed or unknown); remove them from the table's physics ini");
          if (s.wireDMm <= 0.0)
          {
             notices.push_back("Wire trigger " + GetName() + ": wire_d_mm " + std::to_string(s.wireDMm) + " is not a wire; the default 1.0 mm is used. Set wire_d_mm above 0");
@@ -901,11 +898,8 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       ButtonCap::Settings s;
       if (star)
          s.massG = ButtonCap::kStarMassG;   // (before the ini: mass_g still sets it)
-      std::string ignoredKeys;
-      PartsIni::LoadButtonCap(s, ini, GetName(), &ignoredKeys);
+      PartsIni::LoadButtonCap(s, ini, GetName());
       std::vector<std::string> notices;   // load-time detectors (rule 8): on screen at the first cycle and in the log as WARN
-      if (!ignoredKeys.empty())
-         notices.push_back(kind + " trigger " + GetName() + ": ini key(s) " + ignoredKeys + " not used (removed or unknown); remove them from the table's physics ini");
       const double radiusMm = m_d.m_radius * U * 1e3;
       if (star)
       {

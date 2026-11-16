@@ -83,12 +83,8 @@ namespace
             s.ballRollingResistance = d;
          else if (key == "ball_mu" && num)
             s.ballMu = d;
-         else if (key == "static_model")   // removed 2026-11-10 (the old island loop is gone: every static surface is on the group step; runs/2026-11-10-old-loop/design.md): read and ignored, said once
+         else if (key == "static_model")   // removed 2026-11-10 (the old island loop is gone: every static surface is on the group step; runs/2026-11-10-old-loop/design.md): read and ignored
          {
-            static bool said = false;
-            if (!said)
-               PLOGI << "Contact settings: static_model is no longer used (2026-11-10): ignored";
-            said = true;
          }
          else if (key == "roll_smooth_rad_s" && num)
             s.rollSmoothRadS = d;
@@ -155,9 +151,7 @@ namespace
          else if (key == "sleep_hold_ms" && num)
             s.sleepHoldMs = d;
          else if (key == "twist_patch_mm" && num)
-            s.twistPatchMm = d;
-         else
-            PLOGW << "Contact settings: ignored line '" << line << "'";
+            s.twistPatchMm = d;   // (a key not listed here is ignored)
       }
       if (!PhysicsIni::Active(file).contact)   // [Features] contact = 0 is the old enable = 0; stock engine: off
          s.enable = false;

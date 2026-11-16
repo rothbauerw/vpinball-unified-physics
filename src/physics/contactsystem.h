@@ -95,7 +95,7 @@ void NotePlaced(const HitBall *ball);   // a script or the driver put this ball 
    // An event raised inside the step: fired after it (the script never runs inside the step)
    void DeferEvent(std::function<void()> f);
 
-   // Takes the free balls that can touch a surface this cycle into the contact (before the stock hit search); [Features] proximity_engage, VPX_PROXIMITY=0|1. cycleS: the cycle in seconds
+   // Takes the free balls that can touch a surface this cycle into the contact (before the stock hit search). cycleS: the cycle in seconds
    void EngageNear(double cycleS);
 
    // Engagement: a surface (the host) takes a ball into the force model; the ball stays until it is clear of every surface and receding

@@ -51,7 +51,7 @@ namespace PartsIni
       }
    }
 
-   // Gate settings over `s` (the part's own values already filled in). Unknown keys are reported in the log.
+   // Gate settings over `s` (the part's own values already filled in). Unknown keys are ignored.
    inline void LoadGate(GateModel::Settings &s, const std::filesystem::path &file, const std::string &name)
    {
       ReadSections(file, "gates", "gate:" + name, [&](const std::string &k, double v, const std::string &lv) {
@@ -88,7 +88,6 @@ namespace PartsIni
          else if (k == "hit_window_deg") s.hitWindowDeg = v;
          else if (k == "rubber") {}   // the opt-out key (ContactSurfaceHost::HingeWanted)
          else if (ContactHost::IsSurfaceKey(k)) {}   // the surface material's (ContactHost::LoadHardSurfaceSettings reads it)
-         else PLOGW << "Gate " << name << ": unknown key '" << k << "' ignored";
       });
    }
 
@@ -151,7 +150,6 @@ namespace PartsIni
          else if (k == "plastic_mu") p.plasticMu = v;
          else if (k == "steel_restitution") p.steelRingE = v;
          else if (k == "steel_mu") p.steelMu = v;
-         else PLOGW << "Bumper " << name << ": unknown key '" << k << "' ignored";
       });
    }
 
@@ -184,13 +182,11 @@ namespace PartsIni
          else if (k == "hit_window_deg") s.hitWindowDeg = v;
          else if (k == "rubber") {}
          else if (ContactHost::IsSurfaceKey(k)) {}   // the surface material's (ContactHost::LoadHardSurfaceSettings reads it)
-         else PLOGW << "Spinner " << name << ": unknown key '" << k << "' ignored";
       });
    }
 
    // Wire trigger settings over `s` (runs/2026-11-03-switch-requirements/design-wire.md topic 4): [Triggers] for all, then [Trigger:<name>]. Lengths in mm, forces in N.
-   // Every key read and not used is named in *ignored (the trigger shows it on screen, rule 8).
-   inline void LoadWireSwitch(WireSwitchGroup::Settings &s, const std::filesystem::path &file, const std::string &name, std::string *ignored = nullptr)
+   inline void LoadWireSwitch(WireSwitchGroup::Settings &s, const std::filesystem::path &file, const std::string &name)
    {
       ReadSections(file, "triggers", "trigger:" + name, [&](const std::string &k, double v, const std::string &) {
          if (k == "heightoffset_mm") s.heightOffsetMm = v;
@@ -202,33 +198,19 @@ namespace PartsIni
          else if (k == "wire_d_mm") s.wireDMm = v;
          else if (k == "bend_step_deg") s.bendStepDeg = v;   // (WireSwitchGroup::Settings: the 1.3 mm bends' largest piece, deg; 5 = the shapes before 2026-11-09)
          else if (k == "arch_step_deg") s.archStepDeg = v;   // (WireSwitchGroup::Settings: D's arch's largest piece, deg; 5 = the shape before 2026-11-09)
-         else if (k == "wire_model" || k == "wire_sum")   // removed 2026-11-05 (the wire has its mass; hinge_piece_sum is the union): read and ignored, said once
+         else if (k == "wire_model" || k == "wire_sum")   // removed 2026-11-05 (the wire has its mass; hinge_piece_sum is the union): read and ignored
          {
-            static bool said = false;
-            if (!said)
-               PLOGI << "[Triggers] " << k << " is no longer used (2026-11-05): ignored";
-            said = true;
          }
-         else if (k == "wire_bend")   // removed 2026-11-10 (the wire always bends in every direction; runs/2026-11-09-wire-bend/design.md): read and ignored, said once
+         else if (k == "wire_bend")   // removed 2026-11-10 (the wire always bends in every direction; runs/2026-11-09-wire-bend/design.md): read and ignored
          {
-            static bool said = false;
-            if (!said)
-               PLOGI << "[Triggers] wire_bend is no longer used (2026-11-10): ignored";
-            said = true;
          }
          else if (ContactHost::IsSurfaceKey(k)) {}   // the surface material's (ContactHost::LoadHardSurfaceSettings reads it)
-         else
-         {
-            PLOGW << "Trigger " << name << ": unknown key '" << k << "' ignored";
-            if (ignored != nullptr)
-               *ignored += (ignored->empty() ? "" : ", ") + k;
-         }
       });
    }
 
    // Button trigger settings over `s` (runs/2026-11-10-rollover/design.md section 2S; the comment beside each in ButtonCap::Settings): [Triggers] for all, then [Trigger:<name>].
-   // Lengths in mm, forces in N, mass in g. [Triggers] is shared with the wire triggers: their keys are theirs, not reported here. Every other key read and not used is named in *ignored
-   inline void LoadButtonCap(ButtonCap::Settings &s, const std::filesystem::path &file, const std::string &name, std::string *ignored = nullptr)
+   // Lengths in mm, forces in N, mass in g. [Triggers] is shared with the wire triggers: their keys are theirs, not reported here.
+   inline void LoadButtonCap(ButtonCap::Settings &s, const std::filesystem::path &file, const std::string &name)
    {
       ReadSections(file, "triggers", "trigger:" + name, [&](const std::string &k, double v, const std::string &) {
          if (k == "rest_mm") s.restMm = v;
@@ -241,12 +223,6 @@ namespace PartsIni
          else if (k == "cap_h_mm") s.capHMm = v;
          else if (k == "heightoffset_mm" || k == "stop_below_mm" || k == "release_mm" || k == "wire_d_mm" || k == "bend_step_deg" || k == "arch_step_deg" || k == "wire_model" || k == "wire_sum" || k == "wire_bend") {}   // (the wire triggers')
          else if (ContactHost::IsSurfaceKey(k)) {}   // the surface material's, release_gap_mm among them (ContactHost::LoadHardSurfaceSettings reads it)
-         else
-         {
-            PLOGW << "Trigger " << name << ": unknown key '" << k << "' ignored";
-            if (ignored != nullptr)
-               *ignored += (ignored->empty() ? "" : ", ") + k;
-         }
       });
    }
 }

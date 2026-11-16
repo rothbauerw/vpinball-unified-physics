@@ -123,6 +123,5 @@ VPX_SNAPSHOT_TEST=2        negative control of the snapshot test: the parts are 
 VPX_STEP_SCALE=<k>         every accuracy step limit times k (epsRest k^2); bench convergence k 0.5 / 0.25. k >= 0.25; HFIX wins.
 VPX_HINGES=0               gates and spinners back to the stock kick.        VPX_VISCOELASTIC=0   hard-surface damping by the old alpha law.
 VPX_OVERLAP_REPLAY=0       no overlap replay.        VPX_PREVENT=0   no overlap prevention (overlap standard point 1).
-VPX_PROXIMITY=0|1          proximity engagement off / on, over [Features] proximity_engage.
 VPX_BUMPERS=0              does nothing but name itself in the bumper's "ignored" warning.
 ```

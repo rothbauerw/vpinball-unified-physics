@@ -43,7 +43,6 @@ namespace
       std::string name, shape;
       double x = 0.0, y = 0.0, angle = 0.0, lengthMm = -1.0, widthMm = kWidthMaxMm, cornerMm = 0.0;
       bool xSet = false, ySet = false, lengthSet = false, widthSet = false, cornerSet = false;
-      std::vector<std::string> unknown;
    };
 
    std::vector<CutKeys> Parse(const std::filesystem::path &file)
@@ -84,8 +83,7 @@ namespace
          else if (key == "angle") cur->angle = v;
          else if (key == "length_mm") { cur->lengthMm = v; cur->lengthSet = true; }
          else if (key == "width_mm") { cur->widthMm = v; cur->widthSet = true; }
-         else if (key == "corner_mm") { cur->cornerMm = v; cur->cornerSet = true; }
-         else cur->unknown.push_back(line);
+         else if (key == "corner_mm") { cur->cornerMm = v; cur->cornerSet = true; }   // (a key not listed here is ignored)
       }
       return out;
    }
@@ -1807,8 +1805,6 @@ namespace PlayfieldCuts
       for (const CutKeys &k : cuts)
       {
          const std::string where = "Playfield cut " + k.name + ": ";
-         for (const std::string &line : k.unknown)
-            Notice(where + "unknown key, ignored line '" + line + "' (physics ini)");
          if (k.shape != "slot" && k.shape != "groove" && k.shape != "rectangle")
          {
             Notice(where + (k.shape.empty() ? std::string("no shape") : "shape '" + k.shape + "' is not known") + ": the cut is ignored. The shapes are slot, groove and rectangle (physics ini)");

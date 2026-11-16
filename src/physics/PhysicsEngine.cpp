@@ -320,7 +320,8 @@ void PhysicsEngine::RemoveCollider(HitObject * collider, const bool isUI)
       RemoveFromVectorSingle<MoverObject *>(m_vmover, &ball->m_mover);
       RemoveFromVectorSingle(m_vballs, ball);
       m_hitoctree_dynamic.Remove(collider);
-      ContactSystem::SleepWake(ball, "a ball of the group removed");   // pile sleep: its group lost a ball (no-op for a ball awake)
+      if (ContactSystem::Unified())   // (the stock engine has no contact system)
+         ContactSystem::SleepWake(ball, "a ball of the group removed");   // pile sleep: its group lost a ball (no-op for a ball awake)
       // the ball object may outlive its removal (a destroyed ball is freed later, it may still be rendered): a band must let go of it now, not when it is freed
       if (ball->m_bandOwner != nullptr || ball->m_contact != nullptr)
          HitRubberBandBallDeleted(ball);
@@ -835,7 +836,8 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
             g_pplayer->m_pininput.PlayNudgeRumble(cabinetAcceleration);
       }
 
-      ContactSystem::SleepCycleStart();   // pile sleep: the wakes known at the cycle's start, before the magnets and the balls' velocities (nothing unless [Contact] sleep = 1)
+      if (ContactSystem::Unified())   // (the stock engine has no contact system)
+         ContactSystem::SleepCycleStart();   // pile sleep: the wakes known at the cycle's start, before the magnets and the balls' velocities (nothing unless [Contact] sleep = 1)
 
       {
          const TestDriver::Timed tdMag(TestDriver::kMagnets);
@@ -1140,9 +1142,12 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
                     + (splitBall->m_d.m_lockedInKicker ? " kickerlocked" : "") + (splitBall->m_bandOwner != nullptr ? " band" : "");
          ContactProf::Split(splitCause, splitStatic, what.c_str());
       }
-      ContactSystem::Step(hS); // contact-held balls: surface contacts and, for touching balls, ball-to-ball contact, stepped together
-      if (ContactSystem::Unified() && ContactSystem::SnapshotTestOn())
-         ContactSystem::SnapshotTest(hS);   // test mode: the same step again from the snapshot must give the same result
+      if (ContactSystem::Unified())   // the stock engine has no contact system: its balls are stock VPX's alone
+      {
+         ContactSystem::Step(hS); // contact-held balls: surface contacts and, for touching balls, ball-to-ball contact, stepped together
+         if (ContactSystem::SnapshotTestOn())
+            ContactSystem::SnapshotTest(hS);   // test mode: the same step again from the snapshot must give the same result
+      }
       tdContact.reset();
       const uint64_t ctT1 = ctLog != nullptr ? usec() : 0;
       {
@@ -1187,7 +1192,8 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
       // the events the contact step and the parts queued in this sub-interval: after the free balls have moved, as stock fires its collision events (docs/unified-physics/archive/UnifiedContactDesign.txt 11, point 2)
       {
          const TestDriver::Timed tdDispatch(TestDriver::kContact);
-         ContactSystem::Dispatch();
+         if (ContactSystem::Unified())   // (the stock engine has no contact system)
+            ContactSystem::Dispatch();
       }
 
       // find balls that need to be collided and script'ed (generally there will be one, but more are possible)

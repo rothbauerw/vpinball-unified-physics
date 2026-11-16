@@ -65,13 +65,7 @@ namespace FlipperModel
    inline bool ApplyKey(FlipperSettings& s, const std::string& key, const std::string& val)
    {
       if (key == "rubber_shear_zeta" || key == "rubber_shear_scale")   // keys that no longer act (2026-10-31): the damping comes from rubber_tan_delta, the stiffness from rubber_sideways_stiffness. Old files still load
-      {
-         static bool told = false;
-         if (!told)
-            PLOGW << "Flipper settings: rubber_shear_zeta and rubber_shear_scale no longer act (zeta = rubber_tan_delta / 2; rubber_sideways_stiffness sets the stiffness)";
-         told = true;
          return true;
-      }
       const std::string v = Lower(val);
       if (key == "wiring")
       {
@@ -136,8 +130,8 @@ namespace FlipperModel
          if (cur != want)
             continue;
          const size_t eq = line.find('=');
-         if (eq == std::string::npos || !ApplyKey(s, Lower(Trim(line.substr(0, eq))), Trim(line.substr(eq + 1))))
-            PLOGW << "Flipper settings (" << who << "): ignored line '" << line << "'";
+         if (eq != std::string::npos)   // a key it does not know, or a line with no =, is ignored
+            ApplyKey(s, Lower(Trim(line.substr(0, eq))), Trim(line.substr(eq + 1)));
       }
       return true;
    }
