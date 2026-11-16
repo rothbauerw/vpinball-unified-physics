@@ -13,6 +13,7 @@ G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
 In flight: 1.34 piece 6b-3: split, its six keys and energy_solve_parts deleted; C (SleepParts) done; part work capped; 0.1 mm margin removed; per-term zeros; turntable's stock triangles deleted. Next: the user's pick. To-do candidates for the user: lead log 2026-11-15 CANDIDATES.
+Next code change (user 2026-11-15): band found-inside rules and delete every ini ignored-key warning (finder design P7 line); unified 0 = plain stock: delete the contact system's run on the stock engine and its old engaged/free code (cs !s_unified).
 Judge a change by one exe, its setting on vs off; never by an older exe's md5 (ModelStandards trap 112). Query outliers 0.3-9 ms are the OS (measured). Owed: snapshot hashes refresh; GL main rebuild (bench obj_gl stale). 1.33: cut B kept.
 Stand-up targets: code pulled from the tree 2026-11-15 (crashed VPX; user), backup backups/2026-11-15-standup-pulled; piece 5 in backups/2026-11-14-standup-build6. Next step is the user's call. Rebuild main before VPX play.
 Air-core coil fix (pull read at the step's midpoint, aircore_in_step, on while tested): merged d9629bc4b and pushed. Lead log runs/2026-11-13-lead.
@@ -42,6 +43,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 30. part_guess_accel (default off): design evaluation for all moving parts, then a test plan if kept. After the shared-engine items, unless one of them needs it.
 40. Jet skirt resting on its seat is stepped as a stiff spring and sets short steps whenever the jet is grouped (bumpergroup.h ~283): ModelStandards 3a resting constraint. Gorgar +6 % steps with energy_reach (runs/2026-11-14-reach-p1b).
 42. Step halvings (failed solves, groupstep.h:2190): stress v2 ~560 at 34e4185da (519 near 77 s). Repro: slow ball rocking on a slope below the flippers, 1,269 halvings (runs/2026-11-15-finder-P6b3/drive_burst.txt). Find surface and cause.
+43. After the finder work (1.34): tables/turn table/turn table test 4 (user's worst-case table) runs slower on today's build than on the 11-09 build (user's play). Measure both on one machine and find the cause.
 41. Magnet pull in the energy reach is taken at the ball's place, not the largest over its travel: a true bound needs current, saturation, in-winding and per-type terms. Re-looks while a magnet is on (stress C1).
 
 ## 2. Flippers
@@ -95,7 +97,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 3. unified = 0 against a plain upstream build; plunger fix.
 5. Stock-file hooks to separate.
 6. Editor changes to replace the ini files (panels, settings saved in the .vpx); unified off per table for release.
-7. Old keys in 14 inis, then the unknown-key notice.
+7. Old keys in 14 inis.
 10. Review ReleasePlan with the user, then PR to the official repo after 3-5.
 13. Old-law switches to delete once accepted (CLAUDE.md): roll/pivot/step_model 0, proximity_engage 0 (stock's copies of converted parts are out of the path: balls fall through; load warns).
 
