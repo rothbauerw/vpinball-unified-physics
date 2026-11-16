@@ -13,7 +13,6 @@ G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
 In flight: 1.34 piece 6b-3: split, its six keys and energy_solve_parts deleted; C (SleepParts) done; part work capped; 0.1 mm margin removed; per-term zeros; turntable's stock triangles deleted. Next: the user's pick. To-do candidates for the user: lead log 2026-11-15 CANDIDATES.
-Finder P7 (bands) first: two band contacts missed in play, found inside by the new band warning: stress drive_S_lc29 Bumper2_rest 0.595 mm in Rubber4, R_tap 0.0585 mm in Rubber2 (runs/2026-11-15-finder-P6b3/run_SB2).
 Judge a change by one exe, its setting on vs off; never by an older exe's md5 (ModelStandards trap 112). Query outliers 0.3-9 ms are the OS (measured). Owed: snapshot hashes refresh; GL main rebuild (bench obj_gl stale). 1.33: cut B kept.
 Stand-up targets: code pulled from the tree 2026-11-15 (crashed VPX; user), backup backups/2026-11-15-standup-pulled; piece 5 in backups/2026-11-14-standup-build6. Next step is the user's call. Rebuild main before VPX play.
 Air-core coil fix (pull read at the step's midpoint, aircore_in_step, on while tested): merged d9629bc4b and pushed. Lead log runs/2026-11-13-lead.
