@@ -216,6 +216,7 @@ Drop targets later, separately.
    without one, the face ends hard on the plate (3.2-6.4 mm behind the face, PartData T12a). With no plate, the EM helper blade by default: a stiffer C (item 5), engaging after the
    switch closes. Fat (3D) targets are not a separate model: their type sets the defaults (plate about 3.2 mm sooner; confined foam stiffer and more lossy).
 5. Switch: closes when A's contact reaches B's (gap 0.8-1.6 mm at the contacts, a setting) and opens when it returns past it; a hit too soft to travel that does not fire.
+   A 1 m/s head-on hit closes every target's switch, pad or not (user 2026-11-14).
    Once A reaches B, B and C add stiffness as one step at the closing point. Events: on closing Hit and SwitchClosed, on opening Unhit and SwitchOpened.
    Later extension, not now: Hit on first contact with the face.
 6. Shape: the collision shape matches the drawn mesh (it need not be the drawn mesh); the drawn meshes are redrawn to the real geometry (real plate gap; the fat target's
