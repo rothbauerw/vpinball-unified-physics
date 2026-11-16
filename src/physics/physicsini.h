@@ -48,23 +48,6 @@ namespace PhysicsIni
       bool playfieldCuts = true;  // playfield_cuts: holes cut in the playfield ([PlayfieldCut:<name>] sections, playfieldcut.h; the slot under a wire switch); off = every cut ignored, the playfield solid (on while tested, rule 6)
       bool aircoreInStep = true;  // aircore_in_step (on while tested, rule 6; runs/2026-11-13-aircore-ff/design.md): 1 = an air-core coil's pull on a ball in the contact system's step is read at the
                                   // step's midpoint in every evaluation (Magnets::AircoreForce, its slope in Newton's Jacobian); 0 = held at the cycle-start place for the whole cycle (Ball::fExt), as today
-      bool pathTest = true;       // path_test (on while tested, rule 6; runs/2026-11-13-finder-exactpath/design.md): 1 = after each solve a skipped contact on a static surface (mesh faces,
-                                  // tubes, the playfield with cuts or holes by its full faces; posts, a bumper's body and a disc by chords or facets, rubbercontact.h PathRevolve) or a ball pair is tested over the
-                                  // ball's whole straight move in the step (object box, piece boxes, exact distance; groupstep.h FarStillFar), and the
-                                  // engagement query's size is the one reach rule (ContactReachM); 0 = probed at the move's middle and end only, and the engagement query 20 U, as before
-      bool partFinder = true;     // part_finder (on while tested, rule 6; runs/2026-11-13-finder-P6/design_reach.md sections 1-3, 6 piece P6a): 1 = a hinge part's (gate, spinner, wire switch) pieces
-                                  // a ball can touch are listed once per cycle from each piece's swept sector about the axis (the part's turn bounded by energy, clamped at its stops) and the ball's
-                                  // reach (ContactReachM), every attempt of the cycle takes that list, and a ball centre outside its query volume at a move's middle or end re-queries
-                                  // (groupstep.h CycleNear); the overlap check of free balls probes only the parts whose region is within the ball's radius; 0 = the per-step lists
-                                  // (NearPieces, NearHolds, the retry factor nearGrow) and every part probed, as before
-      bool ballInsideCheck = true;   // ball_inside_check (on while tested, rule 6; runs/2026-11-14-inside-check/brief.md, design runs/2026-11-11-finder/design.md section 4): 1 = after each
-                                     // attempt's solve, every group ball with a cycle query is checked at its move's end against its query volume (ContactSurfaceHost::FinderInsideBall),
-                                     // whatever its items, so its re-query and the mid-step join run for a ball with no static mesh item; 0 = only a static mesh item's probes check it, as before
-      bool jetPulseAtCycle = true;   // jet_pulse_at_cycle (on while tested, rule 6; runs/2026-11-14-reach-p1b/brief_bumperdrv.md): 1 = a jet bumper's switch closure arms a pulse that starts at the next
-                                     // cycle's start after its jet_coil_delay_ms (the sling's form), so its coil state for a cycle is known at the cycle's start; 0 = the pulse fires at the end of the step whose switch closes
-      bool reachFullFeed = true;   // reach_full_feed (on while tested, rule 6; runs/2026-11-15-finder-P6b3/brief_A.md, paper.md section 4 item 2): 1 = in the energy reach's grouping (ContactSystem
-                                   // ReachEnergy) a part's move takes its group's full feed: the balls' energy plus the other grouped parts' work and squash (its own work excluded: it is
-                                   // already in its move), grown with the others to a fixed point; 0 = a part's move from its group's balls' energy only, as before
       bool seatEditorBalls = true; // seat_editor_balls (on while tested, rule 6; runs/2026-11-13-editor-balls): 1 = at play start each ball placed in the table editor is moved out of any surface it overlaps
                                   // (playfield, walls, ramps, primitives, rubbers, moving parts at rest; not other balls) by the shortest move, the no-past seating (ContactSystem::PushOutAtStart); 0 = left where it was placed, as today
       bool hitSpeed = true;       // PROTOTYPE: Ball.HitSpeed (normal speed before an impact) and the table's Hit event for the playfield; off = neither
@@ -181,16 +164,6 @@ namespace PhysicsIni
             f.playfieldCuts = on;
          else if (key == "aircore_in_step")
             f.aircoreInStep = on;
-         else if (key == "path_test")
-            f.pathTest = on;
-         else if (key == "part_finder")
-            f.partFinder = on;
-         else if (key == "reach_full_feed")
-            f.reachFullFeed = on;
-         else if (key == "jet_pulse_at_cycle")
-            f.jetPulseAtCycle = on;
-         else if (key == "ball_inside_check")
-            f.ballInsideCheck = on;
          else if (key == "hit_speed")
             f.hitSpeed = on;
          else if (key == "seat_editor_balls")

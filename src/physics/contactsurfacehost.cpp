@@ -305,11 +305,6 @@ namespace
    thread_local int g_tabDepth = 0;
    thread_local bool g_nearOff = false;   // P3b check mode: the comparison's pass over the whole query list
    thread_local bool g_nearCmp = false;   // P3b check mode: inside one comparison (ProbePatch calls Probe)
-   bool FinderTableOn()   // P3a's table on; VPX_FINDER_TABLE=0 (diagnostics only, results equal): the face loops measure every face directly
-   {
-      static const bool on = [] { const char *e = std::getenv("VPX_FINDER_TABLE"); return e == nullptr || e[0] != '0'; }();
-      return on;
-   }
    bool SameProbe(const RubberContact::TubeProbe &a, const RubberContact::TubeProbe &b)   // P3b check mode: the same bits
    {
       const auto eq = [](const double x, const double y) { return std::memcmp(&x, &y, sizeof(double)) == 0; };
@@ -1997,7 +1992,7 @@ RubberContact::TubeProbe ContactSurfaceHost::ProbePatch(const RubberContact::Bal
    return pr;
 }
 
-// [Features] path_test (runs/2026-11-13-finder-exactpath/design.md): the ball's centre moves straight from s to s + d in the step (the solver's own model); can it touch this surface on the way?
+// the path test (runs/2026-11-13-finder-exactpath/design.md): the ball's centre moves straight from s to s + d in the step (the solver's own model); can it touch this surface on the way?
 // a. the object's box against the path's box grown by the reach; b. each piece of the ball's query (faces, tube segments), its box the same; c. the exact distance (rubbercontact.h path kit).
 // The query's pieces cover the whole path: both ends lie inside the query's volume (the inside check, as the probes made it), and the volume is convex (design.md section 4).
 // The reach is the probe's: a face's depth is R - distance (ProbeTriangles; a static mesh has no thickness), a tube's R + its radius - distance (ProbeTube).
@@ -3339,7 +3334,6 @@ RubberContact::FaceTable *ContactSurfaceHost::FinderTable(const SurfaceContact &
    RubberContact::FaceTable &t = q->tab[k];
    t.check = FinderCheckOn();
    t.count = t.check || ContactProf::CheckOn();   // P3a's per-read counters: check or profile mode only
-   t.direct = !FinderTableOn();
    if (t.tag < 0)
       t.tag = Name() == "zCol_Rubber_Corner_15" || Name() == "zCol_Rubber_Corner_16" || Name() == "zCol_Rubber_Corner_21" ? 1 : 0;
    t.Begin(c, q->ver, q->per[k].size());
@@ -3402,7 +3396,7 @@ void ContactSurfaceHost::FinderTotals(const bool force)
    if (!force && now < g.nextTotalsMs)
       return;
    g.nextTotalsMs = now + 1000;
-   if (GroupStep::partFinderProf)   // [Features] part_finder's counters, running totals once a second of table time (VPX_CHECK_PROFILE or VPX_FINDER_CHECK)
+   if (GroupStep::partFinderProf)   // the part finder's counters, running totals once a second of table time (VPX_CHECK_PROFILE or VPX_FINDER_CHECK)
       PLOGI << GroupStep::PartFinderReport();
    if (g.queries == 0)
       return;
@@ -3432,7 +3426,7 @@ void ContactSurfaceHost::FinderTotals(const bool force)
                     << " us of which setup " << g_join.worstSetup * 1e-3 << " us, re-run " << g_join.worstRerun * 1e-3 << " us (" << g_join.worstReruns << " attempts)";
                return o.str();
             }();
-   if (ContactProf::CheckOn())   // [Features] path_test: FarStillFar's counters (VPX_CHECK_PROFILE; diagnostics only)
+   if (ContactProf::CheckOn())   // the path test: FarStillFar's counters (VPX_CHECK_PROFILE; diagnostics only)
    {
       const RubberContact::PathStats &p = RubberContact::pathStats;
       PLOGI << "Path test totals: FarStillFar calls with a skipped contact " << p.calls << ", time " << p.ns * 1e-3 << " us in all (" << (p.calls > 0 ? (double)p.ns / (double)p.calls : 0.0) << " ns per call, worst "

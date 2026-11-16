@@ -61,7 +61,7 @@ namespace BumperGroup
       double iCoil = 0.0;       // A
       bool pulseActive = false, pulseArmed = true;
       double pulseLeft = 0.0;
-      bool pulsePending = false;   // [Features] jet_pulse_at_cycle: a closure armed a pulse that starts at a cycle's start (CycleStart), pendingS after the next cycle's start
+      bool pulsePending = false;   // a jet's pulse at a cycle's start: a closure armed a pulse that starts at a cycle's start (CycleStart), pendingS after the next cycle's start
       double pendingS = 0.0;
       bool extOn = false;       // external drive: the script's command
       double extVolts = -1.0, extDuty = 1.0;
@@ -198,7 +198,7 @@ namespace BumperGroup
             bk.tPulseStart = t;
          bk.pulses++;
       }
-      // [Features] jet_pulse_at_cycle (the sling's form, hitsling.h): between cycles, a pending pulse starts at this cycle's start once the bumper's delay (jet_coil_delay_ms) has
+      // a jet's pulse at a cycle's start (the sling's form, hitsling.h): between cycles, a pending pulse starts at this cycle's start once the bumper's delay (jet_coil_delay_ms) has
       // passed; cycleS: the cycle about to start. So the coil's state for a cycle is known at its start (ContactBumperPart::EnergyMove)
       void CycleStart(const double cycleS)
       {
@@ -220,7 +220,7 @@ namespace BumperGroup
       double FollowerD() const { return D(PoseAt(nullptr)); }
       double TiltDeg() const { return std::sqrt(thx * thx + thy * thy) / JB::DEG; }
 
-      // [Features] part_finder, the path test's motion term of the skirt (group A; GroupStep::Shape::PathMotion), P in the bumper's frame: it turns about its pivot (0, 0, z) by at most
+      // the part finder, the path test's motion term of the skirt (group A; GroupStep::Shape::PathMotion), P in the bumper's frame: it turns about its pivot (0, 0, z) by at most
       // sqrt(dthx^2 + dthy^2) (Ry Rx: two poses differ by one turn of at most that, paper_groupA.txt) and the pivot slides |dz|: (|P - pivot at the middle| + dLen / 2) |dtilt| + |dz|.
       // Its probe (ProbeSkirt: JB::Revolve::Closest in its own frame) is the profile's distance at any range
       double SkirtMotion(const V3 &P, const double dLen, const double *const trial) const
@@ -540,14 +540,9 @@ namespace BumperGroup
             swLog.push_back(1);
             if (cfg.p.mode == JB::DriveMode::Pulse && coilEnabled && pulseArmed && !pulseActive && !pulsePending)
             {
-               if (GroupStep::jetPulseAtCycle)   // [Features] jet_pulse_at_cycle: armed here, started at a cycle's start (CycleStart)
-               {
-                  pulsePending = true;
-                  pulseArmed = false;
-                  pendingS = cfg.p.coilDelayMs * 1e-3;
-               }
-               else
-                  FirePulse();
+               pulsePending = true;   // armed here, started at a cycle's start (CycleStart)
+               pulseArmed = false;
+               pendingS = cfg.p.coilDelayMs * 1e-3;
             }
          }
          else if (closed && d <= dOpen)
@@ -738,7 +733,7 @@ namespace BumperGroup
       const Part *owner = nullptr;
       void Probe(const V3 &c, const double R, Hit &h) const override { owner->ProbeSkirt(c, R, trial, h); }
    };
-   // [Features] part_finder (group A): the farthest point of a solid of revolution's profile from its frame's origin (each vertex's |(r, z)| plus its sweep radius: along a segment
+   // the part finder (group A): the farthest point of a solid of revolution's profile from its frame's origin (each vertex's |(r, z)| plus its sweep radius: along a segment
    // |core| + rr is convex, so its largest is at a vertex), for the overlap check's bounding radius
    inline double FarR(const JB::Revolve &p)
    {

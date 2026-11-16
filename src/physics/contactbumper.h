@@ -62,7 +62,7 @@ namespace JetBumper
       double switchHystMm = 0.1;           // [guess]
       // coil: AE-23-800 as the sling code has it
       DriveMode mode = DriveMode::Pulse;
-      double coilDelayMs = 0.0;            // jet_coil_delay_ms ([Features] jet_pulse_at_cycle): from the switch's closure to the pulse's start, counted from the next cycle's start (0 = that start). ASSUMED: no measured jet latency (PartData)
+      double coilDelayMs = 0.0;            // jet_coil_delay_ms (a jet's pulse at a cycle's start): from the switch's closure to the pulse's start, counted from the next cycle's start (0 = that start). ASSUMED: no measured jet latency (PartData)
       double pulseMs = 40.0;              // [user 2026-11-02: 20 was too short in play; the ring doesn't reach its stop on slow hits] (was 20 ms [user 2026-10-26: 15 ms first, 20 ms after the first play test])
       CoilSettings coil;                   // AE-23-800 defaults; vSupply 28 V [user], x0 0.3 [user accepted]
       double plungerClosedFrac = 0.0;      // plunger position fraction when the ring is fully down (0 = plunger fully in) [guess]
@@ -87,7 +87,7 @@ namespace JetBumper
          double rr = 0;
          double gr = 0, gz = 1;   // the distance's exact gradient in the meridian plane: the normal, less the taper of the sweep's radius along the segment
       };
-      // [Features] part_finder (group A slope fix): Closest's largest slope over its segments. On a segment whose sweep radius tapers, rr is read at the core's nearest point, so the
+      // the part finder (group A slope fix): Closest's largest slope over its segments. On a segment whose sweep radius tapers, rr is read at the core's nearest point, so the
       // distance changes by sqrt(1 + taper^2) per unit of the point's move (taper = d rr / segment length); 1 where rr is constant. The path test multiplies the moves by it
       double Slope() const
       {

@@ -224,42 +224,7 @@ namespace HingeGroup
          BuildJoints();
          pieceSum = on;
       }
-      // [Contact] hinge_piece_sum, the step's list (GroupStep::Shape::NearPieces): a piece is listed unless the ball cannot reach it in the step. In body coordinates at
-      // the angle now the ball is at cb, rho0 from the axis; over the step it moves at most reach and the part turns at most swing, so in the body frame the ball's
-      // centre moves at most reach + swing (rho0 + reach). A piece whose bound |cb - m| - half - (R + rr) is past that (and past minReach, the far test's bound) has
-      // depth < 0 at every place of the step: off the list, the sum is the same. Order kept
-      void NearPieces(const int surface, const V3 &c, const double R, const double reach, const double swing, const double minReach, std::vector<int> &list) const
-      {
-         BuildJoints();
-         list.clear();
-         const V3 dn = Down(q), fr = Front(q), rel = c - A, cb(rel.Dot(E), rel.Dot(dn), rel.Dot(fr));
-         const double rho0 = std::sqrt(cb.y * cb.y + cb.z * cb.z);
-         const double tot = std::max(minReach, reach + swing * (rho0 + reach));
-         const std::vector<Piece> &ps = pieces[(size_t)surface];
-         for (int i = 0; i < (int)ps.size(); i++)
-            if (!(tot < INFINITY) || (cb - ps[i].m).Length() - ps[i].half - (R + ps[i].rr) <= tot)
-               list.push_back(i);
-      }
-      // every piece off the list is off the ball at c with the part at its angle now + dq (the same bound, at that place)
-      bool NearHolds(const int surface, const V3 &c, const double R, const double dq, const std::vector<int> &list) const
-      {
-         const double th = q + dq;
-         const V3 dn = Down(th), fr = Front(th), rel = c - A, cb(rel.Dot(E), rel.Dot(dn), rel.Dot(fr));
-         const std::vector<Piece> &ps = pieces[(size_t)surface];
-         size_t l = 0;
-         for (int i = 0; i < (int)ps.size(); i++)
-         {
-            if (l < list.size() && list[l] == i)
-            {
-               l++;
-               continue;
-            }
-            if ((cb - ps[i].m).Length() - ps[i].half - (R + ps[i].rr) <= 0.0)
-               return false;
-         }
-         return true;
-      }
-      // [Features] part_finder (runs/2026-11-13-finder-P6/design_reach.md sections 1-3): the turn over the cycle, from the cycle's start. Energy enters only through the drives and
+      // the part finder (runs/2026-11-13-finder-P6/design_reach.md sections 1-3): the turn over the cycle, from the cycle's start. Energy enters only through the drives and
       // the balls: 1/2 I w^2 <= 1/2 I w0^2 + E + I alpha theta, so dtheta <= c T + 1/2 alpha T^2, c^2 = w0^2 + 2 E / I, alpha = MaxStoredTorque / I, w_max = c + alpha T.
       // Clamped at each enabled, armed stop (a driven one at the far end of its move): a Hertz stop squashes at most what the part can carry into it,
       // 2/5 k d^2.5 = 1/2 I w_max^2 at its lever; never past where the part is now
@@ -319,7 +284,7 @@ namespace HingeGroup
             if (PieceDist(ps[(size_t)i], cb) - ps[(size_t)i].rr <= lim)
                list.push_back(i);
       }
-      // [Features] part_finder, the range check after each solve (group A): the solved angle q + qe[0] inside [cycLo, cycHi]
+      // the part finder, the range check after each solve (group A): the solved angle q + qe[0] inside [cycLo, cycHi]
       bool CycleRangeHolds(const double *qe) const override { return q + qe[0] >= cycLo && q + qe[0] <= cycHi; }
       // a new range: the turn from its state now over T with E (CycleTurn, the reference cycQ0 its angle now) joined to the old range and the solved angle
       void CycleRegrow(const double *qe, const double En, const double T) override
@@ -350,13 +315,13 @@ namespace HingeGroup
          }
          return n;
       }
-      // [Features] part_finder, the path test's motion term (group A; GroupStep::Shape::PathMotion): a turn by dq about the axis; P's distance from the axis rho, plus dLen / 2
+      // the part finder, the path test's motion term (group A; GroupStep::Shape::PathMotion): a turn by dq about the axis; P's distance from the axis rho, plus dLen / 2
       double PathMotion(const V3 &P, const double dLen, const double dq) const
       {
          const V3 rel = P - A, ax = rel - E * rel.Dot(E);
          return (ax.Length() + 0.5 * dLen) * std::fabs(dq);
       }
-      // the overlap check of free balls (part_finder, group A): |c - A| less the part's bounding radius about A (its pieces' farthest core point plus the piece's radius; built at load
+      // the overlap check of free balls (part finder, group A): |c - A| less the part's bounding radius about A (its pieces' farthest core point plus the piece's radius; built at load
       // with the pieces): a lower bound on the distance at any angle
       double RegionDist(const V3 &c) const
       {
@@ -759,7 +724,7 @@ namespace HingeGroup
             for (int i = 0; i < (int)lines.size(); i++)
                ps.push_back({ 3, i, (lines[i].a + lines[i].b) * 0.5, 0.5 * (lines[i].b - lines[i].a).Length(), lines[i].r });
          }
-         // part_finder: the bounding radius about A (body coordinates are about A), from each piece's core as built
+         // part finder: the bounding radius about A (body coordinates are about A), from each piece's core as built
          boundR = 0.0;
          for (size_t sf = 0; sf < pieces.size(); sf++)
             for (const Piece &pc : pieces[sf])
@@ -779,8 +744,8 @@ namespace HingeGroup
       }
       struct Piece { int kind, i; V3 m; double half, rr; };   // kind 0 wire, 1 joint, 2 quad, 3 shared line
       mutable std::vector<std::vector<Piece>> pieces;
-      mutable double boundR = 0.0;   // part_finder: the bounding radius about A (BuildJoints), for the overlap check
-      double cycQ0 = 0.0, cycLo = 0.0, cycHi = 0.0;   // part_finder: the angle at the cycle's start and the ends of its turn range over the cycle (CycleTurn; set every cycle, not kept state)
+      mutable double boundR = 0.0;   // part finder: the bounding radius about A (BuildJoints), for the overlap check
+      double cycQ0 = 0.0, cycLo = 0.0, cycHi = 0.0;   // part finder: the angle at the cycle's start and the ends of its turn range over the cycle (CycleTurn; set every cycle, not kept state)
       static double SegDist(const V3 &a, const V3 &b, const V3 &p)   // point to segment
       {
          const V3 u = b - a;
@@ -847,14 +812,6 @@ namespace HingeGroup
       const Part *owner = nullptr;
       int surface = 0;
       void Probe(const V3 &c, const double R, Hit &h) const override { owner->ProbeSurface(surface, c, R, trial != nullptr ? trial[0] : 0.0, h); }
-      bool NearPieces(const V3 &c, const double R, const double reach, const double swing, const double minReach, std::vector<int> &list) const override
-      {
-         if (!owner->pieceSum)
-            return false;
-         owner->NearPieces(surface, c, R, reach, swing, minReach, list);
-         return true;
-      }
-      bool NearHolds(const V3 &c, const double R, const double dq, const std::vector<int> &list) const override { return owner->NearHolds(surface, c, R, dq, list); }
       bool CycleNear(const V3 &c, const double R, const double reach, std::vector<int> &list, int &n) const override
       {
          if (!owner->pieceSum)
@@ -863,6 +820,6 @@ namespace HingeGroup
          return true;
       }
       int CycleMisses(const V3 &c, const double R, const double dq, const std::vector<int> &list) const override { return owner->CycleMisses(surface, c, R, dq, list); }
-      double PathMotion(const V3 &P, const double dLen) const override { return GroupStep::partFinder ? owner->PathMotion(P, dLen, trial != nullptr ? trial[0] : 0.0) : -1.0; }
+      double PathMotion(const V3 &P, const double dLen) const override { return owner->PathMotion(P, dLen, trial != nullptr ? trial[0] : 0.0); }
    };
 }

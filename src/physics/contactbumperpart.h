@@ -45,7 +45,7 @@ namespace JetBumper
       void Build(const Params &prm, const V3 &foot)
       {
          gp.Configure(prm, partSet);
-         slopeSkirt = gp.cfg.skirt0.Slope();   // ([Features] part_finder: the profiles' largest slopes, for the path test)
+         slopeSkirt = gp.cfg.skirt0.Slope();   // (the part finder: the profiles' largest slopes, for the path test)
          slopeRing = gp.cfg.ring0.Slope();
          origin = foot;
          m_reach = 0.5 * prm.skirtOdMm * MM + 2.0e-3;
@@ -55,7 +55,7 @@ namespace JetBumper
          ringShape.owner = &gp;
          bodyShape.prof = &gp.cfg.body0;
          bodyShape.edgeMin = edgeMin;
-         // [Features] path_test: the fixed centre body's profile revolved into facets (world frame, once at load); the ring and skirt move with the part (build 3)
+         // the path test: the fixed centre body's profile revolved into facets (world frame, once at load); the ring and skirt move with the part (build 3)
          std::vector<double> r, z, rr;
          for (const Revolve::Vtx &v : gp.cfg.body0.v)
          {
@@ -65,13 +65,13 @@ namespace JetBumper
          }
          bodyCover.Build(origin, r.data(), z.data(), rr.data(), (int)r.size());
       }
-      RubberContact::PathRevolve bodyCover;   // [Features] path_test (Build)
+      RubberContact::PathRevolve bodyCover;   // the path test (Build)
       double GroupPathCoverSag(const int surface, int &kind) const override   // (the self-check, VPX_FINDER_CHECK)
       {
          kind = 1;
          return surface == 2 && collidable ? bodyCover.MaxSag() : -1.0;
       }
-      // [Features] path_test: surface 2, the centre body, never moves: its facets, reach R + the segment's larger sweep radius (RevolveShape's probe, owner null); not collidable: never touched
+      // the path test: surface 2, the centre body, never moves: its facets, reach R + the segment's larger sweep radius (RevolveShape's probe, owner null); not collidable: never touched
       int GroupPathReach(const int surface, const V3 &s, const V3 &d, const double R) const override
       {
          if (surface != 2)
@@ -91,7 +91,7 @@ namespace JetBumper
          return r;
       }
 
-      // [Features] part_finder, the path test's motion term (group A; GroupStep::Shape::PathMotion), P in the table's frame: 0 the skirt (BumperGroup::Part::SkirtMotion), 1 the ring:
+      // the part finder, the path test's motion term (group A; GroupStep::Shape::PathMotion), P in the table's frame: 0 the skirt (BumperGroup::Part::SkirtMotion), 1 the ring:
       // it moves along the axis only, |d dr|; 2 the body is fixed (its own test, GroupPathReach)
       double slopeSkirt = 1.0, slopeRing = 1.0;   // Revolve::Slope of the skirt's and the ring's profiles (Build)
       double GroupPathSlope(const int surface) const override { return surface == 0 ? slopeSkirt : surface == 1 ? slopeRing : 1.0; }
@@ -103,7 +103,7 @@ namespace JetBumper
             return trial != nullptr ? std::fabs(trial[BumperGroup::Part::kR]) : 0.0;
          return -1.0;
       }
-      // the overlap check of free balls (part_finder, group A): |c - origin| less the bounding radius from its built profiles: the body; the ring plus its stroke (or its drop now, if more: the stop is a spring); the skirt plus its
+      // the overlap check of free balls (part finder, group A): |c - origin| less the bounding radius from its built profiles: the body; the ring plus its stroke (or its drop now, if more: the stop is a spring); the skirt plus its
       // pivot's height now (it turns about (0, 0, z))
       double RegionDist(const V3 &c) const override
       {
@@ -189,18 +189,17 @@ namespace JetBumper
       // at most the energy they can supply
       void NextCycleStart(const double cycleS) override
       {
-         if (GroupStep::jetPulseAtCycle)
-            gp.CycleStart(cycleS);
+         gp.CycleStart(cycleS);
       }
       double EnergyMove(const V3 &c, const double E, const double T, double *const work) const override
       {
          const Params &p = gp.cfg.p;
          const double g = partSet.g.Length();
          // the coil law (runs/2026-11-14-reach-p1b/brief_coil.md item 2): the current cannot jump, i <= min(i0 + V / L T, V / R), L its smallest (the ring up, the plunger farthest out);
-         // the force at that current with the plunger closed (the largest gap factor). The coil's state for the cycle: [Features] jet_pulse_at_cycle on, a pulse starts only at a cycle's
+         // the force at that current with the plunger closed (the largest gap factor). The coil's state for the cycle: a jet's pulse at a cycle's start on, a pulse starts only at a cycle's
          // start (BumperGroup::Part::CycleStart) and the script's command lands between cycles, so an off coil stays off this cycle (its current only decays: V 0); held mode follows the
          // switch inside the cycle, and with the key off a pulse fires inside the step whose switch closes: there an off coil is taken as switched on at the cycle's start
-         const bool offStays = GroupStep::jetPulseAtCycle && p.mode != DriveMode::Held;
+         const bool offStays = p.mode != DriveMode::Held;
          const double V = gp.CoilOn() ? gp.CoilVolts() : offStays ? 0.0 : p.coil.vSupply;
          const double lMin = (gp.cfg.coilD.a + gp.cfg.coilD.b / (p.ringStrokeMm / p.coil.bobbinMm + p.plungerClosedFrac + p.coil.x0)) * 1e-3;
          const double iMax = std::min(std::fabs(gp.iCoil) + V / std::max(lMin, 1e-9) * T, std::max(V / p.coil.rOhm, std::fabs(gp.iCoil)));

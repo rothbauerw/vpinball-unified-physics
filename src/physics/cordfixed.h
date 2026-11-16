@@ -970,7 +970,7 @@ public:
          h.reff = std::sqrt(R1 / std::max(1.0 / R + kLong, 0.05 / R));
          h.curvDist = D;
       }
-      // [Features] path_test: the circle's chords (postCover, built with the posts at load), reach R + rc, the bound chords - sagitta; a twin is never touched (its probe)
+      // the path test: the circle's chords (postCover, built with the posts at load), reach R + rc, the bound chords - sagitta; a twin is never touched (its probe)
       int PathReach(const V3 &s, const V3 &d, const double R) const override
       {
          const bool prof = ContactProf::CheckOn();
@@ -1362,14 +1362,14 @@ public:
    {
       nShapes = (int)circles.size() + (pl.on ? 1 : 0);
       swClosed.assign(kMaxSwitches, 0);
-      postCover.assign(circles.size(), RubberContact::PathRevolve());   // [Features] path_test: each post's circle as chords (once, at load, with the posts)
+      postCover.assign(circles.size(), RubberContact::PathRevolve());   // the path test: each post's circle as chords (once, at load, with the posts)
       for (size_t k = 0; k < circles.size(); k++)
       {
          const double r = circles[k].r, z = 0.0;
          postCover[k].Build(V3(circles[k].x, circles[k].y, zc), &r, &z, &rc, 1);
       }
    }
-   std::vector<RubberContact::PathRevolve> postCover;   // [Features] path_test: the posts' chords, by circle (PostShape::PathReach)
+   std::vector<RubberContact::PathRevolve> postCover;   // the path test: the posts' chords, by circle (PostShape::PathReach)
    int postFirst = 0, nShapes = 0;
    struct Keep { bool touching = false; double zero = 0.0; V3 xi; RubberContact::RollAngle ra; };
    std::vector<Keep> keep;
@@ -2069,14 +2069,12 @@ public:
       const V3 vq = up * dy;
       h.c[0].Set(0, h.n.Dot(vq), vq, V3());
    }
-   // [Features] part_finder, the path test's motion term (group A; GroupStep::Shape::PathMotion): the tube's core is a segment along the span carried across it (up) by the face's offset
+   // the part finder, the path test's motion term (group A; GroupStep::Shape::PathMotion): the tube's core is a segment along the span carried across it (up) by the face's offset
    // yl(phi) (Limit) as the plate turns by trial[0] (null: no move), a translation. The most it moves from its middle place over the step is yl's largest change from yl(phi middle) over
    // [phi, phi + dq]: at an end or at yl's one turning point (dyl/dtheta = ((a + rc) sin theta + h) / cos^2 theta = 0, theta = phi + rest); m is twice that. Its probe is the exact
    // distance to the segment less rc at any range
    double PathMotion(const V3 &, double) const override
    {
-      if (!GroupStep::partFinder)
-         return -1.0;
       const double dq = trial ? trial[0] : 0.0, ph0 = pt->phi, ph1 = pt->phi + dq, lo = std::min(ph0, ph1), hi = std::max(ph0, ph1);
       double y0, y1, ym, dy;
       pt->Limit(ph0, y0, dy);

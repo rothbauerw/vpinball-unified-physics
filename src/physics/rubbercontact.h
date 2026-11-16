@@ -50,7 +50,7 @@
 
 // The reach of a ball over one cycle (to-do N5, the one reach rule; shared finder design.md section 3): how far its centre can move in dt from its speed and its
 // acceleration, reach = speed x dt + 1/2 x accel x dt^2 (m; speed m/s, accel m/s^2, dt s). Used by the shared finder's per-cycle query (to-do 1.34 P2a) and the
-// group step's part_finder lists (P6a). Here, not in contactsurface.h, so the group step needs no VPX types (ModelStandards 2e).
+// group step's part finder lists (P6a). Here, not in contactsurface.h, so the group step needs no VPX types (ModelStandards 2e).
 inline double ContactReachM(const double speed, const double accel, const double dt) { return speed * dt + 0.5 * accel * dt * dt; }
 // the energy reach (runs/2026-11-13-finder-P6/design_reach.md sections 1, 4b; to-do N5's one reach rule): how far a body (a ball, a part's turn or travel) can get in T.
 // Energy enters only through the drives and what feeds it: 1/2 m v^2 <= 1/2 m v0^2 + E + m a x, so dx/dt <= sqrt(c^2 + 2 a x), c^2 = v0^2 + 2 E / m:
@@ -829,7 +829,7 @@ namespace RubberContact
       return t.a + ab * (vb * denom) + ac * (vc * denom);
    }
 
-   // ---- The path kit ([Features] path_test; runs/2026-11-13-finder-exactpath/design.md section 2): exact squared distances from a ball centre's straight move in a step,
+   // ---- The path kit (the path test; runs/2026-11-13-finder-exactpath/design.md section 2): exact squared distances from a ball centre's straight move in a step,
    // the segment s + u d (u in [0, 1]; the solver's own model of the move), to a straight piece. One place, shared by every shape that has straight pieces.
    // to a point (a ball pair: the relative move against the other centre)
    inline double PathPointD2(const V3 &s, const V3 &d, const V3 &p)
@@ -934,7 +934,7 @@ namespace RubberContact
    };
    inline PathCheck pathCheck;
 
-   // ---- Covers of curved pieces ([Features] path_test, build 2; design.md sections 2 and 2b) ----
+   // ---- Covers of curved pieces (the path test, build 2; design.md sections 2 and 2b) ----
    // A curved centre line or surface is replaced, for the path test only, by straight chords or flat facets inscribed in it, built once with the shape. Each lies within its sagitta s of the true
    // curve and the curve within s of it (a two-way bound), so the path's distance to the curve >= its distance to the cover - s: a cover farther than reach + s clears the piece exactly.
    // kPathSagittaM: the largest sagitta of a cover (m). A COST setting, not physics: fewer chords mean fewer kit tests and more re-runs for a path that passes inside the band (a re-run only
@@ -1140,7 +1140,6 @@ namespace RubberContact
       uint64_t cyc = ~0ull;   // the counters: the cycle of the last contact check and the checks in it (contactsurfacehost.cpp TabCheck)
       uint32_t nCyc = 0;
       bool count = false;    // P3a's per-read counters (fills, reads): check or profile mode only
-      bool direct = false;   // VPX_FINDER_TABLE=0 (diagnostics only, results equal): the loops measure every face directly (the near pass still keeps its own measurements here)
       int tag = -1;          // the counters: 1 = a rubber corner timed apart (design.md section 7), 0 = not, -1 = not yet known
       // shared_finder P3b (design.md section 4; list pass runs/2026-11-12-listpass/brief.md): the faces within R, found once per table (ball position) by one pass over the query list.
       // inJ / inI: the faces within R of c, in load order (query-list positions, face indices); useNear: the loops read them (false: the whole query list, check mode's comparison).
@@ -1317,7 +1316,7 @@ namespace RubberContact
       mutable FaceTable::Slot tmp {};
       const FaceTable::Slot &At(const size_t j, const SurfaceTri &tri, const V3 &c) const
       {
-         if (t == nullptr || t->direct)   // VPX_FINDER_TABLE=0: measured directly, as with no table
+         if (t == nullptr)   // no table: measured directly
          {
             tmp.p = ClosestOnTriangle(tri, c, tmp.kind);
             const V3 dv = c - tmp.p;
@@ -1804,7 +1803,7 @@ namespace RubberContact
          nOut = dist > 1e-12 ? dv / dist : V3();
          return dist;
       };
-      FaceTable *const ft = fr != nullptr && fr->t != nullptr && !fr->t->direct ? fr->t : nullptr;   // P3c: the edges' slots (VPX_FINDER_TABLE=0 or no table: measured directly)
+      FaceTable *const ft = fr != nullptr && fr->t != nullptr ? fr->t : nullptr;   // P3c: the edges' slots (no table: measured directly)
       const bool prof = ContactProf::CheckOn();
       const auto edgeDepth = [&](const int t, const int e, V3 &nOut) {
          FaceTable::ESlot *const sl = ft != nullptr ? ft->EdgeSlot(t, e, nb) : nullptr;

@@ -186,7 +186,7 @@ public:
    RubberContact::TubeProbe ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const override;
    int PathReach(const SurfaceContact &it, const RubberContact::V3 &s, const RubberContact::V3 &d, double R) const override;
    bool PathOneWay(const SurfaceContact &it, const RubberContact::V3 &e) const override;   // (the self-check: false inside a carved hole's rim ring, design.md 2c)
-   double PathCoverSag(const SurfaceContact &it, int &kind) const override;   // (the self-check, VPX_FINDER_CHECK)   // [Features] path_test: a static mesh (the playfield with cuts or carved holes: its full faces, a path end under a cut's top: 1) or a static tube
+   double PathCoverSag(const SurfaceContact &it, int &kind) const override;   // (the self-check, VPX_FINDER_CHECK)   // the path test: a static mesh (the playfield with cuts or carved holes: its full faces, a path end under a cut's top: 1) or a static tube
    RubberContact::TubeProbe Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const override;   // the nearest point of one surface contact (tube or faces)
    double LayerM() const override;
    // shared_finder (to-do 1.34, piece P1): builds the index over every static mesh host once. atLoad: the call at the end of the table's load (PhysicsEngine), which drops
@@ -207,7 +207,7 @@ public:
    static void FinderQueryAt(const HitBall *ball, const RubberContact::V3 &c, double ballR, double extM);
    static void FinderBind(const HitBall *ball, std::vector<SurfaceContact> &items, bool cycleItems);   // cycleItems: the engaged ball's own set (kept for the re-query's count)
    static void FinderBindOne(const HitBall *ball, SurfaceContact &it);
-   // [Features] ball_inside_check: the inside check of the ball's own cycle query at c (the same rule as FinderInside, which calls it), for a ball whatever its items; a ball with no query does nothing
+   // the ball's inside check: the inside check of the ball's own cycle query at c (the same rule as FinderInside, which calls it), for a ball whatever its items; a ball with no query does nothing
    static void FinderInsideBall(const HitBall *ball, const RubberContact::V3 &c);
    static void FinderHosts(const HitBall *ball, std::vector<ContactHost *> &out);
    // shared_finder re-engage (runs/2026-11-13-finder-reengage/design.md): an object the inside check's re-query found that is not among the ball's surfaces is recorded for engagement;
@@ -311,7 +311,7 @@ private:
    static void FinderRun(void *q, double r);   // the query itself (q: a FinderBallQ), radius r around its centre
    std::shared_ptr<RubberSurface> m_surface;   // a wall / primitive host: its faces (m_pts is then empty)
    int m_linkOver = 0;                         // multi_contact: edges on more than two faces, counted when the faces' shared edges are built at load (Link)
-   // [Features] path_test, design.md 2c: the playfield's carved holes' rims, each a ring cover (rubbercontact.h PathRevolve: radius the hole's, at the middle zc of the slab the faces
+   // the path test, design.md 2c: the playfield's carved holes' rims, each a ring cover (rubbercontact.h PathRevolve: radius the hole's, at the middle zc of the slab the faces
    // over the hole's disk span, zc +- dz; reach R + dz), built at the first path test after the holes are set (the holes come after this host, carvedholes.h); a hole with no face over
    // its disk has no ring (the full faces there). Only for a playfield without cuts (the cuts keep the full faces, design.md 2b)
    struct HoleRing

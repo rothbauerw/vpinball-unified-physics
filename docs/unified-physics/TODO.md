@@ -12,7 +12,7 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-In flight: 1.34 pieces 6b-3, 7 (bands by the energy query) and 8 (ball pairs) done (runs/2026-11-11-finder/design.md P7-P8 BUILT notes). Left in 1.34: P9's remainder, if any. Next: the user's pick. Lead log: runs/2026-11-15-lead.
+1.34 accepted by the user as a whole (2026-11-16); its last settings and old paths deleted. Left: rubbercontact.h FaceTable 'measured directly' loop (no-table case): needed? Lead log: runs/2026-11-16-lead.
 Judge a change by one exe, its setting on vs off; never by an older exe's md5 (ModelStandards trap 112). Query outliers 0.3-9 ms are the OS (measured). Owed: snapshot hashes refresh; GL main rebuild (bench obj_gl stale). 1.33: cut B kept.
 Stand-up targets: code pulled from the tree 2026-11-15 (crashed VPX; user), backup backups/2026-11-15-standup-pulled; piece 5 in backups/2026-11-14-standup-build6. Next step is the user's call. Rebuild main before VPX play.
 Air-core coil fix (pull read at the step's midpoint, aircore_in_step, on while tested): merged d9629bc4b and pushed. Lead log runs/2026-11-13-lead.

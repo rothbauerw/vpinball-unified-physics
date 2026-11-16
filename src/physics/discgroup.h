@@ -129,7 +129,7 @@ namespace DiscGroup
          edgeRhoM = edgeRho;
          mass = motor.I;
          reach = R;
-         // [Features] path_test: the disc's surface as ProbeSurface measures it (a solid cylinder: bottom, side, top; a flush disc: the top face), revolved facets, sweep radius 0. Its
+         // the path test: the disc's surface as ProbeSurface measures it (a solid cylinder: bottom, side, top; a flush disc: the top face), revolved facets, sweep radius 0. Its
          // geometry never moves (turning about its own axis moves no point of the surface), so the cover is built once here
          const double zTop = centre.z, zBot = std::min(zBottom, zTop);
          if (zTop > zBot)
@@ -143,8 +143,8 @@ namespace DiscGroup
             pathCover.Build(V3(centre.x, centre.y, 0.0), r, z, rr, 2);
          }
       }
-      RubberContact::PathRevolve pathCover;   // [Features] path_test (Build)
-      // [Features] path_test: the ball's centre moving straight from s to s + d: 1 = it can touch the disc on the way (or an end lies inside the solid: ProbeSurface's depth there is above 0),
+      RubberContact::PathRevolve pathCover;   // the path test (Build)
+      // the path test: the ball's centre moving straight from s to s + d: 1 = it can touch the disc on the way (or an end lies inside the solid: ProbeSurface's depth there is above 0),
       // 0 = no (exact: the facets' distance minus their sagitta)
       int PathReach(const V3 &s, const V3 &d, const double Rb, const bool prof, bool &band) const
       {

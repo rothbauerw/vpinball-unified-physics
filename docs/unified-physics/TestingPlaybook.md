@@ -110,7 +110,7 @@ VPX_GROUP_CONTACT_TRACE=1  per-round depth, force, friction (first 3 energy step
 VPX_GROUP_ROUND_TRACE=1    per-round Newton trace with probe notes (group and hinge solves), printed only with an energy-step warning.
 VPX_GROUP_SEARCH_TRACE=1   the failing stop-search solve, per round, to stderr.     VPX_GROUP_STOP_TRACE=1   the first 12 stop checks of a cycle.
 VPX_GROUP_JAC_MODE=1       also a central-difference Jacobian, both logged; changes the last digits.     VPX_GROUP_JAC_WINDOW=t0-t1   its solves in that ms window.
-VPX_FINDER_CHECK=1         finder check: missed pieces within reach, face-table mismatches, playfield cut lists and static tube readers against the full scan (log, screen).     VPX_FINDER_TABLE=0   no face table (A/B, same result).
+VPX_FINDER_CHECK=1         finder check: missed pieces within reach, face-table mismatches, playfield cut lists and static tube readers against the full scan (log, screen).
 VPX_PAIR_CHECK=1           ball pairs: the every-pair test beside the sorted list; counts any pair the list missed (log).
 VPX_HINGE_NEAR_ALL=1       every near-piece list takes all pieces (A/B of the short list, same result expected).
 VPX_SNAPSHOT_TEST=1        after each contact step: restore the snapshot, step again, log any difference (=2 changes the result: see below).

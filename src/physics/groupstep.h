@@ -255,16 +255,11 @@ namespace GroupStep
       virtual ~Shape() = default;
       virtual void Probe(const V3 &c, double R, Hit &h) const = 0;
       virtual std::string Name() const { return std::string(); }   // diagnostics (VPX_GROUP_CLAMP_TRACE): its owner's name
-      // [Contact] hinge_piece_sum, a surface made of pieces: the pieces a ball at c can reach while it moves at most reach and its part turns at most swing (rad), and
-      // every piece within minReach of it (the far test's own bound), in the pieces' own order. False: not a surface of pieces (its probe takes no list)
-      virtual bool NearPieces(const V3 &, double, double, double, double, std::vector<int> &) const { return false; }
-      // the pieces off the list are off the ball at c with its part moved by dq (trial): a distance bound, no probe
-      virtual bool NearHolds(const V3 &, double, double, const std::vector<int> &) const { return true; }
-      // [Features] path_test: does the ball's centre moving straight from s to s + d come within reach of a piece (depth above 0 anywhere on the path, before the item's zero)?
+      // the path test: does the ball's centre moving straight from s to s + d come within reach of a piece (depth above 0 anywhere on the path, before the item's zero)?
       // 1 = yes, 0 = no (exact, the path kit in rubbercontact.h; a curved piece by its cover, PathRevolve), -1 = no exact test for this shape: FarStillFar probes the middle and the end as before.
       // (A surface its part carries: PathMotion below, the rigid-body law in FarStillFar.)
       virtual int PathReach(const V3 & /*s*/, const V3 & /*d*/, double /*R*/) const { return -1; }
-      // [Features] part_finder, a surface its part carries (group A, runs/2026-11-13-finder-P6/brief_groupA.md): trial = its part's move over the step (the end trial). The most m (m) any
+      // the part finder, a surface its part carries (group A, runs/2026-11-13-finder-P6/brief_groupA.md): trial = its part's move over the step (the end trial). The most m (m) any
       // point of the surface moves relative to the point P over the step (the ball's centre moving dLen): a turn about an axis (rho(P) + dLen / 2) |dq|, a turn about a pivot point
       // (|P - pivot| + dLen / 2) |dtilt|, a translation |dx|, sums for combined motions (paper: runs/2026-11-13-finder-P6/paper_groupA.txt). -1 = none: the two probes
       virtual double PathMotion(const V3 & /*P*/, double /*dLen*/) const { return -1.0; }
@@ -275,28 +270,20 @@ namespace GroupStep
       virtual double PathCoverSag(int & /*kind*/) const { return -1.0; }
       // the self-check of kind 2 at the path end e: true = the cover bounds one way only (the playfield's full faces), false = two ways (a carved hole's rim ring, design.md 2c)
       virtual bool PathOneWay(const V3 & /*e*/) const { return true; }
-      // [Features] part_finder, a surface of pieces: the cycle's list (in the pieces' own order) for a ball whose centre was c0 at the cycle's start and can move reach (m) in the cycle,
+      // the part finder, a surface of pieces: the cycle's list (in the pieces' own order) for a ball whose centre was c0 at the cycle's start and can move reach (m) in the cycle,
       // its part turning within the range its CycleTurn set; pieces: how many the surface has. False: not a surface of pieces (its probe takes no list)
       virtual bool CycleNear(const V3 &, double, double, std::vector<int> &, int &) const { return false; }
       // check mode (VPX_FINDER_CHECK): the pieces within R of a ball at c, its part moved by dq (the rigid piece at the trial angle), that are not on list (exact distances)
       virtual int CycleMisses(const V3 &, double, double, const std::vector<int> &) const { return 0; }
    };
-   // [Features] path_test of this table (physicsini.h; set by ContactSystem::SetTable): 1 = FarStillFar tests a skipped contact on a static shape over the ball's whole move
-   // (object box, piece boxes, exact distance); 0 = at the move's middle and end only, as before
-   inline bool pathTest = true;
-   // [Features] part_finder of this table (physicsini.h; set by ContactSystem::SetTable; runs/2026-11-13-finder-P6/design_reach.md, piece P6a): 1 = a surface of pieces takes its cycle's
-   // list (Shape::CycleNear) in every attempt of the cycle, and a ball centre outside its query volume at a move's middle or end queries again (Group::NearStillNear); 0 = the
-   // per-step lists (Shape::NearPieces, NearHolds, nearGrow), as before
-   inline bool partFinder = true;
-   inline bool jetPulseAtCycle = true;   // [Features] jet_pulse_at_cycle (physicsini.h): a jet's pulse starts at a cycle's start (BumperGroup::Part::CycleStart); 0 = at the step whose switch closes
-   // part_finder's counters per kind of part (its type's name; diagnostics only: VPX_CHECK_PROFILE or VPX_FINDER_CHECK, set by the owner in partFinderProf)
+   // part finder's counters per kind of part (its type's name; diagnostics only: VPX_CHECK_PROFILE or VPX_FINDER_CHECK, set by the owner in partFinderProf)
    struct PartFinderCount
    {
-      long long lists = 0, listLen = 0, pieces = 0;   // lists built (key 0: per attempt; key 1: per cycle and after a re-query), their pieces, the surface's pieces
-      long long retries = 0, requeries = 0, rangeRuns = 0;   // key 0: nearGrow retries (a piece off a list reached); key 1: re-queries (a ball outside its query volume), range re-runs (group A)
-      long long checks = 0, misses = 0;              // check mode, key 1: positions checked (start, middle, end of each solve), pieces within R off the list
-      long long ovCalls = 0, ovProbes = 0, ovSkips = 0, ovMismatch = 0;   // CheckOverlaps: calls (each part counted once per call), probes, parts skipped by their region (key 1), skipped parts overlapping (check mode)
-      // key 1, FarStillFar's skipped contacts on this kind's surfaces (P6a2): tested on the path by the swept region, cleared, reached; left to the two probes (no region: -1); fixed surfaces
+      long long lists = 0, listLen = 0, pieces = 0;   // lists built (per cycle and after a re-query), their pieces, the surface's pieces
+      long long requeries = 0, rangeRuns = 0;   // re-queries (a ball outside its query volume), range re-runs (group A)
+      long long checks = 0, misses = 0;              // check mode: positions checked (start, middle, end of each solve), pieces within R off the list
+      long long ovCalls = 0, ovProbes = 0, ovSkips = 0, ovMismatch = 0;   // CheckOverlaps: calls (each part counted once per call), probes, parts skipped by their region, skipped parts overlapping (check mode)
+      // FarStillFar's skipped contacts on this kind's surfaces (P6a2): tested on the path by the swept region, cleared, reached; left to the two probes (no region: -1); fixed surfaces
       // of the part with their own test (a bumper's body, a disc: counted also in "Path test totals"); check mode: swept-region self-checks (path end and middle) and disagreements
       long long pathTested = 0, pathClear = 0, pathReached = 0, pathTwo = 0, pathFixed = 0, pathChecks = 0, pathBad = 0;
    };
@@ -313,14 +300,14 @@ namespace GroupStep
    inline bool FinderCheckEnv() { static const bool on = []() { const char *const e = getenv("VPX_FINDER_CHECK"); return e != nullptr && atoi(e) != 0; }(); return on; }
    inline std::string PartFinderReport()
    {
-      std::string s = std::string("Part finder totals (key part_finder = ") + (partFinder ? "1" : "0") + "):";
+      std::string s = "Part finder totals:";
       char b[900];
       for (const auto &e : partFinderCount)
       {
          const PartFinderCount &c = e.second;
-         snprintf(b, sizeof b, " | %s: lists %lld, pieces per list %.3f, pieces per surface %.3f, retries %lld, re-queries %lld, range re-runs %lld, checks %lld, misses %lld; overlap check calls %lld, probes %lld (%.3f per call), skipped %lld, mismatches %lld"
+         snprintf(b, sizeof b, " | %s: lists %lld, pieces per list %.3f, pieces per surface %.3f, re-queries %lld, range re-runs %lld, checks %lld, misses %lld; overlap check calls %lld, probes %lld (%.3f per call), skipped %lld, mismatches %lld"
                   "; path: swept tested %lld, cleared %lld, reached %lld, two probes %lld, fixed surface %lld, self-checks %lld, disagreements %lld",
-                  e.first.c_str(), c.lists, c.lists > 0 ? (double)c.listLen / (double)c.lists : 0.0, c.lists > 0 ? (double)c.pieces / (double)c.lists : 0.0, c.retries, c.requeries, c.rangeRuns, c.checks, c.misses,
+                  e.first.c_str(), c.lists, c.lists > 0 ? (double)c.listLen / (double)c.lists : 0.0, c.lists > 0 ? (double)c.pieces / (double)c.lists : 0.0, c.requeries, c.rangeRuns, c.checks, c.misses,
                   c.ovCalls, c.ovProbes, c.ovCalls > 0 ? (double)c.ovProbes / (double)c.ovCalls : 0.0, c.ovSkips, c.ovMismatch, c.pathTested, c.pathClear, c.pathReached, c.pathTwo, c.pathFixed,
                   c.pathChecks, c.pathBad);
          s += b;
@@ -725,10 +712,10 @@ namespace GroupStep
       bool guessAccel = false;   // [Contact] part_guess_accel (Settings::partGuessAccel, set by the group before BeginStep)
       bool gripInStep = true;    // [Contact] grip_in_step (Settings::gripInStep, set by the group before BeginStep): its grip limit from each Eval's own unknowns; false = UpdateGrip between rounds
       mutable const std::vector<int> *nearNow = nullptr;   // [Contact] hinge_piece_sum: the probe of a surface it carries takes only these pieces (this attempt's list); null = all
-      // [Features] part_finder: at the cycle's start, how far it can turn in the cycle of T s with the balls of its island holding E J of kinetic energy (design_reach.md section 1). None: no lists
+      // the part finder: at the cycle's start, how far it can turn in the cycle of T s with the balls of its island holding E J of kinetic energy (design_reach.md section 1). None: no lists
       virtual void CycleTurn(double /*E*/, double /*T*/) {}
       double eOwnJ = -1.0;   // energy skip test: what it can hold this cycle before a ball touches it (its kinetic energy, drive work, squash; J); -1 = not given (the host sets it each cycle)
-      // [Features] part_finder (group A): the range of its coordinates its cycle lists were sized for is a size only, made complete by this check after each solve: false = the solved
+      // the part finder (group A): the range of its coordinates its cycle lists were sized for is a size only, made complete by this check after each solve: false = the solved
       // move qe (the end trial) left it; CycleRegrow then sets the range again from its state now (CycleTurn over T with E) joined to the old range and the solved place
       virtual bool CycleRangeHolds(const double * /*qe*/) const { return true; }
       virtual void CycleRegrow(const double * /*qe*/, double /*E*/, double /*T*/) {}
@@ -1208,9 +1195,9 @@ namespace GroupStep
       int nUnk = 0;              // unknowns of the step being solved
       bool partEvalFailed = false;
       bool nearOn = false;
-      double nearGrow = 1.0;     // the reach's factor: x4 each time a solve's end left its list (the lists then grow to all the pieces)
+      bool nearAll = false;      // true = every piece (an explicit move's step); false = the cycle's lists
       bool farOff = false;
-      // [Features] part_finder: the cycle's lists per item (cycHas 0 = to build, 1 = built, 2 = not a surface of pieces; cycAS: the ball and shape it was built for), each ball's query
+      // the part finder: the cycle's lists per item (cycHas 0 = to build, 1 = built, 2 = not a surface of pieces; cycAS: the ball and shape it was built for), each ball's query
       // centre and reach, the cycle's length; nearCyc: this attempt's lists are the cycle's
       std::vector<std::vector<int>> cycL;
       std::vector<char> cycHas;
@@ -1677,9 +1664,8 @@ namespace GroupStep
          stopBuf.clear();
          stopLines = 0;
          FILE *const pf = PhaseFile();
-         struct CycOff { bool &f; explicit CycOff(bool &b) : f(b) {} ~CycOff() { f = false; } } cycOff(cycOn);   // part_finder: the cycle's lists end with it
-         if (partFinder)
-            FinderCycleStart(dt);
+         struct CycOff { bool &f; explicit CycOff(bool &b) : f(b) {} ~CycOff() { f = false; } } cycOff(cycOn);   // part finder: the cycle's lists end with it
+         FinderCycleStart(dt);
          SkipCycleStart();
          while (done < dt - 1e-12)
          {
@@ -2589,7 +2575,7 @@ namespace GroupStep
       Buf<StickRec> szRec;
       std::vector<double> szCand;
       Buf<char> farNow;          // not touching and out of reach in this attempt
-      // [Contact] hinge_piece_sum: per contact, the pieces of its surface the ball can reach in this attempt (Shape::NearPieces), built at its start; every probe
+      // [Contact] hinge_piece_sum: per contact, the pieces of its surface the ball can reach in this cycle (its cycle's list, Shape::CycleNear); every probe
       // of the attempt (start, middle, end, every Newton try) takes the same list. A piece off it has depth <= 0 at every place of the step (checked after the
       // solve: NearStillNear), so the union's sum, forces and energy are those of all its pieces. Outside an attempt (the step's choice, events) a probe takes all
       std::vector<std::vector<int>> nearL;
@@ -2600,57 +2586,31 @@ namespace GroupStep
       std::vector<std::array<double, 4>> tgFS;   // (... each term's force direction gdT, the row side of its slope: termForceRows)
       struct NearOff { bool &f; explicit NearOff(bool &b) : f(b) { f = false; } ~NearOff() { f = false; } };   // a step's lists end with it (Step, EnergyStep)
       static bool NearAllOn() { static const bool on = []() { const char *const e = getenv("VPX_HINGE_NEAR_ALL"); return e != nullptr && atoi(e) != 0; }(); return on; }   // diagnostics: every list = all pieces (A/B)
-      // the lists of this attempt (after the parts' BeginStep: their rates now). The reach: the ball's travel 2 |v| h and the part's turn 2 |rate| h (times nearGrow),
-      // and never less than the far test's bound (OutOfReach), so a contact that is not far has its deepest piece listed and its gap, normal and law are those of all
-      // its pieces. The far test's second solve (farOff) and the diagnostic VPX_HINGE_NEAR_ALL take every piece
+      // the lists of this attempt: each contact's cycle list (CycleList). The far test's second solve (farOff), an explicit move (nearAll) and the
+      // diagnostic VPX_HINGE_NEAR_ALL take every piece
       void BuildNear(const double h)
       {
          nearOn = false;
          if (nearL.size() < (size_t)ni)
             nearL.resize((size_t)ni);
-         const bool all = farOff || NearAllOn() || nearGrow > 1e6;
-         // [Features] part_finder: the cycle's lists (CycleList); a step outside a cycle's StepsOver, or one that takes every piece, takes all (never the per-step lists)
-         nearCyc = partFinder && !all;
+         const bool all = farOff || NearAllOn() || nearAll;
+         // the part finder: the cycle's lists (CycleList); a step outside a cycle's StepsOver, or one that takes every piece, takes all (never the per-step lists)
+         nearCyc = !all;
          for (int k = 0; k < ni; k++)
          {
             Item &it = item[k];
             it.nearK = -1;
             if (it.b >= 0 || shape[it.s]->part < 0)
                continue;
-            if (partFinder)
+            if (nearCyc && cycOn && CycleList(k))
             {
-               if (nearCyc && cycOn && CycleList(k))
-               {
-                  nearL[(size_t)k] = cycL[(size_t)k];
-                  it.nearK = k;
-               }
-               continue;
-            }
-            const Shape *const sh = shape[it.s];
-            const Part *const pp = part[sh->part];
-            const Ball &A = ball[it.a];
-            double rate = 0.0, sp = A.v.Length();
-            for (int c = 0; c < pp->NumCoords(); c++)
-            {
-               const CoordInfo q = pp->Coord(c);
-               rate += std::fabs(q.rate);
-               sp += std::fabs(q.rate) * q.reach;
-            }
-            const double reach = all ? INFINITY : 2.0 * A.v.Length() * h * nearGrow + 1e-4, swing = all ? INFINITY : 2.0 * rate * h * nearGrow;
-            if (sh->NearPieces(A.c, A.R, reach, swing, 2.0 * sp * h + 1e-4, nearL[(size_t)k]))
-            {
+               nearL[(size_t)k] = cycL[(size_t)k];
                it.nearK = k;
-               if (partFinderProf)
-               {
-                  PartFinderCount &pc = partFinderCount[typeid(*pp).name()];
-                  pc.lists++;
-                  pc.listLen += (long long)nearL[(size_t)k].size();
-               }
             }
          }
          nearOn = true;
       }
-      // [Features] part_finder: item k's cycle list, built once per cycle (and again after its ball's re-query) from the ball's centre at the cycle's start and its reach; false = not a
+      // the part finder: item k's cycle list, built once per cycle (and again after its ball's re-query) from the ball's centre at the cycle's start and its reach; false = not a
       // surface of pieces
       bool CycleList(const int k)
       {
@@ -2688,7 +2648,7 @@ namespace GroupStep
          }
          return ok;
       }
-      // [Features] part_finder, the cycle's start (StepsOver): each part's turn over the cycle from the island's balls' kinetic energy (spin included), each ball's query volume
+      // the part finder, the cycle's start (StepsOver): each part's turn over the cycle from the island's balls' kinetic energy (spin included), each ball's query volume
       // (its centre now, its reach ContactReachM from its speed now; its acceleration is not known here: 0, the inside check covers it)
       void FinderCycleStart(const double T)
       {
@@ -2712,7 +2672,7 @@ namespace GroupStep
          }
          std::fill(cycHas.begin(), cycHas.end(), (char)0);
       }
-      // [Features] part_finder, after the solve: the inside check of every ball with a listed contact at the move's middle and end (its centre within its reach of where the cycle's
+      // the part finder, after the solve: the inside check of every ball with a listed contact at the move's middle and end (its centre within its reach of where the cycle's
       // query was made). Outside: the query again from the ball's solved place, its reach ContactReachM over the cycle's length T (at least the time left from this step's start, this
       // step included, so its own middle is inside; the group does not keep the time done) from its solved speed and the acceleration over the step just solved (the end rate 2 dc / h - v); its lists rebuilt, the attempt again.
       // Then the parts' range check (group A): a part whose solved move left the range its lists were sized for takes a new range, every list on it rebuilt, the attempt again
@@ -2797,25 +2757,7 @@ namespace GroupStep
       {
          if (carried)
             SetTrials(xv);
-         if (partFinder)
-            return !nearCyc || CycleStillInside(xv, h);
-         for (int k = 0; k < ni; k++)
-         {
-            const Item &it = item[k];
-            if (it.nearK < 0 || farNow[k])
-               continue;
-            const Shape *const sh = shape[it.s];
-            const Ball &A = ball[it.a];
-            const V3 dc(xv[6 * it.a], xv[6 * it.a + 1], xv[6 * it.a + 2]);
-            const double *const qe = (const double *)qEnd + coordOff[sh->part], *const qm = (const double *)qMid + coordOff[sh->part];
-            if (!sh->NearHolds(A.c + dc, A.R, qe[0], nearL[(size_t)k]) || !sh->NearHolds(A.c + dc * 0.5, A.R, qm[0], nearL[(size_t)k]))
-            {
-               if (partFinderProf)
-                  partFinderCount[typeid(*part[sh->part]).name()].retries++;
-               return false;
-            }
-         }
-         return true;
+         return !nearCyc || CycleStillInside(xv, h);
       }
       Buf<double> fieldE0;       // what each ball's place stores at the start of the attempt
       // out of reach: the gap is more than both bodies' speeds can close in twice the step. A body that picks up speed inside the step is what the check after the solve is for
@@ -2982,7 +2924,7 @@ namespace GroupStep
          return r;
       }
       // After the solve: did a skipped contact get reached after all? Then the attempt runs again with none skipped.
-      // [Features] path_test: a static shape (straight, or curved by its cover) and a ball pair are tested over the whole move (PathReach, the path kit); a moving shape at the move's middle and end
+      // the path test: a static shape (straight, or curved by its cover) and a ball pair are tested over the whole move (PathReach, the path kit); a moving shape at the move's middle and end
       bool FarStillFar(const double *xv)
       {
          if (!ContactProf::CheckOn())
@@ -3038,7 +2980,7 @@ namespace GroupStep
             pc.first[kind] = buf;
          }
       }
-      // [Features] part_finder, the path test of a skipped contact on a surface its part carries (group A; paper: runs/2026-11-13-finder-P6/paper_groupA.txt). The ball's centre moves
+      // the part finder, the path test of a skipped contact on a surface its part carries (group A; paper: runs/2026-11-13-finder-P6/paper_groupA.txt). The ball's centre moves
       // straight over the step, its middle P; the part moves from where it is to its end trial, its middle pose the middle trial. Every point of the part moves relative to P by at most
       // m(P) over the step (Shape::PathMotion) and the ball's centre at most dLen / 2 from P; a distance changes no faster than its two points move (1-Lipschitz), so over the whole step
       // the depth is at most the probe's depth at P with the part at its middle pose (the exact point probe, this attempt's list, less the item's zero) plus L (dLen / 2 + m / 2), L the
@@ -3119,7 +3061,6 @@ namespace GroupStep
          for (int k = 0; k < ni; k++)
             if (farNow[k])
             {
-               if (pathTest)
                {
                   const Item &it = item[k];
                   const Ball &A = ball[it.a];
@@ -3133,7 +3074,7 @@ namespace GroupStep
                      if (prof)
                         RubberContact::pathStats.kit++;
                   }
-                  else if (partFinder && shape[it.s]->part >= 0)   // a part's surface: a fixed one (a bumper's body, a disc) its own test; one that moves with it the rigid-body law (group A)
+                  else if (shape[it.s]->part >= 0)   // a part's surface: a fixed one (a bumper's body, a disc) its own test; one that moves with it the rigid-body law (group A)
                   {
                      const Shape &sh = *shape[it.s];
                      r = sh.PathReach(A.c, dA, A.R);
@@ -3157,7 +3098,7 @@ namespace GroupStep
                      }
                   }
                   else
-                     r = shape[it.s]->PathReach(A.c, dA, A.R);   // (key 0: a surface that moves with its part answers -1; a part's fixed surface, a bumper's body or a disc, its own test)
+                     r = shape[it.s]->PathReach(A.c, dA, A.R);
                   if (r >= 0 && it.b < 0 && RubberContact::PathCheckOn())
                      PathSelfCheck(*shape[it.s], A.c + dA, A.R, it.a);
                   if (r >= 0)
@@ -3178,11 +3119,11 @@ namespace GroupStep
                }
                Hit h1, hm;
                ProbeMove(item[k], b1, bm, h1, hm);
-               if (prof && pathTest)
+               if (prof)
                   RubberContact::pathStats.twoPoint++;
                if (h1.delta > 0.0 || hm.delta > 0.0)
                {
-                  if (prof && pathTest)
+                  if (prof)
                      RubberContact::pathStats.reachedTwo++;
                   return false;
                }
@@ -4548,7 +4489,7 @@ namespace GroupStep
       {
          struct InEnergy { bool &f; explicit InEnergy(bool &b) : f(b) { f = true; } ~InEnergy() { f = false; } } inEnergy(histInEnergy);   // (diagnostics: the history's label)
          const NearOff nearOff(nearOn);
-         nearGrow = INFINITY;   // (its explicit moves are not checked against a list: every piece)
+         nearAll = true;   // (its explicit moves are not checked against a list: every piece)
          const double E0 = Energy();
          Ball *const b0 = esB0;
          Item *const i0 = esI0;
@@ -4853,7 +4794,7 @@ namespace GroupStep
       // tested by FarStillFar again, so nothing found is left at the step's end.
       bool Solve(double h)
       {
-         nearGrow = 1.0;
+         nearAll = false;
          // VPX_CHECK_PROFILE (timeJoins, set by the owner; diagnostics only): an attempt run again in a step with a join (FarStillFar reached a contact, or a join after an all-in attempt)
          const auto t = [&]() { return timeJoins ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point(); };
          const auto timedRerun = [&](const std::chrono::steady_clock::time_point t0) {
@@ -4887,10 +4828,8 @@ namespace GroupStep
                   }
                   return ok;   // (its lists hold every piece)
                }
-               if (!NearStillNear(x, h))
+               if (!NearStillNear(x, h))   // a ball centre outside its query volume: its re-query (CycleStillInside), the attempt again
                {
-                  if (!partFinder)
-                     nearGrow *= 4.0;   // a piece off a list was reached: the lists anew from a longer reach, the attempt again (part_finder: the ball's re-query, CycleStillInside)
                   again = true;
                   break;
                }

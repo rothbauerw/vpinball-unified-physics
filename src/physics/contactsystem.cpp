@@ -50,8 +50,6 @@ namespace ContactSystem
    static bool s_seatEditorBalls = false;   // [Features] seat_editor_balls of this table (physicsini.h), read likewise; off with the unified engine off
    static std::filesystem::path s_iniFile;   // the table's physics ini (PhysicsIni::FindUnified at SetTable; empty = none): every reader reads this one file
    static std::filesystem::file_time_type s_iniTime{};   // its write time when the readers last read it (SetTable, ReloadChangedIni)
-   static bool s_ballInsideCheck = true;    // [Features] ball_inside_check of this table (physicsini.h), read likewise: 1 = every group ball's inside check after each attempt (the midJoin lambda); 0 = as before
-   static bool s_reachFullFeed = true;      // [Features] reach_full_feed of this table (physicsini.h), read likewise: 1 = a part's move in ReachEnergy takes its group's full feed (the other parts' work too); 0 = the balls' energy only, as before
    static bool s_aircoreInStep = false;     // [Features] aircore_in_step of this table (physicsini.h), read likewise: 1 = an air-core coil's pull is read at each step's midpoint (AircorePullForce, CordIsland); 0 = held for the cycle as before
 
    void SetTable(const std::filesystem::path &tableFile)
@@ -73,11 +71,6 @@ namespace ContactSystem
       s_unifiedSet = true;
       s_seatEditorBalls = s_unified && f.seatEditorBalls;
       s_aircoreInStep = s_unified && f.aircoreInStep;
-      GroupStep::pathTest = f.pathTest;   // [Features] path_test (groupstep.h; read by the group step and the engagement query only)
-      GroupStep::partFinder = f.partFinder;   // [Features] part_finder (groupstep.h, hingegroup.h; the group step's piece lists and CheckOverlaps)
-      s_ballInsideCheck = f.ballInsideCheck;   // [Features] ball_inside_check (physicsini.h; the group step's per-ball inside check, the midJoin lambda)
-      s_reachFullFeed = f.reachFullFeed;   // [Features] reach_full_feed (physicsini.h; ReachEnergy)
-      GroupStep::jetPulseAtCycle = f.jetPulseAtCycle;   // [Features] jet_pulse_at_cycle (physicsini.h; BumperGroup::Part::CycleStart, ContactBumperPart::EnergyMove)
       GroupStep::partFinderProf = ContactProf::CheckOn() || GroupStep::FinderCheckEnv();   // (its counters: diagnostics only)
       GroupStep::partFinderCount.clear();
       GroupStep::skipOwnTested = GroupStep::skipOwnSkipped = GroupStep::skipEsComputed = GroupStep::skipTripItems = GroupStep::skipDeferred = GroupStep::skipTripAttempts = 0;
@@ -87,11 +80,6 @@ namespace ContactSystem
       {
          PLOGI << "Contact system: unified engine on (" << file.string() << "; dev fallback: stock hit search still runs for object types not yet converted)";
          PLOGI << "Contact system: [Features] aircore_in_step = " << (s_aircoreInStep ? 1 : 0) << (s_aircoreInStep ? " (an air-core coil's pull read at each step's midpoint)" : " (an air-core coil's pull held for the cycle)");
-         PLOGI << "Contact system: [Features] path_test = " << (GroupStep::pathTest ? 1 : 0) << (GroupStep::pathTest ? " (a skipped contact on a static surface or a ball pair tested over the whole move; engagement query by the reach rule)" : " (a skipped contact probed at the move's middle and end; engagement query 20 U)");
-         PLOGI << "Contact system: [Features] part_finder = " << (GroupStep::partFinder ? 1 : 0) << (GroupStep::partFinder ? " (a hinge part's pieces listed once per cycle from their swept sectors; the overlap check by region)" : " (per-step piece lists; the overlap check probes every part)");
-         PLOGI << "Contact system: [Features] reach_full_feed = " << (s_reachFullFeed ? 1 : 0) << (s_reachFullFeed ? " (a part's move takes its group's full feed: the balls' energy and the other parts' work)" : " (a part's move from its group's balls' energy only)");
-         PLOGI << "Contact system: [Features] jet_pulse_at_cycle = " << (GroupStep::jetPulseAtCycle ? 1 : 0) << (GroupStep::jetPulseAtCycle ? " (a jet's switch closure arms a pulse that starts at the next cycle's start after its jet_coil_delay_ms)" : " (a jet's pulse fires at the end of the step whose switch closes)");
-         PLOGI << "Contact system: [Features] ball_inside_check = " << (s_ballInsideCheck ? 1 : 0) << (s_ballInsideCheck ? " (every group ball checked against its cycle query after each attempt)" : " (only a static mesh item's probes check the ball's query)");
       }
       else
          PLOGI << "Contact system: stock VPX physics, every new model off (" << (file.empty() ? std::string("no physics ini") : file.string() + " has no [Features] unified = 1") << ")";
@@ -747,9 +735,9 @@ struct ContactSystemImpl
       }
       const size_t nPairs0 = cy.pairs.size();
       std::vector<double> eb(nw), af(nw), hv(nw), ef(nw), sb(nw), wp(np), gw(nw);
-      std::vector<int> np2(nw);   // [Features] reach_full_feed: the grouped parts of each group (by its root ball); gw: their work and squash
-      constexpr double kFeedStop = 1e-3;  // reach_full_feed: the fixed point stops once no part's work grows by more than this fraction of itself and the remaining growth is bounded (below); the bound is then added, so the stop is not a tolerance
-      std::vector<double> fp(np), sp(np);   // reach_full_feed: the feed each part's work was last found at, and its last measured slope d(work)/d(feed) (-1 = none yet)
+      std::vector<int> np2(nw);   // the full feed: the grouped parts of each group (by its root ball); gw: their work and squash
+      constexpr double kFeedStop = 1e-3;  // the full feed: the fixed point stops once no part's work grows by more than this fraction of itself and the remaining growth is bounded (below); the bound is then added, so the stop is not a tolerance
+      std::vector<double> fp(np), sp(np);   // the full feed: the feed each part's work was last found at, and its last measured slope d(work)/d(feed) (-1 = none yet)
       int rounds = 0, feedRounds = 0;
       for (bool grew = true; grew;)
       {
@@ -800,7 +788,7 @@ struct ContactSystemImpl
                fp[p] = eb[find(partBall[p])];
             }
          }
-         if (ContactSystem::s_reachFullFeed)   // [Features] reach_full_feed: a part's move takes its group's full feed: the balls' energy and the OTHER parts' work and squash (its own work
+         // a part's move takes its group's full feed: the balls' energy and the OTHER parts' work and squash (its own work
          {                                     // is its own energy, already in its move: fed back it would count twice). In a group with one part this is the move above
             std::fill(np2.begin(), np2.end(), 0);
             for (int p = 0; p < np; p++)
@@ -858,7 +846,7 @@ struct ContactSystemImpl
                }
                if (++feedRounds == 1000)   // (a fixed point that does not end is a fault: logged, and stopped here so the run reports it)
                {
-                  PLOGW << "Energy reach: reach_full_feed parts' fixed point not converged after 1000 sweeps";
+                  PLOGW << "Energy reach: the full feed parts' fixed point not converged after 1000 sweeps";
                   more = false;
                }
             }
@@ -960,7 +948,7 @@ struct ContactSystemImpl
       }
       static uint64_t nCyc = 0, nRounds = 0;   // the fixed point's rounds per cycle (diagnostics: logged every 10000 cycles)
       static int worst = 0;
-      static uint64_t nMulti = 0, nGrown = 0, nSweeps = 0;   // reach_full_feed diagnostics: groups with two or more grouped parts, part moves fed by another part's work or squash, the parts' sweeps
+      static uint64_t nMulti = 0, nGrown = 0, nSweeps = 0;   // the full feed diagnostics: groups with two or more grouped parts, part moves fed by another part's work or squash, the parts' sweeps
       std::fill(np2.begin(), np2.end(), 0);
       std::fill(gw.begin(), gw.end(), 0.0);
       for (int p = 0; p < np; p++)
@@ -972,14 +960,14 @@ struct ContactSystemImpl
       for (int i = 0; i < nw; i++)
          nMulti += np2[i] >= 2 ? 1 : 0;
       for (int p = 0; p < np; p++)
-         if (ContactSystem::s_reachFullFeed && partBall[p] >= 0 && np2[find(partBall[p])] >= 2 && gw[find(partBall[p])] - wp[p] - parts[p]->squashJ > 0.0)
+         if (partBall[p] >= 0 && np2[find(partBall[p])] >= 2 && gw[find(partBall[p])] - wp[p] - parts[p]->squashJ > 0.0)
             nGrown++;
       nSweeps += (uint64_t)feedRounds;
       nCyc++;
       nRounds += (uint64_t)rounds;
       worst = std::max(worst, rounds);
       if (nCyc % 10000 == 0)
-         PLOGI << "Energy reach rounds: " << nCyc << " cycles, rounds per cycle mean " << (double)nRounds / (double)nCyc << ", worst " << worst << "; reach_full_feed " << (ContactSystem::s_reachFullFeed ? 1 : 0) << ": groups with two or more parts " << nMulti << ", part moves fed by another part " << nGrown << ", parts' sweeps " << nSweeps << "; parts in solve " << s_solveParts << " over " << s_solveIslands << " island solves (at rest " << s_solveRest << "), PartsInSolve misses " << s_solveMiss << ", releases clear " << s_relClear << ", timeout " << s_relTimeout << ", kept within the surface.s bound " << s_relHeld;
+         PLOGI << "Energy reach rounds: " << nCyc << " cycles, rounds per cycle mean " << (double)nRounds / (double)nCyc << ", worst " << worst << "; groups with two or more parts " << nMulti << ", part moves fed by another part " << nGrown << ", parts' sweeps " << nSweeps << "; parts in solve " << s_solveParts << " over " << s_solveIslands << " island solves (at rest " << s_solveRest << "), PartsInSolve misses " << s_solveMiss << ", releases clear " << s_relClear << ", timeout " << s_relTimeout << ", kept within the surface.s bound " << s_relHeld;
    }
 
    static void ReachLinks(Cycle &cy)
@@ -1586,18 +1574,13 @@ struct ContactSystemImpl
       ContactMovingPart *mp = nullptr;   // a part on the group: its own surface, which moves with it
       int surface = 0;
       std::string Name() const override { return r != nullptr ? r->Name() : std::string(); }
-      bool NearPieces(const V3 &c, const double R, const double reach, const double swing, const double minReach, std::vector<int> &list) const override
-      {
-         return mp != nullptr && mp->GroupNearPieces(surface, c, R, reach, swing, minReach, list);
-      }
-      bool NearHolds(const V3 &c, const double R, const double dq, const std::vector<int> &list) const override { return mp == nullptr || mp->GroupNearHolds(surface, c, R, dq, list); }
       bool CycleNear(const V3 &c, const double R, const double reach, std::vector<int> &list, int &n) const override { return mp != nullptr && mp->GroupCycleNear(surface, c, R, reach, list, n); }
       int CycleMisses(const V3 &c, const double R, const double dq, const std::vector<int> &list) const override { return mp != nullptr ? mp->GroupCycleMisses(surface, c, R, dq, list) : 0; }
       int PathReach(const V3 &s, const V3 &d, const double R) const override { return mp != nullptr ? mp->GroupPathReach(surface, s, d, R) : r->PathReach(*it, s, d, R); }
-      double PathMotion(const V3 &P, const double dLen) const override { return mp != nullptr && GroupStep::partFinder ? mp->GroupPathMotion(surface, P, dLen, trial) : -1.0; }   // (group A)
+      double PathMotion(const V3 &P, const double dLen) const override { return mp != nullptr ? mp->GroupPathMotion(surface, P, dLen, trial) : -1.0; }   // (group A)
       double PathSlope() const override { return mp != nullptr ? mp->GroupPathSlope(surface) : 1.0; }
       bool PathOneWay(const V3 &e) const override { return mp == nullptr && r->PathOneWay(*it, e); }   // (the self-check: the playfield's full faces bound one way, a hole's rim two ways)
-      double PathCoverSag(int &kind) const override { return mp != nullptr ? mp->GroupPathCoverSag(surface, kind) : r->PathCoverSag(*it, kind); }   // (the self-check, VPX_FINDER_CHECK)   // ([Features] path_test; a part's surface: its own answer, -1 for one that moves: build 3)
+      double PathCoverSag(int &kind) const override { return mp != nullptr ? mp->GroupPathCoverSag(surface, kind) : r->PathCoverSag(*it, kind); }   // (the self-check, VPX_FINDER_CHECK)   // (the path test; a part's surface: its own answer, -1 for one that moves: build 3)
       void Probe(const V3 &c, double R, GroupStep::Hit &h) const override
       {
          const ContactProf::Stage profStage(ContactProf::StGroupShape);   // P3a profile: the calling stage of the checks here (diagnostics only)
@@ -2538,13 +2521,12 @@ struct ContactSystemImpl
       g.joinRerunNs = 0.0;
       g.joinReruns = 0;
       g.midJoin = [&](const bool allow) -> int {
-            // [Features] ball_inside_check: every ball of the group is checked against its own cycle query at the attempt's end, whatever its items (design.md section 4: the
+            // the ball's inside check: every ball of the group is checked against its own cycle query at the attempt's end, whatever its items (design.md section 4: the
             // inside check first). The attempt moves the ball's centre on the straight segment c -> c + MoveOf, whose farthest point from the query's centre is one of its ends;
             // the start passed the last check, so the end covers the move. A ball with no BallContact entry has no cycle query (FinderQuery runs per entry): nothing to check.
-            if (ContactSystem::s_ballInsideCheck)
-               for (int ib = 0; ib < g.nb; ib++)
-                  if (bodyOf[ib] != nullptr && bodyOf[ib]->e != nullptr)
-                     ContactSurfaceHost::FinderInsideBall(balls[ib], g.ball[ib].c + g.MoveOf(ib));
+            for (int ib = 0; ib < g.nb; ib++)
+               if (bodyOf[ib] != nullptr && bodyOf[ib]->e != nullptr)
+                  ContactSurfaceHost::FinderInsideBall(balls[ib], g.ball[ib].c + g.MoveOf(ib));
             if (!ContactSurfaceHost::FinderPendAny())
                return 0;
             if (!allow)
@@ -3699,8 +3681,8 @@ void ContactSystemImpl::GatherItems(ContactHost *const host, const HitBall *cons
    // instead of the host's box); kept in the registry's order
    thread_local std::vector<ContactHost *> hosts;
    hosts.clear();
-   // [Features] path_test: the query's size is the one reach rule (ContactReachM; the acceleration unknown at engagement: 0, the inside check re-queries past it); 0 = 20 U as before
-   ContactSurfaceHost::FinderQueryAt(pb, c, bs.R, GroupStep::pathTest ? ContactReachM(V3((double)pb->m_d.m_vel.x * VS, (double)pb->m_d.m_vel.y * VS, (double)pb->m_d.m_vel.z * VS).Length(), 0.0, PHYSICS_STEPTIME_S) : 20.0 * U);
+   // the path test: the query's size is the one reach rule (ContactReachM; the acceleration unknown at engagement: 0, the inside check re-queries past it); 0 = 20 U as before
+   ContactSurfaceHost::FinderQueryAt(pb, c, bs.R, ContactReachM(V3((double)pb->m_d.m_vel.x * VS, (double)pb->m_d.m_vel.y * VS, (double)pb->m_d.m_vel.z * VS).Length(), 0.0, PHYSICS_STEPTIME_S));
    ContactSurfaceHost::FinderHosts(pb, hosts);
    for (ContactHost *const o : ContactHost::Registry())
       if (o->FinderObjIndex() < 0 || o == host)
@@ -4743,8 +4725,8 @@ void ContactSystemImpl::CheckOverlaps(const float hittime, const double hS)
          for (ContactHost *const o : parts)
          {
             ContactMovingPart *const mp = o->MovingPart();
-            // [Features] part_finder: only a part whose region where it is now is within the ball's radius (plus the tolerance) can overlap it
-            const bool skip = GroupStep::partFinder && mp->RegionDist(c) > bs.R + tol;
+            // the part finder: only a part whose region where it is now is within the ball's radius (plus the tolerance) can overlap it
+            const bool skip = mp->RegionDist(c) > bs.R + tol;
             GroupStep::PartFinderCount *const pc = GroupStep::partFinderProf ? &GroupStep::partFinderCount[typeid(*mp).name()] : nullptr;
             if (pc != nullptr)
             {

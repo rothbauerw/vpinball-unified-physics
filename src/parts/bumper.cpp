@@ -234,7 +234,7 @@ void Bumper::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       }
       m_bumperModel = std::make_shared<JetBumper::EnginePart>();
       m_bumperModel->Build(prm, RubberContact::V3((double)m_d.m_vCenter.x * U, (double)m_d.m_vCenter.y * U, (double)height * U));
-      PLOGI << "part_finder path slope (group A): bumper " << GetName() << " skirt " << m_bumperModel->GroupPathSlope(0) << ", ring " << m_bumperModel->GroupPathSlope(1);
+      PLOGI << "part finder path slope (group A): bumper " << GetName() << " skirt " << m_bumperModel->GroupPathSlope(0) << ", ring " << m_bumperModel->GroupPathSlope(1);
       m_bumperModel->SetCollidable(m_d.m_collidable);
       const float r = (float)(m_bumperModel->Reach() / U);
       const float lo[3] = { m_d.m_vCenter.x - r, m_d.m_vCenter.y - r, height };
