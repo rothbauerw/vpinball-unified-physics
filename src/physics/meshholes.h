@@ -18,5 +18,7 @@ namespace MeshHoles
    void Add(const std::string &name, const std::vector<double> &xy, bool through, double partZ);
    // a round outline of radius r (m) about x y with edges tangent to the circle: N = max(24, smallest N with r (1 / cos(pi / N) - 1) <= 0.2 mm) (paper section 4)
    std::vector<double> Round(double x, double y, double r);
+   // the closed outline x0 y0 x1 y1 ... (m) grown by d (m): each edge moved d outward, parallel, each vertex where its two edges' moved lines cross
+   std::vector<double> Offset(const std::vector<double> &xy, double d);
    void Build();
 }

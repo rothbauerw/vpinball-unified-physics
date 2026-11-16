@@ -22,6 +22,7 @@
 #include "physics/contactsystem.h"
 #include "physics/contactwireswitch.h"
 #include "physics/contactsurfacehost.h"
+#include "physics/meshholes.h"
 #include "physics/physicsini.h"
 #include "physics/testdriver.h"
 #include "core/player.h"
@@ -938,6 +939,47 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       const GroupStep::V3 axis((double)m_d.m_vCenter.x * U, (double)m_d.m_vCenter.y * U, (double)height * U);
       auto model = std::make_shared<ButtonCap::Cap>();
       model->Build(s, axis, m_d.m_radius * U, RubberContact::BallSI(), star ? ButtonCap::Top::Star : ButtonCap::Top::Button);
+      if (MeshHoles::On())   // mesh_holes: the cap's hole cut into the mesh under it (paper Q7, Q2): the cap's plan outline + the gap, not through (no walls: the rim is the top's open edge)
+      {
+         constexpr double kGapM = 0.79375e-3;   // the gap between the cap's side and the hole, 1/32 in (PartData S9b, ESTIMATED)
+         const double R = m_d.m_radius * U;
+         if (star)   // the star's plan outline (buttoncap.h kStarPlan*), turned as drawn (GenerateMesh's matrix), each edge moved out by the gap
+         {
+            const Matrix3D turn = Matrix3D::MatrixRotateZ(ANGTORAD(m_d.m_rotation));
+            const Vertex3Ds ex = turn * Vertex3Ds { 1.f, 0.f, 0.f }, ey = turn * Vertex3Ds { 0.f, 1.f, 0.f };
+            const double ut = std::sqrt(ButtonCap::kStarPlanTip * ButtonCap::kStarPlanTip - ButtonCap::kStarPlanTipHalf * ButtonCap::kStarPlanTipHalf);
+            std::vector<double> local;
+            for (int k = 0; k < 10; k++)   // counter-clockwise: the inner corner before spoke k, its right tip, its left tip
+            {
+               const double ph = k * M_PI / 5.0, c = std::cos(ph), sn = std::sin(ph), ci = std::cos(ph - M_PI / 10.0), si = std::sin(ph - M_PI / 10.0);
+               const double u[3] = { 0.0, ut, ut }, v[3] = { 0.0, -ButtonCap::kStarPlanTipHalf, ButtonCap::kStarPlanTipHalf };
+               local.push_back(ButtonCap::kStarPlanInner * ci * R);
+               local.push_back(ButtonCap::kStarPlanInner * si * R);
+               for (int j = 1; j < 3; j++)
+               {
+                  local.push_back((u[j] * c - v[j] * sn) * R);
+                  local.push_back((u[j] * sn + v[j] * c) * R);
+               }
+            }
+            const std::vector<double> grown = MeshHoles::Offset(local, kGapM);
+            std::vector<double> xy;
+            double rIn = 1e9, rTip = 0.0, minCross = 1e9;
+            for (size_t i = 0; i + 1 < grown.size(); i += 2)
+            {
+               const double lx = grown[i], ly = grown[i + 1], lx2 = grown[(i + 2) % grown.size()], ly2 = grown[(i + 3) % grown.size()];
+               xy.push_back(axis.x + (double)ex.x * lx + (double)ey.x * ly);
+               xy.push_back(axis.y + (double)ex.y * lx + (double)ey.y * ly);
+               rIn = std::min(rIn, std::hypot(lx, ly));
+               rTip = std::max(rTip, std::hypot(lx, ly));
+               minCross = std::min(minCross, lx * ly2 - ly * lx2);   // > 0 for every edge: star-shaped from its centre (the cut's wedges, meshholes.cpp)
+            }
+            MeshHoles::Add("Star " + GetName(), xy, false, axis.z);
+            PLOGI << "Mesh holes: Star " << GetName() << " hole: " << grown.size() / 2 << " vertices, tips at r " << rTip * 1e3 << " mm, inner corners at r " << rIn * 1e3 << " mm (star outline + " << kGapM * 1e3
+                  << " mm), star-shaped from its centre: " << (minCross > 0.0 ? "yes" : "NO");
+         }
+         else
+            MeshHoles::Add("Button " + GetName(), MeshHoles::Round(axis.x, axis.y, R + kGapM), false, axis.z);
+      }
       PLOGI << "part finder path slope (group A): " << (star ? "star" : "button") << " trigger " << GetName() << " cap " << model->GroupPathSlope(0);
       // the drawn cap, moved by the travel (looks only). A Button: the stock mesh (taller than the real cap), its top put at the physical top at rest. A Star: the stock star mesh, its
       // height scaled to the model's (GenerateMesh), its top already there

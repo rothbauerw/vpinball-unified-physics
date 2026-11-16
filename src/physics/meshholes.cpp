@@ -226,7 +226,8 @@ namespace
    bool IsMeshKind(const std::string &k) { return k == "playfield" || k == "wall" || k == "ramp" || k == "primitive"; }
 
    // one outline into the host's faces; "" or the reason it is refused (nothing changed then)
-   std::string CutOne(Cut &c, const Outline &o, double topZ, double thickM, int &nWalls, double &holeArea, std::vector<std::pair<P3, P3>> &bottoms)
+   // bottoms: the walls' bottom edges (a through hole); rims: the rim edges of a hole that is not through (the top faces' open edge, paper section 3 step 4); both open by design
+   std::string CutOne(Cut &c, const Outline &o, double topZ, double thickM, int &nWalls, double &holeArea, std::vector<std::pair<P3, P3>> &bottoms, std::vector<std::pair<P3, P3>> &rims)
    {
       const std::vector<P2> &H = o.v;
       const size_t n = H.size();
@@ -255,7 +256,7 @@ namespace
          {
             if (Area(p) < 0.0)
                std::reverse(p.begin(), p.end());
-            cover += std::abs(Area(ClipConvex(p, H)));
+            cover += std::abs(Area(ClipConvex(H, p)));   // (the outline clipped by the convex face: right for a star-shaped outline too)
             continue;
          }
          const double zlo = std::min({ t.a.z, t.b.z, t.c.z }), zhi = std::max({ t.a.z, t.b.z, t.c.z });
@@ -315,7 +316,7 @@ namespace
                const std::vector<P2> cell = Box(p, xs[i], xs[i + 1], ys[j], ys[j + 1]);
                if (cell.size() < 3)
                   continue;
-               if (std::abs(Area(ClipConvex(cell, H))) <= 1e-14)
+               if (std::abs(Area(ClipConvex(H, cell))) <= 1e-14)
                {
                   c.Emit(out, cell, t, flip);
                   continue;
@@ -345,6 +346,9 @@ namespace
             bottoms.push_back({ Ab, Bb });   // the wall's bottom edge: open by design (load check)
             nWalls++;
          }
+      else
+         for (size_t i = 0; i < n; i++)   // no walls: the rim is the top faces' open edge (load check)
+            rims.push_back({ rimZ[i], rimZ[(i + 1) % n] });
       // no T-junction: the points this cut made, in every face of the host (the original vertices are not new)
       std::set<std::tuple<double, double, double>> orig;
       for (const T3 &t : c.f)
@@ -430,11 +434,34 @@ std::vector<double> MeshHoles::Round(double x, double y, double r)
    return xy;
 }
 
+std::vector<double> MeshHoles::Offset(const std::vector<double> &xy, double d)
+{
+   std::vector<P2> p;
+   for (size_t i = 0; i + 1 < xy.size(); i += 2)
+      p.push_back({ xy[i], xy[i + 1] });
+   if (p.size() >= 3 && Area(p) < 0.0)
+      std::reverse(p.begin(), p.end());
+   const size_t n = p.size();
+   std::vector<double> o;
+   for (size_t i = 0; i < n; i++)   // vertex i: where the offset lines of edges i-1 and i cross
+   {
+      const P2 &a = p[(i + n - 1) % n], &b = p[i], &c = p[(i + 1) % n];
+      const double l1 = std::hypot(b.x - a.x, b.y - a.y), l2 = std::hypot(c.x - b.x, c.y - b.y);
+      const P2 n1 { (b.y - a.y) / l1, -(b.x - a.x) / l1 }, n2 { (c.y - b.y) / l2, -(c.x - b.x) / l2 };   // outward normals (right of a counter-clockwise edge)
+      const double k = d / (1.0 + n1.x * n2.x + n1.y * n2.y);   // b + d (n1 + n2) / (1 + n1 . n2) lies at distance d from both lines
+      o.push_back(b.x + k * (n1.x + n2.x));
+      o.push_back(b.y + k * (n1.y + n2.y));
+   }
+   return o;
+}
+
 void MeshHoles::Build()
 {
    if (!g_on || g_outlines.empty())
       return;
-   // the host under each outline: the static mesh host whose up face under the outline's centre is the nearest at or below the part's height
+   // the host under each outline, found at its rim points (paper section 9 P2): each outline vertex takes the static mesh host whose up face under it is the highest at or below
+   // the part's height plus kTopTolM; all vertices must give the same host. A different host inside the outline (a wall standing in the hole) is neither cut nor a reason to refuse.
+   // The top's height for the cut (topZ, at the outline's centre) is the plane of the face under the first rim point
    std::map<ContactSurfaceHost *, std::vector<std::pair<const Outline *, double>>> byHost;
    for (const Outline &o : g_outlines)
    {
@@ -443,32 +470,55 @@ void MeshHoles::Build()
       P2 ctr { 0.0, 0.0 };
       for (const P2 &p : o.v)
          ctr = { ctr.x + p.x / (double)o.v.size(), ctr.y + p.y / (double)o.v.size() };
-      ContactSurfaceHost *best = nullptr;
-      double bestZ = 0.0;
-      for (ContactHost *const h : ContactHost::AllHosts())
+      std::vector<ContactSurfaceHost *> hostAt(o.v.size(), nullptr);
+      double topZ = 0.0;
+      size_t missing = 0;
+      for (size_t i = 0; i < o.v.size(); i++)
       {
-         ContactSurfaceHost *const s = dynamic_cast<ContactSurfaceHost *>(h);
-         if (s == nullptr || s->MeshSurface() == nullptr || !IsMeshKind(s->MeshKind()))
-            continue;
-         for (const RubberContact::SurfaceTri &t : s->MeshSurface()->tris)
+         double bestZ = 0.0;
+         T3 bestFace {};
+         for (ContactHost *const h : ContactHost::AllHosts())
          {
-            const T3 q { { t.a.x, t.a.y, t.a.z }, { t.b.x, t.b.y, t.b.z }, { t.c.x, t.c.y, t.c.z } };
-            if (!Up(q) || !InTri(Plan(q), ctr))
+            ContactSurfaceHost *const s = dynamic_cast<ContactSurfaceHost *>(h);
+            if (s == nullptr || s->MeshSurface() == nullptr || !IsMeshKind(s->MeshKind()))
                continue;
-            const double z = PlaneZ(q, ctr.x, ctr.y);
-            if (z <= o.z + kTopTolM && (best == nullptr || z > bestZ))
+            for (const RubberContact::SurfaceTri &t : s->MeshSurface()->tris)
             {
-               best = s;
-               bestZ = z;
+               const T3 q { { t.a.x, t.a.y, t.a.z }, { t.b.x, t.b.y, t.b.z }, { t.c.x, t.c.y, t.c.z } };
+               if (!Up(q) || !InTri(Plan(q), o.v[i]))
+                  continue;
+               const double z = PlaneZ(q, o.v[i].x, o.v[i].y);
+               if (z <= o.z + kTopTolM && (hostAt[i] == nullptr || z > bestZ))
+               {
+                  hostAt[i] = s;
+                  bestZ = z;
+                  bestFace = q;
+               }
             }
          }
+         if (hostAt[i] == nullptr)
+            missing++;
+         else if (i == 0)
+            topZ = PlaneZ(bestFace, ctr.x, ctr.y);
       }
-      if (best == nullptr)
+      if (missing > 0)
       {
-         Notice("Mesh holes: " + o.name + ": no static mesh top found under it at or below its height: hole not cut");
+         Notice("Mesh holes: " + o.name + ": " + std::to_string(missing) + " of its " + std::to_string(o.v.size()) + " rim points have no static mesh top under them at or below its height: hole not cut");
          continue;
       }
-      byHost[best].push_back({ &o, bestZ });
+      std::vector<ContactSurfaceHost *> hosts;
+      for (ContactSurfaceHost *const s : hostAt)
+         if (std::find(hosts.begin(), hosts.end(), s) == hosts.end())
+            hosts.push_back(s);
+      if (hosts.size() > 1)
+      {
+         std::string names;
+         for (const ContactSurfaceHost *const s : hosts)
+            names += (names.empty() ? "" : ", ") + s->MeshKind() + " " + s->Name();
+         Notice("Mesh holes: " + o.name + " not cut: its rim points lie on different hosts (" + names + ")");
+         continue;
+      }
+      byHost[hosts[0]].push_back({ &o, topZ });
    }
    for (auto &[host, list] : byHost)
    {
@@ -481,7 +531,7 @@ void MeshHoles::Build()
       const double thickM = host->ThicknessMm() * 1e-3;
       int cut = 0;
       double expectTop = before.top;
-      std::vector<std::pair<P3, P3>> bottoms;   // the walls' bottom edges (open by design)
+      std::vector<std::pair<P3, P3>> bottoms, rims;   // the walls' bottom edges and the rims of holes that are not through (open by design)
       std::ostringstream per;
       std::vector<const Outline *> done;
       for (const auto &[o, topZ] : list)
@@ -493,7 +543,7 @@ void MeshHoles::Build()
          int nWalls = 0;
          double aHole = 0.0;
          if (why.empty())
-            why = CutOne(c, *o, topZ, thickM, nWalls, aHole, bottoms);
+            why = CutOne(c, *o, topZ, thickM, nWalls, aHole, bottoms, rims);
          if (!why.empty())
          {
             Notice("Mesh holes: " + o->name + " not cut in the " + host->MeshKind() + " host: " + why);
@@ -502,7 +552,7 @@ void MeshHoles::Build()
          done.push_back(o);
          cut++;
          expectTop -= aHole;
-         per << " " << o->name << " N " << o->v.size() << " (top z " << topZ * 1e3 << " mm);";
+         per << " " << o->name << " N " << o->v.size() << (o->through ? " through" : " not through") << " (top z " << topZ * 1e3 << " mm);";
       }
       if (cut == 0)
          continue;
@@ -519,21 +569,24 @@ void MeshHoles::Build()
       s.fold.clear();
       host->MeshRelink();   // shared edges again (contactsurfacehost.cpp Link) and the host's box
       const HostCheck after = Measure(s);
-      // every open edge after the cut is a wall's bottom or a piece of an open edge the mesh had (its border, split where a grid line crosses it); any other is a gap the cut made
+      // every open edge after the cut is a wall's bottom, a rim edge of a hole that is not through, or a piece of an open edge the mesh had (its border, split where a grid line
+      // crosses it); any other is a gap the cut made
       int stray = 0;
       for (const auto &[a, b] : after.edges)
       {
          bool ok = false;
          for (const auto &[p, q] : bottoms)
             ok = ok || (OnSeg(a, p, q) && OnSeg(b, p, q));
+         for (const auto &[p, q] : rims)
+            ok = ok || (OnSeg(a, p, q) && OnSeg(b, p, q));
          for (const auto &[p, q] : before.edges)
             ok = ok || (OnSeg(a, p, q) && OnSeg(b, p, q));
          stray += !ok;
       }
       PLOGI << "Mesh holes: " << host->MeshKind() << " host: faces " << facesBefore << " -> " << s.tris.size() << ", holes " << cut << ":" << per.str() << " open edges " << before.open << " -> " << after.open
-            << " (" << bottoms.size() << " wall bottoms, " << stray << " stray), top area " << before.top << " -> " << after.top << " m2 (expected " << expectTop << ", diff " << (after.top - expectTop) << ")";
+            << " (" << bottoms.size() << " wall bottoms, " << rims.size() << " rim edges not through, " << stray << " stray), top area " << before.top << " -> " << after.top << " m2 (expected " << expectTop << ", diff " << (after.top - expectTop) << ")";
       if (stray > 0 || std::abs(after.top - expectTop) > 1e-9 * before.top)
-         Notice("Mesh holes: load check failed on the " + host->MeshKind() + " host: " + std::to_string(stray) + " open edges that are neither a wall's bottom nor the mesh's own border, top area off by "
+         Notice("Mesh holes: load check failed on the " + host->MeshKind() + " host: " + std::to_string(stray) + " open edges that are neither a wall's bottom, a rim not through, nor the mesh's own border, top area off by "
                 + std::to_string((after.top - expectTop) * 1e6) + " mm2");
    }
 }
