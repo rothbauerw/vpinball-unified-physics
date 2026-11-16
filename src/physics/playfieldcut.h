@@ -97,6 +97,7 @@ namespace PlayfieldCuts
       std::string name;
       double unit = 1.0, cx = 0.0, cy = 0.0, z0 = 0.0, lx = 0.0, ly = 1.0, px = -1.0, py = 0.0;
       double a = 0.0, hs = 0.0, L = 0.0, U1 = 0.0, wJ = 0.0, c = 0.0, tauJ = 0.0, th1 = 0.0, thick = 0.0;
+      std::vector<double> outlineU;   // mesh_holes 1: the physics outline (meshholes.cpp, VPX units x0 y0 x1 y1 ..., counter-clockwise): the drawn hole (paper R5); empty: from the shape
       double W(double u) const;   // the outline's half-width at u past the straight part's end (0 past the tip)
       double C(double u) const;   // the through-hole's half-width (0 past the round end, u >= a)
       // the ramp floor's cross-section at u (U1 < u < L): the circular arc t^2 + (z - zc)^2 = rho^2 through (+-W, 0) and (0, -depth), z up from the top

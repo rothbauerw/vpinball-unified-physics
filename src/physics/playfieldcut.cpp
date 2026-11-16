@@ -4,6 +4,7 @@
 #include "physics/playfieldcut.h"
 #include "physics/contactsurfacehost.h"
 #include "physics/physicsini.h"
+#include "physics/meshholes.h"
 #include "physics/contactsystem.h"
 #include "physics/contactprof.h"
 #include <intrin.h>
@@ -1779,6 +1780,8 @@ namespace PlayfieldCuts
       g_rimsVer++;   // shared_finder P4b: every ball's cut query is stale
       g_rimsTable = table;
       g_warnedMany = false;
+      if (MeshHoles::On())
+         return;   // mesh_holes 1: the [PlayfieldCut:<name>] sections are mesh holes (MeshHoles::AddIniCuts); no math cut runs
       const std::filesystem::path file = PhysicsIni::FindUnified(table->m_filename);
       if (file.empty())
          return;

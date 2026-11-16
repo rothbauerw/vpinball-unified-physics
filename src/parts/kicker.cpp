@@ -200,7 +200,7 @@ void Kicker::PhysicalSetup(PhysicsEngine *const physics)
    // the hole carved in the playfield: the real cutout's radius at the playfield top (part of the cup data), not the VPX kicker radius
    const double holeMm = kickerCupSys7HoleRadiusMm;
    if (MeshHoles::On())   // mesh_holes: the hole cut into the mesh under it at load (meshholes.h), tangent polygon of the cutout's radius
-      MeshHoles::Add("Kicker " + name, MeshHoles::Round((double)m_d.m_vCenter.x * U, (double)m_d.m_vCenter.y * U, holeMm * 1e-3), true, (double)height * U);
+      MeshHoles::Add("Kicker " + name, MeshHoles::Round((double)m_d.m_vCenter.x * U, (double)m_d.m_vCenter.y * U, holeMm * 1e-3), (double)height * U);
    else
       CarvedHoles::Add({ (double)m_d.m_vCenter.x * U, (double)m_d.m_vCenter.y * U, holeMm * 1e-3, (double)height * U });
    // the cup's switch (cup data: close and open depth of the ball's bottom, TUNED, kickerCupSys7.h)

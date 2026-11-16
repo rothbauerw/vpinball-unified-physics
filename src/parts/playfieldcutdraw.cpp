@@ -9,6 +9,7 @@
 #include "parts/playfieldcutdraw.h"
 #include "parts/primitive.h"
 #include "physics/playfieldcut.h"
+#include "physics/meshholes.h"
 #include "core/VPApp.h"
 #include "renderer/IndexBuffer.h"
 #include "renderer/MeshBuffer.h"
@@ -49,6 +50,13 @@ namespace
    // w = c tau round its tip, the round end back to the side t = a), then the same turned half round (the end at -s); the points shared by two parts once
    std::vector<P2> Outline(const DrawnSlot &d)
    {
+      if (!d.outlineU.empty())   // mesh_holes 1: the physics outline itself (drawn hole = physics outline, paper R5)
+      {
+         std::vector<P2> o;
+         for (size_t i = 0; i + 1 < d.outlineU.size(); i += 2)
+            o.push_back({ d.outlineU[i], d.outlineU[i + 1] });
+         return o;
+      }
       const int nRound = std::max(1, (int)std::ceil(d.th1 / ChordAngle(d.a))), nRamp = RampChords(d);
       std::vector<P2> st;   // the end at +s in the slot frame (s, t), metres
       for (int k = 0; k <= nRound; k++)
@@ -382,7 +390,7 @@ namespace PlayfieldCutDraw
 {
    void Setup(Primitive *const pf, Renderer *const renderer)
    {
-      const std::vector<DrawnSlot> cuts = PlayfieldCuts::Drawn(pf->GetPTable());
+      const std::vector<DrawnSlot> cuts = MeshHoles::On() ? MeshHoles::Drawn() : PlayfieldCuts::Drawn(pf->GetPTable());   // mesh_holes 1: fed the mesh holes' outline list
       if (cuts.empty() || g_drawing.prim != nullptr)
          return;
       Mesh &mesh = pf->m_mesh;

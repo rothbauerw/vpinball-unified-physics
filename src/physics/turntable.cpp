@@ -316,7 +316,7 @@ namespace Turntables
          const double R = t.radiusMm * 1e-3 / UM;   // table units
          const double hole = (t.radiusMm + t.gapMm) * 1e-3;
          if (MeshHoles::On())   // mesh_holes: the disc and its gap cut into the mesh under it at load (meshholes.h)
-            MeshHoles::Add("Turntable " + t.name, MeshHoles::Round(t.x * UM, t.y * UM, hole), true, t.playfieldZ * UM);
+            MeshHoles::Add("Turntable " + t.name, MeshHoles::Round(t.x * UM, t.y * UM, hole), t.playfieldZ * UM);
          else
             CarvedHoles::Add({ t.x * UM, t.y * UM, hole, t.playfieldZ * UM });   // the playfield's carved holes (carvedholes.h; cleared when the engine is built)
 
