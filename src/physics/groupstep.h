@@ -289,6 +289,7 @@ namespace GroupStep
    // per-step lists (Shape::NearPieces, NearHolds, nearGrow), as before
    inline bool partFinder = true;
    inline bool jetPulseAtCycle = true;   // [Features] jet_pulse_at_cycle (physicsini.h): a jet's pulse starts at a cycle's start (BumperGroup::Part::CycleStart); 0 = at the step whose switch closes
+   inline bool bandQuery = true;   // [Features] band_query (physicsini.h; set by ContactSystem::SetTable): a band takes and lets go of a ball by the ball's energy query (ContactSystem BandQuery) and fires BandHit at first touch; 0 = CordNear, the release rule and BandHit on release, as before
    // part_finder's counters per kind of part (its type's name; diagnostics only: VPX_CHECK_PROFILE or VPX_FINDER_CHECK, set by the owner in partFinderProf)
    struct PartFinderCount
    {

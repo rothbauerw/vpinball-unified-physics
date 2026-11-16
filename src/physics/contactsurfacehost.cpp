@@ -2330,8 +2330,13 @@ void HitRubberContactRelease(HitBall *ball, const char *why)
 
 void HitRubberBandBallDeleted(HitBall *ball)
 {
-   if (ball->m_bandOwner != nullptr)
-      ball->m_bandOwner->BandRelease(ball, "ball deleted");
+   while (ball->m_bandOwner != nullptr)   // (band_query: each band that holds it; the next one becomes the owner)
+   {
+      ContactSurfaceHost *const owner = ball->m_bandOwner;
+      owner->BandRelease(ball, "ball deleted");
+      if (ball->m_bandOwner == owner)
+         break;   // (not in its list: nothing more to let go)
+   }
    ContactSystem::Remove(ball);
 }
 
@@ -2368,14 +2373,29 @@ void ContactSurfaceHost::BandRelease(HitBall *const ball, const char *why)
    const double speedOut = std::hypot(std::hypot(vel.x, vel.y), vel.z) * VS;
    PLOGI << "Band " << m_name << ": released ball (" << why << ") at t=" << g_pplayer->m_time_msec << " ms, speed in " << e.vin.Length() << " m/s, out " << speedOut << " m/s, vel out ("
          << vel.x * VS << ", " << vel.y * VS << ", " << vel.z * VS << ") m/s, balls left on the band " << m_engaged.size() - 1;
-   if (ball->m_contact != nullptr && ball->m_contact->band == this)
-      ball->m_contact->band = nullptr;   // (the ball may stay in its other contacts)
-   ball->m_bandOwner = nullptr;
+   if (GroupStep::bandQuery && ball->m_contact != nullptr)   // band_query: a ball can be held by several bands; another one that holds it becomes its first (band, the owner)
+   {
+      BallContact &bc = *ball->m_contact;
+      bc.bandsMore.erase(std::remove(bc.bandsMore.begin(), bc.bandsMore.end(), this), bc.bandsMore.end());
+      if (bc.band == this)
+      {
+         bc.band = bc.bandsMore.empty() ? nullptr : bc.bandsMore.front();
+         if (!bc.bandsMore.empty())
+            bc.bandsMore.erase(bc.bandsMore.begin());
+      }
+      ball->m_bandOwner = bc.band;
+   }
+   else
+   {
+      if (ball->m_contact != nullptr && ball->m_contact->band == this)
+         ball->m_contact->band = nullptr;   // (the ball may stay in its other contacts)
+      ball->m_bandOwner = nullptr;
+   }
    m_engaged.erase(m_engaged.begin() + (long)i);
    m_info.hitTimeMs = (int)g_pplayer->m_time_msec;
    m_info.speedIn = (float)e.vin.Length();
    m_info.speedOut = (float)speedOut;
-   if (std::strcmp(why, "ball deleted") != 0 && std::strcmp(why, "band switched off") != 0 && m_editable != nullptr)
+   if (!GroupStep::bandQuery && std::strcmp(why, "ball deleted") != 0 && std::strcmp(why, "band switched off") != 0 && m_editable != nullptr)   // (band_query: fired at the first touch, CordFinish)
       static_cast<Rubber *>(m_editable)->FireVoidEventParm(DISPID_RubberEvents_BandHit, m_info.peakMm);   // the script handler may do anything: nothing of ours is in flight
 }
 
@@ -2691,6 +2711,28 @@ void ContactSurfaceHost::CordFinish(const float /*dtime*/)
          m_obj->m_currentHitThreshold = h.second;
          FireHitEvent(h.first);
       }
+   if (GroupStep::bandQuery)   // band_query: BandHit at the ball's first touch of the cord since the band took it (the physical hit; a ball taken by its query that never touches fires none)
+      for (const auto &h : m_cord->hits)
+         for (BandBall &e : m_engaged)
+            if (e.ball == h.first && !e.touched)
+            {
+               e.touched = true;
+               m_info.hitTimeMs = (int)g_pplayer->m_time_msec;
+               m_info.speedIn = (float)e.vin.Length();
+               PLOGI << "Band " << m_name << ": BandHit at first touch, t=" << g_pplayer->m_time_msec << " ms, speed in " << m_info.speedIn << " m/s";   // (one line per hit, as the release line)
+               if (const BallContact *const bc = h.first->m_contact; bc != nullptr && !bc->bandsMore.empty())   // held by two cords at once: has the other touched it too (diagnostics: second-band takes that are real)
+               {
+                  bool both = false;
+                  for (ContactSurfaceHost *const o : bc->bandsMore)
+                     for (const ContactSurfaceHost *const b : { (const ContactSurfaceHost *)bc->band, (const ContactSurfaceHost *)o })
+                        if (b != nullptr && b != this)
+                           for (const BandBall &x : b->m_engaged)
+                              both = both || (x.ball == h.first && x.touched);
+                  PLOGI << "Band " << m_name << ": touch while held by " << 1 + bc->bandsMore.size() << " cords, the other touched too: " << (both ? "yes" : "no");
+               }
+               if (m_editable != nullptr)
+                  static_cast<Rubber *>(m_editable)->FireVoidEventParm(DISPID_RubberEvents_BandHit, m_info.peakMm);   // after the step, as the Hit event above
+            }
    m_cord->hits.clear();
    CordFixed::Part &p = *m_cord->fixed;
    std::vector<std::pair<int, bool>> changes;

@@ -1068,6 +1068,80 @@ public:
       }
       return gap;
    }
+   // [Features] band_query (paper_P7.md 2): how far a ball (centre c, radius R) is from where this cord can be in the coming cycle, on the cord's own geometry: each span's rest line with
+   // radius rc, less that span's move D_j + its own bend at rest (a body holding it off its line); each post's cord circle (PostShape's distance; a twin is never met), less the largest
+   // move of the spans that end on it; and the plate's face where it is now (PlateTube's segment), less plateMove. D_j, per span (the span's ends are fixed on their posts, so a push
+   // moves only its own span): the deepest deflection now on that span by its held balls (dNow[j]) plus the largest move of what can push that span in the cycle, the held balls whose
+   // travel reaches it (push[j], SpanPush) and, on the plate's span, plateMove. A span with no ball and no plate on it: D_j 0. Empty dNow / push: no held ball. Read before the cord's
+   // first step too (its post shapes and plate tube are made there): the same formulas. m
+   double QueryGap(const V3 &c, const double R, const std::vector<double> &dNow, const std::vector<double> &push, const double plateMove) const
+   {
+      double gap = 1e30;
+      const auto D = [&](const int j) { return (j < (int)dNow.size() ? dNow[j] : 0.0) + std::max(j < (int)push.size() ? push[j] : 0.0, geo.hasPlate && pl.on && j == pl.span ? plateMove : 0.0); };
+      for (int j = 0; j < ns; j++)
+      {
+         const Span &sp = span[j];
+         const double u = std::min(std::max((c - sp.A).Dot(sp.t), 0.0), sp.len);
+         gap = std::min(gap, (c - (sp.A + sp.t * u)).Length() - rc - R - D(j) - std::fabs(sp.bendMost));
+      }
+      for (const Circle &q : circles)
+         if (!q.twin)
+         {
+            double move = -1.0, all = 0.0;   // the spans that end on this post (their end within 1 mm of its cord circle); none found: every span's (a bound)
+            for (int j = 0; j < ns; j++)
+            {
+               const double dj = D(j);
+               all = std::max(all, dj);
+               if (std::fabs(std::hypot(span[j].A.x - q.x, span[j].A.y - q.y) - q.r) < 1e-3 || std::fabs(std::hypot(span[j].B.x - q.x, span[j].B.y - q.y) - q.r) < 1e-3)
+                  move = std::max(move, dj);
+            }
+            const double dx = c.x - q.x, dy = c.y - q.y, aa = std::sqrt(dx * dx + dy * dy) - q.r, zz = c.z - zc;
+            gap = std::min(gap, std::sqrt(aa * aa + zz * zz) - rc - R - (move < 0.0 ? all : move));
+         }
+      if (geo.hasPlate && pl.on)
+      {
+         const Span &sp = span[pl.span];
+         double yl = 0.0, dyl = 0.0;
+         Limit(phi, yl, dyl);
+         const V3 p0 = sp.A + sp.t * pl.x0 + sp.yh * (pl.sgn * yl), dp = sp.t * (pl.x1 - pl.x0);
+         const double ll = dp.Dot(dp), u = ll > 0.0 ? std::min(std::max((c - p0).Dot(dp) / ll, 0.0), 1.0) : 0.0;
+         gap = std::min(gap, (c - (p0 + dp * u)).Length() - rc - R - plateMove);
+      }
+      return gap;
+   }
+   // [Features] band_query: a ball (centre c, radius R, travel reach this cycle) this cord holds, per span: how far past the span's rest line it holds it now (its centre within R + rc
+   // of the line: dNow[j]) and, when its travel reaches the span (gap to the rest line <= reach), its travel as a push on that span (push[j]). The caller clears both per cord. m
+   void SpanPush(const V3 &c, const double R, const double reach, std::vector<double> &dNow, std::vector<double> &push) const
+   {
+      dNow.resize((size_t)ns, 0.0);
+      push.resize((size_t)ns, 0.0);
+      for (int j = 0; j < ns; j++)
+      {
+         const Span &sp = span[j];
+         const double u = std::min(std::max((c - sp.A).Dot(sp.t), 0.0), sp.len), g = (c - (sp.A + sp.t * u)).Length() - rc - R;
+         dNow[j] = std::max(dNow[j], -g);
+         if (g <= std::max(reach, 0.0))
+            push[j] = std::max(push[j], std::max(reach, 0.0));
+      }
+   }
+   // [Features] band_query: the most the plate face can carry the cord in the coming cycle T, by the energy reach (design_reach.md section 1, as the bat's EnergyMove): nothing while it
+   // is quiet (PlateQuiet: at rest, no coil, no pulse pending) and its coil cannot start within T (CoilWorkBound 0); otherwise its turn is at most what all its energy as speed makes in
+   // T, sqrt(w0^2 + 2 E / I) T with E its spring's stored energy now (PlateV) plus its coil's work bound (CoilWorkBound) and I its smallest inertia over the stroke (rest, now, stop),
+   // the turn clamped at its rest (phi 0) and its coil stop (the stops are hard); the face move is the larger change of the face (Limit) over that range. m
+   double PlateMoveM(const double T) const
+   {
+      if (!geo.hasPlate || !pl.on || (PlateQuiet() && CoilWorkBound(T) <= 0.0))
+         return 0.0;
+      const double inertia = std::max(std::min({ Inertia(0.0), Inertia(phi), Inertia(PhiStop()) }), 1e-12);
+      const double E = std::max(PlateV(phi), 0.0) + CoilWorkBound(T);
+      const double dphi = std::sqrt(omega * omega + 2.0 * E / inertia) * T;
+      const double lo = std::max(std::min(phi - dphi, phi), 0.0), hi = std::min(std::max(phi + dphi, phi), std::max(PhiStop(), phi));
+      double y = 0.0, yl = 0.0, yh = 0.0, dy = 0.0;
+      Limit(phi, y, dy);
+      Limit(lo, yl, dy);
+      Limit(hi, yh, dy);
+      return std::max({ yh - y, y - yl, 0.0 });
+   }
    bool PlateQuiet() const { return !geo.hasPlate || (plateIdle && !driver.Coil() && driver.pending <= 0.0); }   // the one rest rule (PlateRestStep), and no drive since: only whether to step it alone
    // the plate at its rest angle (phi 0) and still, with no drive since: what the cord's reach, its release and its drawing read (asleep is not at rest: it can sleep on its coil stop)
    bool PlateAtRest() const

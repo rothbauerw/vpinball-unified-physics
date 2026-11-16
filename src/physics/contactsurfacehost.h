@@ -77,6 +77,7 @@ struct BandBall
 {
    HitBall *ball = nullptr;
    RubberContact::V3 vin;                // its velocity at engagement
+   bool touched = false;                 // [Features] band_query: the cord has touched it since it was taken (its BandHit fired, CordFinish)
 };
 
 // The faces of a wall or primitive flagged as rubber, in the world frame (metres). Owned by the ContactSurfaceHost that hosts the object's contact.
@@ -115,6 +116,7 @@ struct BallContact
 {
    class ContactHost *host = nullptr;   // the surface or part that engaged the ball (its settings drive the step)
    class ContactSurfaceHost *band = nullptr;       // a band that holds this ball (its BandBall is in band->m_engaged); null = none
+   std::vector<class ContactSurfaceHost *> bandsMore;   // [Features] band_query: the other bands that hold it at once (a ball within reach of two cords; each one's BandBall in its m_engaged). Empty while band is null
    HitBall *ball = nullptr;
    std::vector<SurfaceContact> items;
    RubberContact::V3 vin, win;           // velocity (m/s) and spin (rad/s) at engagement
