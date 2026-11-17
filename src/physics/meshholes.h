@@ -12,34 +12,46 @@
 // itself (BarsTriangles, the shared static mesh path): no hole list at contact time. Pure SI (metres); the list is cleared when the physics engine is built.
 namespace MeshHoles
 {
-   // A slot as the drawing needs it (parts/playfieldcutdraw.cpp, slot-hole design section 8). Frame: centre (cx, cy) at the top z0, along (lx, ly), across (px, py), metres (unit: metres
-   // per VPX unit). Shape: a the half-width, hs the straight part's half-length, L the tip, U1 where the round end meets the ramp, wJ the half-width there; the ramp's outline
-   // u = L - tau^2, w = c tau (tau from 0 at the tip to tauJ at U1); th1 the round end's angle at U1; thick the through-hole's depth
-   struct DrawnSlot
+   // A joined hole as Build cut it, for the drawing (parts/playfieldcutdraw.cpp: drawn hole = physics hole). World, VPX units (metres / ContactSystem::kMetresPerUnit).
+   struct DrawnHole
    {
-      std::string name;
-      double unit = 1.0, cx = 0.0, cy = 0.0, z0 = 0.0, lx = 0.0, ly = 1.0, px = -1.0, py = 0.0;
-      double a = 0.0, hs = 0.0, L = 0.0, U1 = 0.0, wJ = 0.0, c = 0.0, tauJ = 0.0, th1 = 0.0, thick = 0.0;
-      std::vector<double> outlineU;   // the physics outline (meshholes.cpp, VPX units x0 y0 x1 y1 ..., counter-clockwise): the drawn hole (paper R5)
-      double W(double u) const;   // the outline's half-width at u past the straight part's end (0 past the tip)
-      double C(double u) const;   // the through-hole's half-width (0 past the round end, u >= a)
-      // the ramp floor's cross-section at u (U1 < u < L): the circular arc t^2 + (z - zc)^2 = rho^2 through (+-W, 0) and (0, -depth), z up from the top
-      void FloorArc(double u, double &rho, double &zc) const;
+      std::string name;                    // the joined outlines' names (a + b)
+      double unit = 1.0;                   // metres per VPX unit
+      std::string hostKind, hostName;      // the static mesh host the physics cut
+      std::vector<std::vector<double>> rim;   // the joined outline's boundary loops as Build cut them (x0 y0 x1 y1 ..., counter-clockwise; Pieces' points in order, the same doubles / unit)
+      double topZ = 0.0, thick = 0.0;      // the host's top at the hole and the walls' depth (VPX units)
+      bool walls = false;                  // walls cut (the joined outline's inscribed circle at least the ball's radius)
+      bool draw = true;                    // drawn (false: every joined outline says draw = 0)
+      int physWallTris = 0;                // the wall triangles Build emitted (2 per wall quad, end faces included)
+      bool onTop = true;                   // the rim lies on the host's top (false: an outline cut after the others into another's floor, a slot in the groove)
+      std::vector<float> wood;             // the wall, floor and side triangles Build emitted (before the T-junction pass), 3 vertices each of 6 floats: x y z (VPX units), along (VPX
+                                           // units: the rim length on walls, x + y elsewhere), depth below the top (VPX units), kind: 0 a floor (wound to face up), 1 a rim wall (wound to
+                                           // face into the hole), 2 a wall under a floor's open edge, 3 a side face (2 and 3: wound either way)
    };
-   // a new load: the outline list and the drawn slots cleared
-   void Clear();
+   // a new load: the outline list and the drawn holes cleared; roundMm: [Features] hole_round_mm, Round's vertex excess (physicsini.h)
+   void Clear(double roundMm);
    // [Features] mesh_overlap_repair = 1: in every static collidable mesh host (playfield, wall, ramp, primitive), the faces of one host that lie on one plane and overlap in it are made to
    // cover the surface once (a face wholly covered by smaller ones dropped, one partly covered clipped by them), then welded and linked again; log only. Before Build.
    void RepairOverlaps(bool on);
-   // a closed outline x0 y0 x1 y1 ... (m); partZ: the part's height (m), the host is the nearest top below it. Walls down by the host's thickness only where the ball can pass through
+   // a part's hole keys (to-do N11): read from [Triggers] / [Trigger:<name>] (Button, Star), [Kicker:<name>] (type physical), [Turntable:<name>] and [PlayfieldCut:<name>]
+   struct HoleKeys
+   {
+      bool cut = true;              // cut_hole = 1 | 0: 1 (default) the part's hole is cut in the mesh under it; 0 no hole (no Add: the part sits on the whole surface)
+      bool draw = true;             // draw = 1 | 0: 1 (default) the hole is drawn as the physics cut it; 0 cut in the physics but not drawn (the drawn top stays whole there)
+      double wallDepthMm = -1.0;    // wall_depth_mm: the hole's walls' depth below the top, mm (above 0); absent = the cut host's thickness_mm (contacthost.h). Joined holes: the deepest
+   };
+   // true when lowerKey is one of HoleKeys' keys (its value read into h); a bad wall_depth_mm (0 or less) is kept as absent, with a notice
+   bool HoleKey(HoleKeys &h, const std::string &lowerKey, double v, const std::string &where);
+   // a closed outline x0 y0 x1 y1 ... (m); partZ: the part's height (m), the host is the nearest top below it. Walls down by the wall depth only where the ball can pass through
    // (the joined outline's largest inscribed circle at least the ball's radius, paper section 3 step 4)
-   void Add(const std::string &name, const std::vector<double> &xy, double partZ);
+   void Add(const std::string &name, const std::vector<double> &xy, double partZ, const HoleKeys &keys);
    // the table's [PlayfieldCut:<name>] sections (shapes slot, groove, rectangle, circle, triangle; keys in meshholes.cpp Parse) as outlines; file: the table's physics ini
    void AddIniCuts(const std::filesystem::path &file);
-   // the [PlayfieldCut:<name>] shapes the drawing draws (the slots today, parts/playfieldcutdraw.cpp), each with its mesh outline (DrawnSlot::outlineU); cleared with the outlines
-   std::vector<DrawnSlot> Drawn();
-   // a round outline of radius r (m) about x y with edges tangent to the circle: N = max(24, smallest N with r (1 / cos(pi / N) - 1) <= 0.2 mm) (paper section 4)
-   std::vector<double> Round(double x, double y, double r);
+   // every joined hole Build cut on this load (the drawing's record; cleared with the outlines)
+   const std::vector<DrawnHole> &Drawn();
+   // a round outline of radius r (m) about x y with edges tangent to the circle: N = max(24, smallest N with r (1 / cos(pi / N) - 1) <= hole_round_mm, default 0.2 mm) (paper section 4)
+   // n > 0: that many edges instead (a chamfer's inner ring takes its outer ring's N: one face pair per edge between them)
+   std::vector<double> Round(double x, double y, double r, int n = 0);
    // the closed outline x0 y0 x1 y1 ... (m) grown by d (m): each edge moved d outward, parallel, each vertex where its two edges' moved lines cross
    std::vector<double> Offset(const std::vector<double> &xy, double d);
    void Build();

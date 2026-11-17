@@ -51,13 +51,13 @@ namespace Turntables
          double frictionNm = 0.02;             // friction_nm: constant (Coulomb) torque of the bearing and gear train: it holds the disc still until a ball's push exceeds it
          double mu = 0.6;                      // friction coefficient of the textured surface against the steel ball
          double rollingResistance = 0.03;      // rolling_resistance: coefficient of a ball rolling on the textured (rubber-like) surface; torque = coefficient * R * N. The playfield's is [Contact] rolling_resistance (0.003); a negative value here = use that one
-         bool visible = false;
-         bool gapVisible = true;               // visible: a dark ring marks the gap
+         bool visible = false;                 // visible: the disc drawn as the physical disc (radius_mm at z), no gap ring: the playfield's hole, gap included, is drawn by the hole drawing
          std::string marker = "spokes";        // visible: spokes | dot | stripe | none
          double refDeg = 0;                    // angle reference, degrees clockwise from the +x direction (screen right)
+         MeshHoles::HoleKeys hole;             // cut_hole, draw, wall_depth_mm: the disc's hole in the mesh under it (meshholes.h HoleKeys)
          // the disc as a moving part of the contact system, on the group step (contactdiscpart.h, discgroup.h): motor, bearing, speed and angle (clockwise positive), the script's voltage
          std::shared_ptr<DiscModel::Engine> part;
-         std::shared_ptr<MeshBuffer> discMesh, markMesh, gapMesh;
+         std::shared_ptr<MeshBuffer> discMesh, markMesh;
       };
 
       // The table side of the disc's moving part (UnifiedContactDesign 12.1): the renderer and the script read the part itself, it raises no events (it has no table object to raise them on), and its settings are
@@ -244,9 +244,9 @@ namespace Turntables
             else if (key == "mu") cur->mu = v;
             else if (key == "rolling_resistance") cur->rollingResistance = v;
             else if (key == "visible") cur->visible = v != 0;
-            else if (key == "gap_visible") cur->gapVisible = v != 0;
             else if (key == "marker") cur->marker = sval;
             else if (key == "ref_angle_deg") cur->refDeg = v;
+            else if (MeshHoles::HoleKey(cur->hole, key, v, "Turntable " + cur->name)) {}   // cut_hole, draw, wall_depth_mm (meshholes.h HoleKeys)
          }
       }
 
@@ -314,7 +314,7 @@ namespace Turntables
             t.z = t.playfieldZ;
          const double R = t.radiusMm * 1e-3 / UM;   // table units
          const double hole = (t.radiusMm + t.gapMm) * 1e-3;
-         MeshHoles::Add("Turntable " + t.name, MeshHoles::Round(t.x * UM, t.y * UM, hole), t.playfieldZ * UM);   // the disc and its gap cut into the mesh under it at load (meshholes.h)
+         MeshHoles::Add("Turntable " + t.name, MeshHoles::Round(t.x * UM, t.y * UM, hole), t.playfieldZ * UM, t.hole);   // the disc and its gap cut into the mesh under it at load (meshholes.h)
 
          // the disc: a flat polygon at the top height, plus a skirt down to the playfield when it stands proud of it: the host's box (the contact finder takes the disc from the host registry; no stock collider)
          std::vector<Vertex3Ds> top;
@@ -438,7 +438,7 @@ namespace Turntables
       }
    }
 
-   // The disc, its gap ring and (when marker is not none) the pattern that makes the turning visible. Only the pattern is rewritten every frame; the plain disc looks the same at every angle.
+   // The disc (as the physical disc: radius_mm at its top z) and (when marker is not none) the pattern that makes the turning visible. Only the pattern is rewritten every frame; the plain disc looks the same at every angle.
    void Render(Renderer *const renderer)
    {
       for (Turntable &t : g_tt)
@@ -446,8 +446,8 @@ namespace Turntables
          if (!t.visible)
             continue;
          RenderDevice *const rd = renderer->m_renderDevice;
-         const double R = t.radiusMm * 1e-3 / UM, Rg = (t.radiusMm + t.gapMm) * 1e-3 / UM;
-         const double zTop = t.z + 0.15, zMark = t.z + 0.3, zGap = t.playfieldZ + 0.1;
+         const double R = t.radiusMm * 1e-3 / UM;
+         const double zTop = t.z, zMark = t.z + 0.3;   // the disc at its physical top; the turning pattern just above it
          auto build = [&](std::vector<Vertex3D_NoTex2> &v, std::vector<unsigned int> &idx, const double ang, const bool markers)
          {
             v.clear();
@@ -500,26 +500,8 @@ namespace Turntables
          {
             build(v, idx, 0.0, false);
             t.discMesh = std::make_shared<MeshBuffer>("Turntable disc"s, std::make_shared<VertexBuffer>(rd, (unsigned int)v.size(), (const float *)v.data()), std::make_shared<IndexBuffer>(rd, idx), true);
-            if (t.gapVisible)
-            {
-               v.clear();
-               idx.clear();
-               const unsigned int base = 0;
-               for (int k = 0; k <= SEG; k++)
-               {
-                  const double a = 2.0 * PI * k / SEG;
-                  v.emplace_back();
-                  FillVertex(v.back(), t.x + R * std::cos(a), t.y + R * std::sin(a), zGap);
-                  v.emplace_back();
-                  FillVertex(v.back(), t.x + Rg * std::cos(a), t.y + Rg * std::sin(a), zGap);
-               }
-               for (int k = 0; k < SEG; k++)
-               {
-                  const unsigned int a = base + 2 * k;
-                  idx.insert(idx.end(), { a, a + 1, a + 2, a + 1, a + 3, a + 2 });
-               }
-               t.gapMesh = std::make_shared<MeshBuffer>("Turntable gap"s, std::make_shared<VertexBuffer>(rd, (unsigned int)v.size(), (const float *)v.data()), std::make_shared<IndexBuffer>(rd, idx), true);
-            }
+            PLOGI << "Turntable " << t.name << " drawn: the disc only, radius " << t.radiusMm << " mm at its top z " << zTop << " VPU (the physical disc), " << SEG
+                  << " segments; no gap ring (the playfield's hole, gap included, is drawn by the hole drawing)";
          }
          if (t.marker != "none")
          {
@@ -550,7 +532,6 @@ namespace Turntables
             rd->m_basicShader->SetVector(ShaderUniform::staticColor_Alpha, r, g, b, 1.f);
             rd->DrawMesh(rd->m_basicShader, false, Vertex3Ds((float)t.x, (float)t.y, (float)t.z), 0.f, m, RenderDevice::TRIANGLELIST, 0, m->m_ib->m_count);
          };
-         draw(t.gapMesh, 0.02f, 0.02f, 0.02f);
          draw(t.discMesh, 0.35f, 0.36f, 0.40f);
          if (t.marker != "none")
             draw(t.markMesh, 0.95f, 0.72f, 0.10f);
@@ -564,7 +545,6 @@ namespace Turntables
       {
          t.discMesh.reset();
          t.markMesh.reset();
-         t.gapMesh.reset();
       }
    }
 }

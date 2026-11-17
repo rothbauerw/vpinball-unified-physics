@@ -53,6 +53,9 @@ namespace PhysicsIni
       bool seatEditorBalls = true; // seat_editor_balls (on while tested, rule 6; runs/2026-11-13-editor-balls): 1 = at play start each ball placed in the table editor is moved out of any surface it overlaps
                                   // (playfield, walls, ramps, primitives, rubbers, moving parts at rest; not other balls) by the shortest move, the no-past seating (ContactSystem::PushOutAtStart); 0 = left where it was placed, as today
       bool hitSpeed = true;       // PROTOTYPE: Ball.HitSpeed (normal speed before an impact) and the table's Hit event for the playfield; off = neither
+      float holeRoundMm = 0.2f;   // hole_round_mm: a round hole cut in the mesh (Button, kicker, turntable, [PlayfieldCut] circle) is a polygon whose edges touch the true circle at their midpoints;
+                                  // each vertex stands at most this far outside it, mm (MeshHoles::Round: N = max(24, smallest N with r (1 / cos(pi / N) - 1) <= this); smaller = more edges, a rounder
+                                  // rim). TUNED by feel (user 2026-11-17; 0.2 mm from paper section 4); 0.01 .. 1 (outside: a notice and the nearest)
    };
 
    inline std::string Trim(const std::string &s)
@@ -89,8 +92,9 @@ namespace PhysicsIni
    // A section header nothing reads (a misspelt kind such as [Primitve:Post1]) is reported once.
    inline void WarnUnknownSection(const std::string &lowerName)
    {
-      static const char *const plain[] = { "features", "contact", "flippers", "rubbers", "slings", "playfield", "surfaces", "gates", "spinners", "bumpers" };
-      static const char *const kinds[] = { "flipper:", "rubber:", "sling:", "wall:", "primitive:", "magnet:", "turntable:", "playfieldcut:", "gate:", "spinner:", "ramp:", "bumper:", "kicker:" };
+      // every section a loader reads (PartsIni::ReadSections' plain and kind names, ContactHost::ApplySection's, the magnet/turntable/playfield-cut parsers)
+      static const char *const plain[] = { "features", "contact", "flippers", "rubbers", "slings", "playfield", "surfaces", "gates", "spinners", "bumpers", "triggers" };
+      static const char *const kinds[] = { "flipper:", "rubber:", "sling:", "wall:", "primitive:", "magnet:", "turntable:", "playfieldcut:", "gate:", "spinner:", "ramp:", "bumper:", "kicker:", "trigger:" };
       for (const char *p : plain)
          if (lowerName == p)
             return;
@@ -99,7 +103,7 @@ namespace PhysicsIni
             return;
       static std::set<std::string> warned;
       if (warned.insert(lowerName).second)
-         PLOGW << "Physics settings: section [" << lowerName << "] is not a known kind (features, contact, flippers, rubbers, slings, flipper:, rubber:, sling:, wall:, primitive:); it is ignored";
+         PLOGW << "Physics settings: section [" << lowerName << "] is not a known kind (features, contact, flippers, rubbers, slings, playfield, surfaces, gates, spinners, bumpers, triggers, or a part's kind: flipper, rubber, sling, wall, primitive, magnet, turntable, playfieldcut, gate, spinner, ramp, bumper, kicker, trigger); it is ignored";
    }
 
    // true if the file has a [Features] section (it is a unified file); `f` gets its switches (a missing key = on)
@@ -172,6 +176,8 @@ namespace PhysicsIni
             f.seatEditorBalls = on;
          else if (key == "hit_speed_min")
             f.hitSpeedMin = (float)atof(v.c_str());   // (a key not listed here is ignored)
+         else if (key == "hole_round_mm")
+            f.holeRoundMm = (float)atof(v.c_str());
       }
       return found;
    }

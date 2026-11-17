@@ -12,7 +12,7 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-Mesh holes (old N3) finished 11-16; next N11, N12 (holes, runs/2026-11-16-meshholes/paper.md sec 9). Main BGFX rebuilt 11-16 from HEAD; GL not (user: not needed), so bench_snapshot.py refuses and main_exe is stale: pass -Exe. Lead log runs/2026-11-16-lead.
+Holes in flight (runs/2026-11-16-holedraw): drawn rims on the true curve, slot drawn in the groove floor, host-height run check; then Wire C renamed Wire F and a new C (user data). GL exe and main_exe stale: pass -Exe. Lead log runs/2026-11-16-lead.
 Judge a change by one exe, its setting on vs off; never by an older exe's md5 (ModelStandards trap 112). Query outliers 0.3-9 ms are the OS (measured). 1.33: cut B kept.
 Stand-up targets: code pulled from the tree 2026-11-15 (crashed VPX; user), backup backups/2026-11-15-standup-pulled; piece 5 in backups/2026-11-14-standup-build6; simpler draft runs/2026-11-15-standup-simple/design.md, unreviewed. Next step is the user's call.
 Button bounce (a ball on a flush Button lands on the wood through the cap, e 0.86; user expects much more loss): recheck now: the Button hole landed with N3.
@@ -20,8 +20,7 @@ N5. One reach rule from physics (speed plus force) for grouping and step length;
 N7. Stress v2 bench: ball travel energy +2 % at 57 ms; spin not counted. Check total energy in the saved run (no new run).
 N8. Test driver must refuse a ball placed inside any object, unless the file declares the overlap (rule 10b: then judged on recovery, no energy gained).
 N9. Push only on the user's word; check git status -sb against fork/unified-physics for what is unpushed (no commit hash here: it goes stale).
-N11. Holes optional (user 2026-11-16): Button, Star, kicker and turntable each get an ini key to cut their mesh hole or not (meshholes.cpp declarations); default: user to say.
-N12. Kicker funnel (user 2026-11-16): a funnel mesh for kickers, a hole with a bevelled edge instead of the sharp rim; shape and size data from the user; paper first.
+N12. Kicker holes of any size with the chamfer (user 2026-11-17: deferred; today the Sys7 hole is fixed at 18.93 mm, cut_hole = 0 plus an ini circle with chamfer_deg does it by hand); paper first.
 N10. Performance tests: not built; review TestMatrixDesign with the user when building them. Includes the stress table driver clock after start-up and the 144 Hz frame budget. Any safety-net trip (e.g. the cord's hold and let-go) fails the run.
 
 ## 1. Contact system (tasks)

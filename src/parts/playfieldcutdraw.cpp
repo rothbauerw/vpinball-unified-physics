@@ -1,14 +1,15 @@
 // license:GPLv3+
 
-// The playfield's cuts as drawn (design runs/2026-11-09-slot-hole/design.md section 8). The shape is the physics' (physics/meshholes.h, MeshHoles::Drawn: the mesh hole's outline):
-// the sharp outline (the rim's 0.25 mm rounding is not drawn), the through-hole's walls straight down the playfield's thickness, the ramp floors. All made once with the playfield's render
-// buffers (Primitive::RenderSetup): the hole is cut in the playfield's own mesh, so every pass that draws the playfield (static prepass, dynamic pass, VR) draws it; the walls and floors are
-// one mesh drawn right after the playfield (Primitive::Render) with its material and the wood texture assets/PlayfieldCutWood.png. Per frame: that one draw call.
+// The mesh holes as drawn: each hole exactly as the physics cut it (physics/meshholes.h MeshHoles::Drawn, recorded by MeshHoles::Build): the joined rim loops (the same points), and the
+// physics' own wall, floor and side triangles. Made once with the playfield's render buffers (Primitive::RenderSetup): the rims are cut in the playfield's own mesh, so every pass that draws
+// the playfield (static prepass, dynamic pass, VR) draws them; the walls and floors are one mesh drawn right after the playfield (Primitive::Render) with its material and the wood texture
+// assets/PlayfieldCutWood.png. Per frame: that one draw call.
 
 #include "core/stdafx.h"
 #include "parts/playfieldcutdraw.h"
 #include "parts/primitive.h"
 #include "physics/meshholes.h"
+#include "physics/physicsini.h"
 #include "core/VPApp.h"
 #include "renderer/IndexBuffer.h"
 #include "renderer/MeshBuffer.h"
@@ -23,13 +24,8 @@
 
 namespace
 {
-   using MeshHoles::DrawnSlot;
+   using MeshHoles::DrawnHole;
 
-   // Curves are drawn as chords within kDrawTolM inside the true curve. kDrawTolM is a tenth of a pixel where the playfield is seen finest: in VR, the eye 30 cm from the playfield at about
-   // 25 pixels per degree, a pixel is 0.21 mm; on a 4K cabinet screen (2160 pixels across a 20.25 in playfield) 0.24 mm. A tenth of a pixel is finer than antialiasing resolves, so the
-   // chords look like the curve. On the 5.03 mm slot: 1 chord per round end of the outline (its 9.9 deg arc of 2.515 mm radius strays 0.009 mm), 19 per ramp (round the tip, whose
-   // 0.43 mm radius is the outline's tightest curve).
-   constexpr double kDrawTolM = 0.02e-3;
    constexpr double kTopTolM = 1e-6;   // a face is at the playfield's top over a cut when its corners are within this of it (the drawing's own flatness limit)
 
    struct P2
@@ -37,45 +33,6 @@ namespace
       double x, y;
    };
    double Cross(const P2 &o, const P2 &a, const P2 &b) { return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x); }
-
-   // chords: a circle's over the angle dphi strays r (1 - cos(dphi / 2)) from it; the ramp's over dtau at most dtau^2 |P''| / 8 = dtau^2 / 4 (P'' = (-2, 0) in the slot frame)
-   double ChordAngle(const double r) { return 2.0 * std::acos(1.0 - kDrawTolM / r); }
-   int RampChords(const DrawnSlot &d) { return std::max(2, (int)std::ceil(d.tauJ / std::sqrt(kDrawTolM))); }
-
-   // a point of cut d's frame (s along, t across, metres) in the world (VPX units)
-   P2 World(const DrawnSlot &d, const double s, const double t) { return { (d.cx + d.lx * s + d.px * t) / d.unit, (d.cy + d.ly * s + d.py * t) / d.unit }; }
-
-   // cut d's sharp outline in the world (VPX units), counter-clockwise in x, y from the side t = -a at s = -hs: the end at +s (the round end of radius a to U1, the ramp u = L - tau^2,
-   // w = c tau round its tip, the round end back to the side t = a), then the same turned half round (the end at -s); the points shared by two parts once
-   std::vector<P2> Outline(const DrawnSlot &d)
-   {
-      if (!d.outlineU.empty())   // the physics outline itself (drawn hole = physics outline, paper R5)
-      {
-         std::vector<P2> o;
-         for (size_t i = 0; i + 1 < d.outlineU.size(); i += 2)
-            o.push_back({ d.outlineU[i], d.outlineU[i + 1] });
-         return o;
-      }
-      const int nRound = std::max(1, (int)std::ceil(d.th1 / ChordAngle(d.a))), nRamp = RampChords(d);
-      std::vector<P2> st;   // the end at +s in the slot frame (s, t), metres
-      for (int k = 0; k <= nRound; k++)
-         st.push_back({ d.hs + d.a * std::sin(d.th1 * k / nRound), -d.a * std::cos(d.th1 * k / nRound) });
-      for (int k = 1; k < nRamp; k++)
-      {
-         const double tau = d.tauJ * (2.0 * k / nRamp - 1.0);
-         st.push_back({ d.hs + d.L - tau * tau, d.c * tau });
-      }
-      for (int k = nRound; k >= 0; k--)
-         st.push_back({ st[k].x, -st[k].y });
-      std::vector<P2> out { World(d, -st.back().x, -st.back().y) };
-      for (const double e : { 1.0, -1.0 })
-         for (const P2 &q : st)
-            if (const P2 w = World(d, e * q.x, e * q.y); std::hypot(w.x - out.back().x, w.y - out.back().y) > 1e-9)
-               out.push_back(w);
-      if (std::hypot(out[0].x - out.back().x, out[0].y - out.back().y) <= 1e-9)
-         out.pop_back();
-      return out;
-   }
 
    // two convex polygons, counter-clockwise, overlap: no side of either has the other wholly on its outer side (touching is not overlapping)
    bool Overlap(const P2 *a, const size_t na, const P2 *b, const size_t nb)
@@ -97,17 +54,26 @@ namespace
       return a;
    }
 
-   // The playfield's faces sel (the corners wp, wz in the world) as one region less the outlines holes (counter-clockwise, convex, apart). The region's boundary is kept (its edges are the
+   // The playfield's faces sel (the corners wp, wz in the world) as one region less the outlines holes (counter-clockwise, simple, apart). The region's boundary is kept (its edges are the
    // neighbour faces' own: no cracks); its inside is filled again by VPX's ear clipping (PolygonToTriangles) of one simple polygon per boundary loop, each hole inside the loop joined to it
    // first by the shortest bridge that meets no edge. The other faces are copied to idx, the new triangles appended, wound as the faces are. A hole's point is a new vertex in verts with the
    // values (position, normal, texture coordinates) of the faces' plane: they must be one plane (an affine map of x, y) at the top z0 (within tol), as on the implicit playfield quad.
-   // Returns why not, or nullptr. Every other failure (no face, a gap or a corner-only touch in them, a cut past their edge, no bridge) fails the one check at the end: n - 2 triangles per
+   // Returns why not, or nullptr. Every other failure (no face, a gap in them, a cut past their edge, no bridge) fails the one check at the end: n - 2 triangles per
    // polygon, none turned over, covering the region less the holes.
    const char *Fill(const Mesh &mesh, const std::vector<P2> &wp, const std::vector<double> &wz, const double z0, const double tol, const std::vector<char> &sel,
                     const std::vector<std::vector<P2>> &holes, std::vector<Vertex3D_NoTex2> &verts, std::vector<unsigned int> &idx)
    {
       static_assert(sizeof(Vertex3D_NoTex2) == 8 * sizeof(float));   // x, y, z, nx, ny, nz, tu, tv: read as 8 floats from &x
-      const char *const noFill = "the faces over the cuts cannot be filled again round the cuts (none, a gap or a corner-only touch in them, a cut past their edge, or the ear clipping fails)";
+      // which check refused (brief 4: the chamfered hole's 'drawn uncut' in run a2 named none of them)
+      const auto noFill = [](const int k) -> const char * {
+         static const char *const why[5] = { "the faces over the cuts cannot be filled again round the cuts: no face of the drawn top under them",
+                                             "the faces over the cuts cannot be filled again round the cuts: their boundary does not close in loops (a cut past their edge)",
+                                             "the faces over the cuts cannot be filled again round the cuts: a boundary loop runs clockwise (a gap in the faces)",
+                                             "the faces over the cuts cannot be filled again round the cuts: no bridge from a hole to its loop clear of every edge",
+                                             "the faces over the cuts cannot be filled again round the cuts: the ear clipping gave too few triangles" };
+         return why[k];
+      };
+      static std::string areaWhy;   // the last check's numbers
       std::map<std::pair<double, double>, int> placeOf;   // the region's corners by place (a mesh may have several vertices at one place)
       std::vector<P2> pt;                                 // the corners' places, then the holes' points
       std::vector<unsigned int> vtx;                      // their vertex in verts
@@ -143,7 +109,7 @@ namespace
             edges.insert(ar > 0.0 ? std::make_pair(p[k], p[(k + 1) % 3]) : std::make_pair(p[(k + 1) % 3], p[k]));
       }
       if (big < 0)
-         return noFill;
+         return noFill(0);
       // the plane's values at a place: the largest face's corners' by their weights; every corner of the region must be on it
       const unsigned int *IB = &mesh.m_indices[3 * big];
       const P2 K[3] = { wp[IB[0]], wp[IB[1]], wp[IB[2]] };
@@ -163,25 +129,48 @@ namespace
                return "the faces over the cuts are not one flat plane at the playfield's top (raised or curved there, design section 6; or a seam in normals or texture coordinates)";
       }
       // the region's boundary: the edges whose reverse is no edge, in loops, each counter-clockwise (an outer edge; a clockwise one is a gap in the faces)
-      std::map<int, int> next;
+      // A corner where faces touch only at that corner (brief 5: a fan's centre, two of its faces under cuts and the two between them not) has two boundary edges out: the loop
+      // through it goes on along the one turning most to the left (the same face's side: its inside is on the left), so each loop keeps to one side and a loop closes
+      std::multimap<int, int> next;
       for (const auto &[a, b] : edges)
          if (edges.count({ b, a }) == 0)
-            next.emplace(a, b);   // (a corner with two: one is lost, and a loop does not close)
+            next.emplace(a, b);
+      const auto after = [&](const int p, const int s) {   // the boundary edge out of s after the edge p s, or -1
+         int best = -1;
+         double bestTurn = -10.0;
+         const auto [lo, hi] = next.equal_range(s);
+         for (auto it = lo; it != hi; ++it)
+         {
+            const int w = it->second;
+            const double dx = pt[s].x - pt[p].x, dy = pt[s].y - pt[p].y, ex = pt[w].x - pt[s].x, ey = pt[w].y - pt[s].y;
+            const double turn = std::atan2(dx * ey - dy * ex, dx * ex + dy * ey);   // + left
+            if (turn > bestTurn)
+            {
+               bestTurn = turn;
+               best = w;
+            }
+         }
+         return best;
+      };
       std::vector<std::vector<int>> loops;
-      std::set<int> seen;
-      for (const auto &[first, unused] : next)
+      std::set<std::pair<int, int>> seen;
+      for (const auto &[a0, b0] : next)
       {
-         if (seen.count(first))
+         if (seen.count({ a0, b0 }))
             continue;
          std::vector<int> L;
-         for (int s = first; L.empty() || s != first; s = next[s])
+         for (std::pair<int, int> e { a0, b0 }; L.empty() || e != std::make_pair(a0, b0);)
          {
-            if (!seen.insert(s).second || next.count(s) == 0)
-               return noFill;
-            L.push_back(s);
+            if (!seen.insert(e).second)
+               return noFill(1);
+            L.push_back(e.first);
+            const int w = after(e.first, e.second);
+            if (w < 0)
+               return noFill(1);
+            e = { e.second, w };
          }
          if (Area(pt, L) <= 0.0)
-            return noFill;
+            return noFill(2);
          loops.push_back(std::move(L));
       }
       // the holes' points, clockwise, each a new vertex on the plane
@@ -252,7 +241,7 @@ namespace
                      bj = (int)j;
                   }
             if (bh < 0)
-               return noFill;
+               return noFill(3);
             const std::vector<int> &Hb = in[bh];
             twice[P[bj]] = twice[Hb[bi]] = 1;
             std::vector<int> merged(P.begin(), P.begin() + bj + 1);   // ..., the polygon's point, round the hole from its point back to it, the polygon's point again, ...
@@ -266,7 +255,7 @@ namespace
          std::vector<unsigned int> poly(P.rbegin(), P.rend()), tri;
          PolygonToTriangles(rgv, poly, tri, false);
          if (tri.size() != 3 * (P.size() - 2))
-            return noFill;
+            return noFill(4);
          for (size_t k = 0; k < tri.size(); k += 3)
          {
             const double a = Cross(pt[tri[k]], pt[tri[k + 1]], pt[tri[k + 2]]);
@@ -274,103 +263,36 @@ namespace
             idx.insert(idx.end(), { vtx[tri[k]], vtx[tri[k + (A > 0.0 ? 1 : 2)]], vtx[tri[k + (A > 0.0 ? 2 : 1)]] });
          }
       }
-      return std::abs(triArea - (loopArea - holeArea)) > 1e-6 * loopArea ? noFill : nullptr;
+      if (std::abs(triArea - (loopArea - holeArea)) <= 1e-6 * loopArea)
+         return nullptr;
+      std::ostringstream w;   // (a hole not wholly inside one loop is never bridged: its area is missing from the triangles; a turned-over triangle: -1e300)
+      w << "the faces over the cuts cannot be filled again round the cuts: the triangles' area " << triArea << " is not the loops' " << loopArea << " less the holes' " << holeArea << " ("
+        << loops.size() << " loops, " << H.size() << " holes)";
+      areaWhy = w.str();
+      return areaWhy.c_str();
    }
 
-   // Cut d's walls and ramp floors in the wood (world, VPX units; normals into the hole), appended to v and idx. The slot's frame (s, t, z up) turns as the world's (p is l turned by +90 deg,
-   // meshholes.cpp AddIniCuts), so each quad is wound from its sides' directions to be seen from its normals' side, as the playfield's top (counter-clockwise seen from above). Texture: the
-   // grain along the wall at the texture's own scale, its height the wall's depth: u = length along the wall (on the floor: along the slot) / rep, v = depth / thick (the floor shows the
-   // layer of wood at its depth, as the wall beside it).
-   void Wood(const DrawnSlot &d, const double rep, std::vector<Vertex3D_NoTex2> &v, std::vector<unsigned int> &idx)
+   // the convex hull of q, counter-clockwise (Andrew's monotone chain): the faces a rim loop overlaps are found by it (Overlap takes convex polygons; a face over the hull but not the
+   // loop is filled again as it was)
+   std::vector<P2> Hull(std::vector<P2> q)
    {
-      const auto vert = [&](const double s, const double t, const double z, const double ns, const double nt, const double nz, const double tu) {
-         const P2 w = World(d, s, t);
-         const double nx = d.lx * ns + d.px * nt, ny = d.ly * ns + d.py * nt, l = std::sqrt(nx * nx + ny * ny + nz * nz);
-         v.push_back({ (float)w.x, (float)w.y, (float)((d.z0 + z) / d.unit), (float)(nx / l), (float)(ny / l), (float)(nz / l), (float)tu, (float)(-z / d.thick) });
-      };
-      // the quads of rows x cols vertices from f0 (row i, column j at f0 + i cols + j): corners (i, j) (i + 1, j) (i + 1, j + 1) (i, j + 1) in turn, or the other way (flip)
-      const auto grid = [&](const unsigned int f0, const unsigned int rows, const unsigned int cols, const bool flip) {
-         for (unsigned int p = f0; p + cols + 1 < f0 + rows * cols; p++)
-            if ((p - f0) % cols + 1 < cols)
-               idx.insert(idx.end(), { p, flip ? p + 1 : p + cols, p + cols + 1, p, p + cols + 1, flip ? p + cols : p + 1 });
-      };
-      // the ramp floor's cross-sections, u past the end of the straight part: its outline's chord ends (the hole's points), the through-hole's round end's chords where it cuts the floor
-      // (U1 < u < a), and the tip (an arc of no width; its radius stays finite)
-      const int nRamp = RampChords(d);
-      const double dPh = ChordAngle(d.a);
-      const int nRound = std::max(1, (int)std::ceil(d.th1 / dPh)), nCut = std::max(1, (int)std::ceil((0.5 * M_PI - d.th1) / dPh));
-      std::vector<double> us { d.U1, d.a, d.L * (1.0 - 1e-7) };
-      for (int k = 1; k < nRamp; k++)
-         if (const double tau = d.tauJ * (2.0 * k / nRamp - 1.0); tau > 0.0)
-            us.push_back(d.L - tau * tau);
-      for (int k = 1; k < nCut; k++)
-         us.push_back(d.a * std::sin(d.th1 + (0.5 * M_PI - d.th1) * k / nCut));
-      std::sort(us.begin(), us.end());
-      us.erase(std::unique(us.begin(), us.end(), [](const double x, const double y) { return std::abs(x - y) < 1e-12; }), us.end());
-      struct Sec
+      std::sort(q.begin(), q.end(), [](const P2 &a, const P2 &b) { return a.x < b.x || (a.x == b.x && a.y < b.y); });
+      std::vector<P2> h(2 * q.size());
+      size_t k = 0;
+      for (size_t i = 0; i < q.size(); i++)
       {
-         double u, rho, zc, drho, dzc, p0, p1;   // the floor's arc t^2 + (z - zc)^2 = rho^2 and its change along u; from the angle p0 (on the through-hole's wall, or the axis) to p1 (the outline)
-      };
-      std::vector<Sec> sec;
-      int nA = 1;   // chords across each section (the most any needs)
-      for (const double u : us)
-      {
-         Sec q { u };
-         d.FloorArc(u, q.rho, q.zc);
-         const double h = std::min(1e-7, 0.5 * (d.L - u));
-         double r1, z1;
-         d.FloorArc(u + h, r1, z1);
-         q.drho = (r1 - q.rho) / h;
-         q.dzc = (z1 - q.zc) / h;
-         q.p0 = -std::acos(std::min(1.0, d.C(u) / q.rho));
-         q.p1 = std::atan2(-q.zc, d.W(u));
-         nA = std::max(nA, (int)std::ceil((q.p1 - q.p0) / ChordAngle(q.rho)));
-         sec.push_back(q);
+         while (k >= 2 && Cross(h[k - 2], h[k - 1], q[i]) <= 0.0)
+            k--;
+         h[k++] = q[i];
       }
-      // the walls: the through-hole's outline (the straight sides, the round ends of radius a) from the side t = -a at s = -hs, counter-clockwise: the end at +s (E) from that side round to
-      // the other, its top edge on the top up to U1, then on the floor (the sections U1 < u <= a, at the floor's angle p0); the end at -s, E turned half round; back to the start (the seam)
-      struct WP
+      for (size_t i = q.size() - 1, t = k + 1; i-- > 0;)
       {
-         double s, t, z, ns, nt;
-      };
-      std::vector<WP> E;
-      for (int k = 0; k <= nRound; k++)
-      {
-         const double ph = d.th1 * k / nRound;
-         E.push_back({ d.hs + d.a * std::sin(ph), -d.a * std::cos(ph), 0.0, -std::sin(ph), std::cos(ph) });
+         while (k >= t && Cross(h[k - 2], h[k - 1], q[i]) <= 0.0)
+            k--;
+         h[k++] = q[i];
       }
-      for (const Sec &q : sec)
-         if (q.u > d.U1 && q.u <= d.a)
-            E.push_back({ d.hs + q.u, -q.rho * std::cos(q.p0), q.zc + q.rho * std::sin(q.p0), -q.u / d.a, q.rho * std::cos(q.p0) / d.a });
-      for (size_t k = E.size() - 1; k-- > 0;)   // round the other side (the axis once)
-         E.push_back({ E[k].s, -E[k].t, E[k].z, E[k].ns, -E[k].nt });
-      const auto turn = [](const WP &p) { return WP { -p.s, -p.t, p.z, -p.ns, -p.nt }; };
-      std::vector<WP> loop { turn(E.back()) };
-      loop.insert(loop.end(), E.begin(), E.end());
-      for (const WP &p : E)
-         loop.push_back(turn(p));
-      const unsigned int w0 = (unsigned int)v.size();
-      double len = 0.0;
-      for (size_t k = 0; k < loop.size(); k++)
-      {
-         len += k > 0 ? std::hypot(loop[k].s - loop[k - 1].s, loop[k].t - loop[k - 1].t) : 0.0;
-         vert(loop[k].s, loop[k].t, loop[k].z, loop[k].ns, loop[k].nt, 0.0, len / rep);
-         vert(loop[k].s, loop[k].t, -d.thick, loop[k].ns, loop[k].nt, 0.0, len / rep);
-      }
-      grid(w0, (unsigned int)loop.size(), 2, false);   // (top edge forward, then down: the hole on the left, seen from above)
-      // the floors: at each end e, each side of the axis g, the sections by nA chords across; normal: the arc surface's gradient turned inward. Mirrored once (e g < 0): wound the other way
-      for (const double e : { 1.0, -1.0 })
-         for (const double g : { 1.0, -1.0 })
-         {
-            const unsigned int f0 = (unsigned int)v.size();
-            for (const Sec &q : sec)
-               for (int j = 0; j <= nA; j++)
-               {
-                  const double ps = q.p0 + (q.p1 - q.p0) * j / nA, s = e * (d.hs + q.u);
-                  vert(s, g * q.rho * std::cos(ps), q.zc + q.rho * std::sin(ps), e * (std::sin(ps) * q.dzc + q.drho), -g * std::cos(ps), -std::sin(ps), s / rep);
-               }
-            grid(f0, (unsigned int)sec.size(), nA + 1, e * g < 0.0);
-         }
+      h.resize(k - 1);
+      return h;
    }
 
    struct Drawing
@@ -389,11 +311,11 @@ namespace PlayfieldCutDraw
 {
    void Setup(Primitive *const pf, Renderer *const renderer)
    {
-      const std::vector<DrawnSlot> cuts = MeshHoles::Drawn();   // the mesh holes' outline list
-      if (cuts.empty() || g_drawing.prim != nullptr)
+      const std::vector<DrawnHole> &holes = MeshHoles::Drawn();   // every joined hole as the physics cut it (MeshHoles::Build: in the physics engine's setup, before the render setup, every load)
+      if (holes.empty() || g_drawing.prim != nullptr)
          return;
       Mesh &mesh = pf->m_mesh;
-      const std::string where = "Playfield cuts, drawn playfield " + pf->GetName() + ": ";
+      const std::string where = "Mesh holes drawn, playfield " + pf->GetName() + ": ";
       if (!mesh.m_animationFrames.empty())
       {
          PLOGW << where << "an animated mesh (its frames rewrite the vertices): drawn uncut";
@@ -410,65 +332,193 @@ namespace PlayfieldCutDraw
          wp[i] = { w.x, w.y };
          wz[i] = w.z;
       }
-      // each cut's outline (one overlapping an earlier cut is not drawn) and the faces it overlaps seen from above, but those wholly under the top (the playfield's underside, left as they
-      // are): re-cut (Fill: they must be flat at the top)
+      // each hole's rim loops as the physics cut them, and the faces of the drawn top they overlap seen from above (their convex hull's), but those wholly under the top (the playfield's
+      // underside, left as they are): re-cut (Fill: they must be flat at the top). The drawn top under a hole: the highest of the drawn faces' planes at its first rim point
+      const double tol = kTopTolM / holes[0].unit;
       std::vector<std::vector<P2>> outl;
-      std::vector<const DrawnSlot *> drawn;
+      std::vector<const DrawnHole *> owner;
       std::vector<char> sel(nTri, 0);
-      std::ostringstream names;
-      const double z0 = cuts[0].z0 / cuts[0].unit, tol = kTopTolM / cuts[0].unit;
-      for (const DrawnSlot &d : cuts)
+      double z0 = 0.0;
+      for (const DrawnHole &h : holes)
       {
-         std::vector<P2> o = Outline(d);
-         if (std::any_of(outl.begin(), outl.end(), [&](const std::vector<P2> &q) { return Overlap(o.data(), o.size(), q.data(), q.size()); }))
+         std::ostringstream line;
+         const bool same = PhysicsIni::Lower(h.hostName) == PhysicsIni::Lower(pf->GetName());
+         line << where << h.name << ": cut by the physics in the " << h.hostKind << " host " << h.hostName << (same ? " (the drawn primitive)" : " (not the drawn primitive: drawn on it)")
+              << ", walls " << (h.walls ? "yes, " : "no, ") << h.thick << " VPU deep, physics top z " << h.topZ << " VPU";
+         if (!h.draw)
          {
-            PLOGW << where << "cut " << d.name << " overlaps another cut: not drawn";
+            PLOGI << line.str() << "; draw = 0: cut in the physics, not drawn (the drawn top stays whole there)";
             continue;
          }
+         if (!h.onTop || h.rim.empty() || h.rim[0].size() < 2)
+         {
+            PLOGI << line.str() << (h.onTop ? "; no rim recorded: not cut in the drawn top" : "; cut into another hole's floor: its rim is not cut in the drawn top, and that floor is drawn whole over it");
+            continue;
+         }
+         const P2 q0 { h.rim[0][0], h.rim[0][1] };
+         double zt = 0.0;
+         bool found = false;
          for (size_t t = 0; t < nTri; t++)
          {
             const unsigned int *I = &mesh.m_indices[3 * t];
-            const double ar = Cross(wp[I[0]], wp[I[1]], wp[I[2]]);   // (0: seen edge-on from above, covers nothing)
-            const P2 K[3] = { wp[I[0]], wp[I[ar > 0.0 ? 1 : 2]], wp[I[ar > 0.0 ? 2 : 1]] };
-            if (ar != 0.0 && std::max({ wz[I[0]], wz[I[1]], wz[I[2]] }) >= z0 - tol && Overlap(K, 3, o.data(), o.size()))
-               sel[t] = 1;
+            const double A = Cross(wp[I[0]], wp[I[1]], wp[I[2]]);
+            if (A == 0.0)
+               continue;
+            const double w0 = Cross(q0, wp[I[1]], wp[I[2]]) / A, w1 = Cross(wp[I[0]], q0, wp[I[2]]) / A, w2 = 1.0 - w0 - w1;
+            if (w0 < 0.0 || w1 < 0.0 || w2 < 0.0)
+               continue;
+            const double z = w0 * wz[I[0]] + w1 * wz[I[1]] + w2 * wz[I[2]];
+            if (!found || z > zt)
+               zt = z;
+            found = true;
          }
-         names << (outl.empty() ? "" : ", ") << d.name << " (" << o.size() << " outline points)";
-         outl.push_back(std::move(o));
-         drawn.push_back(&d);
+         if (!found)
+         {
+            PLOGI << line.str() << "; no face of the drawn primitive under its rim: not cut in the drawn top";
+            continue;
+         }
+         if (outl.empty())
+            z0 = zt;
+         line << ", drawn top z " << zt << " VPU (drawn - physics " << zt - h.topZ << " VPU)";
+         for (const std::vector<double> &L : h.rim)
+         {
+            std::vector<P2> o;
+            for (size_t i = 0; i + 1 < L.size(); i += 2)
+               o.push_back({ L[i], L[i + 1] });
+            double ar = 0.0;
+            for (size_t i = 0; i < o.size(); i++)
+               ar += Cross({ 0.0, 0.0 }, o[i], o[(i + 1) % o.size()]);
+            if (o.size() < 3 || ar <= 0.0)
+            {
+               line << "; a rim loop of " << o.size() << " points not counter-clockwise: not cut";
+               continue;
+            }
+            const std::vector<P2> hull = Hull(o);
+            for (size_t t = 0; t < nTri; t++)
+            {
+               const unsigned int *I = &mesh.m_indices[3 * t];
+               const double a = Cross(wp[I[0]], wp[I[1]], wp[I[2]]);   // (0: seen edge-on from above, covers nothing)
+               const P2 K[3] = { wp[I[0]], wp[I[a > 0.0 ? 1 : 2]], wp[I[a > 0.0 ? 2 : 1]] };
+               if (a != 0.0 && std::max({ wz[I[0]], wz[I[1]], wz[I[2]] }) >= zt - tol && Overlap(K, 3, hull.data(), hull.size()))
+                  sel[t] = 1;
+            }
+            outl.push_back(std::move(o));
+            owner.push_back(&h);
+         }
+         PLOGI << line.str();
       }
-      std::vector<Vertex3D_NoTex2> verts = mesh.m_vertices;
-      std::vector<unsigned int> idx;
-      if (const char *const why = Fill(mesh, wp, wz, z0, tol, sel, outl, verts, idx))
+      if (!outl.empty())
       {
-         PLOGW << where << why << ": the playfield is drawn uncut";
-         return;
+         std::vector<Vertex3D_NoTex2> verts = mesh.m_vertices;
+         std::vector<unsigned int> idx;
+         const size_t base = verts.size();
+         if (const char *const why = Fill(mesh, wp, wz, z0, tol, sel, outl, verts, idx))
+         {
+            PLOGW << where << why << ": the playfield is drawn uncut";
+            return;
+         }
+         // each rim loop as drawn (Fill's new vertices, float, in the order Fill added them: each loop's points reversed) against the physics' rim points
+         size_t at = base;
+         for (size_t i = 0; i < outl.size(); i++)
+         {
+            double dmax = 0.0;
+            for (size_t k = 0; k < outl[i].size(); k++)
+            {
+               const Vertex3D_NoTex2 &v = verts[at + outl[i].size() - 1 - k];   // (the primitive's own frame: to the world as its corners)
+               const Vertex3Ds w = M.MultiplyVectorNoPerspective(Vertex3Ds(v.x, v.y, v.z));
+               dmax = std::max(dmax, std::hypot(w.x - outl[i][k].x, w.y - outl[i][k].y));
+            }
+            at += outl[i].size();
+            PLOGI << where << owner[i]->name << ": rim points drawn " << outl[i].size() << " vs physics " << outl[i].size()
+                  << ", largest plan distance between matching vertices " << dmax << " VPU (the drawn vertex's float rounding)";
+         }
+         g_drawing.vertices = std::exchange(mesh.m_vertices, std::move(verts));
+         g_drawing.indices = std::exchange(mesh.m_indices, std::move(idx));
+         PLOGI << where << "re-cut with the physics' rim loops left out (the faces over them filled again by PolygonToTriangles): " << nTri << " triangles -> " << mesh.m_indices.size() / 3
+               << ", " << g_drawing.vertices.size() << " vertices -> " << mesh.m_vertices.size() << ", " << outl.size() << " rim loops";
       }
       g_drawing.prim = pf;
-      g_drawing.vertices = std::exchange(mesh.m_vertices, std::move(verts));
-      g_drawing.indices = std::exchange(mesh.m_indices, std::move(idx));
-      PLOGI << where << "re-cut with the outlines left out (chords within " << kDrawTolM * 1e3 << " mm inside the physics outline; the faces over them filled again by PolygonToTriangles): "
-            << nTri << " triangles -> " << mesh.m_indices.size() / 3 << ", " << g_drawing.vertices.size() << " vertices -> " << mesh.m_vertices.size() << "; cuts " << names.str();
-      // the walls and floors
+      // the walls, floors and side faces: the physics' own triangles, each with its flat normal (a rim wall faces into the hole, a floor up, as the physics wound them; a wall under a
+      // floor's open edge and a side face turned to face the hole's first rim loop's centre). Texture: the grain along the rim on walls, its height the wall's depth
       const std::filesystem::path file = g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, "PlayfieldCutWood.png");
       g_drawing.tex.reset(Texture::CreateFromFile(file));
       if (g_drawing.tex == nullptr || g_drawing.tex->m_width == 0 || g_drawing.tex->m_height == 0)
       {
          g_drawing.tex.reset();
-         PLOGW << where << "no wood texture " << file.string() << ": the cuts' walls and floors are not drawn";
+         PLOGW << where << "no wood texture " << file.string() << ": the holes' walls and floors are not drawn";
          return;
       }
-      const double rep = drawn[0]->thick * (double)g_drawing.tex->m_width / (double)g_drawing.tex->m_height;   // the texture's height is the wall's depth; its width along the grain
+      const double rep = holes[0].thick * (double)g_drawing.tex->m_width / (double)g_drawing.tex->m_height;   // the texture's height is the wall's depth; its width along the grain
       std::vector<Vertex3D_NoTex2> v;
       std::vector<unsigned int> wi;
-      for (const DrawnSlot *const d : drawn)
-         Wood(*d, rep, v, wi);
+      for (const DrawnHole &h : holes)
+      {
+         if (!h.draw)   // draw = 0: no walls or floors drawn either
+            continue;
+         P2 ctr { 0.0, 0.0 };
+         const size_t nr = h.rim.empty() ? 0 : h.rim[0].size() / 2;
+         for (size_t i = 0; i < nr; i++)
+            ctr = { ctr.x + h.rim[0][2 * i] / (double)nr, ctr.y + h.rim[0][2 * i + 1] / (double)nr };
+         int walls = 0, others = 0;
+         for (size_t i = 0; i + 18 <= h.wood.size(); i += 18)
+         {
+            const float *f = &h.wood[i];
+            const int kind = (int)f[5];
+            const double ux = f[6] - f[0], uy = f[7] - f[1], uz = f[8] - f[2], vx = f[12] - f[0], vy = f[13] - f[1], vz = f[14] - f[2];
+            double nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+            const double l = std::sqrt(nx * nx + ny * ny + nz * nz);
+            if (l <= 0.0)
+               continue;
+            nx /= l;
+            ny /= l;
+            nz /= l;
+            const bool flip = kind >= 2 && nr > 0 && nx * (ctr.x - (f[0] + f[6] + f[12]) / 3.0) + ny * (ctr.y - (f[1] + f[7] + f[13]) / 3.0) < 0.0;
+            for (const int k : { 0, flip ? 2 : 1, flip ? 1 : 2 })
+            {
+               const float *q = f + 6 * k;
+               wi.push_back((unsigned int)v.size());
+               v.push_back({ q[0], q[1], q[2], (float)(flip ? -nx : nx), (float)(flip ? -ny : ny), (float)(flip ? -nz : nz), (float)(q[3] / rep), (float)(q[4] / h.thick) });
+            }
+            (kind == 1 || kind == 2 ? walls : others)++;
+         }
+         // a hole the physics cut without walls (narrower than the ball: Button, Star, slot, a small cut): drawn walls all the same (user 2026-11-17), one quad per rim edge from the
+         // top down to the wall depth (h.thick) at the physics top's height (h.topZ), facing into the hole (the hole lies left of every rim piece). Under a floor (the slot's ramps,
+         // the groove's strips) the floor hides the part below it. Looks only: no physics face
+         int drawnOnly = 0;
+         if (!h.walls)
+            for (const std::vector<double> &loop : h.rim)
+            {
+               const size_t n = loop.size() / 2;
+               double along = 0.0;
+               for (size_t i = 0; i < n; i++)
+               {
+                  const size_t j = (i + 1) % n;
+                  const double ax = loop[2 * i], ay = loop[2 * i + 1], bx = loop[2 * j], by = loop[2 * j + 1], len = std::hypot(bx - ax, by - ay);
+                  if (len <= 0.0)
+                     continue;
+                  const float nx = (float)(-(by - ay) / len), ny = (float)((bx - ax) / len);   // the left normal: into the hole
+                  const float zt = (float)h.topZ, zb = (float)(h.topZ - h.thick);
+                  const Vertex3D_NoTex2 At { (float)ax, (float)ay, zt, nx, ny, 0.f, (float)(along / rep), 0.f }, Bt { (float)bx, (float)by, zt, nx, ny, 0.f, (float)((along + len) / rep), 0.f };
+                  const Vertex3D_NoTex2 Ab { (float)ax, (float)ay, zb, nx, ny, 0.f, (float)(along / rep), 1.f }, Bb { (float)bx, (float)by, zb, nx, ny, 0.f, (float)((along + len) / rep), 1.f };
+                  along += len;
+                  for (const Vertex3D_NoTex2 &q : { At, Bt, Bb, At, Bb, Ab })
+                  {
+                     wi.push_back((unsigned int)v.size());
+                     v.push_back(q);
+                  }
+                  drawnOnly += 2;
+               }
+            }
+         PLOGI << where << h.name << ": walls drawn " << walls << " triangles vs physics " << h.physWallTris << ", floors and sides drawn " << others << " triangles"
+               << (h.walls ? std::string() : ", walls drawn without physics walls " + std::to_string(drawnOnly) + " triangles (" + std::to_string(h.thick) + " VPU deep)");
+      }
+      if (wi.empty())
+         return;
       g_drawing.woodIndices = (unsigned int)wi.size();
       g_drawing.wood = std::make_shared<MeshBuffer>("PlayfieldCuts.Wood"s, std::make_shared<VertexBuffer>(renderer->m_renderDevice, (unsigned int)v.size(), (const float *)v.data()),
          std::make_shared<IndexBuffer>(renderer->m_renderDevice, wi), true);
-      PLOGI << where << "walls and ramp floors: " << wi.size() / 3 << " triangles, " << v.size() << " vertices; walls " << drawn[0]->thick * 1e3 << " mm deep (the physics' through-hole); wood "
-            << file.filename().string() << " " << g_drawing.tex->m_width << " x " << g_drawing.tex->m_height << " px: its height is the wall's depth, its width " << rep * 1e3
-            << " mm along the grain";
+      PLOGI << where << "walls, floors and sides: " << wi.size() / 3 << " triangles, " << v.size() << " vertices; wood " << file.filename().string() << " " << g_drawing.tex->m_width << " x "
+            << g_drawing.tex->m_height << " px: its height is the wall's depth, its width " << rep << " VPU along the grain";
    }
 
    void Draw(const Primitive *const pf, Renderer *const renderer, const Material *const mat)

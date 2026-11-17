@@ -9,13 +9,15 @@ Lead log: runs/2026-11-12-lead/log.md. Tests so far: runs/2026-11-12-kicker-cup.
 1. Physical laws and bodies  (APPROVED by the user 2026-11-12)
 -----------------------------------------
 Physical kicker (Requirements F 1-8):
- a. Bodies: the ball, and one static body, the kicker's collision mesh: the cup (hand-made, faces only where a ball touches) plus the hole's wall below the rim (c gives the rim).
+ a. Bodies: the ball, and one static body, the kicker's collision mesh: the cup (hand-made, faces only where a ball touches). The hole's wall is the cut's (c); the cup data's
+    own outer wall (a 2 mm-ring sampling artefact, r 18 at the top to r 16 at the underside) was removed 2026-11-17 (user): one wall, the drilled hole's.
     Nothing in the kicker moves; the switch and pins are left out (F 3).
  b. Law: the existing static-mesh contact (ContactCore: Hertz + damping + friction + twist, BarsTriangles for several pressed faces). No new law. Material: hard surface
     (cup plastic or steel), from an ini section [Kicker:<name>] with [Surfaces] defaults, as walls do.
  c. The hole: the cutout's circle (tangent polygon) is cut out of the mesh under the kicker at load, walls 12.7 mm down (meshholes.cpp, 2026-11-16). This replaces today's exclusion (g_playfieldHoles /
     InPlayfieldHole), which takes the playfield away from the ball at any height and hands the ball to stock. Playfield only, as the turntable (F 2). The hole's radius is
-    the real cutout's (18.93 mm at the playfield top for the Sys7 cutout, measured in Kickers.blend; 1.34 mm bevel to 17.6, wall 16.4), part of the cup data, not the VPX
+    the real cutout's (18.93 mm at the playfield top for the Sys7 cutout, from Kickers.blend; drilled straight through, no bevel: user 2026-11-17, the model has none; an
+    earlier '1.34 mm bevel to 17.6, wall 16.4' here had no source and is withdrawn), part of the cup data; [Kicker:<name>] cut_hole = 0 leaves the hole to the author. Not the VPX
     kicker radius (25 U = 13.5 mm, the ball's own radius).
  d. Gravity, the cup and friction bring the ball to rest; nothing else holds it (F 1).
  e. The kick: one instantaneous velocity change of the ball where it is (the script's speed, angle, inclination, scatter and offset), the drive; the cup and rim then act

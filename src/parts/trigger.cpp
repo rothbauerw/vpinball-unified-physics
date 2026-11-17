@@ -900,6 +900,8 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       if (star)
          s.massG = ButtonCap::kStarMassG;   // (before the ini: mass_g still sets it)
       PartsIni::LoadButtonCap(s, ini, GetName());
+      MeshHoles::HoleKeys holeKeys;   // cut_hole, draw, wall_depth_mm: the cap's hole in the mesh under it, [Triggers] then [Trigger:<name>] (meshholes.h HoleKeys)
+      PartsIni::ReadSections(ini, "triggers", "trigger:" + GetName(), [&](const std::string &k, double v, const std::string &) { MeshHoles::HoleKey(holeKeys, k, v, kind + " trigger " + GetName()); });
       std::vector<std::string> notices;   // load-time detectors (rule 8): on screen at the first cycle and in the log as WARN
       const double radiusMm = m_d.m_radius * U * 1e3;
       if (star)
@@ -972,20 +974,17 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
                rTip = std::max(rTip, std::hypot(lx, ly));
                minCross = std::min(minCross, lx * ly2 - ly * lx2);   // > 0 for every edge: star-shaped from its centre (logged; the cut takes any simple outline)
             }
-            MeshHoles::Add("Star " + GetName(), xy, axis.z);
+            MeshHoles::Add("Star " + GetName(), xy, axis.z, holeKeys);
             PLOGI << "Mesh holes: Star " << GetName() << " hole: " << grown.size() / 2 << " vertices, tips at r " << rTip * 1e3 << " mm, inner corners at r " << rIn * 1e3 << " mm (star outline + " << kGapM * 1e3
                   << " mm), star-shaped from its centre: " << (minCross > 0.0 ? "yes" : "NO");
          }
          else
-            MeshHoles::Add("Button " + GetName(), MeshHoles::Round(axis.x, axis.y, R + kGapM), axis.z);
+            MeshHoles::Add("Button " + GetName(), MeshHoles::Round(axis.x, axis.y, R + kGapM), axis.z, holeKeys);
       }
       PLOGI << "part finder path slope (group A): " << (star ? "star" : "button") << " trigger " << GetName() << " cap " << model->GroupPathSlope(0);
-      // the drawn cap, moved by the travel (looks only). A Button: the stock mesh (taller than the real cap), its top put at the physical top at rest. A Star: the stock star mesh, its
-      // height scaled to the model's (GenerateMesh), its top already there
-      float meshTop = -FLT_MAX;
-      for (const Vertex3D_NoTex2 &v : SetupMeshData(TriggerButton).vertices)
-         meshTop = max(meshTop, v.z * m_d.m_radius + 5.0f);   // (GenerateMesh's zoffset for a Button)
-      const double drawRest = star ? 0.0 : s.restMm * 1e-3 / U - meshTop;
+      // the drawn cap, moved by the travel (looks only). A Button: the physics cap revolved (RenderSetup), at its rest place. A Star: the stock star mesh, its height scaled to the
+      // model's (GenerateMesh), its top already there. Both: no offset at rest
+      const double drawRest = 0.0;
       RubberObjectSettings hs;
       const JetBumper::Params pp;
       ContactHost::LoadHardSurfaceSettings(hs, ini, "trigger", GetName(), pp.plasticE, pp.plasticMu);
@@ -1146,6 +1145,46 @@ void Trigger::UpdateMesh()
       if (m_d.m_shape == TriggerWireE)
          MakeRestTube();
    }
+   // a Button cap on the unified engine: drawn as the physics cap (buttoncap.h Part: the flat top of the trigger's radius rest_mm above its surface, the corner rounded corner_mm, the
+   // side cap_h_mm down from the top; the bottom open, in the hole), revolved 96 around, the corner in 6 steps; moved by the travel (m_partAngle, 0 at rest). Replaces the stock
+   // button mesh scaled by the radius in z: the height no longer follows the radius
+   if (!m_partDraw && m_d.m_shape == TriggerButton && m_partHost != nullptr)
+      if (const ButtonCap::Cap *const cap = dynamic_cast<const ButtonCap::Cap *>(m_partHost->MovingPart()); cap != nullptr && cap->part.prof.v.size() == 3)
+      {
+         const ButtonCap::Part &p = cap->part;
+         constexpr double U = ContactSystem::kMetresPerUnit;
+         constexpr int kAround = 96, kCorner = 6;
+         const double top = p.prof.v[0].z + p.rc, rc = p.rc, R = p.R, bottom = p.prof.v[2].z - p.rc;   // (the sweep: the polyline swept by rc; its side ends cap_h_mm below the top)
+         struct M { double r, z, nr, nz; };
+         std::vector<M> prof { { 0.0, top, 0.0, 1.0 }, { R - rc, top, 0.0, 1.0 } };
+         for (int k = 1; k <= kCorner; k++)
+         {
+            const double a = 0.5 * M_PI * (1.0 - (double)k / kCorner);   // from straight up to horizontal
+            prof.push_back({ R - rc + rc * std::cos(a), top - rc + rc * std::sin(a), std::cos(a), std::sin(a) });
+         }
+         prof.push_back({ R, bottom, 1.0, 0.0 });
+         const double cx = p.centre.x / U, cy = p.centre.y / U, cz = p.centre.z / U;
+         m_tubeVerts.clear();
+         m_tubeIdx.clear();
+         m_tubeVerts.push_back({ (float)cx, (float)cy, (float)(cz + top / U), 0.f, 0.f, 1.f, 0.5f, 0.5f });   // the axis
+         for (size_t j = 1; j < prof.size(); j++)
+            for (int i = 0; i < kAround; i++)
+            {
+               const double ph = 2.0 * M_PI * i / kAround, c = std::cos(ph), s = std::sin(ph), rr = prof[j].r / U;
+               m_tubeVerts.push_back({ (float)(cx + rr * c), (float)(cy + rr * s), (float)(cz + prof[j].z / U), (float)(prof[j].nr * c), (float)(prof[j].nr * s), (float)prof[j].nz,
+                  (float)(0.5 + 0.5 * prof[j].r / R * c), (float)(0.5 + 0.5 * prof[j].r / R * s) });
+            }
+         const auto at = [&](size_t j, int i) { return (WORD)(1 + (j - 1) * kAround + (i % kAround)); };
+         for (int i = 0; i < kAround; i++)
+         {
+            m_tubeIdx.insert(m_tubeIdx.end(), { (WORD)0, at(1, i), at(1, i + 1) });
+            for (size_t j = 1; j + 1 < prof.size(); j++)
+               m_tubeIdx.insert(m_tubeIdx.end(), { at(j, i), at(j + 1, i), at(j + 1, i + 1), at(j, i), at(j + 1, i + 1), at(j, i + 1) });
+         }
+         PLOGI << "Trigger " << GetName() << ": Button drawn as the physics cap: radius " << R * 1e3 << " mm, top " << top * 1e3 << " mm above its surface, corner " << rc * 1e3 << " mm in " << kCorner
+               << " steps, side down to " << bottom * 1e3 << " mm, " << kAround << " around: " << m_tubeVerts.size() << " vertices, " << m_tubeIdx.size() / 3 << " triangles (replaces the stock button mesh, "
+               << SetupMeshData(TriggerButton).vertices.size() << " vertices, scaled by the radius in z)";
+      }
    const std::span<const WORD> indices = m_tubeVerts.empty() ? SetupMeshData(m_d.m_shape).indices : std::span<const WORD>(m_tubeIdx);
    if (indices.empty())
       return;
@@ -1282,7 +1321,7 @@ void Trigger::Render(const unsigned int renderMask)
    }
 
    m_renderer->m_renderDevice->ResetRenderState();
-   if (CentrelineShape(m_d.m_shape) || m_d.m_shape == TriggerInder)
+   if (CentrelineShape(m_d.m_shape) || m_d.m_shape == TriggerInder || (m_d.m_shape == TriggerButton && !m_tubeVerts.empty()))   // (the Button drawn as the physics cap: either winding)
       m_renderer->m_renderDevice->SetRenderState(RenderState::CULLMODE, RenderState::CULL_NONE);
    m_renderer->m_renderDevice->m_basicShader->SetBasic(m_ptable->GetMaterial(m_d.m_szMaterial), nullptr);
    if (m_partDraw)

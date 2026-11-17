@@ -76,7 +76,7 @@ PhysicsEngine::PhysicsEngine(PinTable *const table)
       PLOGW << "Physics: surface hosts left over from the previous table (a leak, the game will slow down with each restart): " << m_leftoverHosts;
    else
       PLOGI << "Physics: no surface hosts left over from the previous table";
-   MeshHoles::Clear();   // the holes cut into the mesh under them at load (meshholes.h): the kickers and turntables add theirs in PhysicSetup, below, the [PlayfieldCut:<name>] sections at AddIniCuts
+   MeshHoles::Clear(PhysicsIni::Active(ContactSurfaceHost::IniPathFor(table->m_filename)).holeRoundMm);   // the holes cut into the mesh under them at load (meshholes.h): the kickers and turntables add theirs in PhysicSetup, below, the [PlayfieldCut:<name>] sections at AddIniCuts
 
    // Collect all hit objects
    const FRect3D tableBounds = table->GetBoundingBox();

@@ -128,6 +128,7 @@ void Kicker::PhysicalSetup(PhysicsEngine *const physics)
    // [Kicker:<name>] in the table's physics ini, every key read here or by the hard-surface loader below; unknown or repeated keys are said on screen (rule 8)
    bool physical = false;               // type = physical | virtual: default virtual; physical only where the table's physics ini says so (design 7b, Requirements F 9, user 2026-11-12)
    std::string cup = "sys7";            // cup = sys7: the collision cup and its switch depths, compiled in, one per cup type (System 7 the only one so far)
+   MeshHoles::HoleKeys holeKeys;        // cut_hole, draw, wall_depth_mm (type physical only: a virtual kicker cuts no hole)
    std::set<std::string> seen;
    std::string unknown, repeated, badType;
    PartsIni::ReadSections(ini, std::string(), "kicker:" + GetName(), [&](const std::string &k, const double v, const std::string &lv) {
@@ -144,6 +145,7 @@ void Kicker::PhysicalSetup(PhysicsEngine *const physics)
       }
       else if (k == "cup")
          cup = lv;
+      else if (MeshHoles::HoleKey(holeKeys, k, v, "Kicker " + GetName())) {}   // cut_hole, draw, wall_depth_mm: the physical kicker's hole in the mesh under it (meshholes.h HoleKeys)
       else if (ContactHost::IsSurfaceKey(k)) {}   // the hard surface's material (ContactHost::LoadHardSurfaceSettings reads it)
       else
          unknown += (unknown.empty() ? "" : ", ") + k;
@@ -198,7 +200,7 @@ void Kicker::PhysicalSetup(PhysicsEngine *const physics)
    physics->AddCollider(host, false);
    // the hole cut into the mesh under it at load (meshholes.h): the real cutout's radius at the playfield top (part of the cup data), not the VPX kicker radius, as a tangent polygon
    const double holeMm = kickerCupSys7HoleRadiusMm;
-   MeshHoles::Add("Kicker " + name, MeshHoles::Round((double)m_d.m_vCenter.x * U, (double)m_d.m_vCenter.y * U, holeMm * 1e-3), (double)height * U);
+   MeshHoles::Add("Kicker " + name, MeshHoles::Round((double)m_d.m_vCenter.x * U, (double)m_d.m_vCenter.y * U, holeMm * 1e-3), (double)height * U, holeKeys);
    // the cup's switch (cup data: close and open depth of the ball's bottom, TUNED, kickerCupSys7.h)
    const double zClose = (double)height - kickerCupSys7SwitchCloseDepthMm * mmU, zOpen = (double)height - kickerCupSys7SwitchOpenDepthMm * mmU;
    physics->m_noneZones.AddKicker(this, m_d.m_vCenter.x, m_d.m_vCenter.y, holeMm * mmU, zClose, zOpen);
@@ -621,7 +623,41 @@ void Kicker::RenderSetup(Renderer *renderer)
        break;
    }
 
-   //
+   if (m_physical)   // a physical kicker: its cup drawn from the physics cup data (meshes/kickerCupSys7.h: fixed size, turned by the orientation, at the surface height as PhysicalSetup places
+   {                 // it), each face flat-shaded (its normal turned up), not the stock kicker mesh; the hole round it is the playfield's drawn cut
+      constexpr double mmU = 1e-3 / ContactSystem::kMetresPerUnit;
+      const Matrix3D rot = Matrix3D::MatrixRotateZ(ANGTORAD(m_d.m_orientation));
+      std::vector<Vertex3D_NoTex2> cv;
+      for (unsigned int t = 0; t < kickerCupSys7NumTriangles; t++)
+      {
+         Vertex3Ds p[3];
+         for (int k = 0; k < 3; k++)
+         {
+            const float *q = kickerCupSys7Vertices[kickerCupSys7Indices[t][k]];
+            const Vertex3Ds w = rot.MultiplyVectorNoTranslate(Vertex3Ds { (float)(q[0] * mmU), (float)(q[1] * mmU), (float)(q[2] * mmU) });
+            p[k] = Vertex3Ds { m_d.m_vCenter.x + w.x, m_d.m_vCenter.y + w.y, m_baseHeight + w.z };
+         }
+         Vertex3Ds n = CrossProduct(p[1] - p[0], p[2] - p[0]);
+         n.Normalize();
+         if (n.z < 0.f)
+            n = Vertex3Ds { -n.x, -n.y, -n.z };
+         for (int k = 0; k < 3; k++)
+            cv.push_back({ p[k].x, p[k].y, p[k].z, n.x, n.y, n.z, 0.f, 0.f });
+      }
+      static std::vector<WORD> s_seq;   // the faces' corners in order (the same for every physical kicker: the cup is fixed)
+      s_seq.resize(cv.size());
+      for (size_t i = 0; i < s_seq.size(); i++)
+         s_seq[i] = (WORD)i;
+      const unsigned int stockVertices = m_numVertices;
+      m_numVertices = m_numIndices = (unsigned int)cv.size();
+      m_texture = nullptr;
+      std::shared_ptr<VertexBuffer> cupVB = std::make_shared<VertexBuffer>(m_renderer->m_renderDevice, m_numVertices, (float *)cv.data());
+      std::shared_ptr<IndexBuffer> cupIB = std::make_shared<IndexBuffer>(m_renderer->m_renderDevice, m_numIndices, s_seq.data());
+      m_meshBuffer = std::make_shared<MeshBuffer>(GetName() + ".Kicker"s, cupVB, cupIB, true);
+      PLOGI << "Kicker " << GetName() << ": drawn as the physics cup (kickerCupSys7.h, " << kickerCupSys7NumTriangles << " faces, " << cv.size() << " vertices), replacing the stock kicker mesh of type "
+            << (int)m_d.m_kickertype << " (" << stockVertices << " vertices)";
+      return;
+   }
 
    std::shared_ptr<VertexBuffer> vertexBuffer = std::make_shared<VertexBuffer>(m_renderer->m_renderDevice, m_numVertices);
    Vertex3D_NoTex2 *buf;
@@ -689,7 +725,10 @@ void Kicker::Render(const unsigned int renderMask)
             default:
             case KickerHoleSimple: indices = kickerSimpleHoleIndices; break;
             }
-            vector<unsigned int> indices2(indices, indices + m_numIndices);
+            vector<unsigned int> indices2 = m_physical ? vector<unsigned int>(m_numIndices) : vector<unsigned int>(indices, indices + m_numIndices);
+            if (m_physical)   // the physics cup: its corners in order (RenderSetup)
+               for (unsigned int i = 0; i < m_numIndices; i++)
+                  indices2[i] = i;
             m_meshEdgeBuffer = m_meshBuffer->CreateEdgeMeshBuffer(indices2);
          }
          m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, false, pos, 0.f, m_meshEdgeBuffer, RenderDevice::LINELIST, 0, m_meshEdgeBuffer->m_ib->m_count);
@@ -704,7 +743,7 @@ void Kicker::Render(const unsigned int renderMask)
    else if (m_d.m_kickertype != KickerInvisible)
    {
       m_renderer->m_renderDevice->ResetRenderState();
-      if (m_d.m_kickertype == KickerHoleSimple)
+      if (m_d.m_kickertype == KickerHoleSimple || m_physical)   // (the physics cup: either winding)
          m_renderer->m_renderDevice->SetRenderState(RenderState::CULLMODE, RenderState::CULL_NONE);
 
       const Material *const mat = m_ptable->GetMaterial(m_d.m_szMaterial);

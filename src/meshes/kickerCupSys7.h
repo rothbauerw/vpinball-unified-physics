@@ -1,9 +1,10 @@
 // license:GPLv3+
-// System 7 kicker collision cup (kicker build plan K1). Source: runs/2026-11-12-kicker-cup/handmade/Sys7_N24_R11.tri (the full Blender Sys7 kicker + round cutout
-// top surface sampled on 11 rings, 0-20 mm every 2 mm, x 24 azimuth segments; 341 faces), moved to the kicker frame: centre (-50.8, -76.2) -> origin,
+// System 7 kicker collision cup (kicker build plan K1, outer wall removed 2026-11-17). Source: runs/2026-11-12-kicker-cup/handmade/Sys7_N24_R11.tri (the full Blender Sys7 kicker
+// + round cutout top surface sampled on 11 rings, 0-20 mm every 2 mm, x 24 azimuth segments; 341 faces), moved to the kicker frame: centre (-50.8, -76.2) -> origin,
 // units mm, z up, playfield top z = 0. Faces at the playfield level or above dropped (48): the rim and the playfield come from the hole cut into the playfield's mesh (meshholes.h).
-// Kept: 293 faces (cup and hole wall below the rim), 175 vertices. Hole radius = the real cutout's edge at the playfield top (Cutout_-_Round.005): 18.932 mm.
-// Generator: runs/2026-11-12-kicker-cup/K1/gen_K1.py
+// Faces with a vertex outside r 16 mm dropped (48: a wall leaning from the r 18 ring at z -0.9 to the r 16 ring at -12.7, a sampling artefact the Blender cup does not have; user
+// 2026-11-17). Kept: 245 faces, 151 vertices; the cup's outer edge: r 16.000 mm at z -12.700 .. -12.700 mm. Hole radius = the real cutout's edge at the playfield top (Cutout_-_Round.005): 18.932 mm.
+// Generator: runs/2026-11-16-holedraw/cup/gen_K1b.py (from runs/2026-11-12-kicker-cup/K1/gen_K1.py)
 #pragma once
 
 constexpr float kickerCupSys7HoleRadiusMm = 18.932f;
@@ -13,8 +14,8 @@ constexpr float kickerCupSys7HoleRadiusMm = 18.932f;
 constexpr float kickerCupSys7RestDepthMm = 10.65f;
 constexpr float kickerCupSys7SwitchCloseDepthMm = 10.15f;
 constexpr float kickerCupSys7SwitchOpenDepthMm = 7.15f;
-constexpr unsigned int kickerCupSys7NumVertices = 175;
-static constexpr float kickerCupSys7Vertices[175][3] =
+constexpr unsigned int kickerCupSys7NumVertices = 151;
+static constexpr float kickerCupSys7Vertices[151][3] =
 {
 { 4.00000f, 0.00000f, -10.11091f },
 { 6.00000f, 0.00000f, -9.30960f },
@@ -167,34 +168,10 @@ static constexpr float kickerCupSys7Vertices[175][3] =
 { 11.31371f, -11.31371f, -12.70000f },
 { 13.85641f, -8.00000f, -12.70000f },
 { 15.45481f, -4.14110f, -12.70000f },
-{ 18.00000f, 0.00000f, -0.94226f },
-{ 17.38666f, 4.65874f, -0.86409f },
-{ 15.58846f, 9.00000f, -0.86405f },
-{ 12.72792f, 12.72792f, -0.94229f },
-{ 9.00000f, 15.58846f, -0.86403f },
-{ 4.65874f, 17.38666f, -0.86408f },
-{ 0.00000f, 18.00000f, -0.94229f },
-{ -4.65874f, 17.38666f, -0.86409f },
-{ -9.00000f, 15.58846f, -0.86405f },
-{ -12.72792f, 12.72792f, -0.94229f },
-{ -15.58846f, 9.00000f, -0.86406f },
-{ -17.38666f, 4.65874f, -0.86409f },
-{ -18.00000f, 0.00000f, -0.94229f },
-{ -17.38666f, -4.65874f, -0.86409f },
-{ -15.58846f, -9.00000f, -0.86404f },
-{ -12.72792f, -12.72792f, -0.94229f },
-{ -9.00000f, -15.58846f, -0.86406f },
-{ -4.65874f, -17.38666f, -0.86405f },
-{ 0.00000f, -18.00000f, -0.94226f },
-{ 4.65874f, -17.38666f, -0.86408f },
-{ 9.00000f, -15.58846f, -0.86402f },
-{ 12.72792f, -12.72792f, -0.94229f },
-{ 15.58846f, -9.00000f, -0.86403f },
-{ 17.38666f, -4.65874f, -0.86409f },
 };
 
-constexpr unsigned int kickerCupSys7NumTriangles = 293;
-static constexpr unsigned short kickerCupSys7Indices[293][3] =
+constexpr unsigned int kickerCupSys7NumTriangles = 245;
+static constexpr unsigned short kickerCupSys7Indices[245][3] =
 {
 { 0, 1, 2 },
 { 3, 4, 5 },
@@ -441,52 +418,4 @@ static constexpr unsigned short kickerCupSys7Indices[293][3] =
 { 125, 150, 126 },
 { 126, 150, 127 },
 { 126, 127, 104 },
-{ 127, 151, 152 },
-{ 127, 152, 128 },
-{ 128, 152, 153 },
-{ 128, 153, 129 },
-{ 129, 153, 154 },
-{ 129, 154, 130 },
-{ 130, 154, 155 },
-{ 130, 155, 131 },
-{ 131, 155, 156 },
-{ 131, 156, 132 },
-{ 132, 156, 157 },
-{ 132, 157, 133 },
-{ 133, 157, 158 },
-{ 133, 158, 134 },
-{ 134, 158, 159 },
-{ 134, 159, 135 },
-{ 135, 159, 160 },
-{ 135, 160, 136 },
-{ 136, 160, 161 },
-{ 136, 161, 137 },
-{ 137, 161, 162 },
-{ 137, 162, 138 },
-{ 138, 162, 163 },
-{ 138, 163, 139 },
-{ 139, 163, 164 },
-{ 139, 164, 140 },
-{ 140, 164, 165 },
-{ 140, 165, 141 },
-{ 141, 165, 166 },
-{ 141, 166, 142 },
-{ 142, 166, 167 },
-{ 142, 167, 143 },
-{ 143, 167, 168 },
-{ 143, 168, 144 },
-{ 144, 168, 169 },
-{ 144, 169, 145 },
-{ 145, 169, 170 },
-{ 145, 170, 146 },
-{ 146, 170, 171 },
-{ 146, 171, 147 },
-{ 147, 171, 172 },
-{ 147, 172, 148 },
-{ 148, 172, 173 },
-{ 148, 173, 149 },
-{ 149, 173, 174 },
-{ 149, 174, 150 },
-{ 150, 174, 151 },
-{ 150, 151, 127 },
 };

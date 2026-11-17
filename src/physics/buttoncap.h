@@ -33,8 +33,8 @@ namespace ButtonCap
    {
       double restMm = 3.175;       // rest_mm: the cap's top above the playfield at rest, and its sink to flush (Williams A-7385 / A-7903: 1/8 in, user 2026-11-10)
       double closeMm = 2.38125;    // close_mm: the switch is closed while the cap has sunk at least this far, open below it (3/32 in, user 2026-11-11; PartData S9)
-      double springN = 0.2;        // spring_n: the leaf's force up on the cap at rest, N (its preload; the cap's weight not included; user 2026-11-11 after watching the drive: 0.34 too strong)
-      double springFullN = 0.25;   // spring_full_n: the leaf's force up at full sink (flush), N; linear between (user 2026-11-11)
+      double springN = 0.1;        // spring_n: the leaf's force up on the cap at rest, N (its preload; the cap's weight not included). TUNED for feel, not measured (user 2026-11-16 in play: 0.2 a tad stiff; 2026-11-11: 0.34 too strong)
+      double springFullN = 0.15;   // spring_full_n: the leaf's force up at full sink (flush), N; linear between. TUNED for feel, not measured (user 2026-11-16; was 0.25)
       double cornerMm = 0.79375;   // corner_mm: the rounding of the edge between the top and the side (1/32 in, user 2026-11-10); at most the cap's radius and rest_mm (larger: a notice, and the largest that fits)
       double massG = 1.0;          // mass_g: the cap with its peg, g (user 2026-11-10); a Star's default is kStarMassG (the owner sets it before reading the ini)
       double stopE = 0.2;          // stop_e: restitution of both stops (push nut up, flush down), the same at every speed (ESTIMATED from the user's video: no visible bounce; design 2S)

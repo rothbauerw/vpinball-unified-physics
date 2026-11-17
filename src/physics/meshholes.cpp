@@ -30,7 +30,7 @@ namespace
    constexpr double kPi = 3.14159265358979323846;
    constexpr double kGridM = 54e-3;     // the plan grid round a hole and the margin past its outline's box: 4 ball radii (paper section 3, INFERRED choice)
    constexpr double kGridClearM = 1e-6; // no grid line passes this near an outline vertex, and no outline edge this near a grid node (the grid's origin is moved till none does; lead 2026-11-16)
-   constexpr double kExcessM = 0.2e-3;  // a round outline's vertex stands at most this far outside its circle (paper section 4, Q1 decided)
+   double g_excessM = 0.2e-3;           // a round outline's vertex stands at most this far outside its circle ([Features] hole_round_mm, physicsini.h; set by Clear each load)
    constexpr double kSnapM = 0.1e-6;    // two points of the cut closer than this (3D) are one: the clip's double rounding and crossings a few float32 steps apart (the stored float32 is 0.03 um near
                                         // the table: a 68 nm wall face was degenerate in it, p3 run T2); an existing vertex of the region wins (Cut::pool is seeded with them)
    constexpr double kOnEdgeM = 1e-7;    // a new point this close to a face's edge lies on it (no T-junction)
@@ -49,7 +49,6 @@ namespace
    constexpr int kGrooveStrips = 16;                  // straight strips tangent to the half-round (paper section 4: N 16, the smallest crease at the cost of 12)
    constexpr double kGrooveLenMinMm = 12.0 * 25.4;    // groove length_mm smallest and largest: 12 - 20 in (PartData 7)
    constexpr double kGrooveLenMaxMm = 20.0 * 25.4;
-   constexpr double kRunOutMm = 50.0;   // groove run_out_mm default: the upper end's floor rises to the top over this length. TUNED placeholder for feel, no data (user 2026-11-16, Q8)
 
    struct P2 { double x, y; };
    struct P3 { double x, y, z; };
@@ -61,13 +60,15 @@ namespace
       std::vector<P2> v;                 // counter-clockwise
       double z = 0.0;                    // the part's height: the host is the nearest top at or below it
       std::string host;                  // the host named in the ini (empty: found at the rim points)
+      MeshHoles::HoleKeys keys;          // draw, wall_depth_mm (cut_hole 0: never added)
+      double passR = -1.0;               // >= 0: the largest circle through the hole's through part when smaller than the outline's (a chamfer's inner hole); the walls rule takes it
       std::vector<char> floored;         // per edge (v[i] -> v[i + 1]): a floor face meets the top along it (no wall, not an open rim)
       std::vector<FTri> floor, side;     // floor faces (up) and vertical faces (the groove's square end), depth below the surface
       std::vector<std::array<std::pair<P2, double>, 2>> openFloor;   // floor edges open by design (the ramp floor's edge over the slot's through part)
    };
 
    std::vector<Outline> g_outlines;
-   std::vector<MeshHoles::DrawnSlot> g_drawn;   // the slots as drawn, with their mesh outline
+   std::vector<MeshHoles::DrawnHole> g_drawn;   // every joined hole as Build cut it (the drawing's record)
 
    void Notice(const std::string &msg)   // rule 8: on screen and in the log
    {
@@ -592,22 +593,46 @@ namespace
       const double w0 = Cross(t.p[1], t.p[2], q) / A, w1 = Cross(t.p[2], t.p[0], q) / A, w2 = 1.0 - w0 - w1;
       return w0 * t.d[0] + w1 * t.d[1] + w2 * t.d[2];
    }
+   // a point on an edge of the floor (within kOnEdgeM: a crossing on a slanted outline edge lies a rounding step off it, 2.5e-17 m in the switch test's groove + Round, offline brief 4)
+   // takes the face nearest it
    bool FloorDepth(const Outline &o, const P2 &q, double &d)
    {
+      const FTri *best = nullptr;
+      double bestOut = kOnEdgeM;
       for (const FTri &t : o.floor)
+      {
          if (InTri({ t.p[0], t.p[1], t.p[2] }, q))
          {
             d = DepthIn(t, q);
             return true;
          }
-      return false;
+         const double sg = Cross(t.p[0], t.p[1], t.p[2]) > 0.0 ? 1.0 : -1.0;
+         double out = 0.0;   // the point's largest distance outside one of the face's edges
+         for (int k = 0; k < 3; k++)
+         {
+            const P2 &a = t.p[k], &b = t.p[(k + 1) % 3];
+            if (const double l = std::hypot(b.x - a.x, b.y - a.y); l > 0.0)
+               out = std::max(out, -sg * Cross(a, b, q) / l);
+         }
+         if (out <= bestOut)
+         {
+            bestOut = out;
+            best = &t;
+         }
+      }
+      if (best == nullptr)
+         return false;
+      d = DepthIn(*best, q);
+      return true;
    }
 
    struct GroupResult { int nWalls = 0, nDrop = 0, nDeep = 0, nFloor = 0, nUnder = 0; double underCut = 0.0, holeArea = 0.0, holeAreaD = 0.0, dropUp = 0.0, missing = 0.0, floorUp = 0.0, inscribed = 0.0, gridOff = 0.0; };
 
    // one group of joined outlines into the host's faces; "" or the reason it is refused (nothing changed then)
    // bottoms: the walls' bottom edges; rims: open edges by design (the rim of a hole without walls, a floor's edge over a through part); both for the load check
-   std::string CutGroup(Cut &c, const Group &g, double topZ, double thickM, GroupResult &r, std::vector<std::pair<P3, P3>> &bottoms, std::vector<std::pair<P3, P3>> &rims)
+   // dh: the hole as cut, for the drawing (meshholes.h DrawnHole: its rim loops, walls, wall and floor triangles)
+   std::string CutGroup(Cut &c, const Group &g, double topZ, double thickM, GroupResult &r, std::vector<std::pair<P3, P3>> &bottoms, std::vector<std::pair<P3, P3>> &rims,
+                        MeshHoles::DrawnHole &dh)
    {
       r = GroupResult();
       P2 ctr { 0.0, 0.0 };
@@ -642,7 +667,45 @@ namespace
          r.holeAreaD += 0.5 * (s.a.x * s.b.y - s.b.x * s.a.y);   // (r.holeArea: from the stored rim points, after the cut)
       }
       r.inscribed = Inscribed(g, bd);
+      for (const Outline *o : g)   // a chamfered circle: the ball passes through its inner hole, not its outer outline
+         if (o->passR >= 0.0)
+            r.inscribed = std::min(r.inscribed, o->passR);
       const bool walls = r.inscribed >= kBallRM;   // rule 3 (lead 2026-11-16): walls only where the ball can pass through
+      dh.walls = walls;
+      // the drawing's rim: the boundary pieces chained into loops (each piece's start, in order; a piece's end meets the next one's start within kSnapM: the crossings of two members are
+      // found once per member)
+      {
+         std::vector<char> used(bd.size(), 0);
+         for (size_t s0 = 0; s0 < bd.size(); s0++)
+         {
+            if (used[s0])
+               continue;
+            std::vector<double> loop;
+            for (size_t s = s0; s < bd.size() && !used[s];)
+            {
+               used[s] = 1;
+               loop.push_back(bd[s].a.x / U);
+               loop.push_back(bd[s].a.y / U);
+               size_t nx = bd.size();
+               double best = kSnapM;
+               for (size_t k = 0; k < bd.size(); k++)
+                  if (const double dd = std::hypot(bd[k].a.x - bd[s].b.x, bd[k].a.y - bd[s].b.y); (!used[k] || k == s0) && dd <= best)
+                  {
+                     best = dd;
+                     nx = k;
+                  }
+               s = nx;
+            }
+            dh.rim.push_back(std::move(loop));
+         }
+      }
+      double along = 0.0;   // the drawing's wood: the rim length so far (the grain along the walls)
+      // one triangle as emitted: each corner's place along and depth below the top; kind (meshholes.h DrawnHole::wood) 0 a floor, 1 a rim wall, 2 a wall under a floor's open edge, 3 a side
+      const auto woodTri = [&](const T3 &t, const double *u, const double *depth, const int kind) {
+         const P3 *p[3] = { &t.a, &t.b, &t.c };
+         for (int k = 0; k < 3; k++)
+            dh.wood.insert(dh.wood.end(), { (float)(p[k]->x / U), (float)(p[k]->y / U), (float)(p[k]->z / U), (float)(u[k] / U), (float)(depth[k] / U), (float)kind });
+      };
       double floorMax = 0.0;   // the group's deepest floor point below the top
       for (const Outline *o : g)
          for (const FTri &t : o->floor)
@@ -856,6 +919,11 @@ namespace
             const P3 Ab = c.Snap({ A.x, A.y, za - thickM }), Bb = c.Snap({ B.x, B.y, zb - thickM });
             out.push_back({ A, B, Ab });
             out.push_back({ B, Bb, Ab });
+            const double a0 = along, a1 = along + std::hypot(B.x - A.x, B.y - A.y);
+            along = a1;
+            const double u0[3] = { a0, a1, a0 }, d0[3] = { za - A.z, zb - B.z, za - Ab.z }, u1[3] = { a1, a1, a0 }, d1[3] = { zb - B.z, zb - Bb.z, za - Ab.z };
+            woodTri(out[out.size() - 2], u0, d0, 1);
+            woodTri(out.back(), u1, d1, 1);
             bottoms.push_back({ Ab, Bb });   // the wall's bottom edge: open by design (load check)
             r.nWalls++;
          }
@@ -936,6 +1004,10 @@ namespace
                   c.EmitZ(out, q, [&](const P2 &p) { return PlaneZ(b, p.x, p.y) - DepthIn(t, p); }, false);
                   for (size_t k = before; k < out.size(); k++)
                   {
+                     const T3 &f = out[k];
+                     const double u[3] = { f.a.x + f.a.y, f.b.x + f.b.y, f.c.x + f.c.y };
+                     const double dep[3] = { PlaneZ(b, f.a.x, f.a.y) - f.a.z, PlaneZ(b, f.b.x, f.b.y) - f.b.z, PlaneZ(b, f.c.x, f.c.y) - f.c.z };
+                     woodTri(f, u, dep, 0);
                      if (Up(out[k]))   // the floor face's plan area as stored (float32 table units), as the measured top area counts it (load check)
                      {
                         std::vector<P2> s = Plan(out[k]);
@@ -953,14 +1025,18 @@ namespace
             if (InAny(others, g3))
                continue;
             P3 v[3];
+            double u[3], dep[3];
             for (int k = 0; k < 3; k++)
             {
                double z;
                if (!baseZ(t.p[k], z))
                   return "a side face of " + o.name + " found no top face over it";
                v[k] = c.Snap({ t.p[k].x, t.p[k].y, z - t.d[k] });
+               u[k] = v[k].x + v[k].y;
+               dep[k] = z - v[k].z;
             }
             out.push_back({ v[0], v[1], v[2] });
+            woodTri(out.back(), u, dep, 3);
             r.nFloor++;
          }
          for (const auto &e : o.openFloor)   // a floor edge over a through part: open by design
@@ -980,19 +1056,30 @@ namespace
             }
             std::sort(pts.begin(), pts.end(), [](const auto &p, const auto &q) { return p.first < q.first; });
             std::vector<P3> top3, bot3;
+            std::vector<double> zs;
             for (const auto &[u, q] : pts)
             {
                double z;
                if (!baseZ(q, z))
                   return "an open floor edge of " + o.name + " found no top face over it";
-               top3.push_back(c.Snap({ q.x, q.y, z - (e[0].second + u * (e[1].second - e[0].second)) }));
+               const P3 t3 = c.Snap({ q.x, q.y, z - (e[0].second + u * (e[1].second - e[0].second)) });
+               if (!top3.empty() && Same(top3.back(), t3))
+                  continue;   // a crossing at a point the line already has (snapped to it): no piece between them (a zero-length piece gave two zero-area faces, an open stray edge: brief 5)
+               top3.push_back(t3);
                bot3.push_back(c.Snap({ q.x, q.y, z - thickM }));
+               zs.push_back(z);
             }
             for (size_t k = 0; k + 1 < top3.size(); k++)
                if (walls)   // the walled through part closed under the floor's edge: an end face down to the walls' bottom (lead 2026-11-16)
                {
                   out.push_back({ top3[k], top3[k + 1], bot3[k] });
                   out.push_back({ top3[k + 1], bot3[k + 1], bot3[k] });
+                  const double a0 = along, a1 = along + std::hypot(top3[k + 1].x - top3[k].x, top3[k + 1].y - top3[k].y);
+                  along = a1;
+                  const double u0[3] = { a0, a1, a0 }, d0[3] = { zs[k] - top3[k].z, zs[k + 1] - top3[k + 1].z, zs[k] - bot3[k].z };
+                  const double u1[3] = { a1, a1, a0 }, d1[3] = { zs[k + 1] - top3[k + 1].z, zs[k + 1] - bot3[k + 1].z, zs[k] - bot3[k].z };
+                  woodTri(out[out.size() - 2], u0, d0, 2);
+                  woodTri(out.back(), u1, d1, 2);
                   bottoms.push_back({ bot3[k], bot3[k + 1] });
                   r.nWalls++;
                }
@@ -1106,8 +1193,9 @@ namespace
    struct CutKeys
    {
       std::string name, shape, host;
-      double x = 0.0, y = 0.0, angle = 0.0, lengthMm = -1.0, widthMm = -1.0, cornerMm = 0.0, radiusMm = -1.0, baseMm = -1.0, sideMm = -1.0, apexRMm = 0.0, baseRMm = 0.0, runOutMm = kRunOutMm;
+      double x = 0.0, y = 0.0, angle = 0.0, lengthMm = -1.0, widthMm = -1.0, cornerMm = 0.0, radiusMm = -1.0, baseMm = -1.0, sideMm = -1.0, apexRMm = 0.0, baseRMm = 0.0, chamferDeg = 45.0, outerDMm = -1.0;
       bool xSet = false, ySet = false;
+      MeshHoles::HoleKeys keys;   // cut_hole, draw, wall_depth_mm (MeshHoles::HoleKey)
    };
    std::vector<CutKeys> Parse(const std::filesystem::path &file)
    {
@@ -1148,13 +1236,15 @@ namespace
          else if (key == "length_mm") cur->lengthMm = v;
          else if (key == "width_mm") cur->widthMm = v;
          else if (key == "corner_mm") cur->cornerMm = v;
-         else if (key == "radius_mm") cur->radiusMm = v;            // circle
+         else if (key == "radius_mm") cur->radiusMm = v;            // circle: the hole's radius (with a chamfer: the inner hole's)
+         else if (key == "outer_diameter_mm") cur->outerDMm = v;    // circle: the chamfer's diameter at the top, mm (absent = no chamfer); depth (outer / 2 - radius) tan(chamfer_deg)
+         else if (key == "chamfer_deg") cur->chamferDeg = v;        // circle: the chamfer's angle from the top, deg (default 45; above 0, below 90); refused when as deep as the wall depth
          else if (key == "base_mm") cur->baseMm = v;                // triangle: the third side
          else if (key == "side_mm") cur->sideMm = v;                // triangle: the two equal sides
          else if (key == "apex_radius_mm") cur->apexRMm = v;        // triangle: the corner between the equal sides
          else if (key == "base_radius_mm") cur->baseRMm = v;        // triangle: the two corners on the base
-         else if (key == "run_out_mm") cur->runOutMm = v;           // groove: the upper end's run-out length (default kRunOutMm, TUNED placeholder, no data)
-         else if (key == "host") cur->host = raw;                   // the static mesh (part name) the hole is cut in; overrides the detection at the rim points (paper R1)
+         else if (key == "host") cur->host = raw;                   // the static mesh (part name) the hole is cut in, and its top at x, y is the hole's height (paper R1)
+         else if (MeshHoles::HoleKey(cur->keys, key, v, "Playfield cut " + cur->name)) {}   // cut_hole, draw, wall_depth_mm (meshholes.h HoleKeys)
       }
       return out;
    }
@@ -1484,47 +1574,67 @@ void MeshHoles::RepairOverlaps(const bool on)
    }
 }
 
-void MeshHoles::Clear()
+void MeshHoles::Clear(const double roundMm)
 {
+   double mm = roundMm;
+   if (!(mm >= 0.01 && mm <= 1.0))
+   {
+      mm = mm > 1.0 ? 1.0 : 0.01;
+      std::ostringstream n;
+      n << "Mesh holes: hole_round_mm " << roundMm << " is outside 0.01 .. 1: using " << mm << " (physics ini [Features])";
+      Notice(n.str());
+   }
+   g_excessM = mm * 1e-3;
+   PLOGI << "Mesh holes: hole_round_mm " << mm << " (a round hole's vertex at most this far outside its circle)";
    g_drawn.clear();
    g_outlines.clear();   // (the kickers add theirs in PhysicSetup, the turntables in Turntables::Setup, the [PlayfieldCut:<name>] sections in AddIniCuts, all after this)
 }
 
-double MeshHoles::DrawnSlot::W(const double u) const
+bool MeshHoles::HoleKey(HoleKeys &h, const std::string &lowerKey, const double v, const std::string &where)
 {
-   if (u <= 0.0)
-      return a;
-   if (u <= U1)
-      return std::sqrt(std::max(0.0, a * a - u * u));
-   if (u < L)
-      return std::sqrt(std::max(0.0, wJ * wJ - 2.0 * U1 * (u - U1)));
-   return 0.0;
+   if (lowerKey == "cut_hole")
+      h.cut = v != 0.0;
+   else if (lowerKey == "draw")
+      h.draw = v != 0.0;
+   else if (lowerKey == "wall_depth_mm")
+   {
+      h.wallDepthMm = v;
+      if (!(v > 0.0))
+      {
+         h.wallDepthMm = -1.0;
+         Notice(where + ": wall_depth_mm " + std::to_string(v) + " is not above 0: the host's thickness is used (physics ini)");
+      }
+   }
+   else
+      return false;
+   return true;
 }
 
-double MeshHoles::DrawnSlot::C(const double u) const { return u <= 0.0 ? a : u < a ? std::sqrt(a * a - u * u) : 0.0; }
-
-void MeshHoles::DrawnSlot::FloorArc(const double u, double &rho, double &zc) const
+void MeshHoles::Add(const std::string &name, const std::vector<double> &xy, double partZ, const HoleKeys &keys)
 {
-   const double D = kRampDepthM * (L - u) / (L - a), w = W(u);
-   rho = (w * w + D * D) / (2.0 * D);
-   zc = rho - D;
-}
-
-void MeshHoles::Add(const std::string &name, const std::vector<double> &xy, double partZ)
-{
+   if (!keys.cut)   // cut_hole = 0: no outline (every part's hole goes through here: one place for the key)
+   {
+      PLOGI << "Mesh holes: " << name << ": cut_hole = 0, no hole";
+      return;
+   }
    Outline o;
    o.name = name;
    o.z = partZ;
+   o.keys = keys;
+   PLOGI << "Mesh holes: " << name << ": cut_hole 1, draw " << (keys.draw ? 1 : 0) << ", wall_depth_mm " << (keys.wallDepthMm > 0.0 ? std::to_string(keys.wallDepthMm) : std::string("host thickness"));
    for (size_t i = 0; i + 1 < xy.size(); i += 2)
       o.v.push_back({ xy[i], xy[i + 1] });
    AddOutline(std::move(o));
 }
 
-std::vector<double> MeshHoles::Round(double x, double y, double r)
+std::vector<double> MeshHoles::Round(double x, double y, double r, int n)
 {
-   int n = 24;
-   while (r * (1.0 / std::cos(kPi / n) - 1.0) > kExcessM)
-      n++;
+   if (n <= 0)
+   {
+      n = 24;
+      while (r * (1.0 / std::cos(kPi / n) - 1.0) > g_excessM)
+         n++;
+   }
    const double R = r / std::cos(kPi / n);   // vertices outside the circle: every edge touches it at its midpoint (paper section 4)
    std::vector<double> xy;
    for (int k = 0; k < n; k++)
@@ -1571,25 +1681,39 @@ void MeshHoles::AddIniCuts(const std::filesystem::path &file)
          Notice(where + "needs x and y: the cut is ignored (physics ini)");
          continue;
       }
-      // the part's height: the highest playfield surface at its centre (the cut is at the playfield's top; a named host overrides the detection of the mesh, not this height)
-      double zU = 0.0;
+      if (!k.keys.cut)
+      {
+         PLOGI << "Mesh holes: Cut " << k.name << ": cut_hole = 0, no hole";
+         continue;
+      }
+      // the hole's height: with host named, that host's top at x, y (its highest up face there); else the highest playfield surface at x, y
+      double zU = 0.0, hostThickM = 0.0;   // (hostThickM: that host's thickness_mm, a chamfer's depth limit)
       bool found = false;
       for (ContactHost *const h : ContactHost::AllHosts())
-         if (h->IsPlayfieldKind())
+      {
+         const ContactSurfaceHost *const s = dynamic_cast<ContactSurfaceHost *>(h);
+         const bool want = k.host.empty() ? h->IsPlayfieldKind()
+                                          : s != nullptr && s->MeshSurface() != nullptr && IsMeshKind(s->MeshKind()) && PhysicsIni::Lower(s->Name()) == PhysicsIni::Lower(k.host);
+         if (want)
             if (double z; h->SurfaceHeightAt(k.x, k.y, z) && (!found || z > zU))
             {
                zU = z;
                found = true;
+               hostThickM = (s != nullptr ? s->ThicknessMm() : RubberObjectSettings().thicknessMm) * 1e-3;
             }
+      }
       if (!found)
       {
-         Notice(where + "no playfield surface at its centre: the cut is ignored (physics ini x, y)");
+         Notice(where + (k.host.empty() ? std::string("no playfield surface at its centre") : "the host '" + k.host + "' has no top under x, y") + ": the cut is ignored (physics ini x, y, host)");
          continue;
       }
       Outline o;
       o.name = "Cut " + k.name;
       o.z = zU * U;
       o.host = k.host;
+      o.keys = k.keys;
+      PLOGI << "Mesh holes: " << o.name << ": cut_hole 1, draw " << (k.keys.draw ? 1 : 0) << ", wall_depth_mm " << (k.keys.wallDepthMm > 0.0 ? std::to_string(k.keys.wallDepthMm) : std::string("host thickness"))
+            << ", height " << zU << " VPU (" << (k.host.empty() ? "highest playfield surface" : "host " + k.host + "'s top") << " at x, y)";
       const double rot = k.angle * (kPi / 180.0), cx = k.x * U, cy = k.y * U;
       const P2 l { -std::sin(rot), std::cos(rot) }, p { -l.y, l.x };   // along (the trigger's rotation convention, wireshape.h Place) and across
       const auto W = [&](double s, double t) { return P2 { cx + l.x * s + p.x * t, cy + l.y * s + p.y * t }; };
@@ -1601,10 +1725,48 @@ void MeshHoles::AddIniCuts(const std::filesystem::path &file)
             Notice(where + "a circle needs radius_mm above 0: the cut is ignored (physics ini)");
             continue;
          }
-         const std::vector<double> xy = MeshHoles::Round(cx, cy, k.radiusMm * 1e-3);
-         for (size_t i = 0; i + 1 < xy.size(); i += 2)
-            o.v.push_back({ xy[i], xy[i + 1] });
-         log << "circle radius " << k.radiusMm << " mm";
+         if (k.outerDMm < 0.0)
+         {
+            const std::vector<double> xy = MeshHoles::Round(cx, cy, k.radiusMm * 1e-3);
+            for (size_t i = 0; i + 1 < xy.size(); i += 2)
+               o.v.push_back({ xy[i], xy[i + 1] });
+            log << "circle radius " << k.radiusMm << " mm";
+         }
+         else
+         {
+            // a chamfered circle: a cone from the outer circle (outer_diameter_mm / 2, at the top) down to the inner hole (radius_mm) at depth (outer / 2 - r) tan(chamfer_deg), then
+            // the inner hole's walls (when the ball can pass, the walls rule on the outer outline) down to the wall depth. Both rings tangent polygons with the outer ring's N (each
+            // edge touches its circle at its midpoint); the cone: one face pair per edge, its inner edge an open floor edge over the through hole (as the slot's ramp floor's)
+            const double ro = 0.5 * k.outerDMm * 1e-3, ri = k.radiusMm * 1e-3, depth = (ro - ri) * std::tan(k.chamferDeg * (kPi / 180.0));
+            const double limM = k.keys.wallDepthMm > 0.0 ? k.keys.wallDepthMm * 1e-3 : hostThickM;
+            if (!(ro > ri) || !(k.chamferDeg > 0.0 && k.chamferDeg < 90.0))
+            {
+               Notice(where + "a chamfer needs outer_diameter_mm above 2 radius_mm and chamfer_deg between 0 and 90: the cut is ignored (physics ini)");
+               continue;
+            }
+            if (depth >= limM)
+            {
+               std::ostringstream n;
+               n << where << "the chamfer is " << depth * 1e3 << " mm deep, not less than the " << (k.keys.wallDepthMm > 0.0 ? "wall depth " : "host's thickness ") << limM * 1e3 << " mm: the cut is ignored (physics ini)";
+               Notice(n.str());
+               continue;
+            }
+            const std::vector<double> xo = MeshHoles::Round(cx, cy, ro);
+            const int nr = (int)(xo.size() / 2);
+            const std::vector<double> xi = MeshHoles::Round(cx, cy, ri, nr);
+            o.passR = ri;
+            for (int i = 0; i < nr; i++)
+            {
+               const int j = (i + 1) % nr;
+               const P2 a { xo[2 * i], xo[2 * i + 1] }, b { xo[2 * j], xo[2 * j + 1] }, ai { xi[2 * i], xi[2 * i + 1] }, bi { xi[2 * j], xi[2 * j + 1] };
+               o.v.push_back(a);
+               o.floored.push_back(1);
+               o.floor.push_back({ { a, b, bi }, { 0.0, 0.0, depth } });
+               o.floor.push_back({ { a, bi, ai }, { 0.0, depth, depth } });
+               o.openFloor.push_back({ std::make_pair(ai, depth), std::make_pair(bi, depth) });
+            }
+            log << "circle radius " << k.radiusMm << " mm, chamfer " << k.chamferDeg << " deg to outer diameter " << k.outerDMm << " mm (" << depth * 1e3 << " mm deep, " << nr << " edges on both rings)";
+         }
       }
       else if (k.shape == "rectangle" || k.shape == "triangle")
       {
@@ -1721,31 +1883,11 @@ void MeshHoles::AddIniCuts(const std::filesystem::path &file)
             for (const double side : { 1.0, -1.0 })
                o.openFloor.push_back({ std::make_pair(W(e * (hs + a), side * Wu(a)), 0.0), std::make_pair(c0, kRampDepthM) });
          }
-         DrawnSlot d;   // the drawing's numbers (meshholes.h DrawnSlot; the outline itself is added below, from the mesh outline)
-         d.name = k.name;
-         d.unit = U;
-         d.cx = cx;
-         d.cy = cy;
-         d.z0 = o.z;
-         d.lx = l.x;
-         d.ly = l.y;
-         d.px = p.x;
-         d.py = p.y;
-         d.a = a;
-         d.hs = hs;
-         d.L = L;
-         d.U1 = U1;
-         d.wJ = std::sqrt(std::max(0.0, a * a - U1 * U1));
-         d.c = cc;
-         d.tauJ = std::sqrt(L - U1);
-         d.th1 = std::asin(U1 / a);
-         d.thick = 12.7e-3;   // (the drawn walls' depth, as the math cut's kThickM)
-         g_drawn.push_back(d);
          log << "slot length " << k.lengthMm << " mm, width " << widthMm << " mm (round end to u " << U1 * 1e3 << " mm, ramp to " << L * 1e3 << " mm, floor from u " << a * 1e3 << " mm, " << nr << " ramp edges past it)";
       }
       else if (k.shape == "groove")
       {
-         double lenMm = k.lengthMm, roMm = k.runOutMm;
+         double lenMm = k.lengthMm;
          if (lenMm < kGrooveLenMinMm || lenMm > kGrooveLenMaxMm)
          {
             const double lim = lenMm < kGrooveLenMinMm ? kGrooveLenMinMm : kGrooveLenMaxMm;
@@ -1754,17 +1896,11 @@ void MeshHoles::AddIniCuts(const std::filesystem::path &file)
             Notice(n.str());
             lenMm = lim;
          }
-         if (roMm <= 0.0 || roMm > lenMm)
-         {
-            const double lim = roMm <= 0.0 ? kRunOutMm : lenMm;
-            std::ostringstream n;
-            n << where << "run_out_mm " << roMm << " is outside 0 .. length_mm: using " << lim << " (physics ini)";
-            Notice(n.str());
-            roMm = lim;
-         }
-         // x, y the plunger end on the axis, s from it toward the upper end (the math groove's convention). Cross-section: kGrooveStrips straight strips tangent to the half-round
-         // (paper section 4), creases j = 1 .. N-1 at the arc's angles -phi0 + j delta (radius Rg / cos(delta / 2)), the rims j = 0, N where the outer strips meet the top. Full depth
-         // from s = 0 (square end, a vertical face) to s1 = length - run_out; then the cross-section rises uniformly, reaching the top at s = length (every strip still flat).
+         // x, y the plunger end on the axis, s from it up the table: angle 0 runs toward -y (the groove's own frame, Wg: the shapes' frame turned half a turn, the same handedness).
+         // Cross-section: kGrooveStrips straight strips tangent to the half-round (paper section 4), creases j = 1 .. N-1 at the arc's angles -phi0 + j delta (radius Rg / cos(delta / 2)),
+         // the rims j = 0, N where the outer strips meet the top. Full depth at s = 0 (the square end, a vertical face); the cross-section rises uniformly from there, its depth falling
+         // linearly to 0 at s = length (user 2026-11-17: no run-out; every strip flat, crease j reaching the top at s = length dj / dmax, so the outline narrows to a point at the top end)
+         const auto Wg = [&](double s, double t) { return W(-s, -t); };
          const double Rg = kGrooveRM, zc = Rg - kGrooveDepthM, phi0 = std::acos(zc / Rg), dl = 2.0 * phi0 / kGrooveStrips, Rr = Rg / std::cos(0.5 * dl);
          const int N = kGrooveStrips;
          std::vector<double> tj(N + 1), dj(N + 1);
@@ -1778,34 +1914,31 @@ void MeshHoles::AddIniCuts(const std::filesystem::path &file)
          tj[0] = (Rg - zc * std::cos(th0)) / std::sin(th0);
          tj[N] = -tj[0];
          dj[0] = dj[N] = 0.0;
-         const double Lg = lenMm * 1e-3, ro = roMm * 1e-3, s1 = Lg - ro, dMax = dj[N / 2];
+         const double Lg = lenMm * 1e-3, dMax = dj[N / 2];
          std::vector<double> sj(N + 1);
          for (int j = 0; j <= N; j++)
-            sj[j] = s1 + ro * dj[j] / dMax;   // where crease j reaches the top in the run-out
-         std::vector<std::pair<P2, char>> st { { { 0.0, tj[0] }, 1 }, { { s1, tj[0] }, 1 } };
+            sj[j] = Lg * dj[j] / dMax;   // where crease j reaches the top (the rims j = 0, N: at s = 0)
+         std::vector<std::pair<P2, char>> st { { { 0.0, tj[0] }, 1 } };
          for (int j = 1; j < N; j++)
             st.push_back({ { sj[j], tj[j] }, 1 });
-         st.push_back({ { s1, tj[N] }, 1 });
          st.push_back({ { 0.0, tj[N] }, 1 });   // (the end edge back to the start: closed by the end face)
          for (const auto &[q, f] : st)
          {
-            o.v.push_back(W(q.x, q.y));
+            o.v.push_back(Wg(q.x, q.y));
             o.floored.push_back(f);
          }
-         for (int j = 0; j < N; j++)
+         for (int j = 0; j < N; j++)   // strip j: A at the square end on crease j, B where crease j meets the top, C where crease j + 1 does, D at the square end on crease j + 1 (one plane)
          {
-            const P2 a0 = W(0.0, tj[j]), a1 = W(s1, tj[j]), b1 = W(s1, tj[j + 1]), b0 = W(0.0, tj[j + 1]);
-            o.floor.push_back({ { a0, a1, b1 }, { dj[j], dj[j], dj[j + 1] } });   // the full-depth strip
-            o.floor.push_back({ { a0, b1, b0 }, { dj[j], dj[j + 1], dj[j + 1] } });
-            const P2 B = W(sj[j], tj[j]), C = W(sj[j + 1], tj[j + 1]);   // the run-out: A = a1, B where crease j meets the top, C where crease j + 1 does, D = b1
-            if (j > 0)
-               o.floor.push_back({ { a1, B, C }, { dj[j], 0.0, 0.0 } });
+            const P2 A = Wg(0.0, tj[j]), B = Wg(sj[j], tj[j]), C = Wg(sj[j + 1], tj[j + 1]), D = Wg(0.0, tj[j + 1]);
+            if (j > 0)   // (B = A at the first strip: no first face)
+               o.floor.push_back({ { A, B, C }, { dj[j], 0.0, 0.0 } });
             if (j + 1 < N)   // (C = D at the last strip: no second face)
-               o.floor.push_back({ { a1, C, b1 }, { dj[j], 0.0, dj[j + 1] } });
+               o.floor.push_back({ { A, C, D }, { dj[j], 0.0, dj[j + 1] } });
          }
          for (int j = 1; j < N; j++)   // the square end: a vertical fan from the rim at j = 0
-            o.side.push_back({ { W(0.0, tj[0]), W(0.0, tj[j]), W(0.0, tj[j + 1]) }, { 0.0, dj[j], dj[j + 1] } });
-         log << "groove length " << lenMm << " mm, run-out " << roMm << " mm (TUNED placeholder), " << N << " strips, width " << 2.0 * tj[N] * 1e3 << " mm at the top, depth " << dMax * 1e3 << " mm at the crease";
+            o.side.push_back({ { Wg(0.0, tj[0]), Wg(0.0, tj[j]), Wg(0.0, tj[j + 1]) }, { 0.0, dj[j], dj[j + 1] } });
+         log << "groove length " << lenMm << " mm up the table from x, y (angle 0: -y), depth tapering linearly to 0 at the top end, " << N << " strips, width " << 2.0 * tj[N] * 1e3 << " mm at the top, depth "
+             << dMax * 1e3 << " mm at the crease";
       }
       else
       {
@@ -1813,18 +1946,11 @@ void MeshHoles::AddIniCuts(const std::filesystem::path &file)
          continue;
       }
       PLOGI << "Mesh holes: " << o.name << ": " << log.str() << ", " << o.v.size() << " outline points, " << o.floor.size() << " floor faces" << (o.host.empty() ? "" : ", host " + o.host);
-      const bool drawn = k.shape == "slot";
       AddOutline(std::move(o));
-      if (drawn)
-         for (const P2 &q : g_outlines.back().v)
-         {
-            g_drawn.back().outlineU.push_back(q.x / U);
-            g_drawn.back().outlineU.push_back(q.y / U);
-         }
    }
 }
 
-std::vector<MeshHoles::DrawnSlot> MeshHoles::Drawn()
+const std::vector<MeshHoles::DrawnHole> &MeshHoles::Drawn()
 {
    return g_drawn;
 }
@@ -1912,7 +2038,7 @@ void MeshHoles::Build()
       Cut c;
       for (const RubberContact::SurfaceTri &t : s.tris)
          c.f.push_back({ { t.a.x, t.a.y, t.a.z }, { t.b.x, t.b.y, t.b.z }, { t.c.x, t.c.y, t.c.z } });
-      const double thickM = host->ThicknessMm() * 1e-3;
+      const double hostThickM = host->ThicknessMm() * 1e-3;   // the walls' depth unless an outline's wall_depth_mm says otherwise
       // pass 2: an outline wholly inside another's floor (a slot in the groove) is cut after it, into that floor's faces (paper Q5, lead 2026-11-16). The others: joined where their
       // plans overlap (paper Q5: one cutout, no warning)
       const size_t n = list.size();
@@ -1988,20 +2114,36 @@ void MeshHoles::Build()
                   topZ = PlaneZ(t, gc.x, gc.y);
                   found = true;
                }
+         double thickM = 0.0;   // the group's wall depth: the deepest of its outlines' (wall_depth_mm, else the host's thickness_mm)
+         bool draw = false;     // drawn unless every joined outline says draw = 0
+         for (const Outline *o : g)
+         {
+            thickM = std::max(thickM, o->keys.wallDepthMm > 0.0 ? o->keys.wallDepthMm * 1e-3 : hostThickM);
+            draw = draw || o->keys.draw;
+         }
          GroupResult r;
+         MeshHoles::DrawnHole dh;
+         dh.draw = draw;
          const size_t facesAt = c.f.size();
-         const std::string why = found ? CutGroup(c, g, topZ, thickM, r, bottoms, rims) : std::string("no top face under its first rim point");
+         const std::string why = found ? CutGroup(c, g, topZ, thickM, r, bottoms, rims, dh) : std::string("no top face under its first rim point");
          if (!why.empty())
          {
-            Notice("Mesh holes: " + names + " not cut in the " + host->MeshKind() + " host: " + why);
-            for (const Outline *o : g)   // not drawn either (drawn hole = physics outline)
-               g_drawn.erase(std::remove_if(g_drawn.begin(), g_drawn.end(), [&](const DrawnSlot &d) { return "Cut " + d.name == o->name; }), g_drawn.end());
+            Notice("Mesh holes: " + names + " not cut in the " + host->MeshKind() + " host: " + why);   // (not drawn either: drawn hole = physics hole)
             continue;
          }
+         dh.name = names;
+         dh.unit = U;
+         dh.hostKind = host->MeshKind();
+         dh.hostName = host->Name();
+         dh.topZ = topZ / U;
+         dh.thick = thickM / U;
+         dh.physWallTris = 2 * r.nWalls;
+         dh.onTop = !(g.size() == 1 && second[std::find(list.begin(), list.end(), g[0]) - list.begin()]);
+         g_drawn.push_back(std::move(dh));
          cut += (int)g.size();
          expectTop += -(r.holeArea - r.missing) - r.dropUp + r.floorUp - r.underCut;
          nUnder += r.nUnder;   // the top inside the joined outline (less an existing hole's opening), the deleted faces that face up, the floors
-         per << " " << names << " (" << g.size() << " joined, N";
+         per << " " << names << " (" << g.size() << " joined, wall depth " << thickM * 1e3 << " mm, draw " << (draw ? 1 : 0) << ", N";
          for (const Outline *o : g)
             per << " " << o->v.size();
          per << ", inscribed r " << r.inscribed * 1e3 << " mm -> " << (r.nWalls > 0 ? "walls " + std::to_string(r.nWalls) : std::string("no walls")) << ", floor faces " << r.nFloor << ", faces " << facesAt << " -> " << c.f.size()
@@ -2026,11 +2168,17 @@ void MeshHoles::Build()
          for (const auto &[p, q] : before.edges)
             ok = ok || (OnSeg(a, p, q) && OnSeg(b, p, q));
          stray += !ok;
+         if (!ok && stray <= 20)   // where they are (brief 4: run a2's 13 strays were not found offline on a clean box)
+            PLOGW << "Mesh holes: stray open edge " << stray << " on the " << host->MeshKind() << " host: (" << a.x / U << ", " << a.y / U << ", " << a.z / U << ") -> (" << b.x / U << ", "
+                  << b.y / U << ", " << b.z / U << ") VPU";
       }
       PLOGI << "Mesh holes: " << host->MeshKind() << " host " << host->Name() << ": faces " << facesBefore << " -> " << s.tris.size() << ", holes " << cut << ":" << per.str() << " open edges " << before.open << " -> " << after.open
             << " (" << bottoms.size() << " wall bottoms, " << rims.size() << " open rim edges, " << stray << " stray, " << over << " edges on more than two faces), underside faces cut " << nUnder << ", top area " << before.top << " -> " << after.top << " m2 (expected " << expectTop << ", diff " << (after.top - expectTop) << ")";
-      if (stray > 0 || over > 0 || std::abs(after.top - expectTop) > 1e-9 * before.top)
+      // The notice is for the edge checks only: a stray open edge or an edge on more than two faces is a real gap or overlap in the surface the ball rolls on. The top area (measured
+      // from the faces as stored, expected from the cut) is logged in the line above, not a notice: it differs by float32 rounding, not by a gap (brief 5, turn table test 4: the cut's
+      // faces in doubles give each level's area less the outline's exactly; stored as float32 they give +0.0212 mm2 per level, and the expected's float32 rim points 8.3e-4 mm2 less)
+      if (stray > 0 || over > 0)
          Notice("Mesh holes: load check failed on the " + host->MeshKind() + " host: " + std::to_string(stray) + " open edges that are neither a wall's bottom, an open rim, nor the mesh's own border, "
-                + std::to_string(over) + " edges on more than two faces, top area off by " + std::to_string((after.top - expectTop) * 1e6) + " mm2");
+                + std::to_string(over) + " edges on more than two faces");
    }
 }
