@@ -1,5 +1,5 @@
 // license:GPLv3+
-// Wire switch shapes A - E as the real parts (PartData S1, S7; docs/unified-physics/wire-switches/wire_A..E_installed.md; GroupStepDesign 23.4).
+// Wire switch shapes A - F as the real parts (PartData S1, S7; docs/unified-physics/wire-switches/wire_A..F_installed.md; GroupStepDesign 23.4).
 // Plain math only (no engine types) so offline benches and the engine can both include it. Built once at load; no runtime cost.
 // Each shape is a fixed centreline in mm in the switch frame: x along the wire's plane from the lever's pivot away from the switch, z the height above the playfield
 // top at rest with the switch at its agreed mount (pivot 19.3 mm below the playfield top). D's arch is a 14.7 mm arc; every other bend a 1.3 mm centreline-radius
@@ -35,7 +35,7 @@ struct Capsule
    double r = 0.; // tube radius
 };
 
-enum class Shape { WireA, WireB, WireC, WireD, WireE };
+enum class Shape { WireA, WireB, WireC, WireD, WireE, WireF };
 
 constexpr double kMmPerVpu = 25.4 * 1.0625 / 50.; // same as VPUTOMM
 constexpr double kPivotZMm = -19.3;                // the lever's pivot below the playfield top at the agreed mount (S7: bracket flush under the playfield)
@@ -155,7 +155,18 @@ inline Centreline MakeCentreline(Shape s, double bendStepDeg, double archStepDeg
       AppendFilleted(cl.pts, c, kBendRMm, bendStepDeg, sag);
    }
       break;
-   case Shape::WireC:   // one-way: lever run, a leaning rise, a diagonal up to the tip (the peak)
+   case Shape::WireC:   // one-way (user 2026-11-17): A's lever (raised as A), a leg up through the playfield leaning 8 deg toward the tip to a bend 2.0 mm below the playfield top,
+   {                    // then a leg at 43.5 deg up to the free tip (the peak) 8.0 mm above it: legs 11.7 and 14.5 mm. User's first guess, may be tweaked
+      constexpr double raiseDeg = 1.90, leanDeg = 8.0, bendZ = -2.0, legDeg = 43.5, tipZ = 8.0;
+      const std::vector<P2> lever = up({ { 7.4, -17.6 }, { 22.3, -14.3 } }, raiseDeg);
+      const double ln = leanDeg * (kPi / 180.), lg = legDeg * (kPi / 180.);
+      const P2 bend = lever[1] + P2 { std::sin(ln), std::cos(ln) } * ((bendZ - lever[1].z) / std::cos(ln));
+      const P2 tip = bend + P2 { std::cos(lg), std::sin(lg) } * ((tipZ - bend.z) / std::sin(lg));
+      cl.leverEnd = lever[1]; cl.peak = tip;
+      AppendFilleted(cl.pts, { lever[0], lever[1], bend, tip }, kBendRMm, bendStepDeg, sag);
+   }
+      break;
+   case Shape::WireF:   // the first one-way C (until 2026-11-17): lever run, a leaning rise, a diagonal up to the tip (the peak)
    {
       constexpr double raiseDeg = 2.06;   // free tip 8.0 mm
       const std::vector<P2> c = up({ { 2.7, -18.0 }, { 27.2, -14.9 }, { 32.0, -1.5 }, { 56.2, 6.0 } }, raiseDeg);

@@ -54,7 +54,7 @@ namespace Turntables
          bool visible = false;                 // visible: the disc drawn as the physical disc (radius_mm at z), no gap ring: the playfield's hole, gap included, is drawn by the hole drawing
          std::string marker = "spokes";        // visible: spokes | dot | stripe | none
          double refDeg = 0;                    // angle reference, degrees clockwise from the +x direction (screen right)
-         MeshHoles::HoleKeys hole;             // cut_hole, draw, wall_depth_mm: the disc's hole in the mesh under it (meshholes.h HoleKeys)
+         MeshHoles::HoleKeys hole;             // cut_hole, draw, wall_depth_mm, host: the disc's hole in the mesh under it and the mesh whose top it is flush with (meshholes.h HoleKeys)
          // the disc as a moving part of the contact system, on the group step (contactdiscpart.h, discgroup.h): motor, bearing, speed and angle (clockwise positive), the script's voltage
          std::shared_ptr<DiscModel::Engine> part;
          std::shared_ptr<MeshBuffer> discMesh, markMesh;
@@ -223,7 +223,7 @@ namespace Turntables
             if (cur == nullptr || eq == std::string::npos)
                continue;
             const std::string key = PhysicsIni::Lower(PhysicsIni::Trim(line.substr(0, eq)));
-            const std::string sval = PhysicsIni::Lower(PhysicsIni::Trim(line.substr(eq + 1)));
+            const std::string raw = PhysicsIni::Trim(line.substr(eq + 1)), sval = PhysicsIni::Lower(raw);
             const double v = atof(sval.c_str());
             if (key == "x") cur->x = v;
             else if (key == "y") cur->y = v;
@@ -246,7 +246,7 @@ namespace Turntables
             else if (key == "visible") cur->visible = v != 0;
             else if (key == "marker") cur->marker = sval;
             else if (key == "ref_angle_deg") cur->refDeg = v;
-            else if (MeshHoles::HoleKey(cur->hole, key, v, "Turntable " + cur->name)) {}   // cut_hole, draw, wall_depth_mm (meshholes.h HoleKeys)
+            else if (MeshHoles::HoleKey(cur->hole, key, v, raw, "Turntable " + cur->name)) {}   // cut_hole, draw, wall_depth_mm, host (the disc sits on that mesh's top; host wins over playfield_z) (meshholes.h HoleKeys)
          }
       }
 
@@ -293,13 +293,28 @@ namespace Turntables
          if (pend != g_pending.end())
             t.part->SetVolts(pend->second.first ? pend->second.second * t.ratedVolts : pend->second.second);
          std::string note;
+         bool onHost = false, cutHole = true;   // (cutHole false: the named host refused)
          {
             AroundDisc around;
             const double gapU = t.gapMm * 1e-3 / UM;
             const bool found = SurfaceAroundDisc(t.x, t.y, t.radiusMm * 1e-3 / UM, around);
             if (found)
                PLOGI << "Turntable " << t.name << ": the playfield around it is at z " << around.z << " (" << around.points << " directions, " << around.lo << " .. " << around.hi << "), furthest " << around.farU * UM * 1e3 << " mm from its edge";
-            if (!t.playfieldZSet)
+            if (!t.hole.host.empty())   // host = <static mesh>: the disc is flush with that mesh's top at its centre (host wins over playfield_z); refused (PartOnHost says why): as without it, no hole
+            {
+               double z = 0.0;
+               cutHole = onHost = MeshHoles::PartOnHost("Turntable " + t.name, t.hole.host, t.x, t.y, z);
+               if (onHost && t.playfieldZSet)
+               {
+                  const std::string msg = "Turntable " + t.name + ": playfield_z " + std::to_string(t.playfieldZ) + " ignored: host " + t.hole.host + " sets its height (" + std::to_string(z) + "). Remove one of them from its ini section";
+                  PLOGW << msg;
+                  if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+                     g_pplayer->m_liveUI->PushNotification(msg, 10000);
+               }
+               if (onHost)
+                  t.playfieldZ = z;
+            }
+            if (!onHost && !t.playfieldZSet)
             {
                t.playfieldZ = found ? around.z : 0.0;
                if (!found)
@@ -314,7 +329,8 @@ namespace Turntables
             t.z = t.playfieldZ;
          const double R = t.radiusMm * 1e-3 / UM;   // table units
          const double hole = (t.radiusMm + t.gapMm) * 1e-3;
-         MeshHoles::Add("Turntable " + t.name, MeshHoles::Round(t.x * UM, t.y * UM, hole), t.playfieldZ * UM, t.hole);   // the disc and its gap cut into the mesh under it at load (meshholes.h)
+         if (cutHole)
+            MeshHoles::Add("Turntable " + t.name, MeshHoles::Round(t.x * UM, t.y * UM, hole), t.playfieldZ * UM, t.hole);   // the disc and its gap cut into the mesh under it at load (meshholes.h)
 
          // the disc: a flat polygon at the top height, plus a skirt down to the playfield when it stands proud of it: the host's box (the contact finder takes the disc from the host registry; no stock collider)
          std::vector<Vertex3Ds> top;

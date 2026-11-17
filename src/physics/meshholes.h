@@ -3,6 +3,7 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -42,10 +43,22 @@ namespace MeshHoles
       bool cut = true;              // cut_hole = 1 | 0: 1 (default) the part's hole is cut in the mesh under it; 0 no hole (no Add: the part sits on the whole surface)
       bool draw = true;             // draw = 1 | 0: 1 (default) the hole is drawn as the physics cut it; 0 cut in the physics but not drawn (the drawn top stays whole there)
       double wallDepthMm = -1.0;    // wall_depth_mm: the hole's walls' depth below the top, mm (above 0); absent = the cut host's thickness_mm (contacthost.h). Joined holes: the deepest
+      std::string host;             // host = <static mesh name> (playfield, wall or primitive; not a ramp): the part sits on that mesh's top at its x, y (HostTop) and its hole is cut and drawn
+                                    // in that mesh; absent = the part's own height (a part's VPX Surface, a turntable's playfield_z or the playfield around it) and the nearest top at or below it
    };
-   // true when lowerKey is one of HoleKeys' keys (its value read into h); a bad wall_depth_mm (0 or less) is kept as absent, with a notice
-   bool HoleKey(HoleKeys &h, const std::string &lowerKey, double v, const std::string &where);
-   // a closed outline x0 y0 x1 y1 ... (m); partZ: the part's height (m), the host is the nearest top below it. Walls down by the wall depth only where the ball can pass through
+   // true when lowerKey is one of HoleKeys' keys (its value read into h: v for the numbers, text, the value as written, for host); a bad wall_depth_mm (0 or less) is kept as absent, with a notice
+   bool HoleKey(HoleKeys &h, const std::string &lowerKey, double v, const std::string &text, const std::string &where);
+   // a static mesh host's top at x, y (VPX units), the one lookup of the host key ([PlayfieldCut:<name>] and every part): host named = that mesh's highest up face there; "" = the highest
+   // playfield surface. zU: the top (VPX units); thickM: that host's thickness_mm (m)
+   enum class Top { Found, Ramp, NoMesh, NoTop };   // NoMesh: no static mesh of that name; NoTop: none of its up faces under x, y
+   Top HostTop(const std::string &host, double xU, double yU, double &zU, double &thickM);
+   // a part's host key (Star, Button, physical kicker, turntable): true with zU = the named host's top at x, y; false with a notice and WARN (rule 8) saying what to fix (the part keeps its own height, its hole is not cut)
+   bool PartOnHost(const std::string &part, const std::string &host, double xU, double yU, double &zU);
+   // the parts whose height comes from their host (Star, Button, physical kicker): PhysicSetup registers the height-dependent rest of its setup here, PlaceParts runs them once every host exists
+   // (PhysicsEngine, after the item loop and the playfield host, before Turntables::Setup), in registration order (table item order), then empties the list (no part kept past the load); Clear empties it too
+   void Defer(std::function<void()> place);
+   void PlaceParts();
+   // a closed outline x0 y0 x1 y1 ... (m); partZ: the part's height (m); the host is keys.host when named, else the nearest top below partZ. Walls down by the wall depth only where the ball can pass through
    // (the joined outline's largest inscribed circle at least the ball's radius, paper section 3 step 4)
    void Add(const std::string &name, const std::vector<double> &xy, double partZ, const HoleKeys &keys);
    // the table's [PlayfieldCut:<name>] sections (shapes slot, groove, rectangle, circle, triangle; keys in meshholes.cpp Parse) as outlines; file: the table's physics ini

@@ -132,9 +132,10 @@ private:
       std::span<const WORD> indices;
    };
    static StaticMeshData SetupMeshData(TriggerShape shape);
-   // WireA-E: the real parts' fixed centrelines (wireshape.h), drawn as a tube of the physics' radius; the stock meshes only when the triggers feature is off (WireE has none: its rest tube)
-   static bool CentrelineShape(TriggerShape shape) { return shape == TriggerWireA || shape == TriggerWireB || shape == TriggerWireC || shape == TriggerWireD || shape == TriggerWireE; }
-   void MakeRestTube();   // m_tubeVerts / m_tubeIdx at the agreed mount with the default wire (no physics: a WireE drawn by the stock path)
+   // WireA-F: the real parts' fixed centrelines (wireshape.h), drawn as a tube of the physics' radius; the stock meshes only when the triggers feature is off (WireE and WireF have none: their rest tube)
+   static bool CentrelineShape(TriggerShape shape) { return shape == TriggerWireA || shape == TriggerWireB || shape == TriggerWireC || shape == TriggerWireD || shape == TriggerWireE || shape == TriggerWireF; }
+   static bool HasStockMesh(TriggerShape shape) { return shape != TriggerWireE && shape != TriggerWireF; }
+   void MakeRestTube();   // m_tubeVerts / m_tubeIdx at the agreed mount with the default wire (no physics: a WireE or WireF drawn by the stock path)
 
    // Generates the render mesh and the mesh bounding sphere center for the current m_d
    std::unique_ptr<std::vector<Vertex3D_NoTex2>> GenerateMesh(Vertex3Ds &boundingSphereCenter) const;
@@ -145,6 +146,7 @@ private:
    Hit3DPoly *m_ptriggerhitpoly = nullptr;
    std::shared_ptr<WireSwitchModel::WireSwitch> m_partModel;
    ContactPartHost *m_partHost = nullptr;
+   float m_placedZ = 0.f;   // a Button or Star cap's height, VPU: its host's top (host key) or its Surface's, set by PhysicSetup's placing step (MeshHoles::PlaceParts); drawn there
    bool m_hitEvent = false;
    bool m_unhitEvent = false;
 

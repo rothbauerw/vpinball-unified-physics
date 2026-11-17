@@ -73,6 +73,7 @@ namespace
    };
 
    std::vector<Outline> g_outlines;
+   std::vector<std::function<void()>> g_place;   // the parts' deferred placing steps (MeshHoles::Defer; run and emptied by PlaceParts, emptied by Clear)
    std::vector<MeshHoles::DrawnHole> g_drawn;   // every joined hole as Build cut it (the drawing's record)
 
    void Notice(const std::string &msg)   // rule 8: on screen and in the log
@@ -101,7 +102,7 @@ namespace
          const double fs = Cross(a, b, s), fe = Cross(a, b, e);
          if (fs >= 0.0)
             o.push_back(s);
-         if ((fs >= 0.0) != (fe >= 0.0))
+         if ((fs > 0.0 && fe < 0.0) || (fs < 0.0 && fe > 0.0))   // a crossing only where the sides strictly differ (Sutherland-Hodgman): a point on the line is kept once, as itself, never again as a t = 0 or t = 1 crossing
          {
             const double t = fs / (fs - fe);
             o.push_back({ s.x + t * (e.x - s.x), s.y + t * (e.y - s.y) });
@@ -385,7 +386,11 @@ namespace
                const P2 mid { 0.5 * (s[k].x + s[k + 1].x), 0.5 * (s[k].y + s[k + 1].y) };
                bool inCell = true;
                for (size_t i = 0; i < P.size() && inCell; i++)
-                  inCell = Cross(P[i], P[(i + 1) % P.size()], mid) > 0.0;
+               {
+                  const P2 &pa = P[i], &pb = P[(i + 1) % P.size()];
+                  if (std::hypot(pb.x - pa.x, pb.y - pa.y) >= kOnEdgeM)   // a cell edge shorter than kOnEdgeM has no direction to judge a side by: skip it
+                     inCell = Cross(pa, pb, mid) > 0.0;
+               }
                if (inCell && !InAny(g, mid, (int)m))
                   pieces.push_back({ s[k + 1], s[k] });
             }
@@ -1262,10 +1267,10 @@ namespace
    // ---- [PlayfieldCut:<name>] (paper section 5) ----
    struct CutKeys
    {
-      std::string name, shape, host;
+      std::string name, shape;
       double x = 0.0, y = 0.0, angle = 0.0, lengthMm = -1.0, widthMm = -1.0, cornerMm = 0.0, radiusMm = -1.0, baseMm = -1.0, sideMm = -1.0, apexRMm = 0.0, baseRMm = 0.0, chamferDeg = 45.0, outerDMm = -1.0;
       bool xSet = false, ySet = false;
-      MeshHoles::HoleKeys keys;   // cut_hole, draw, wall_depth_mm (MeshHoles::HoleKey)
+      MeshHoles::HoleKeys keys;   // cut_hole, draw, wall_depth_mm, host (MeshHoles::HoleKey)
    };
    std::vector<CutKeys> Parse(const std::filesystem::path &file)
    {
@@ -1313,8 +1318,7 @@ namespace
          else if (key == "side_mm") cur->sideMm = v;                // triangle: the two equal sides
          else if (key == "apex_radius_mm") cur->apexRMm = v;        // triangle: the corner between the equal sides
          else if (key == "base_radius_mm") cur->baseRMm = v;        // triangle: the two corners on the base
-         else if (key == "host") cur->host = raw;                   // the static mesh (part name) the hole is cut in, and its top at x, y is the hole's height (paper R1)
-         else if (MeshHoles::HoleKey(cur->keys, key, v, "Playfield cut " + cur->name)) {}   // cut_hole, draw, wall_depth_mm (meshholes.h HoleKeys)
+         else if (MeshHoles::HoleKey(cur->keys, key, v, raw, "Playfield cut " + cur->name)) {}   // cut_hole, draw, wall_depth_mm, host: the static mesh (part name) the hole is cut in, its top at x, y the hole's height (paper R1; meshholes.h HoleKeys)
       }
       return out;
    }
@@ -1664,12 +1668,70 @@ void MeshHoles::Clear(const double roundMm)
    PLOGI << "Mesh holes: hole_round_mm " << mm << " (a round hole's vertex at most this far outside its circle)";
    g_drawn.clear();
    g_arcs.clear();
-   g_outlines.clear();   // (the kickers add theirs in PhysicSetup, the turntables in Turntables::Setup, the [PlayfieldCut:<name>] sections in AddIniCuts, all after this)
+   g_outlines.clear();   // (the Stars, Buttons and physical kickers add theirs in PlaceParts, the turntables in Turntables::Setup, the [PlayfieldCut:<name>] sections in AddIniCuts, all after this)
+   g_place.clear();
 }
 
-bool MeshHoles::HoleKey(HoleKeys &h, const std::string &lowerKey, const double v, const std::string &where)
+void MeshHoles::Defer(std::function<void()> place)
 {
-   if (lowerKey == "cut_hole")
+   g_place.push_back(std::move(place));
+}
+
+void MeshHoles::PlaceParts()
+{
+   std::vector<std::function<void()>> place;
+   place.swap(g_place);   // (emptied before the calls: no part pointer kept past the load)
+   for (const std::function<void()> &f : place)
+      f();
+}
+
+MeshHoles::Top MeshHoles::HostTop(const std::string &host, const double xU, const double yU, double &zU, double &thickM)
+{
+   // a named ramp host: not cut (Build says why for a ramp found at the rim; here before its top is looked up, so the refusal names the reason, not a missing top)
+   if (!host.empty() && std::any_of(ContactHost::AllHosts().begin(), ContactHost::AllHosts().end(), [&](ContactHost *const h) {
+          const ContactSurfaceHost *const s = dynamic_cast<ContactSurfaceHost *>(h);
+          return s != nullptr && s->MeshKind() == "ramp" && PhysicsIni::Lower(s->Name()) == PhysicsIni::Lower(host);
+       }))
+      return Top::Ramp;
+   bool found = false, named = false;
+   for (ContactHost *const h : ContactHost::AllHosts())
+   {
+      const ContactSurfaceHost *const s = dynamic_cast<ContactSurfaceHost *>(h);
+      const bool want = host.empty() ? h->IsPlayfieldKind()
+                                     : s != nullptr && s->MeshSurface() != nullptr && IsMeshKind(s->MeshKind()) && PhysicsIni::Lower(s->Name()) == PhysicsIni::Lower(host);
+      named |= want;
+      if (want)
+         if (double z; h->SurfaceHeightAt(xU, yU, z) && (!found || z > zU))
+         {
+            zU = z;
+            found = true;
+            thickM = (s != nullptr ? s->ThicknessMm() : RubberObjectSettings().thicknessMm) * 1e-3;
+         }
+   }
+   return found ? Top::Found : named ? Top::NoTop : Top::NoMesh;
+}
+
+bool MeshHoles::PartOnHost(const std::string &part, const std::string &host, const double xU, const double yU, double &zU)
+{
+   double z = 0.0, thickM = 0.0;
+   const Top t = HostTop(host, xU, yU, z, thickM);
+   if (t == Top::Found)
+   {
+      zU = z;
+      PLOGI << "Mesh holes: " << part << ": on host " << host << ", its top at x, y z " << z << " VPU";
+      return true;
+   }
+   Notice(part + (t == Top::Ramp ? ": host ramp " + host + ": holes in ramps are not supported yet: hole not cut; the part stays at its own height. Name a playfield, wall or primitive in host (physics ini)"
+                  : t == Top::NoMesh ? ": no static mesh named '" + host + "' (physics ini host): hole not cut; the part stays at its own height. Set host to a playfield, wall or primitive with collision"
+                                     : ": host '" + host + "' has no top under its x, y: hole not cut; the part stays at its own height. Fix host or the part's place"));
+   return false;
+}
+
+bool MeshHoles::HoleKey(HoleKeys &h, const std::string &lowerKey, const double v, const std::string &text, const std::string &where)
+{
+   if (lowerKey == "host")
+      h.host = text;
+   else if (lowerKey == "cut_hole")
       h.cut = v != 0.0;
    else if (lowerKey == "draw")
       h.draw = v != 0.0;
@@ -1697,8 +1759,10 @@ void MeshHoles::Add(const std::string &name, const std::vector<double> &xy, doub
    Outline o;
    o.name = name;
    o.z = partZ;
+   o.host = keys.host;   // (named: cut in that mesh, Build's named-host branch)
    o.keys = keys;
-   PLOGI << "Mesh holes: " << name << ": cut_hole 1, draw " << (keys.draw ? 1 : 0) << ", wall_depth_mm " << (keys.wallDepthMm > 0.0 ? std::to_string(keys.wallDepthMm) : std::string("host thickness"));
+   PLOGI << "Mesh holes: " << name << ": cut_hole 1, draw " << (keys.draw ? 1 : 0) << ", wall_depth_mm " << (keys.wallDepthMm > 0.0 ? std::to_string(keys.wallDepthMm) : std::string("host thickness"))
+         << (keys.host.empty() ? std::string() : ", host " + keys.host);
    for (size_t i = 0; i + 1 < xy.size(); i += 2)
       o.v.push_back({ xy[i], xy[i + 1] });
    AddOutline(std::move(o));
@@ -1764,43 +1828,27 @@ void MeshHoles::AddIniCuts(const std::filesystem::path &file)
          PLOGI << "Mesh holes: Cut " << k.name << ": cut_hole = 0, no hole";
          continue;
       }
-      // a named ramp host: not cut (Build says why for a ramp found at the rim; here before its top is looked up, so the refusal names the reason, not a missing top)
-      if (!k.host.empty() && std::any_of(ContactHost::AllHosts().begin(), ContactHost::AllHosts().end(), [&](ContactHost *const h) {
-             const ContactSurfaceHost *const s = dynamic_cast<ContactSurfaceHost *>(h);
-             return s != nullptr && s->MeshKind() == "ramp" && PhysicsIni::Lower(s->Name()) == PhysicsIni::Lower(k.host);
-          }))
+      const std::string &host = k.keys.host;
+      // the hole's height: with host named, that host's top at x, y (its highest up face there); else the highest playfield surface at x, y (HostTop, the parts' host key's lookup)
+      double zU = 0.0, hostThickM = 0.0;   // (hostThickM: that host's thickness_mm, a chamfer's depth limit)
+      const Top top = HostTop(host, k.x, k.y, zU, hostThickM);
+      if (top == Top::Ramp)
       {
-         Notice(where + "host ramp " + k.host + ": holes in ramps are not supported yet: hole not cut");
+         Notice(where + "host ramp " + host + ": holes in ramps are not supported yet: hole not cut");
          continue;
       }
-      // the hole's height: with host named, that host's top at x, y (its highest up face there); else the highest playfield surface at x, y
-      double zU = 0.0, hostThickM = 0.0;   // (hostThickM: that host's thickness_mm, a chamfer's depth limit)
-      bool found = false;
-      for (ContactHost *const h : ContactHost::AllHosts())
+      if (top != Top::Found)
       {
-         const ContactSurfaceHost *const s = dynamic_cast<ContactSurfaceHost *>(h);
-         const bool want = k.host.empty() ? h->IsPlayfieldKind()
-                                          : s != nullptr && s->MeshSurface() != nullptr && IsMeshKind(s->MeshKind()) && PhysicsIni::Lower(s->Name()) == PhysicsIni::Lower(k.host);
-         if (want)
-            if (double z; h->SurfaceHeightAt(k.x, k.y, z) && (!found || z > zU))
-            {
-               zU = z;
-               found = true;
-               hostThickM = (s != nullptr ? s->ThicknessMm() : RubberObjectSettings().thicknessMm) * 1e-3;
-            }
-      }
-      if (!found)
-      {
-         Notice(where + (k.host.empty() ? std::string("no playfield surface at its centre") : "the host '" + k.host + "' has no top under x, y") + ": the cut is ignored (physics ini x, y, host)");
+         Notice(where + (host.empty() ? std::string("no playfield surface at its centre") : "the host '" + host + "' has no top under x, y") + ": the cut is ignored (physics ini x, y, host)");
          continue;
       }
       Outline o;
       o.name = "Cut " + k.name;
       o.z = zU * U;
-      o.host = k.host;
+      o.host = host;
       o.keys = k.keys;
       PLOGI << "Mesh holes: " << o.name << ": cut_hole 1, draw " << (k.keys.draw ? 1 : 0) << ", wall_depth_mm " << (k.keys.wallDepthMm > 0.0 ? std::to_string(k.keys.wallDepthMm) : std::string("host thickness"))
-            << ", height " << zU << " VPU (" << (k.host.empty() ? "highest playfield surface" : "host " + k.host + "'s top") << " at x, y)";
+            << ", height " << zU << " VPU (" << (host.empty() ? "highest playfield surface" : "host " + host + "'s top") << " at x, y)";
       const double rot = k.angle * (kPi / 180.0), cx = k.x * U, cy = k.y * U;
       const P2 l { -std::sin(rot), std::cos(rot) }, p { -l.y, l.x };   // along (the trigger's rotation convention, wireshape.h Place) and across
       const auto W = [&](double s, double t) { return P2 { cx + l.x * s + p.x * t, cy + l.y * s + p.y * t }; };

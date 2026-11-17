@@ -103,8 +103,8 @@ Offline measurements (runs/2026-11-12-kicker-cup, results_handmade.txt; one cont
 
 6. What breaks  (APPROVED by the user 2026-11-12; DevelopmentRules 7; all INFERRED until tested)
 --------------------------------------------------------------------------
- a. A physical kicker not on the playfield (wall top, ramp): refused at load with a notice (rule 8) asking for the virtual type. The mesh hole could now be cut into
-    any static mesh (meshholes.cpp); lifting the refusal is open (not asked yet).
+ a. A physical kicker on any static mesh (user and lead 2026-11-17): placed after every host exists at its Surface's height, or with host = <mesh> in [Kicker:<name>] at that mesh's top,
+    its hole cut there (meshholes.h HoleKeys). A ramp host is refused with a notice (holes in ramps not yet); playfield_contact = 0 is still refused (rule 8 notice: set the virtual type).
  b. VPX kicker radius vs the cup: the drawn kicker and the real cup can differ in size; physics uses the cup, the drawing is untouched; a notice when they differ by more
     than a set amount.
  c. CreateBall into an occupied kicker is not allowed (user 2026-11-12), both types: when a ball is held, or any ball overlaps the new ball's place, no ball is created

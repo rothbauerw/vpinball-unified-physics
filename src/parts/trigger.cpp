@@ -66,7 +66,7 @@ namespace
    WireShape::Shape ToWireShape(const TriggerShape shape)
    {
       return shape == TriggerWireB ? WireShape::Shape::WireB : shape == TriggerWireC ? WireShape::Shape::WireC : shape == TriggerWireD ? WireShape::Shape::WireD
-         : shape == TriggerWireE ? WireShape::Shape::WireE : WireShape::Shape::WireA;
+         : shape == TriggerWireE ? WireShape::Shape::WireE : shape == TriggerWireF ? WireShape::Shape::WireF : WireShape::Shape::WireA;
    }
 }
 
@@ -900,8 +900,8 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       if (star)
          s.massG = ButtonCap::kStarMassG;   // (before the ini: mass_g still sets it)
       PartsIni::LoadButtonCap(s, ini, GetName());
-      MeshHoles::HoleKeys holeKeys;   // cut_hole, draw, wall_depth_mm: the cap's hole in the mesh under it, [Triggers] then [Trigger:<name>] (meshholes.h HoleKeys)
-      PartsIni::ReadSections(ini, "triggers", "trigger:" + GetName(), [&](const std::string &k, double v, const std::string &) { MeshHoles::HoleKey(holeKeys, k, v, kind + " trigger " + GetName()); });
+      MeshHoles::HoleKeys holeKeys;   // cut_hole, draw, wall_depth_mm, host: the cap's hole in the mesh under it and the mesh it sits on, [Triggers] then [Trigger:<name>] (meshholes.h HoleKeys)
+      PartsIni::ReadSections(ini, "triggers", "trigger:" + GetName(), [&](const std::string &k, double v, const std::string &lv) { MeshHoles::HoleKey(holeKeys, k, v, lv, kind + " trigger " + GetName()); });
       std::vector<std::string> notices;   // load-time detectors (rule 8): on screen at the first cycle and in the log as WARN
       const double radiusMm = m_d.m_radius * U * 1e3;
       if (star)
@@ -938,6 +938,17 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          s.springN = ButtonCap::Settings().springN;
          s.springFullN = ButtonCap::Settings().springFullN;
       }
+      // the rest needs the cap's height: placed once every host exists (MeshHoles::PlaceParts, after the item loop and the playfield host), with or without a host key (one path)
+      MeshHoles::Defer([this, physics, isUI, star, kind, ini, s, holeKeys, radiusMm, notices = std::move(notices), height = height]() mutable {
+      bool cutHole = true;   // (false: the named host refused, PartOnHost said why; the cap keeps its Surface's height)
+      if (!holeKeys.host.empty())
+      {
+         double z = 0.0;
+         cutHole = MeshHoles::PartOnHost(kind + " trigger " + GetName(), holeKeys.host, m_d.m_vCenter.x, m_d.m_vCenter.y, z);
+         if (cutHole)
+            height = (float)z;
+      }
+      m_placedZ = height;   // (the drawn cap's height, GenerateMesh)
       const GroupStep::V3 axis((double)m_d.m_vCenter.x * U, (double)m_d.m_vCenter.y * U, (double)height * U);
       auto model = std::make_shared<ButtonCap::Cap>();
       model->Build(s, axis, m_d.m_radius * U, RubberContact::BallSI(), star ? ButtonCap::Top::Star : ButtonCap::Top::Button);
@@ -974,11 +985,12 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
                rTip = std::max(rTip, std::hypot(lx, ly));
                minCross = std::min(minCross, lx * ly2 - ly * lx2);   // > 0 for every edge: star-shaped from its centre (logged; the cut takes any simple outline)
             }
-            MeshHoles::Add("Star " + GetName(), xy, axis.z, holeKeys);
+            if (cutHole)
+               MeshHoles::Add("Star " + GetName(), xy, axis.z, holeKeys);
             PLOGI << "Mesh holes: Star " << GetName() << " hole: " << grown.size() / 2 << " vertices, tips at r " << rTip * 1e3 << " mm, inner corners at r " << rIn * 1e3 << " mm (star outline + " << kGapM * 1e3
                   << " mm), star-shaped from its centre: " << (minCross > 0.0 ? "yes" : "NO");
          }
-         else
+         else if (cutHole)
             MeshHoles::Add("Button " + GetName(), MeshHoles::Round(axis.x, axis.y, R + kGapM), axis.z, holeKeys);
       }
       PLOGI << "part finder path slope (group A): " << (star ? "star" : "button") << " trigger " << GetName() << " cap " << model->GroupPathSlope(0);
@@ -1008,6 +1020,7 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       PLOGI << "Trigger " << GetName() << ": " << (star ? "star" : "button") << " cap on the group step at (" << m_d.m_vCenter.x << ", " << m_d.m_vCenter.y << ") VPU, surface z " << height << " VPU; radius " << c.R * 1e3 << " mm, rest " << s.restMm
             << " mm, corner " << s.cornerMm << " mm, close " << s.closeMm << " mm; spring " << s.springN << " N at rest, " << s.springFullN << " N flush; mass " << s.massG << " g; stops e " << s.stopE << " (sink only, one coordinate; stop k " << c.stops[c.stopUp].k << " N/m^1.5); cap " << s.capHMm << " mm tall; plastic E " << c.rp.eMpa
             << " MPa, mu " << c.rp.mu << "; enabled " << m_d.m_enabled << "; drawn offset at rest " << drawRest << " VPU";
+      });
       return;
    }
    if (!isUI && ContactSystem::Unified() && m_d.m_shape == TriggerNone)
@@ -1138,11 +1151,11 @@ void Trigger::UpdateMesh()
    if (m_d.m_shape == TriggerNone)
       return;
 
-   if (!m_partDraw)   // no switch part: the stock mesh, or for WireE (no stock mesh) its rest tube
+   if (!m_partDraw)   // no switch part: the stock mesh, or for WireE and WireF (no stock mesh) their rest tube
    {
       m_tubeVerts.clear();
       m_tubeIdx.clear();
-      if (m_d.m_shape == TriggerWireE)
+      if (!HasStockMesh(m_d.m_shape))
          MakeRestTube();
    }
    // a Button cap on the unified engine: drawn as the physics cap (buttoncap.h Part: the flat top of the trigger's radius rest_mm above its surface, the corner rounded corner_mm, the
@@ -1374,7 +1387,8 @@ void Trigger::ExportMesh(ObjLoader& loader)
 
 std::unique_ptr<std::vector<Vertex3D_NoTex2>> Trigger::GenerateMesh(Vertex3Ds &boundingSphereCenter) const
 {
-   const float baseHeight = m_ptable->GetSurfaceHeight(m_d.m_szSurface, m_d.m_vCenter.x, m_d.m_vCenter.y);
+   // a Button or Star cap on the unified engine: at its placed height (its host's top, PhysicSetup's placing step); else (stock, editor) its Surface's
+   const float baseHeight = m_partHost != nullptr && (m_d.m_shape == TriggerButton || m_d.m_shape == TriggerStar) ? m_placedZ : m_ptable->GetSurfaceHeight(m_d.m_szSurface, m_d.m_vCenter.x, m_d.m_vCenter.y);
    float zoffset = (m_d.m_shape == TriggerButton) ? 5.0f : 0.0f;
    if (m_d.m_shape == TriggerWireC) zoffset = -19.0f;
 

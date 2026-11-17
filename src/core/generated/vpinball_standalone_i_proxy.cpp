@@ -2421,6 +2421,7 @@ STDMETHODIMP ScriptGlobalTable::GetIDsOfNames(REFIID /*riid*/, LPOLESTR* rgszNam
 			{ L"TriggerWireC", 2013 },
 			{ L"TriggerWireD", 2014 },
 			{ L"TriggerWireE", 2149 },
+			{ L"TriggerWireF", 2150 },
 			{ L"UpdateMaterial", 230 },
 			{ L"UpdateMaterialPhysics", 247 },
 			{ L"UserDirectory", 13 },
@@ -2559,6 +2560,7 @@ static const char *ScriptGlobalTable_dispid_name(DISPID dispId) {
 		case 2014: return "TriggerWireD";
 		case 2015: return "TriggerInder";
 		case 2149: return "TriggerWireE";
+		case 2150: return "TriggerWireF";
 		case 2016: return "RampTypeFlat";
 		case 2017: return "RampType4Wire";
 		case 2018: return "RampType2Wire";
@@ -4089,6 +4091,14 @@ STDMETHODIMP ScriptGlobalTable::Invoke(DISPID dispIdMember, REFIID /*riid*/, LCI
 			if (wFlags & DISPATCH_PROPERTYGET) {
 				V_VT(&res) = VT_I2;
 				V_I2(&res) = 8;
+				hres = S_OK;
+			}
+			break;
+		}
+		case 2150: {
+			if (wFlags & DISPATCH_PROPERTYGET) {
+				V_VT(&res) = VT_I2;
+				V_I2(&res) = 9;
 				hres = S_OK;
 			}
 			break;

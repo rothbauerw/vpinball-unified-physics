@@ -76,7 +76,7 @@ PhysicsEngine::PhysicsEngine(PinTable *const table)
       PLOGW << "Physics: surface hosts left over from the previous table (a leak, the game will slow down with each restart): " << m_leftoverHosts;
    else
       PLOGI << "Physics: no surface hosts left over from the previous table";
-   MeshHoles::Clear(PhysicsIni::Active(ContactSurfaceHost::IniPathFor(table->m_filename)).holeRoundMm);   // the holes cut into the mesh under them at load (meshholes.h): the kickers and turntables add theirs in PhysicSetup, below, the [PlayfieldCut:<name>] sections at AddIniCuts
+   MeshHoles::Clear(PhysicsIni::Active(ContactSurfaceHost::IniPathFor(table->m_filename)).holeRoundMm);   // the holes cut into the mesh under them at load (meshholes.h): the Stars, Buttons and physical kickers add theirs at PlaceParts, the turntables at Turntables::Setup, the [PlayfieldCut:<name>] sections at AddIniCuts
 
    // Collect all hit objects
    const FRect3D tableBounds = table->GetBoundingBox();
@@ -404,6 +404,7 @@ void PhysicsEngine::AddCabinetBoundingHitShapes(PinTable *const table)
       }
    }
    m_hitPlayfield.m_surfaceHost = m_playfieldHost;
+   MeshHoles::PlaceParts();   // the Stars, Buttons and physical kickers on their hosts (their PhysicSetup's height-dependent rest, in table item order), every host now existing
    Turntables::Setup(table, m_vmover, m_ownedHosts);   // discs set into the playfield (their holes cut into the mesh under them at MeshHoles::Build)
    MeshHoles::RepairOverlaps(PhysicsIni::Active(ContactSurfaceHost::IniPathFor(table->m_filename)).meshOverlapRepair);   // mesh_overlap_repair: every static mesh's overlapping faces on one plane cover it once (before the cut and the finder's tree)
    MeshHoles::AddIniCuts(PhysicsIni::FindUnified(table->m_filename));   // the [PlayfieldCut:<name>] sections as mesh holes (after the playfield host, whose height they read)

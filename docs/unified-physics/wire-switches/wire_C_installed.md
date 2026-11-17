@@ -1,8 +1,7 @@
-# Wire C installed (ACCEPTED by the user 2026-11-09)
-Side view, millimetres from the playfield top (+ up), x along from the pivot (+ toward the tip). Source: images/C_photo.png, side-on, scale = subminiature body 19.8 mm (+-5 %).
-- User 2026-11-09: all wire switches hang on a bracket like D's; switch at the same height as D's: bracket flush, pivot -19.3, body top -17.3.
-- As photographed that puts the tip at +24.3 and the lever run inside the wood, so the lever and wire are turned 20.8 deg down (clockwise) about the pivot from the photo, chosen so the tip stands 6.0 mm up. The bottom bend then lands at -14.9, close to wire A's rule (-14.3), an independent check.
-Points before the raise (x, height): pivot (0, -19.3); wire start on the lever (2.7, -18.0); bottom bend (27.2, -14.9); top corner (32.0, -1.5); tip (56.2, +6.0).
-- Lever raised 2026-11-09 so the rounded peak is 6.0 (C tip 8.0), user: lever and wire turned up 2.06 deg about the pivot (pivot stays -19.3). Built points: wire start on the lever (2.7, -17.9); bottom bend / lever end (27.0, -13.9); top corner (31.3, -0.4, still under the surface); tip (55.3, +8.0) (built and checked: 8.004).
-Segments as photographed: lever run 24.7 (now about 7 deg up), vertical 14.2 (now leaning 21 deg toward the tip), diagonal 25.4 (now 17 deg up).
-- Crosses the playfield underside at x 27.9 and the top at x 36.9: slot at least 13 mm plus the travel. Body x -5.9 to 13.9, top -17.3. Wire 1.0 mm.
+# Wire C installed (agreed with the user 2026-11-17; the user's first guess, may be tweaked)
+Side view, millimetres from the playfield top (+ up), x along from the pivot (+ toward the tip). Source: the user's sketch 2026-11-17 (pivot 19.3 below the top, 1/2 in wood: scale 23.4 px/mm), then shaped by the user in chat. One-way wire. The earlier Wire C is now Wire F (wire_F_installed.md).
+- Lever: wire A's, raised as A (1.90 deg): wire start on the lever (7.3, -17.4), lever end (22.1, -13.6). Pivot (0, -19.3), switch body as A's.
+- Leg through the playfield: from the lever end, leaning 8 deg from vertical toward the tip (as sketched), to the bend 2.0 mm below the playfield top (user: a couple of mm down): bend (23.7, -2.0); 11.7 mm.
+- Top leg: 43.5 deg up (as sketched) to the free tip 8.0 mm above the playfield (user): tip (34.3, +8.0); 14.5 mm. The tip is the peak (the switch's travel is measured there).
+- Above the playfield the wire runs from x 25.8 to 34.3 (8.4 mm along the lane; 11.6 mm of wire). Crosses the underside (-12.7) at x 22.2. Bends 1.3 mm centreline radius, as every wire but D's arch. Wire 1.0 mm.
+- Paths not taken (user 2026-11-17): the sketch's legs at true length (1/2 in, 3/4 in) put the tip at 11.4; turning the wire down 5 deg would put the lever end 3.6 mm under the wood; flattening the 3/4 in leg to 28 deg keeps 14.8 mm above the playfield.
