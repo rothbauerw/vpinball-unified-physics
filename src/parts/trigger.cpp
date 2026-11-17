@@ -806,11 +806,18 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          }
          if (m_d.m_scaleX != 1.f || m_d.m_scaleY != 1.f)
             notices.push_back("Wire trigger " + GetName() + ": Scale X / Y (" + std::to_string(m_d.m_scaleX) + ", " + std::to_string(m_d.m_scaleY) + ") are not used: a real wire has one size. Set them to 1");
-         // the playfield top = the trigger's Surface (user 2026-11-09); the trigger's x, y = the middle of the wire's part above it; the pivot 19.3 mm below it plus heightoffset_mm
-         const float floorZ = height;
-         const float playfieldZ = m_ptable->GetSurfaceHeight(string(), m_d.m_vCenter.x, m_d.m_vCenter.y);
+         MeshHoles::HoleKeys holeKeys;   // only host is used (a wire cuts no hole): the mesh it sits on, [Triggers] then [Trigger:<name>], as a Button's or Star's (meshholes.h HoleKeys)
+         PartsIni::ReadSections(ini, "triggers", "trigger:" + GetName(), [&](const std::string &k, double v, const std::string &lv) { MeshHoles::HoleKey(holeKeys, k, v, lv, "Wire trigger " + GetName()); });
          const WireShape::Shape shape = ToWireShape(m_d.m_shape);
          const WireShape::Centreline cl = WireShape::MakeCentreline(shape, s.bendStepDeg, s.archStepDeg);
+         // the rest needs the wire's height: placed once every host exists (MeshHoles::PlaceParts, after the item loop and the playfield host), as a Button's or Star's (one path)
+         MeshHoles::Defer([this, physics, isUI, ini, s, shape, cl, host = holeKeys.host, notices = std::move(notices), height = height]() mutable {
+         // the playfield top = the wire's height (user 2026-11-09; host, Surface or playfield top, MeshHoles::PartHeight); the trigger's x, y = the middle of the wire's part above it; the pivot
+         // 19.3 mm below it plus heightoffset_mm
+         double z = 0.0;
+         MeshHoles::PartHeight("Wire trigger " + GetName(), host, m_d.m_szSurface, m_d.m_vCenter.x, m_d.m_vCenter.y, height, z);   // (a refused host: its Surface's height; no hole either way)
+         const float floorZ = (float)z;
+         const float playfieldZ = m_ptable->GetSurfaceHeight(string(), m_d.m_vCenter.x, m_d.m_vCenter.y);
          WireShape::Placement pl;
          pl.x = m_d.m_vCenter.x;
          pl.y = m_d.m_vCenter.y;
@@ -885,6 +892,7 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          PLOGI << "Trigger " << GetName() << ": surface '" << m_d.m_szSurface << "' at z " << floorZ << " VPU (playfield z " << playfieldZ << "), heightoffset " << s.heightOffsetMm << " mm; spring " << s.springN
                << " N at first touch, " << s.springFullN << " N at full travel; close " << s.closeMm << " mm, release " << s.releaseMm << " mm, full travel " << s.stopBelowMm << " mm under the playfield; wire_d_mm " << s.wireDMm << ", bend_step_deg " << s.bendStepDeg << ", arch_step_deg " << s.archStepDeg << "; mass "
                << w.mp.m * 1e3 << " g, I " << w.mp.I << " kg m^2, reach " << reach * 1e3 << " mm)";
+         });
          return;
       }
    }
@@ -940,14 +948,9 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       }
       // the rest needs the cap's height: placed once every host exists (MeshHoles::PlaceParts, after the item loop and the playfield host), with or without a host key (one path)
       MeshHoles::Defer([this, physics, isUI, star, kind, ini, s, holeKeys, radiusMm, notices = std::move(notices), height = height]() mutable {
-      bool cutHole = true;   // (false: the named host refused, PartOnHost said why; the cap keeps its Surface's height)
-      if (!holeKeys.host.empty())
-      {
-         double z = 0.0;
-         cutHole = MeshHoles::PartOnHost(kind + " trigger " + GetName(), holeKeys.host, m_d.m_vCenter.x, m_d.m_vCenter.y, z);
-         if (cutHole)
-            height = (float)z;
-      }
+      double z = 0.0;   // the cap's height: host, Surface or playfield top (MeshHoles::PartHeight); false: the named host refused, PartOnHost said why, the cap keeps its Surface's height, no hole
+      const bool cutHole = MeshHoles::PartHeight(kind + " trigger " + GetName(), holeKeys.host, m_d.m_szSurface, m_d.m_vCenter.x, m_d.m_vCenter.y, height, z);
+      height = (float)z;
       m_placedZ = height;   // (the drawn cap's height, GenerateMesh)
       const GroupStep::V3 axis((double)m_d.m_vCenter.x * U, (double)m_d.m_vCenter.y * U, (double)height * U);
       auto model = std::make_shared<ButtonCap::Cap>();

@@ -54,6 +54,10 @@ namespace MeshHoles
    Top HostTop(const std::string &host, double xU, double yU, double &zU, double &thickM);
    // a part's host key (Star, Button, physical kicker, turntable): true with zU = the named host's top at x, y; false with a notice and WARN (rule 8) saying what to fix (the part keeps its own height, its hole is not cut)
    bool PartOnHost(const std::string &part, const std::string &host, double xU, double yU, double &zU);
+   // a placed part's height (Star, Button, physical kicker, wire switch; brief 2026-11-17 4), logged with the rule that set it: host named = that host's top at x, y (PartOnHost; refused: surfaceZ,
+   // returns false, no hole); else its VPX Surface named = surfaceZ (GetSurfaceHeight of it); else the highest playfield-kind top at x, y (HostTop with no host, a [PlayfieldCut]'s lookup);
+   // none there: surfaceZ with a notice. zU: the height (VPX units)
+   bool PartHeight(const std::string &part, const std::string &host, const std::string &surface, double xU, double yU, double surfaceZ, double &zU);
    // the parts whose height comes from their host (Star, Button, physical kicker): PhysicSetup registers the height-dependent rest of its setup here, PlaceParts runs them once every host exists
    // (PhysicsEngine, after the item loop and the playfield host, before Turntables::Setup), in registration order (table item order), then empties the list (no part kept past the load); Clear empties it too
    void Defer(std::function<void()> place);

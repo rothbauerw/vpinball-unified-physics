@@ -181,14 +181,9 @@ void Kicker::PhysicalSetup(PhysicsEngine *const physics)
    }
    // the rest needs the kicker's height: placed once every host exists (MeshHoles::PlaceParts, after the item loop and the playfield host), with or without a host key (one path)
    MeshHoles::Defer([this, physics, ini, name, cup, holeKeys, fromIni = seen.count("type") != 0, height = height]() mutable {
-   bool cutHole = true;   // (false: the named host refused, PartOnHost said why; the kicker keeps its Surface's height)
-   if (!holeKeys.host.empty())
-   {
-      double z = 0.0;
-      cutHole = MeshHoles::PartOnHost("Kicker " + name, holeKeys.host, m_d.m_vCenter.x, m_d.m_vCenter.y, z);
-      if (cutHole)
-         height = (float)z;
-   }
+   double z = 0.0;   // the kicker's height: host, Surface or playfield top (MeshHoles::PartHeight); false: the named host refused, PartOnHost said why, it keeps its Surface's height, no hole
+   const bool cutHole = MeshHoles::PartHeight("Kicker " + name, holeKeys.host, m_d.m_szSurface, m_d.m_vCenter.x, m_d.m_vCenter.y, height, z);
+   height = (float)z;
    m_placedZ = height;   // (the drawn plate and cup, RenderSetup, and CreateBall)
    constexpr double U = ContactSystem::kMetresPerUnit;
    const double mmU = 1e-3 / U;   // mm -> VPX units

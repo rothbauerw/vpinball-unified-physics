@@ -1727,6 +1727,29 @@ bool MeshHoles::PartOnHost(const std::string &part, const std::string &host, con
    return false;
 }
 
+bool MeshHoles::PartHeight(const std::string &part, const std::string &host, const std::string &surface, const double xU, const double yU, const double surfaceZ, double &zU)
+{
+   zU = surfaceZ;
+   if (!host.empty())
+      return PartOnHost(part, host, xU, yU, zU);   // (logs the host rule; refused: the Surface's height, no hole)
+   if (!surface.empty())
+   {
+      PLOGI << "Mesh holes: " << part << ": height " << zU << " VPU (rule: its Surface " << surface << ")";
+      return true;
+   }
+   double z = 0.0, thickM = 0.0;
+   if (HostTop(std::string(), xU, yU, z, thickM) == Top::Found)
+   {
+      zU = z;
+      PLOGI << "Mesh holes: " << part << ": height " << zU << " VPU (rule: playfield top, the highest playfield surface at x, y)";
+      return true;
+   }
+   std::ostringstream n;
+   n << part << ": no playfield surface under its x, y: it stays at the table's playfield height " << zU << " VPU. Move the part over the playfield or set its Surface";
+   Notice(n.str());
+   return true;
+}
+
 bool MeshHoles::HoleKey(HoleKeys &h, const std::string &lowerKey, const double v, const std::string &text, const std::string &where)
 {
    if (lowerKey == "host")
