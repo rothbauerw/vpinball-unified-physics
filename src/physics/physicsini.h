@@ -45,9 +45,9 @@ namespace PhysicsIni
       float hitSpeedMin = 0.5f;   // [Features] hit_speed_min: impacts slower than this (ball velocity units, 18.53 = 1 m/s) do not fire the playfield Hit event
       bool magnets = true;        // electromagnets ([Magnet:<name>] sections); off = none
       bool turntables = true;     // turntables ([Turntable:<name>] sections); off = none
-      bool playfieldCuts = true;  // playfield_cuts: holes cut in the playfield ([PlayfieldCut:<name>] sections, playfieldcut.h; the slot under a wire switch); off = every cut ignored, the playfield solid (on while tested, rule 6)
-      bool meshHoles = true;      // mesh_holes (on while tested, rule 6; runs/2026-11-16-meshholes/paper.md): 1 = the round holes of the physical kickers and the turntables are cut into the static mesh under them
-                                  // at load (meshholes.h; the playfield then takes BarsTriangles like every mesh); 0 = the carved holes (carvedholes.h) and the playfield's patch sum, as before
+      bool meshOverlapRepair = true;   // mesh_overlap_repair (on while tested, rule 6; to-do N3 piece 5): 1 = at load, in every static collidable mesh (playfield, wall, ramp, primitive), faces of one
+                                       // host on one plane (normals parallel either way, plane distance <= 1 um) that overlap cover the surface once: a face wholly covered by smaller ones is dropped,
+                                       // one partly covered is clipped by them (meshholes.h RepairOverlaps; logged per host, never on screen); 0 = the faces as the table has them
       bool aircoreInStep = true;  // aircore_in_step (on while tested, rule 6; runs/2026-11-13-aircore-ff/design.md): 1 = an air-core coil's pull on a ball in the contact system's step is read at the
                                   // step's midpoint in every evaluation (Magnets::AircoreForce, its slope in Newton's Jacobian); 0 = held at the cycle-start place for the whole cycle (Ball::fExt), as today
       bool seatEditorBalls = true; // seat_editor_balls (on while tested, rule 6; runs/2026-11-13-editor-balls): 1 = at play start each ball placed in the table editor is moved out of any surface it overlaps
@@ -162,10 +162,8 @@ namespace PhysicsIni
             f.magnets = on;
          else if (key == "turntables")
             f.turntables = on;
-         else if (key == "playfield_cuts")
-            f.playfieldCuts = on;
-         else if (key == "mesh_holes")
-            f.meshHoles = on;
+         else if (key == "mesh_overlap_repair")
+            f.meshOverlapRepair = on;
          else if (key == "aircore_in_step")
             f.aircoreInStep = on;
          else if (key == "hit_speed")
@@ -186,7 +184,7 @@ namespace PhysicsIni
       if (!ContactSystem::Unified())
       {
          f.flippers = f.flipperRubber = f.rubbers = f.playfieldContact = f.surfaceRubbers = f.hardSurfaces = f.hinges = f.triggers = false;
-         f.bands = f.slings = f.contact = f.magnets = f.turntables = f.playfieldCuts = f.meshHoles = f.hitSpeed = f.aircoreInStep = f.seatEditorBalls = false;
+         f.bands = f.slings = f.contact = f.magnets = f.turntables = f.meshOverlapRepair = f.hitSpeed = f.aircoreInStep = f.seatEditorBalls = false;
          return f;
       }
       if (!file.empty())

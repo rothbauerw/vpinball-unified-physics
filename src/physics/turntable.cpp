@@ -2,7 +2,6 @@
 
 #include "core/stdafx.h"
 #include "physics/turntable.h"
-#include "physics/carvedholes.h"
 #include "physics/meshholes.h"
 #include "physics/contactparthost.h"
 #include "physics/contactdiscpart.h"
@@ -315,10 +314,7 @@ namespace Turntables
             t.z = t.playfieldZ;
          const double R = t.radiusMm * 1e-3 / UM;   // table units
          const double hole = (t.radiusMm + t.gapMm) * 1e-3;
-         if (MeshHoles::On())   // mesh_holes: the disc and its gap cut into the mesh under it at load (meshholes.h)
-            MeshHoles::Add("Turntable " + t.name, MeshHoles::Round(t.x * UM, t.y * UM, hole), t.playfieldZ * UM);
-         else
-            CarvedHoles::Add({ t.x * UM, t.y * UM, hole, t.playfieldZ * UM });   // the playfield's carved holes (carvedholes.h; cleared when the engine is built)
+         MeshHoles::Add("Turntable " + t.name, MeshHoles::Round(t.x * UM, t.y * UM, hole), t.playfieldZ * UM);   // the disc and its gap cut into the mesh under it at load (meshholes.h)
 
          // the disc: a flat polygon at the top height, plus a skirt down to the playfield when it stands proud of it: the host's box (the contact finder takes the disc from the host registry; no stock collider)
          std::vector<Vertex3Ds> top;

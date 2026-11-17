@@ -53,7 +53,7 @@ namespace ButtonCap
    constexpr int kStarTip = 4;          // the tips' top edge (rounded corner_mm); corners 1-3 are the dome's kinks (rounded at the probe's edge minimum)
    // The star's plan outline: the stock star mesh's base (triggerStarMesh.h, z -0.037; MEASURED 2026-11-16, made symmetric about each spoke), mesh units (x R): 10 spokes along
    // k x 36 deg (turned by the trigger's Rotation as drawn), the inner corners between them at r kStarPlanInner on the 18 deg bisectors, each spoke's square tip at r kStarPlanTip with
-   // half-width kStarPlanTipHalf. Its hole (mesh_holes, paper Q2): this outline + 1/32 in
+   // half-width kStarPlanTipHalf. Its hole (meshholes.h, paper Q2): this outline + 1/32 in
    constexpr double kStarPlanInner = 0.188, kStarPlanTip = 0.968, kStarPlanTipHalf = 0.0245;
 
    // An outline in (radius from the axis, height), m, starting on the axis, with each inner corner rounded by its own radius, as a Revolve sweep. Every straight part of the outline is a

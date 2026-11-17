@@ -909,14 +909,14 @@ namespace RubberContact
    }
    // counters of the path test (VPX_CHECK_PROFILE=1 only; diagnostics, logged with the finder's once-a-second totals): skipped contacts tested by the path, by the two probes (a curved or moving
    // shape); cleared at the object box (a), at every piece box (b), by the exact distance (c); exact kit tests; reached; FarStillFar calls with a skipped contact, their time (ns) and worst
-   // Build 2, per kind of curved shape (0 post, 1 bumper body, 2 playfield with cuts or carved holes, 3 disc): tested, reached, reached only inside the cover's sagitta band (the cover's distance
-   // within reach + sagitta but not within reach: an upper bound on the re-runs the cover adds, the true curve not measured), reached because a path end lies below a cut's or hole's top (kind 2);
+   // Build 2, per kind of curved shape (0 post, 1 bumper body, 2 disc): tested, reached, reached only inside the cover's sagitta band (the cover's distance
+   // within reach + sagitta but not within reach: an upper bound on the re-runs the cover adds, the true curve not measured);
    // pieces passed over by their box (boxSkip) against the kit tests above (kit)
    struct PathStats
    {
       uint64_t tested = 0, twoPoint = 0, clearA = 0, clearB = 0, clearC = 0, kit = 0, reached = 0, reachedTwo = 0;
       uint64_t calls = 0, ns = 0, nsWorst = 0;
-      uint64_t kTested[4] = {}, kReached[4] = {}, kBand[4] = {}, cutBelow = 0, boxSkip = 0;
+      uint64_t kTested[3] = {}, kReached[3] = {}, kBand[3] = {}, boxSkip = 0;
    };
    inline PathStats pathStats;
    // The covers' self-check (VPX_FINDER_CHECK=1; diagnostics only, no bit changes; groupstep.h PathSelfCheck): per kind as PathStats, the checks made and the disagreements, and the first
@@ -928,9 +928,9 @@ namespace RubberContact
    }
    struct PathCheck
    {
-      uint64_t n[4] = {}, bad[4] = {};
-      bool warned[4] = {}, logged[4] = {};
-      std::string first[4];
+      uint64_t n[3] = {}, bad[3] = {};
+      bool warned[3] = {}, logged[3] = {};
+      std::string first[3];
    };
    inline PathCheck pathCheck;
 
@@ -1097,16 +1097,6 @@ namespace RubberContact
    // The nearest point on the faces in `cand`. A contact on a face is flat (effective radius R). On an edge or a corner, where the direction to the ball is
    // more than ~5 deg off the face normal, the rubber counts as rounded to edgeRho (the effective radius falls toward that of a ball on a tube of radius
    // edgeRho, fully at 15 deg), so a knife edge has a contact patch. The depth is measured from the sharp geometry. The result has rho = 0.
-   // A round hole cut in a flat surface (a turntable's, metres): the surface within r of (x, y) at height z is missing; the nearest point of what is left is on the hole's edge.
-   struct CarvedHole
-   {
-      double x, y, r, z;
-      bool Holds(const V3 &p) const   // a point of a face inside the hole isn't surface
-      {
-         const double dx = p.x - x, dy = p.y - y;
-         return std::abs(p.z - z) < 0.003 && dx * dx + dy * dy < r * r;
-      }
-   };
 
    // One candidate face as the probe measured it: its nearest point to the ball centre, the kind of that point, the squared distance.
    struct FaceHit
@@ -1331,7 +1321,7 @@ namespace RubberContact
    // (flat on both sides, edges rounded to radius halfThick), so the depth is R + halfThick - distance. Pass edgeRho = halfThick for such a sheet.
    // hits (optional): every candidate's measurement, in candidate order, for a caller that needs the other faces too (BarsTriangles), so each face is measured once.
    inline TubeProbe ProbeTriangles(const BallSI &ball, const std::vector<SurfaceTri> &tris, const std::vector<int> &cand, double edgeRho, const V3 &c,
-                                   const CarvedHole *holes = nullptr, int nHoles = 0, double halfThick = 0.0, std::vector<FaceHit> *hits = nullptr, const FaceRead *fr = nullptr)
+                                   double halfThick = 0.0, std::vector<FaceHit> *hits = nullptr, const FaceRead *fr = nullptr)
    {
       TubeProbe pr;
       double bestD2 = INFINITY;
@@ -1341,12 +1331,12 @@ namespace RubberContact
       for (size_t j = 0; j < cand.size(); j++)
       {
          const int i = cand[j];
-         if (fr != nullptr && fr->prune && nHoles == 0 && bestI >= 0 && FaceTable::BoxD2(tris[i], c) > (bestD2 + 1e-18) * (1.0 + FaceTable::kBoxSlack))
+         if (fr != nullptr && fr->prune && bestI >= 0 && FaceTable::BoxD2(tris[i], c) > (bestD2 + 1e-18) * (1.0 + FaceTable::kBoxSlack))
             continue;   // P3b: cannot be nearer than the best so far nor tie with it (exact lower bound; the 1e-18 tie band kept)
          int kind = 0;
          V3 p;
          const FaceTable::Slot *sl = nullptr;
-         if (fr != nullptr)   // shared_finder P3a: the table's measurement (raw; the carved hole below is applied to it as before)
+         if (fr != nullptr)   // shared_finder P3a: the table's measurement
          {
             sl = &fr->At(j, tris[i], c);
             p = sl->p;
@@ -1354,19 +1344,6 @@ namespace RubberContact
          }
          else
             p = ClosestOnTriangle(tris[i], c, kind);
-         for (int k = 0; k < nHoles; k++)
-         {
-            const CarvedHole &h = holes[k];
-            if (h.Holds(p))
-            {
-               double ux = c.x - h.x, uy = c.y - h.y;
-               const double ul = std::sqrt(ux * ux + uy * uy);
-               if (ul > 1e-9) { ux /= ul; uy /= ul; } else { ux = 1.0; uy = 0.0; }
-               p = V3(h.x + ux * h.r, h.y + uy * h.r, p.z);   // the nearest point of the surface that is left: on the rim of the hole
-               kind = 1;
-               sl = nullptr;   // the point moved: its distance is measured from it
-            }
-         }
          const V3 dv = c - p;
          const double d2 = sl != nullptr ? sl->d2 : dv.Dot(dv);
          if (hits != nullptr)
@@ -1409,8 +1386,7 @@ namespace RubberContact
    }
 
    // ProbeTriangles' result with the other faces pressing the ball: the nearest point inside a face of another plane (a concave corner of the mesh). A face in a plane already counted adds nothing.
-   inline void PatchTriangles(const BallSI &ball, const std::vector<SurfaceTri> &tris, const std::vector<int> &cand, const V3 &c, const double zero, TubeProbe &pr, const CarvedHole *holes = nullptr, int nHoles = 0,
-                              const FaceRead *fr = nullptr)
+   inline void PatchTriangles(const BallSI &ball, const std::vector<SurfaceTri> &tris, const std::vector<int> &cand, const V3 &c, const double zero, TubeProbe &pr, const FaceRead *fr = nullptr)
    {
       if (!pr.overlap || pr.seg < 0 || pr.reff <= 0.0 || pr.delta <= zero)
          return;
@@ -1443,7 +1419,7 @@ namespace RubberContact
             continue;
          int kind = 0;
          V3 p;
-         if (fr != nullptr)   // shared_finder P3a: the table's measurement (the Holds test below applied to it as before)
+         if (fr != nullptr)   // shared_finder P3a: the table's measurement
          {
             const FaceTable::Slot &sl = fr->At(j, t, c);
             p = sl.p;
@@ -1451,7 +1427,7 @@ namespace RubberContact
          }
          else
             p = ClosestOnTriangle(t, c, kind);
-         if (kind != 0 || std::any_of(holes, holes + nHoles, [&](const CarvedHole &h) { return h.Holds(p); }))
+         if (kind != 0)
             continue;
          if (fitBest < 0.0)
             fitBest = fitOn(tris[pr.seg], pr.point);
@@ -1689,7 +1665,7 @@ namespace RubberContact
       profEnd.cand = cand.size();
       thread_local std::vector<FaceHit> hits;   // each candidate measured once, by the probe (scratch kept per thread)
       hits.clear();
-      TubeProbe pr = ProbeTriangles(ball, tris, cand, edgeRho, c, nullptr, 0, 0.0, &hits, fr);
+      TubeProbe pr = ProbeTriangles(ball, tris, cand, edgeRho, c, 0.0, &hits, fr);
       uint64_t profT = profS ? __rdtsc() : 0;
       if (profS)
          ContactProf::CD().bProbe += profT - profEnd.t0;

@@ -30,12 +30,10 @@ void ContactTraceBall(const char *stage, const HitBall *pb, bool items, int isla
 #include <unordered_set>
 #include "physics/magnet.h"
 #include "physics/turntable.h"
-#include "physics/playfieldcut.h"
 #include "physics/testdriver.h"
 #include "parts/ball.h"
 #include "parts/flipper.h"
 #include "parts/primitive.h"
-#include "physics/carvedholes.h"
 #include "physics/meshholes.h"
 #include <fstream>
 static unsigned s_ctReplays = 0, s_ctReplayUs = 0;   // VPX_CONTACT_TIMING: overlap replays and their time since the last cost-log row
@@ -77,8 +75,7 @@ PhysicsEngine::PhysicsEngine(PinTable *const table)
       PLOGW << "Physics: surface hosts left over from the previous table (a leak, the game will slow down with each restart): " << m_leftoverHosts;
    else
       PLOGI << "Physics: no surface hosts left over from the previous table";
-   CarvedHoles::Clear();   // the playfield's carved holes (turntables, physical kickers): they add theirs in PhysicSetup, below
-   MeshHoles::Clear(PhysicsIni::Active(ContactSurfaceHost::IniPathFor(table->m_filename)).meshHoles);   // mesh_holes: the holes cut into the mesh under them at load (meshholes.h), the [PlayfieldCut:<name>] sections too
+   MeshHoles::Clear();   // the holes cut into the mesh under them at load (meshholes.h): the kickers and turntables add theirs in PhysicSetup, below, the [PlayfieldCut:<name>] sections at AddIniCuts
 
    // Collect all hit objects
    const FRect3D tableBounds = table->GetBoundingBox();
@@ -404,10 +401,10 @@ void PhysicsEngine::AddCabinetBoundingHitShapes(PinTable *const table)
       }
    }
    m_hitPlayfield.m_surfaceHost = m_playfieldHost;
-   Turntables::Setup(table, m_vmover, m_ownedHosts);   // discs set into the playfield (the holes are read by the playfield host)
-   PlayfieldCuts::Setup(this, table);                        // holes cut in the playfield: exact rims read by the playfield host's probe (after the playfield host, whose height they read); mesh_holes 1: none
-   MeshHoles::AddIniCuts(PhysicsIni::FindUnified(table->m_filename));   // mesh_holes: the [PlayfieldCut:<name>] sections as mesh holes (after the playfield host, whose height they read)
-   MeshHoles::Build();                                       // mesh_holes: every declared outline cut into the static mesh under it, in place, before the finder's tree (FinderBuild, after this in the load)
+   Turntables::Setup(table, m_vmover, m_ownedHosts);   // discs set into the playfield (their holes cut into the mesh under them at MeshHoles::Build)
+   MeshHoles::RepairOverlaps(PhysicsIni::Active(ContactSurfaceHost::IniPathFor(table->m_filename)).meshOverlapRepair);   // mesh_overlap_repair: every static mesh's overlapping faces on one plane cover it once (before the cut and the finder's tree)
+   MeshHoles::AddIniCuts(PhysicsIni::FindUnified(table->m_filename));   // the [PlayfieldCut:<name>] sections as mesh holes (after the playfield host, whose height they read)
+   MeshHoles::Build();                                       // every declared outline cut into the static mesh under it, in place, before the finder's tree (FinderBuild, after this in the load)
    {
       const std::filesystem::path ini = ContactSurfaceHost::IniPathFor(table->m_filename);
       const PhysicsIni::Features feat = PhysicsIni::Active(ini);

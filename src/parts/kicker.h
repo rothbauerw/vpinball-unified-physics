@@ -110,7 +110,7 @@ private:
    bool m_virtual = false;               // this kicker is a virtual kicker on the unified path (a sensing zone and its parked, held ball)
    Vertex3Ds m_parkPlace;                // virtual: where the parked ball is held (its centre where it crossed into the zone, or where CreateBall made it), VPX units
    bool m_parkMovedNoted = false;        // virtual: CheckParked said once that something moved the parked ball
-   bool m_physical = false;              // this kicker is a physical kicker (no KickerHitCircle; its cup host, carved hole and held test instead)
+   bool m_physical = false;              // this kicker is a physical kicker (no KickerHitCircle; its cup host, mesh hole and held test instead)
    bool m_physicalRefused = false;       // a physical kicker that could not be built (not on the playfield): it does nothing (no stock path, design 6a)
    HitBall *m_heldBall = nullptr;        // physical: the ball the held test holds; virtual: the parked ball (DestroyBall, Kick; null = empty)
    HitBall *m_lastHeldBall = nullptr;    // physical and virtual: LastCapturedBall

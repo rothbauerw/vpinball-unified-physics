@@ -9,6 +9,7 @@
 #include "ui/live/LiveUI.h"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <map>
@@ -36,9 +37,9 @@ namespace
    constexpr double kTopTolM = 1e-3;    // the host's top: the nearest face plane at or below the part's height plus this (stress v2's playfield_mesh is 0.05 VPU above the parts)
    constexpr double kIsTopTolM = 0.25e-3;   // a face of the cut's top: an up face whose plane at the outline's centre is within this of the top (under a 1 VPU slab's 0.54 mm; lead 2026-11-16)
    constexpr double kUpNz = 0.5;        // a face facing up: |n z| over this (within 60 deg of horizontal; the stored winding is either way, rubbercontact.h SurfaceTri)
-   constexpr double kBallRM = 25.0 * U; // the ball the walls rule is judged for: the standard ball (the table carries no ball size; the math cuts' R, playfieldcut.cpp)
+   constexpr double kBallRM = 25.0 * U; // the ball the walls rule is judged for: the standard ball (the table carries no ball size)
    constexpr double kTurnRad = kPi / 12.0;   // a rounded corner's tangent polygon turns 15 deg per vertex (paper section 4: 6 per quarter)
-   // [PlayfieldCut:<name>] shapes (moved from playfieldcut.cpp; slot-hole design 1, 4, 9; paper section 4 for the groove)
+   // [PlayfieldCut:<name>] shapes (slot-hole design 1, 4, 9; paper section 4 for the groove)
    constexpr double kRampM = 7.5e-3;          // the slot's drilled ramp: the outline narrows to a point this far from the end of the straight sides (user 2026-11-09; fixed)
    constexpr double kRampDepthM = 1.75e-3;    // the ramp floor's depth on the axis at the round end's far edge (u = a), rising linearly to 0 at the tip (slot-hole design 2: drill cross-section)
    constexpr double kWidthMaxMm = 5.03;       // slot width_mm default and largest: 0.198 in (PartData 7)
@@ -65,9 +66,8 @@ namespace
       std::vector<std::array<std::pair<P2, double>, 2>> openFloor;   // floor edges open by design (the ramp floor's edge over the slot's through part)
    };
 
-   bool g_on = false;
    std::vector<Outline> g_outlines;
-   std::vector<PlayfieldCuts::DrawnSlot> g_drawn;   // the slots as drawn, with their mesh outline
+   std::vector<MeshHoles::DrawnSlot> g_drawn;   // the slots as drawn, with their mesh outline
 
    void Notice(const std::string &msg)   // rule 8: on screen and in the log
    {
@@ -639,8 +639,7 @@ namespace
       const std::vector<Piece> inner = Pieces(g, true, &inWhich);   // the members' edges inside another member
       for (const Piece &s : bd)
       {
-         r.holeArea += 0.5 * ((double)(float)(s.a.x / U) * U * (double)(float)(s.b.y / U) * U - (double)(float)(s.b.x / U) * U * (double)(float)(s.a.y / U) * U);   // (as stored, float32 table units)
-         r.holeAreaD += 0.5 * (s.a.x * s.b.y - s.b.x * s.a.y);
+         r.holeAreaD += 0.5 * (s.a.x * s.b.y - s.b.x * s.a.y);   // (r.holeArea: from the stored rim points, after the cut)
       }
       r.inscribed = Inscribed(g, bd);
       const bool walls = r.inscribed >= kBallRM;   // rule 3 (lead 2026-11-16): walls only where the ball can pass through
@@ -742,8 +741,7 @@ namespace
             return "it crosses a face of the host that is not its top (a wall, a step, or a face within the wall's depth) at its rim";
       }
       r.missing = r.holeAreaD - cover;
-      if (r.underCut > 0.0 && std::abs(r.underCut - r.holeAreaD) <= 1e-9 * r.holeAreaD)
-         r.underCut = r.holeArea;   // the underside under the whole outline: its rim as stored (float32), as the top's
+      const bool underWhole = r.underCut > 0.0 && std::abs(r.underCut - r.holeAreaD) <= 1e-9 * r.holeAreaD;   // the underside under the whole outline: its rim as stored, as the top's (below)
       // the grid: lines 54 mm apart, the origin moved by half a step and then by 1 mm at a time till no line passes within kGridClearM of an outline vertex and no outline edge within
       // kGridClearM of a grid node (the clip's crossings then never fall on a vertex: lead 2026-11-16)
       std::vector<double> xs, ys;
@@ -938,7 +936,13 @@ namespace
                   c.EmitZ(out, q, [&](const P2 &p) { return PlaneZ(b, p.x, p.y) - DepthIn(t, p); }, false);
                   for (size_t k = before; k < out.size(); k++)
                   {
-                     r.floorUp += Up(out[k]) ? std::abs(Area(Plan(out[k]))) : 0.0;
+                     if (Up(out[k]))   // the floor face's plan area as stored (float32 table units), as the measured top area counts it (load check)
+                     {
+                        std::vector<P2> s = Plan(out[k]);
+                        for (P2 &v : s)
+                           v = { (double)(float)(v.x / U) * U, (double)(float)(v.y / U) * U };
+                        r.floorUp += std::abs(Area(s));
+                     }
                      r.nFloor++;
                   }
                }
@@ -1008,6 +1012,44 @@ namespace
       NoTJunction(out, fresh);
       c.f.swap(out);
       c.pool.clear();
+      // the load check's hole area from the rim points as stored: every vertex the cut left on the joined outline's boundary (grid and face crossings included), in order along each
+      // boundary piece, rounded to float32 table units as the faces are stored (the outline's own vertices alone miss the rounding of the points between them: p3 fix round)
+      const auto rimArea = [&](const bool top) {
+         double area = 0.0;
+         for (const Piece &s : bd)
+         {
+            const double dx = s.b.x - s.a.x, dy = s.b.y - s.a.y, l2 = dx * dx + dy * dy;
+            std::vector<std::pair<double, P2>> pts { { 0.0, s.a }, { 1.0, s.b } };
+            for (const T3 &t : c.f)
+            {
+               if (!Up(t) || !overlaps(t, hx0, hx1, hy0, hy1))
+                  continue;
+               const double zHi = std::max({ t.a.z, t.b.z, t.c.z }), zLo = std::min({ t.a.z, t.b.z, t.c.z });
+               if (top ? !isTop(t) : (isTop(t) || zHi >= topZ - kIsTopTolM || zLo < topZ - thickM - kIsTopTolM))
+                  continue;
+               for (const P3 *v : { &t.a, &t.b, &t.c })
+               {
+                  const double u = l2 > 0.0 ? ((v->x - s.a.x) * dx + (v->y - s.a.y) * dy) / l2 : 0.0;
+                  if (u > 0.0 && u < 1.0 && std::abs(Cross(s.a, s.b, { v->x, v->y })) <= kOnEdgeM * std::sqrt(l2))
+                     pts.push_back({ u, { v->x, v->y } });
+               }
+            }
+            std::sort(pts.begin(), pts.end(), [](const auto &p, const auto &q) { return p.first < q.first; });
+            std::vector<P2> f32;
+            for (const auto &pu : pts)
+            {
+               const P2 q { (double)(float)(pu.second.x / U) * U, (double)(float)(pu.second.y / U) * U };
+               if (f32.empty() || !Eq(f32.back(), q))
+                  f32.push_back(q);
+            }
+            for (size_t k = 0; k + 1 < f32.size(); k++)
+               area += 0.5 * (f32[k].x * f32[k + 1].y - f32[k + 1].x * f32[k].y);
+         }
+         return area;
+      };
+      r.holeArea = rimArea(true);
+      if (underWhole)
+         r.underCut = rimArea(false);
       return std::string();
    }
 
@@ -1060,7 +1102,7 @@ namespace
       g_outlines.push_back(std::move(o));
    }
 
-   // ---- [PlayfieldCut:<name>] (the parser moved from playfieldcut.cpp; paper section 5) ----
+   // ---- [PlayfieldCut:<name>] (paper section 5) ----
    struct CutKeys
    {
       std::string name, shape, host;
@@ -1152,18 +1194,320 @@ namespace
       }
       return std::string();
    }
+   // the host's face list replaced by f (m), welded by their float bits as every host's (contactsurfacehost.cpp RubberSurface::Add), linked again and its box recomputed; returns the
+   // edges on more than two faces (Link)
+   int Store(ContactSurfaceHost *const host, const std::vector<T3> &f)
+   {
+      RubberSurface &s = *host->MeshSurface();
+      RubberSurface ns;
+      for (const T3 &t : f)
+         ns.Add(Vertex3Ds((float)(t.a.x / U), (float)(t.a.y / U), (float)(t.a.z / U)), Vertex3Ds((float)(t.b.x / U), (float)(t.b.y / U), (float)(t.b.z / U)),
+                Vertex3Ds((float)(t.c.x / U), (float)(t.c.y / U), (float)(t.c.z / U)));
+      s.tris = std::move(ns.tris);
+      std::copy(ns.lo, ns.lo + 3, s.lo);
+      std::copy(ns.hi, ns.hi + 3, s.hi);
+      s.vid = std::move(ns.vid);
+      s.weld = std::move(ns.weld);
+      s.nb.clear();
+      s.fold.clear();
+      return host->MeshRelink();   // shared edges again (contactsurfacehost.cpp Link) and the host's box
+   }
+
+   // ---- overlap repair ([Features] mesh_overlap_repair; to-do N3 piece 5) ----
+   constexpr double kPlaneM = 1e-6;       // two faces on one plane: every corner of each within this of the other's plane (user and lead 2026-11-16)
+   constexpr double kOverlapM2 = 1e-12;   // two faces overlap when their common area exceeds this (1 um2; faces that only share an edge have none)
+   P3 Sub(const P3 &a, const P3 &b) { return { a.x - b.x, a.y - b.y, a.z - b.z }; }
+   double Dot(const P3 &a, const P3 &b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+   P3 Unit(const P3 &a) { const double l = std::sqrt(Dot(a, a)); return l > 0.0 ? P3 { a.x / l, a.y / l, a.z / l } : P3 { 0.0, 0.0, 0.0 }; }
+   P3 CrossP(const P3 &a, const P3 &b) { return { a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x }; }
+   // a face's own plane frame: origin its first corner, u v in the plane with u x v = its normal
+   struct Frame
+   {
+      P3 o, u, v, n;
+      explicit Frame(const T3 &t)
+      {
+         o = t.a;
+         n = Unit(Normal(t));
+         u = Unit(Sub(t.b, t.a));
+         v = CrossP(n, u);
+      }
+      P2 To(const P3 &p) const { const P3 d = Sub(p, o); return { Dot(d, u), Dot(d, v) }; }
+      P3 From(const P2 &q) const { return { o.x + q.x * u.x + q.y * v.x, o.y + q.x * u.y + q.y * v.y, o.z + q.x * u.z + q.y * v.z }; }
+   };
+   bool OnePlane(const T3 &a, const T3 &b)
+   {
+      const P3 na = Unit(Normal(a)), nb = Unit(Normal(b));
+      if (std::abs(Dot(na, nb)) < 0.999)
+         return false;
+      for (const P3 *p : { &b.a, &b.b, &b.c })
+         if (std::abs(Dot(Sub(*p, a.a), na)) > kPlaneM)
+            return false;
+      for (const P3 *p : { &a.a, &a.b, &a.c })
+         if (std::abs(Dot(Sub(*p, b.a), nb)) > kPlaneM)
+            return false;
+      return true;
+   }
+   std::vector<P2> InFrame(const Frame &fr, const T3 &t)   // counter-clockwise in the frame
+   {
+      std::vector<P2> p { fr.To(t.a), fr.To(t.b), fr.To(t.c) };
+      if (Area(p) < 0.0)
+         std::reverse(p.begin(), p.end());
+      return p;
+   }
+   double Area3(const T3 &t) { const P3 n = Normal(t); return 0.5 * std::sqrt(Dot(n, n)); }
 }
 
-void MeshHoles::Clear(bool on)
+void MeshHoles::RepairOverlaps(const bool on)
 {
-   g_on = on;
+   if (!on)
+      return;
+   for (ContactHost *const h : ContactHost::AllHosts())
+   {
+      ContactSurfaceHost *const host = dynamic_cast<ContactSurfaceHost *>(h);
+      if (host == nullptr || host->MeshSurface() == nullptr || !IsMeshKind(host->MeshKind()))
+         continue;
+      const auto t0 = std::chrono::steady_clock::now();
+      const RubberSurface &s = *host->MeshSurface();
+      std::vector<T3> f;
+      f.reserve(s.tris.size());
+      for (const RubberContact::SurfaceTri &t : s.tris)
+         f.push_back({ { t.a.x, t.a.y, t.a.z }, { t.b.x, t.b.y, t.b.z }, { t.c.x, t.c.y, t.c.z } });
+      const size_t n = f.size();
+      if (n < 2)
+         continue;
+      // the pairs on one plane that overlap, found through a grid of boxes over the host (a face goes into every cell its box meets; at most 64 cells per axis, at least 2 mm)
+      double lo[3] = { 1e30, 1e30, 1e30 }, hi[3] = { -1e30, -1e30, -1e30 };
+      for (const T3 &t : f)
+         for (const P3 *p : { &t.a, &t.b, &t.c })
+            for (int k = 0; k < 3; k++)
+            {
+               lo[k] = std::min(lo[k], (&p->x)[k]);
+               hi[k] = std::max(hi[k], (&p->x)[k]);
+            }
+      const double cell = std::max({ (hi[0] - lo[0]) / 64.0, (hi[1] - lo[1]) / 64.0, (hi[2] - lo[2]) / 64.0, 2e-3 });
+      int nc[3];
+      for (int k = 0; k < 3; k++)
+         nc[k] = std::max(1, std::min(64, (int)std::ceil((hi[k] - lo[k]) / cell)));
+      const auto at = [&](const double x, const int k) { return std::max(0, std::min(nc[k] - 1, (int)std::floor((x - lo[k]) / cell))); };
+      std::vector<std::vector<int>> grid((size_t)nc[0] * nc[1] * nc[2]);
+      std::vector<std::array<int, 6>> span(n);
+      for (size_t i = 0; i < n; i++)
+      {
+         const T3 &t = f[i];
+         for (int k = 0; k < 3; k++)
+         {
+            span[i][k] = at(std::min({ (&t.a.x)[k], (&t.b.x)[k], (&t.c.x)[k] }) - kPlaneM, k);
+            span[i][k + 3] = at(std::max({ (&t.a.x)[k], (&t.b.x)[k], (&t.c.x)[k] }) + kPlaneM, k);
+         }
+         for (int x = span[i][0]; x <= span[i][3]; x++)
+            for (int y = span[i][1]; y <= span[i][4]; y++)
+               for (int z = span[i][2]; z <= span[i][5]; z++)
+                  grid[((size_t)x * nc[1] + y) * nc[2] + z].push_back((int)i);
+      }
+      std::vector<std::vector<int>> nbr(n);   // the faces each overlaps on its plane
+      std::vector<int> stamp(n, -1);
+      std::vector<double> area(n);
+      for (size_t i = 0; i < n; i++)
+         area[i] = Area3(f[i]);
+      size_t pairs = 0;
+      for (size_t i = 0; i < n; i++)
+      {
+         if (area[i] <= 0.0)
+            continue;
+         const Frame fr(f[i]);
+         const std::vector<P2> pi = InFrame(fr, f[i]);
+         for (int x = span[i][0]; x <= span[i][3]; x++)
+            for (int y = span[i][1]; y <= span[i][4]; y++)
+               for (int z = span[i][2]; z <= span[i][5]; z++)
+                  for (const int j : grid[((size_t)x * nc[1] + y) * nc[2] + z])
+                  {
+                     if (j <= (int)i || stamp[j] == (int)i || area[j] <= 0.0)
+                        continue;
+                     stamp[j] = (int)i;
+                     if (!OnePlane(f[i], f[j]))
+                        continue;
+                     const std::vector<P2> common = ClipConvex(InFrame(fr, f[j]), pi);
+                     if (common.size() < 3 || std::abs(Area(common)) <= kOverlapM2)
+                        continue;
+                     nbr[i].push_back(j);
+                     nbr[(size_t)j].push_back((int)i);
+                     pairs++;
+                  }
+      }
+      const double ms0 = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+      if (pairs == 0)
+      {
+         PLOGI << "Mesh overlap repair: " << host->MeshKind() << " host " << host->Name() << ": faces " << n << ", no overlapping faces, " << ms0 << " ms";
+         continue;
+      }
+      // the faces in an overlap, smallest first (ties: load order; lead 2026-11-16): each keeps what the faces before it that it overlaps do not cover (a face wholly covered is dropped).
+      // Those faces' union is the union of what they kept, so each subtracts their whole faces: F less a triangle T = the parts of F outside T's edge k and inside its edges before k
+      // (at most 3, disjoint; exact where an edge of T lies on one of F)
+      std::vector<int> order;
+      for (size_t i = 0; i < n; i++)
+         if (!nbr[i].empty())
+            order.push_back((int)i);
+      std::sort(order.begin(), order.end(), [&](const int a, const int b) { return area[a] != area[b] ? area[a] < area[b] : a < b; });
+      std::vector<char> done(n, 0), changed(n, 0);
+      std::vector<std::vector<T3>> kept(n);
+      std::vector<P3> pool;   // the points of the repair: a new point near one of these takes it
+      for (const int i : order)
+         for (const P3 *p : { &f[i].a, &f[i].b, &f[i].c })
+            pool.push_back(*p);
+      const size_t nOrig = pool.size();
+      double areaBefore = 0.0, areaAfter = 0.0, removed = 0.0;
+      for (size_t i = 0; i < n; i++)
+         areaBefore += area[i];
+      std::ostringstream where;
+      int nDropped = 0, nClipped = 0;
+      for (const int i : order)
+      {
+         done[i] = 1;
+         std::vector<int> under;   // the faces before it that it overlaps
+         for (const int j : nbr[i])
+            if (done[j] && j != i)
+               under.push_back(j);
+         if (under.empty())
+            continue;   // (kept whole)
+         const Frame fr(f[i]);
+         std::vector<std::vector<P2>> pieces { InFrame(fr, f[i]) };
+         for (const int j : under)
+         {
+            const std::vector<P2> T = InFrame(fr, f[j]);
+            std::vector<std::vector<P2>> next;
+            for (const std::vector<P2> &P : pieces)
+            {
+               std::vector<P2> inside = P;
+               for (int k = 0; k < 3 && inside.size() >= 3; k++)
+               {
+                  const std::vector<P2> out = ClipLeft(inside, T[(k + 1) % 3], T[k]);   // outside edge k (on its right)
+                  if (out.size() >= 3 && std::abs(Area(out)) > kOverlapM2)
+                     next.push_back(out);
+                  inside = ClipLeft(inside, T[k], T[(k + 1) % 3]);
+               }
+            }
+            pieces.swap(next);
+         }
+         changed[i] = 1;
+         // a corner at a point of the faces it was clipped by (or of itself) takes that point; one on such a face's edge takes that edge's own point there (no T-junction across the
+         // small step between the two planes); else it lies on its own plane. Corners within the T-pass tolerance of a straight run go (as EmitZ)
+         const auto place = [&](const P2 &q) {
+            for (const P3 &w3 : pool)
+            {
+               const P2 w = fr.To(w3);
+               if ((w.x - q.x) * (w.x - q.x) + (w.y - q.y) * (w.y - q.y) < kSnapM * kSnapM && std::abs(Dot(Sub(w3, fr.o), fr.n)) <= kPlaneM)
+                  return w3;
+            }
+            P3 p = fr.From(q);
+            bool onEdge = false;
+            for (size_t m = 0; m < under.size() && !onEdge; m++)
+            {
+               const T3 &t = f[under[m]];
+               const P3 c3[3] = { t.a, t.b, t.c };
+               for (int e = 0; e < 3 && !onEdge; e++)
+               {
+                  const P2 a = fr.To(c3[e]), b = fr.To(c3[(e + 1) % 3]);
+                  const double l = std::hypot(b.x - a.x, b.y - a.y), u = l > 0.0 ? Param(a, b, q) : -1.0;
+                  if (u > 0.0 && u < 1.0 && std::abs(Cross(a, b, q)) <= kOnEdgeM * l)
+                  {
+                     const P3 &A = c3[e], &B = c3[(e + 1) % 3];
+                     p = { A.x + u * (B.x - A.x), A.y + u * (B.y - A.y), A.z + u * (B.z - A.z) };
+                     onEdge = true;
+                  }
+               }
+            }
+            pool.push_back(p);
+            return p;
+         };
+         double left = 0.0;
+         for (const std::vector<P2> &P : pieces)
+         {
+            std::vector<P2> q2;
+            for (const P2 &q : P)
+               if (q2.empty() || !Eq(q2.back(), q))
+                  q2.push_back(q);
+            while (q2.size() > 1 && Eq(q2.front(), q2.back()))
+               q2.pop_back();
+            for (bool again = true; again && q2.size() >= 3;)
+            {
+               again = false;
+               for (size_t k = 0; k < q2.size(); k++)
+               {
+                  const P2 &a = q2[(k + q2.size() - 1) % q2.size()], &b = q2[k], &c = q2[(k + 1) % q2.size()];
+                  const double lac = std::hypot(c.x - a.x, c.y - a.y);
+                  if (lac <= 0.0 || std::abs(Cross(a, b, c)) <= kOnEdgeM * lac)
+                  {
+                     q2.erase(q2.begin() + (std::ptrdiff_t)k);
+                     again = true;
+                     break;
+                  }
+               }
+            }
+            if (q2.size() < 3)
+               continue;
+            std::vector<P3> q3;
+            for (const P2 &q : q2)
+               q3.push_back(place(q));
+            const bool flip = Dot(Normal({ q3[0], q3[1], q3[2] }), Normal(f[i])) < 0.0;   // (the face's own winding kept)
+            for (size_t k = 1; k + 1 < q3.size(); k++)
+            {
+               const T3 t = flip ? T3 { q3[0], q3[k + 1], q3[k] } : T3 { q3[0], q3[k], q3[k + 1] };
+               kept[i].push_back(t);
+               left += Area3(t);
+            }
+         }
+         const P3 g { (f[i].a.x + f[i].b.x + f[i].c.x) / 3.0, (f[i].a.y + f[i].b.y + f[i].c.y) / 3.0, (f[i].a.z + f[i].b.z + f[i].c.z) / 3.0 };
+         (kept[i].empty() ? nDropped : nClipped)++;
+         removed += area[i] - left;
+         where << " face " << i << " centre (" << g.x * 1e3 << ", " << g.y * 1e3 << ", " << g.z * 1e3 << ") mm [" << g.x / U << ", " << g.y / U << " VPU] "
+               << (kept[i].empty() ? std::string("dropped") : "clipped to " + std::to_string(kept[i].size()) + " faces") << ", under " << under.size() << " smaller faces, double cover removed "
+               << (area[i] - left) * 1e6 << " mm2;";
+      }
+      std::vector<T3> out;
+      for (size_t i = 0; i < n; i++)
+         if (!changed[i])
+            out.push_back(f[i]);
+         else
+            out.insert(out.end(), kept[i].begin(), kept[i].end());
+      const std::vector<P3> fresh(pool.begin() + (std::ptrdiff_t)nOrig, pool.end());
+      NoTJunction(out, fresh);
+      for (const T3 &t : out)
+         areaAfter += Area3(t);
+      const int over = Store(host, out);
+      int open = 0;
+      for (const auto &nb : host->MeshSurface()->nb)
+         for (int k = 0; k < 3; k++)
+            open += nb[k] < 0;
+      PLOGI << "Mesh overlap repair: " << host->MeshKind() << " host " << host->Name() << ": faces " << n << " -> " << out.size() << ", overlapping pairs " << pairs << ", faces dropped " << nDropped << ", clipped "
+            << nClipped << ", face area " << areaBefore * 1e6 << " -> " << areaAfter * 1e6 << " mm2 (double cover removed " << removed * 1e6 << " mm2), open edges after " << open
+            << ", edges on more than two faces after " << over << ", " << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() << " ms;" << where.str();
+   }
+}
+
+void MeshHoles::Clear()
+{
    g_drawn.clear();
    g_outlines.clear();   // (the kickers add theirs in PhysicSetup, the turntables in Turntables::Setup, the [PlayfieldCut:<name>] sections in AddIniCuts, all after this)
 }
 
-bool MeshHoles::On()
+double MeshHoles::DrawnSlot::W(const double u) const
 {
-   return g_on;
+   if (u <= 0.0)
+      return a;
+   if (u <= U1)
+      return std::sqrt(std::max(0.0, a * a - u * u));
+   if (u < L)
+      return std::sqrt(std::max(0.0, wJ * wJ - 2.0 * U1 * (u - U1)));
+   return 0.0;
+}
+
+double MeshHoles::DrawnSlot::C(const double u) const { return u <= 0.0 ? a : u < a ? std::sqrt(a * a - u * u) : 0.0; }
+
+void MeshHoles::DrawnSlot::FloorArc(const double u, double &rho, double &zc) const
+{
+   const double D = kRampDepthM * (L - u) / (L - a), w = W(u);
+   rho = (w * w + D * D) / (2.0 * D);
+   zc = rho - D;
 }
 
 void MeshHoles::Add(const std::string &name, const std::vector<double> &xy, double partZ)
@@ -1214,16 +1558,11 @@ std::vector<double> MeshHoles::Offset(const std::vector<double> &xy, double d)
 
 void MeshHoles::AddIniCuts(const std::filesystem::path &file)
 {
-   if (!g_on || file.empty())
+   if (file.empty() || !ContactSystem::Unified())   // (stock physics: no static mesh host to cut)
       return;
    std::vector<CutKeys> cuts = Parse(file);
    if (cuts.empty())
       return;
-   if (!PhysicsIni::Active(file).playfieldCuts)
-   {
-      PLOGI << "Mesh holes: " << cuts.size() << " [PlayfieldCut:<name>] section(s) ignored: [Features] playfield_cuts = 0";
-      return;
-   }
    for (const CutKeys &k : cuts)
    {
       const std::string where = "Playfield cut " + k.name + ": ";
@@ -1332,7 +1671,7 @@ void MeshHoles::AddIniCuts(const std::filesystem::path &file)
             Notice(n.str());
             widthMm = lim;
          }
-         // the math slot's outline (slot-hole design 1; playfieldcut.h): straight sides t = +-a; round end w^2 = a^2 - u^2 to U1 = L - sqrt(L^2 - a^2); the ramp w^2 = 2 U1 (L - u) to the
+         // the math slot's outline (slot-hole design 1): straight sides t = +-a; round end w^2 = a^2 - u^2 to U1 = L - sqrt(L^2 - a^2); the ramp w^2 = 2 U1 (L - u) to the
          // tip at u = L (tangent at U1). Ramp vertices on the curve at its direction's even steps (at most 15 deg) from u = a, where the floor starts, to the tip. The through part is the
          // straight part, the round ends and the ramp to u = a; the ramp floor from u = a (depth 1.75 mm on the axis) to the tip (0), each cross-section a V through the axis point
          // (the arc's two chords: the fewest faces; the ball meets the floor only near the tip, where both reach the top)
@@ -1382,7 +1721,7 @@ void MeshHoles::AddIniCuts(const std::filesystem::path &file)
             for (const double side : { 1.0, -1.0 })
                o.openFloor.push_back({ std::make_pair(W(e * (hs + a), side * Wu(a)), 0.0), std::make_pair(c0, kRampDepthM) });
          }
-         PlayfieldCuts::DrawnSlot d;   // the drawing's numbers (playfieldcut.h DrawnSlot; the outline itself is added below, from the mesh outline)
+         DrawnSlot d;   // the drawing's numbers (meshholes.h DrawnSlot; the outline itself is added below, from the mesh outline)
          d.name = k.name;
          d.unit = U;
          d.cx = cx;
@@ -1485,14 +1824,14 @@ void MeshHoles::AddIniCuts(const std::filesystem::path &file)
    }
 }
 
-std::vector<PlayfieldCuts::DrawnSlot> MeshHoles::Drawn()
+std::vector<MeshHoles::DrawnSlot> MeshHoles::Drawn()
 {
-   return g_on ? g_drawn : std::vector<PlayfieldCuts::DrawnSlot>();
+   return g_drawn;
 }
 
 void MeshHoles::Build()
 {
-   if (!g_on || g_outlines.empty())
+   if (g_outlines.empty())
       return;
    // the host under each outline: the one the ini names, else found at its rim points (paper section 9 P2): each outline vertex takes the static mesh host whose up face under it is the
    // highest at or below the part's height plus kTopTolM; all vertices must give the same host. A different host inside the outline (a wall standing in the hole) is neither cut nor a reason to refuse.
@@ -1656,7 +1995,7 @@ void MeshHoles::Build()
          {
             Notice("Mesh holes: " + names + " not cut in the " + host->MeshKind() + " host: " + why);
             for (const Outline *o : g)   // not drawn either (drawn hole = physics outline)
-               g_drawn.erase(std::remove_if(g_drawn.begin(), g_drawn.end(), [&](const PlayfieldCuts::DrawnSlot &d) { return "Cut " + d.name == o->name; }), g_drawn.end());
+               g_drawn.erase(std::remove_if(g_drawn.begin(), g_drawn.end(), [&](const DrawnSlot &d) { return "Cut " + d.name == o->name; }), g_drawn.end());
             continue;
          }
          cut += (int)g.size();
@@ -1673,18 +2012,7 @@ void MeshHoles::Build()
       }
       if (cut == 0)
          continue;
-      RubberSurface ns;   // the cut faces, welded by their float bits as every host's (contactsurfacehost.cpp RubberSurface::Add); the uncut list is not kept
-      for (const T3 &t : c.f)
-         ns.Add(Vertex3Ds((float)(t.a.x / U), (float)(t.a.y / U), (float)(t.a.z / U)), Vertex3Ds((float)(t.b.x / U), (float)(t.b.y / U), (float)(t.b.z / U)),
-                Vertex3Ds((float)(t.c.x / U), (float)(t.c.y / U), (float)(t.c.z / U)));
-      s.tris = std::move(ns.tris);
-      std::copy(ns.lo, ns.lo + 3, s.lo);
-      std::copy(ns.hi, ns.hi + 3, s.hi);
-      s.vid = std::move(ns.vid);
-      s.weld = std::move(ns.weld);
-      s.nb.clear();
-      s.fold.clear();
-      host->MeshRelink();   // shared edges again (contactsurfacehost.cpp Link) and the host's box
+      const int over = Store(host, c.f);   // the cut faces (the uncut list is not kept), welded and linked again; edges on more than two faces: strays (overlapping faces)
       const HostCheck after = Measure(s);
       // every open edge after the cut is a wall's bottom, an open rim by design, or a piece of an open edge the mesh had (its border, split where a grid line crosses it); any other is a gap
       int stray = 0;
@@ -1700,9 +2028,9 @@ void MeshHoles::Build()
          stray += !ok;
       }
       PLOGI << "Mesh holes: " << host->MeshKind() << " host " << host->Name() << ": faces " << facesBefore << " -> " << s.tris.size() << ", holes " << cut << ":" << per.str() << " open edges " << before.open << " -> " << after.open
-            << " (" << bottoms.size() << " wall bottoms, " << rims.size() << " open rim edges, " << stray << " stray), underside faces cut " << nUnder << ", top area " << before.top << " -> " << after.top << " m2 (expected " << expectTop << ", diff " << (after.top - expectTop) << ")";
-      if (stray > 0 || std::abs(after.top - expectTop) > 1e-9 * before.top)
-         Notice("Mesh holes: load check failed on the " + host->MeshKind() + " host: " + std::to_string(stray) + " open edges that are neither a wall's bottom, an open rim, nor the mesh's own border, top area off by "
-                + std::to_string((after.top - expectTop) * 1e6) + " mm2");
+            << " (" << bottoms.size() << " wall bottoms, " << rims.size() << " open rim edges, " << stray << " stray, " << over << " edges on more than two faces), underside faces cut " << nUnder << ", top area " << before.top << " -> " << after.top << " m2 (expected " << expectTop << ", diff " << (after.top - expectTop) << ")";
+      if (stray > 0 || over > 0 || std::abs(after.top - expectTop) > 1e-9 * before.top)
+         Notice("Mesh holes: load check failed on the " + host->MeshKind() + " host: " + std::to_string(stray) + " open edges that are neither a wall's bottom, an open rim, nor the mesh's own border, "
+                + std::to_string(over) + " edges on more than two faces, top area off by " + std::to_string((after.top - expectTop) * 1e6) + " mm2");
    }
 }

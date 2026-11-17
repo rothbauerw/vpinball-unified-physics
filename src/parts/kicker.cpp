@@ -24,7 +24,6 @@
 #include "parts/PartGroup.h"
 #include "physics/collideex.h"
 #include "physics/PhysicsEngine.h"
-#include "physics/carvedholes.h"
 #include "physics/meshholes.h"
 #include "physics/contactpartsini.h"
 #include "physics/contactsystem.h"
@@ -112,7 +111,7 @@ namespace
 }
 
 // Physical kicker (docs/unified-physics/KickerDesign.txt sections 1, 2, 5, 7; Requirements F 1-8), on the unified engine with type physical: no KickerHitCircle. The ball meets the cup, a static hard-surface host built from the cup data compiled in (meshes/kickerCupSys7.h: the cup and the hole's wall below the rim, mm, kicker
-// frame), under a round hole carved in the playfield (CarvedHoles: the playfield's faces do not press a ball inside the real cutout's radius, from the cup data; the rim is the hole's
+// frame), under a round hole cut into the mesh under it at load (meshholes.h: the real cutout's radius, from the cup data; the rim is the hole's
 // edge). Gravity, the cup and friction bring the ball to rest; nothing else holds it (1d). Held: the cup's switch, a switch with travel (Requirements F 6): it closes when the ball's centre
 // is inside the hole and its bottom reaches the close depth, and opens only when the bottom rises above the open depth (cup data), judged on each step's chord, Hit / Unhit queued and fired
 // after the step (ContactSystem::NoneZones with the kicker as owner, 1f, 7e). The kick (KickXYZ) is the arm stroke (4c: the held ball carried along a quarter circle, KickerArm). No Enabled: the cup and its switch are
@@ -197,12 +196,9 @@ void Kicker::PhysicalSetup(PhysicsEngine *const physics)
    host->SetFriction((float)kMu);
    host->m_enabled = true;   // the cup is always there (a physical kicker has no Enabled, F 9)
    physics->AddCollider(host, false);
-   // the hole carved in the playfield: the real cutout's radius at the playfield top (part of the cup data), not the VPX kicker radius
+   // the hole cut into the mesh under it at load (meshholes.h): the real cutout's radius at the playfield top (part of the cup data), not the VPX kicker radius, as a tangent polygon
    const double holeMm = kickerCupSys7HoleRadiusMm;
-   if (MeshHoles::On())   // mesh_holes: the hole cut into the mesh under it at load (meshholes.h), tangent polygon of the cutout's radius
-      MeshHoles::Add("Kicker " + name, MeshHoles::Round((double)m_d.m_vCenter.x * U, (double)m_d.m_vCenter.y * U, holeMm * 1e-3), (double)height * U);
-   else
-      CarvedHoles::Add({ (double)m_d.m_vCenter.x * U, (double)m_d.m_vCenter.y * U, holeMm * 1e-3, (double)height * U });
+   MeshHoles::Add("Kicker " + name, MeshHoles::Round((double)m_d.m_vCenter.x * U, (double)m_d.m_vCenter.y * U, holeMm * 1e-3), (double)height * U);
    // the cup's switch (cup data: close and open depth of the ball's bottom, TUNED, kickerCupSys7.h)
    const double zClose = (double)height - kickerCupSys7SwitchCloseDepthMm * mmU, zOpen = (double)height - kickerCupSys7SwitchOpenDepthMm * mmU;
    physics->m_noneZones.AddKicker(this, m_d.m_vCenter.x, m_d.m_vCenter.y, holeMm * mmU, zClose, zOpen);

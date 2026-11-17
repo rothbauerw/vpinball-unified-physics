@@ -137,7 +137,6 @@ struct BallContact
 };
 
 class ContactSurfaceHost;
-namespace PlayfieldCuts { struct CutQuery; }
 
 // Shared with the contact system (contactsystem.cpp)
 bool ContactTraceOn();
@@ -184,9 +183,7 @@ public:
    void Refresh(SurfaceContact &it, double ballR, double reachM, const RubberContact::V3 &c) const override;   // the faces the ball can reach this cycle
    double ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, double a, double hMax, double touchM, double arriveM) const override;
    RubberContact::TubeProbe ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const override;
-   int PathReach(const SurfaceContact &it, const RubberContact::V3 &s, const RubberContact::V3 &d, double R) const override;
-   bool PathOneWay(const SurfaceContact &it, const RubberContact::V3 &e) const override;   // (the self-check: false inside a carved hole's rim ring, design.md 2c)
-   double PathCoverSag(const SurfaceContact &it, int &kind) const override;   // (the self-check, VPX_FINDER_CHECK)   // the path test: a static mesh (the playfield with cuts or carved holes: its full faces, a path end under a cut's top: 1) or a static tube
+   int PathReach(const SurfaceContact &it, const RubberContact::V3 &s, const RubberContact::V3 &d, double R) const override;   // the path test: a static mesh (its faces) or a static tube
    RubberContact::TubeProbe Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const override;   // the nearest point of one surface contact (tube or faces)
    double LayerM() const override;
    // shared_finder (to-do 1.34, piece P1): builds the index over every static mesh host once. atLoad: the call at the end of the table's load (PhysicsEngine), which drops
@@ -220,15 +217,12 @@ public:
    static void FinderJoinCapHit(long n);
    static void FinderJoinTiming(double setupNs, double rerunNs, long reruns, double stepsNs);   // VPX_CHECK_PROFILE: a cycle with a join: its setup and re-run attempts' time, and its whole group step time (worst kept)
    static void FinderJoinTouched(int items, int touched);   // the contacts joined in an island's cycle, and how many of them were touching at the end of some step of it
-   // shared_finder P4b: the cut pieces around c0 within r (the cuts' box tree, built once per cut Setup), in index order, into cq; the item's ball's cut query (never null: an item with no query gets an empty one, queried around the ball)
-   static void FinderCuts(PlayfieldCuts::CutQuery &cq, const RubberContact::V3 &c0, double r);
-   static PlayfieldCuts::CutQuery *FinderCutsOf(const SurfaceContact &it);
    int FinderObjIndex() const override { return m_surface != nullptr ? m_surface->fobj : -1; }
-   // mesh_holes (meshholes.cpp): the faces, cut in place at load before the finder's tree; then linked again and the box recomputed
+   // mesh holes and the overlap repair (meshholes.cpp): the faces, changed in place at load before the finder's tree; then linked again and the box recomputed
    const std::shared_ptr<RubberSurface> &MeshSurface() const { return m_surface; }
    const std::string &MeshKind() const { return m_surfaceKind; }
    double ThicknessMm() const { return m_set.thicknessMm; }
-   void MeshRelink() { m_linkOver = m_surface->Link(); CalcHitBBox(); }
+   int MeshRelink() { m_linkOver = m_surface->Link(); CalcHitBBox(); return m_linkOver; }   // returns the edges on more than two faces
    // the finder's totals (query cost, re-queries), once a second of table time and when the table closes
    static void FinderTotals(bool force);
    // shared_finder P3a: the ball's measurement table of this object at c (null: the item does not read the ball's query); the cost log's counters since its last row
@@ -316,19 +310,6 @@ private:
    static void FinderRun(void *q, double r);   // the query itself (q: a FinderBallQ), radius r around its centre
    std::shared_ptr<RubberSurface> m_surface;   // a wall / primitive host: its faces (m_pts is then empty)
    int m_linkOver = 0;                         // multi_contact: edges on more than two faces, counted when the faces' shared edges are built at load (Link)
-   // the path test, design.md 2c: the playfield's carved holes' rims, each a ring cover (rubbercontact.h PathRevolve: radius the hole's, at the middle zc of the slab the faces
-   // over the hole's disk span, zc +- dz; reach R + dz), built at the first path test after the holes are set (the holes come after this host, carvedholes.h); a hole with no face over
-   // its disk has no ring (the full faces there). Only for a playfield without cuts (the cuts keep the full faces, design.md 2b)
-   struct HoleRing
-   {
-      double x, y, r, z, dz;   // centre, radius, the slab's middle and half height (m)
-      bool ok = false;
-      RubberContact::PathRevolve cover;
-   };
-   mutable std::vector<HoleRing> m_holeRings;
-   mutable std::vector<RubberContact::CarvedHole> m_holeRingsOf;   // the holes the rings were built from (rebuilt when they differ: a table restart)
-   const std::vector<HoleRing> &HoleRings() const;
-   static bool InSlab(const RubberContact::SurfaceTri &t, const HoleRing &g);
    mutable bool m_linkNoticed = false;        // that count reported (log and screen) at the first ball near the surface, once
    HitObject *m_eventCarrier = nullptr;        // see SetEventCarrier
    std::vector<Vertex3Ds> m_pts; // closed loop, last = first

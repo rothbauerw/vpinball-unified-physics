@@ -186,7 +186,7 @@ namespace HingeGroup
          }
          if (!tris.empty() && surface == 0)
          {
-            const TubeProbe pr = RubberContact::ProbeTriangles(b, tris, cand, halfT, cb, nullptr, 0, halfT);
+            const TubeProbe pr = RubberContact::ProbeTriangles(b, tris, cand, halfT, cb, halfT);
             if (pr.seg >= 0 && pr.delta > best.delta)
             {
                best = pr;
@@ -388,7 +388,7 @@ namespace HingeGroup
             }
             else if (pc.kind == 2)   // each flat quad by its own two triangles (convex and flat: its nearest point is exact)
             {
-               const TubeProbe pr = RubberContact::ProbeTriangles(b, tris, quads[(size_t)pc.i].cand, halfT, cb, nullptr, 0, halfT);
+               const TubeProbe pr = RubberContact::ProbeTriangles(b, tris, quads[(size_t)pc.i].cand, halfT, cb, halfT);
                add(pr.seg >= 0 ? pr.delta : -S, pr.seg >= 0 ? pr.normal : bestN, 1.0, pr.seg >= 0 ? pr.reff : 0.0, -1);
             }
             else   // a shared line, taken back once: where both nearest points are on it, the smaller element's depth is its own and cancels
@@ -642,7 +642,7 @@ namespace HingeGroup
                      continue;
                   BallSI pt;
                   pt.R = 0.0;
-                  const TubeProbe pr = RubberContact::ProbeTriangles(pt, tris, qd.cand, halfT, v, nullptr, 0, halfT);
+                  const TubeProbe pr = RubberContact::ProbeTriangles(pt, tris, qd.cand, halfT, v, halfT);
                   if (pr.seg < 0 || pr.dist >= rho + halfT)
                      continue;
                   bool onLine = false;

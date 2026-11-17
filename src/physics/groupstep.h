@@ -265,11 +265,9 @@ namespace GroupStep
       virtual double PathMotion(const V3 & /*P*/, double /*dLen*/) const { return -1.0; }
       // the largest slope of its probe's distance (1 for a true distance; a tapered Revolve profile more: JetBumper::Revolve::Slope), built at load; the law multiplies the moves by it
       virtual double PathSlope() const { return 1.0; }
-      // the self-check of a cover (VPX_FINDER_CHECK=1, diagnostics only): its largest sagitta (m) and kind (0 post, 1 bumper body, 2 playfield with cuts or holes: a one-way bound, 3 disc);
+      // the self-check of a cover (VPX_FINDER_CHECK=1, diagnostics only): its largest sagitta (m) and kind (0 post, 1 bumper body, 2 disc);
       // -1 = not a cover
       virtual double PathCoverSag(int & /*kind*/) const { return -1.0; }
-      // the self-check of kind 2 at the path end e: true = the cover bounds one way only (the playfield's full faces), false = two ways (a carved hole's rim ring, design.md 2c)
-      virtual bool PathOneWay(const V3 & /*e*/) const { return true; }
       // the part finder, a surface of pieces: the cycle's list (in the pieces' own order) for a ball whose centre was c0 at the cycle's start and can move reach (m) in the cycle,
       // its part turning within the range its CycleTurn set; pieces: how many the surface has. False: not a surface of pieces (its probe takes no list)
       virtual bool CycleNear(const V3 &, double, double, std::vector<int> &, int &) const { return false; }
@@ -2946,13 +2944,12 @@ namespace GroupStep
       }
       // VPX_FINDER_CHECK=1 (diagnostics only: the counters are put back, nothing else changes): a cover against its shape's own probe at the path's end e. The probe's gap there g = -delta
       // (R + g: the distance from the surface the probe measures). A zero-length path at e must reach with a ball of R + g + 1 um (the cover lies within its sagitta of the curve, and its
-      // test adds the sagitta) and must not with R + g - 2 sagitta - 1 um (the cover can lie a sagitta nearer than the curve, and the test adds one more); the playfield's full faces
-      // bound only one way (cuts anywhere, holes outside their circle): the first check alone; inside a carved hole its rim ring bounds both ways: both checks
+      // test adds the sagitta) and must not with R + g - 2 sagitta - 1 um (the cover can lie a sagitta nearer than the curve, and the test adds one more)
       void PathSelfCheck(const Shape &sh, const V3 &e, const double R, const int ia) const
       {
          int kind = -1;
          const double sag = sh.PathCoverSag(kind);
-         if (sag < 0.0 || kind < 0 || kind > 3)
+         if (sag < 0.0 || kind < 0 || kind > 2)
             return;
          const RubberContact::PathStats save = RubberContact::pathStats;
          Hit h;
@@ -2964,7 +2961,7 @@ namespace GroupStep
          }
          const double g = -h.delta, rIn = R + g + 1e-6, rOut = R + g - 2.0 * sag - 1e-6;
          const int a = sh.PathReach(e, V3(), rIn);
-         const int b = (kind != 2 || !sh.PathOneWay(e)) && rOut > 0.0 ? sh.PathReach(e, V3(), rOut) : 0;
+         const int b = rOut > 0.0 ? sh.PathReach(e, V3(), rOut) : 0;
          RubberContact::pathStats = save;
          RubberContact::PathCheck &pc = RubberContact::pathCheck;
          pc.n[kind]++;

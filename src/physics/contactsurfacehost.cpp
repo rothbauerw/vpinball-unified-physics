@@ -18,9 +18,7 @@
 #include "parts/ball.h"
 #include "physics/contactsurfacehost.h"
 #include "physics/cordband.h"
-#include "physics/carvedholes.h"
 #include "physics/meshholes.h"
-#include "physics/playfieldcut.h"
 #include "physics/contactsystem.h"
 #include "physics/hitball.h"
 #include "physics/magnet.h"
@@ -158,7 +156,6 @@ namespace
       uint64_t ver = 0;          // P3a: the query's version: each query, re-query and bind starts every table of the ball anew
       std::vector<RubberContact::FaceTable> tab;   // P3a: per finder object, the ball's measurement table of its faces in per[k] (one per ball position)
       const HitBall *ball = nullptr;   // P3a: the ball (check mode's log)
-      PlayfieldCuts::CutQuery cq;   // P4b: the playfield cuts found by the query, pieces of their playfield host (NearCuts reads them; playfieldcut.h)
       std::vector<TubeSegQ> tq;     // P5: per static tube the ball reads, its segments found by the query (made at the tube's first read after each query, around c0 within the volume)
    };
 
@@ -206,9 +203,6 @@ namespace
       int logged = 0;
       bool notifiedA = false, notifiedB = false, notifiedG = false, notifiedQ = false;
       uint32_t nextReportMs = 0;   // check mode: the totals are also written once a second of table time (a run may end without closing the table)
-      std::vector<FinderNode> cutNodes;   // P4b: the box tree over the playfield cuts' boxes (built at the first query after the cuts' Setup)
-      std::vector<int> cutOrder;
-      uint64_t cutVer = ~0ull;
       void Reset()   // the table closes (its first mesh host is deleted): the next table builds its own
       {
          built = on = false;
@@ -227,9 +221,6 @@ namespace
          logged = 0;
          notifiedA = notifiedB = notifiedG = notifiedQ = false;
          nextReportMs = 0;
-         cutNodes.clear();
-         cutOrder.clear();
-         cutVer = ~0ull;
       }
    };
    FinderIndex g_finder;
@@ -730,26 +721,64 @@ void RubberSurface::Add(const Vertex3Ds &a, const Vertex3Ds &b, const Vertex3Ds 
 int RubberSurface::Link()
 {
    nb.assign(tris.size(), { -1, -1, -1 });
-   std::map<std::pair<int, int>, std::pair<int, int>> edges;   // (lower id, higher id) -> (face, edge) of the first face on it
-   int over = 0;
+   std::map<std::pair<int, int>, std::vector<std::pair<int, int>>> edges;   // (lower id, higher id) -> every (face, edge) on it, in face order
    for (int t = 0; t < (int)tris.size(); t++)
       for (int e = 0; e < 3; e++)
       {
          const int a = vid[t][e], b = vid[t][(e + 1) % 3];
-         if (a == b)
-            continue;
-         const auto key = std::make_pair(std::min(a, b), std::max(a, b));
-         const auto it = edges.find(key);
-         if (it == edges.end())
-            edges.emplace(key, std::make_pair(t, e));
-         else if (it->second.first >= 0 && nb[it->second.first][it->second.second] < 0 && it->second.first != t)
+         if (a != b)
+            edges[std::make_pair(std::min(a, b), std::max(a, b))].emplace_back(t, e);
+      }
+   // An edge on two faces joins them. On three or more (a flat surface running on past a wall's foot, user 2026-11-16): the two faces that continue each other most nearly
+   // flat are joined, greedily (the in-face directions away from the edge most nearly opposite), so the surface a ball rolls over stays one; the others stay unlinked
+   const auto away = [this](int t, int e) {   // unit direction in face t, square to its edge e, from the edge into the face
+      using RubberContact::V3;
+      const V3 *v[3] = { &tris[t].a, &tris[t].b, &tris[t].c };
+      const V3 p = *v[e], d = *v[(e + 1) % 3] - p, w = *v[(e + 2) % 3] - p;
+      const double dd = d.Dot(d);
+      const V3 s = dd > 0.0 ? w - d * (w.Dot(d) / dd) : w;
+      const double l = std::sqrt(s.Dot(s));
+      return l > 0.0 ? s / l : s;
+   };
+   int over = 0;
+   for (const auto &[key, list] : edges)
+   {
+      if (list.size() == 2)
+      {
+         if (list[0].first != list[1].first)
          {
-            nb[it->second.first][it->second.second] = t;
-            nb[t][e] = it->second.first;
+            nb[list[0].first][list[0].second] = list[1].first;
+            nb[list[1].first][list[1].second] = list[0].first;
          }
          else
-            over++;   // a third face on the edge (or one face twice): left unlinked
+            over++;   // one face twice
+         continue;
       }
+      if (list.size() < 2)
+         continue;
+      std::vector<bool> used(list.size(), false);
+      for (;;)
+      {
+         int bi = -1, bj = -1;
+         double best = 2.0;
+         for (size_t i = 0; i < list.size(); i++)
+            for (size_t j = i + 1; j < list.size(); j++)
+               if (!used[i] && !used[j] && list[i].first != list[j].first)
+                  if (const double c = away(list[i].first, list[i].second).Dot(away(list[j].first, list[j].second)); c < best)
+                  {
+                     best = c;
+                     bi = (int)i;
+                     bj = (int)j;
+                  }
+         if (bi < 0)
+            break;
+         used[bi] = used[bj] = true;
+         nb[list[bi].first][list[bi].second] = list[bj].first;
+         nb[list[bj].first][list[bj].second] = list[bi].first;
+      }
+      for (size_t i = 0; i < list.size(); i++)
+         over += !used[i];   // a face left unlinked on an edge of three or more
+   }
    // cut B: each shared edge's fold, from both faces. Flat band (derived, not tuned): every stored coordinate is a float32, rounded by at most 2^-24 of its size, so each vertex is off by
    // at most dv = sqrt(3) 2^-24 M (M the largest coordinate size of the four vertices; the SI scale adds 2^-53, neglected); the height of a point above a plane through three such vertices
    // is then off by at most dv (1 + |l0| + |l1| + |l2|), l the point's barycentric coordinates in the face. A fold whose two heights are both inside their bounds is flat.
@@ -1622,13 +1651,10 @@ void ContactSurfaceHost::Refresh(SurfaceContact &it, const double ballR, const d
 {
    if (m_surface == nullptr)
       return;
-   if (ContactSettings::Get().multiContact && m_linkOver > 0 && !m_linkNoticed)   // multi_contact: the load's count of edges on more than two faces, reported once
-   {
+   if (ContactSettings::Get().multiContact && m_linkOver > 0 && !m_linkNoticed)   // multi_contact: the load's count of faces left unlinked on edges of three or more faces, logged once
+   {   // (log only: an edge of three faces is a real junction, a flat surface running past a wall's foot; Link joins the flattest pair, user 2026-11-16)
       m_linkNoticed = true;
-      const std::string msg = "Rubber surface " + m_name + ": " + std::to_string(m_linkOver) + " edges are on more than two faces; each joins its first two faces only (multi_contact)";
-      PLOGW << msg;
-      if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
-         g_pplayer->m_liveUI->PushNotification(msg, 5000);
+      PLOGI << "Rubber surface " << m_name << ": " << m_linkOver << " faces left unlinked on edges of three or more faces; on each such edge the two faces that continue most nearly flat are joined (multi_contact)";
    }
    if (it.qFaces != nullptr)
       return;   // shared finder P2b: the ball's query holds this object's faces (FinderBind)
@@ -1643,18 +1669,8 @@ void ContactSurfaceHost::Refresh(SurfaceContact &it, const double ballR, const d
       it.candR = need + kMargin;
    }
    // The faces the ball can touch in this cycle: those whose box is within `need` of the ball (a face farther than the ball's radius plus its reach cannot touch it, and the nearest-face
-   // query only has to find faces that can). The probes of the cycle's substeps test this short list, not the whole Verlet list. A surface with carved holes keeps the whole list (the hole moves the nearest point).
-   const RubberContact::CarvedHole *holes = nullptr;
-   int nHoles = 0;
-   if (m_surfaceKind == "playfield")
-      CarvedHoles::Get(holes, nHoles);
+   // query only has to find faces that can). The probes of the cycle's substeps test this short list, not the whole Verlet list.
    it.cand.clear();
-   it.tightC = c;
-   if (nHoles > 0)
-   {
-      it.cand = it.candV;
-      return;
-   }
    it.tightC = c;
    const double need2 = (need + SurfaceContact::kTightSkin) * (need + SurfaceContact::kTightSkin);
    for (const int i : it.candV)
@@ -1833,8 +1849,6 @@ RubberContact::TubeProbe ContactSurfaceHost::Probe(const RubberContact::BallSI &
       FinderCheck(it, c, bs.R, 0);
    const FinderGuard finderGuard(finderCheck);
    RubberContact::FaceTable *const ft = FinderTable(it, c);   // P3a: the ball's measurement table of this object at c (after the inside check, which may re-query)
-   const RubberContact::FaceRead frd { ft, nullptr };
-   const RubberContact::FaceRead *const fr = ft != nullptr ? &frd : nullptr;
    checkProf.Tab(ft);
    const TabCheck tabCheck(ft, this, it, c);
    if (m_surface != nullptr)
@@ -1843,18 +1857,7 @@ RubberContact::TubeProbe ContactSurfaceHost::Probe(const RubberContact::BallSI &
       RubberContact::FaceRead frIn, frPr;
       NearLists(ft, it.Faces(c), true, inL, frIn, prL, frPr);
       const RubberContact::FaceRead *const pPr = ft != nullptr ? &frPr : nullptr;
-      if (m_surfaceKind == "playfield")
-      {
-         const RubberContact::CarvedHole *holes = nullptr;
-         int nHoles = 0;
-         CarvedHoles::Get(holes, nHoles);   // the playfield has a round hole under every turntable disc and every physical kicker
-         if (PlayfieldCuts::Any(this))   // holes cut in the playfield (playfieldcut.h): the faces inside a cut left out, its exact rim's contacts added. The cuts within the face list's reach are tested
-            return PlayfieldCuts::Probe(this, bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, it.candR >= 0.0 ? it.candR : 1e30, holes, nHoles, false, 0.0, ft, FinderCutsOf(it));
-         if (nHoles > 0)   // P3b: a turntable's hole moves a face's nearest point to its rim, so the near pass's distances are not the probe's: the whole list as P3a
-            return RubberContact::ProbeTriangles(bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, holes, nHoles, 0.0, nullptr, fr);
-         return RubberContact::ProbeTriangles(bs, m_surface->tris, *prL, m_set.edgeRadiusMm * 1e-3, c, holes, nHoles, 0.0, nullptr, pPr);
-      }
-      return RubberContact::ProbeTriangles(bs, m_surface->tris, *prL, m_set.edgeRadiusMm * 1e-3, c, nullptr, 0, 0.0, nullptr, pPr);   // (no carved hole here: a carved hole let balls fall through a plane playfield)
+      return RubberContact::ProbeTriangles(bs, m_surface->tris, *prL, m_set.edgeRadiusMm * 1e-3, c, 0.0, nullptr, pPr);   // (the playfield's holes are in its faces: meshholes.h)
    }
    const bool prof = SegProfOn() && !CordModel();   // P5 counters (static tubes; diagnostics only)
    const uint64_t t0 = prof ? __rdtsc() : 0;
@@ -1897,8 +1900,6 @@ RubberContact::TubeProbe ContactSurfaceHost::ProbePatch(const RubberContact::Bal
       FinderCheck(it, c, bs.R, 1);
    const FinderGuard finderGuard(finderCheck);
    RubberContact::FaceTable *const ft = FinderTable(it, c);   // P3a: the ball's measurement table of this object at c (after the inside check, which may re-query)
-   const RubberContact::FaceRead frd { ft, nullptr };
-   const RubberContact::FaceRead *const fr = ft != nullptr ? &frd : nullptr;
    checkProf.Tab(ft);
    const TabCheck tabCheck(ft, this, it, c);
    const std::vector<int> *inL = nullptr, *prL = nullptr;   // P3b: the near pass's faces (as Probe); the patch reads only faces within R (kind 0 and plane distance below R - zero)
@@ -1906,14 +1907,7 @@ RubberContact::TubeProbe ContactSurfaceHost::ProbePatch(const RubberContact::Bal
    if (m_surface != nullptr)
       NearLists(ft, it.Faces(c), true, inL, frIn, prL, frPr);
    const RubberContact::FaceRead *const pIn = ft != nullptr ? &frIn : nullptr, *const pPr = ft != nullptr ? &frPr : nullptr;
-   if (m_surface != nullptr && m_surfaceKind == "playfield" && PlayfieldCuts::Any(this))   // (as Probe, with the patch sum of the faces' folds or of the cut's rim contacts)
-   {
-      const RubberContact::CarvedHole *holes = nullptr;
-      int nHoles = 0;
-      CarvedHoles::Get(holes, nHoles);
-      return PlayfieldCuts::Probe(this, bs, m_surface->tris, it.Faces(c), m_set.edgeRadiusMm * 1e-3, c, it.candR >= 0.0 ? it.candR : 1e30, holes, nHoles, true, it.gs.zero, ft, FinderCutsOf(it));
-   }
-   if (ContactSettings::Get().multiContact && !(m_surface != nullptr && m_surfaceKind == "playfield" && !MeshHoles::On()))   // (mesh_holes 1: the playfield too, its holes are in its faces)   // every pressed part its own Hertz bar (rubbercontact.h BarsTube / BarsTriangles); the playfield (turntable holes) keeps the patch sum
+   if (ContactSettings::Get().multiContact)   // every pressed part its own Hertz bar (rubbercontact.h BarsTube / BarsTriangles); the playfield too (its holes are in its faces: meshholes.h)
    {
       if (m_surface != nullptr)
          return RubberContact::BarsTriangles(bs, m_surface->tris, m_surface->vid, m_surface->nb, *prL, m_set.edgeRadiusMm * 1e-3, c, it.gs.zero, pPr, &m_surface->fold);   // P3b: the near pass's faces (bars only use faces within R)
@@ -1949,16 +1943,7 @@ RubberContact::TubeProbe ContactSurfaceHost::ProbePatch(const RubberContact::Bal
    }
    RubberContact::TubeProbe pr = Probe(bs, it, c);
    if (m_surface != nullptr)
-   {
-      const RubberContact::CarvedHole *holes = nullptr;
-      int nHoles = 0;
-      if (m_surfaceKind == "playfield")
-         CarvedHoles::Get(holes, nHoles);   // (as Probe)
-      if (nHoles > 0)   // P3b: a turntable's hole: the whole list as P3a (as Probe)
-         RubberContact::PatchTriangles(bs, m_surface->tris, it.Faces(c), c, it.gs.zero, pr, holes, nHoles, fr);
-      else
-         RubberContact::PatchTriangles(bs, m_surface->tris, *inL, c, it.gs.zero, pr, holes, nHoles, pIn);
-   }
+      RubberContact::PatchTriangles(bs, m_surface->tris, *inL, c, it.gs.zero, pr, pIn);
    else
    {
       const bool prof = SegProfOn() && !CordModel();   // P5 counters (static tubes; diagnostics only)
@@ -2010,135 +1995,30 @@ int ContactSurfaceHost::PathReach(const SurfaceContact &it, const RubberContact:
    {
       if (it.qFaces == nullptr || !g_finder.on)
          return -1;   // no query: the lists of the start position only
-      bool cut = false;   // (the counters' kind 2)
-      const std::vector<HoleRing> *rings = nullptr;   // the holed playfield without cuts (design.md 2c)
-      if (m_surfaceKind == "playfield")
-      {
-         // Cuts (design.md 2b): every cut piece (rims, walls, floors, joins) lies at or below the cut's top plane inside its outline grown by rho, the playfield flat there
-         // (PlayfieldCuts::TopZ). For a point P on or above that plane, a point Q below it is farther than its vertical projection Q' on the plane, and Q' lies on the playfield's full
-         // faces (the faces FacesLeft drops are still in the mesh and the query). So the path's distance to the FULL faces (no FacesLeft) bounds every cut piece from below: exact, no
-         // chords. A path end below a top plane: reached (a re-run, never a miss).
-         // Carved holes and no cuts (design.md 2c): the probe's surface is the faces with each hole's disk D taken out and its rim circle put in (ProbeTriangles). For P whose
-         // projection lies inside D, a face point Q in the slab zc +- dz the faces over D span, outside D, is at least |P - Q''| - dz from P (Q'' its projection on the plane zc), and
-         // the nearest point of that plane outside D is on the rim, straight out from the centre: the path's parts inside a hole are tested against the hole's rim ring (its cover,
-         // the sagitta and dz added) and the faces not wholly in the slab; the parts outside every hole against the full faces (a superset of what is left: a true bound at any
-         // height). The split: the path's horizontal projection crosses a hole's circle where a quadratic is 0 (closed form).
-         const RubberContact::CarvedHole *holes = nullptr;
-         int nHoles = 0;
-         CarvedHoles::Get(holes, nHoles);
-         const bool cuts = PlayfieldCuts::Any(this);
-         cut = nHoles > 0 || cuts;
-         if (cut && prof)
-            ps.kTested[2]++;
-         if (cuts)
-         {
-            double top = PlayfieldCuts::TopZ(this);
-            for (int k = 0; k < nHoles; k++)
-               top = std::max(top, holes[k].z);
-            if (std::min(s.z, e.z) < top)
-            {
-               if (prof)
-               {
-                  ps.kReached[2]++;
-                  ps.cutBelow++;
-               }
-               return 1;
-            }
-         }
-         else if (nHoles > 0)
-            rings = &HoleRings();
-      }
       FinderInside(it, e);   // both ends inside the query's volume (a re-query otherwise, as the end probe made it)
       FinderInside(it, s);
       const RubberSurface &sf = *m_surface;
-      if (!sf.fnodes.empty() && RubberContact::PathBoxApart(sf.fnodes[0].lo, sf.fnodes[0].hi, plo, phi, R))   // (a hole's rim lies on the faces' plane inside the faces' box)
+      if (!sf.fnodes.empty() && RubberContact::PathBoxApart(sf.fnodes[0].lo, sf.fnodes[0].hi, plo, phi, R))
       {
          if (prof)
             ps.clearA++;
          return 0;
       }
       bool any = false;
-      // the query's faces against the path piece s1 -> s1 + d1; inside a hole (g) the faces wholly in its slab are left to the ring (their points inside the hole are the rim's,
-      // outside it no nearer than the rim less dz)
-      const auto faces = [&](const V3 &s1, const V3 &d1, const HoleRing *g) {
-         const V3 e1 = s1 + d1;
-         const V3 lo1(std::min(s1.x, e1.x), std::min(s1.y, e1.y), std::min(s1.z, e1.z)), hi1(std::max(s1.x, e1.x), std::max(s1.y, e1.y), std::max(s1.z, e1.z));
-         for (const int i : *it.qFaces)
+      for (const int i : *it.qFaces)   // the query's faces against the path
+      {
+         const RubberContact::SurfaceTri &t = sf.tris[i];
+         if (RubberContact::PathBoxApart(t.lo, t.hi, plo, phi, R))
          {
-            const RubberContact::SurfaceTri &t = sf.tris[i];
-            if (g != nullptr && InSlab(t, *g))
-               continue;
-            if (RubberContact::PathBoxApart(t.lo, t.hi, lo1, hi1, R))
-            {
-               if (prof)
-                  ps.boxSkip++;
-               continue;
-            }
-            any = true;
             if (prof)
-               ps.kit++;
-            if (RubberContact::PathWithin(RubberContact::PathTriD2(s1, d1, t), R))
-               return true;
+               ps.boxSkip++;
+            continue;
          }
-         return false;
-      };
-      const auto reached = [&]() {
-         if (prof && cut)
-            ps.kReached[2]++;
-         return 1;
-      };
-      if (rings == nullptr || rings->empty())
-      {
-         if (faces(s, d, nullptr))
-            return reached();
-      }
-      else
-      {
-         // the cut points u of s + u d (u in [0, 1]) where the projection crosses a hole's circle: (o + u dxy)^2 = r^2, o the start's offset from the centre
-         thread_local std::vector<double> us;
-         us.clear();
-         us.push_back(0.0);
-         us.push_back(1.0);
-         const double a = d.x * d.x + d.y * d.y;
-         if (a > 0.0)
-            for (const HoleRing &g : *rings)
-            {
-               if (!g.ok)
-                  continue;
-               const double ox = s.x - g.x, oy = s.y - g.y, b = ox * d.x + oy * d.y, c = ox * ox + oy * oy - g.r * g.r, disc = b * b - a * c;
-               if (disc <= 0.0)
-                  continue;   // (no crossing, or a touch: the whole path outside)
-               const double sq = std::sqrt(disc);
-               for (const double u : { (-b - sq) / a, (-b + sq) / a })
-                  if (u > 0.0 && u < 1.0)
-                     us.push_back(u);
-            }
-         std::sort(us.begin(), us.end());
-         for (size_t k = 0; k + 1 < us.size(); k++)
-         {
-            const double ua = us[k], ub = us[k + 1];
-            if (ub <= ua)
-               continue;
-            const V3 s1 = s + d * ua, d1 = d * (ub - ua), m = s + d * (0.5 * (ua + ub));
-            bool inside = false;
-            for (const HoleRing &g : *rings)
-            {
-               if (!g.ok || (m.x - g.x) * (m.x - g.x) + (m.y - g.y) * (m.y - g.y) >= g.r * g.r)
-                  continue;
-               inside = true;
-               bool band = false;
-               if (g.cover.Reach(s1, d1, R, prof, band) == 1)
-               {
-                  if (prof && band)
-                     ps.kBand[2]++;
-                  return reached();
-               }
-               if (faces(s1, d1, &g))
-                  return reached();
-            }
-            if (!inside && faces(s1, d1, nullptr))
-               return reached();
-         }
+         any = true;
+         if (prof)
+            ps.kit++;
+         if (RubberContact::PathWithin(RubberContact::PathTriD2(s, d, t), R))
+            return 1;
       }
       if (prof)
          (any ? ps.clearC : ps.clearB)++;
@@ -2185,95 +2065,6 @@ int ContactSurfaceHost::PathReach(const SurfaceContact &it, const RubberContact:
    return 0;
 }
 
-double ContactSurfaceHost::PathCoverSag(const SurfaceContact &it, int &kind) const
-{
-   kind = 2;
-   if (m_surface == nullptr || it.qFaces == nullptr || !g_finder.on || CordModel() || m_surfaceKind != "playfield")
-      return -1.0;
-   const RubberContact::CarvedHole *holes = nullptr;
-   int nHoles = 0;
-   CarvedHoles::Get(holes, nHoles);
-   if (PlayfieldCuts::Any(this))
-      return 0.0;   // the full faces
-   if (nHoles == 0)
-      return -1.0;
-   double sag = 0.0;   // the rings' largest sagitta + dz (the full faces outside them: 0)
-   for (const HoleRing &g : HoleRings())
-      if (g.ok)
-         sag = std::max(sag, g.cover.MaxSag() + g.dz);
-   return sag;
-}
-
-bool ContactSurfaceHost::PathOneWay(const SurfaceContact &, const RubberContact::V3 &e) const
-{
-   if (m_surface == nullptr || m_surfaceKind != "playfield" || PlayfieldCuts::Any(this))
-      return true;
-   for (const HoleRing &g : HoleRings())
-      if (g.ok && (e.x - g.x) * (e.x - g.x) + (e.y - g.y) * (e.y - g.y) < g.r * g.r)
-         return false;   // inside a hole: its rim ring, within its sagitta + dz of the probe's rim both ways
-   return true;
-}
-
-// a face wholly in a hole's slab zc +- dz (its three corners): left to the hole's ring inside the hole's region of a path
-bool ContactSurfaceHost::InSlab(const RubberContact::SurfaceTri &t, const HoleRing &g)
-{
-   return std::abs(t.a.z - g.z) <= g.dz && std::abs(t.b.z - g.z) <= g.dz && std::abs(t.c.z - g.z) <= g.dz;
-}
-
-const std::vector<ContactSurfaceHost::HoleRing> &ContactSurfaceHost::HoleRings() const
-{
-   const RubberContact::CarvedHole *holes = nullptr;
-   int nHoles = 0;
-   CarvedHoles::Get(holes, nHoles);
-   bool same = (int)m_holeRingsOf.size() == nHoles;
-   for (int k = 0; same && k < nHoles; k++)
-      same = m_holeRingsOf[k].x == holes[k].x && m_holeRingsOf[k].y == holes[k].y && m_holeRingsOf[k].r == holes[k].r && m_holeRingsOf[k].z == holes[k].z;
-   if (same)
-      return m_holeRings;
-   m_holeRingsOf.assign(holes, holes + nHoles);
-   m_holeRings.clear();
-   const std::vector<RubberContact::SurfaceTri> &tris = m_surface->tris;
-   for (int k = 0; k < nHoles; k++)
-   {
-      const RubberContact::CarvedHole &h = holes[k];
-      HoleRing g;
-      g.x = h.x;
-      g.y = h.y;
-      g.r = h.r;
-      g.z = h.z;
-      g.dz = 0.0;
-      g.ok = false;
-      // the slab: the corners' heights of the faces whose box meets the hole's horizontal disk, zLo .. zHi (measured); the ring at its middle zc, dz its half height (+ 1 pm, a
-      // rounding guard so the extreme corners count as in it; dz enters the bound as it is). The probe's rim lies at its nearest face point's height, in the slab
-      double zLo = INFINITY, zHi = -INFINITY;
-      int nFaces = 0;
-      for (const RubberContact::SurfaceTri &t : tris)
-      {
-         const double cx = std::min(std::max(h.x, t.lo.x), t.hi.x), cy = std::min(std::max(h.y, t.lo.y), t.hi.y);
-         if ((cx - h.x) * (cx - h.x) + (cy - h.y) * (cy - h.y) > h.r * h.r)
-            continue;
-         nFaces++;
-         for (const RubberContact::V3 *p : { &t.a, &t.b, &t.c })
-         {
-            zLo = std::min(zLo, p->z);
-            zHi = std::max(zHi, p->z);
-         }
-      }
-      if (nFaces > 0)
-      {
-         g.z = 0.5 * (zLo + zHi);
-         g.dz = 0.5 * (zHi - zLo) + 1e-12;
-         g.ok = true;
-         const double dz = g.dz, zero = 0.0;   // (the ring's reach R + dz: its bound is the cover's distance - sagitta - dz)
-         g.cover.Build(RubberContact::V3(h.x, h.y, g.z), &h.r, &zero, &dz, 1);
-      }
-      PLOGI << "Path test (design.md 2c): playfield carved hole " << k << ": centre " << h.x * 1e3 << ", " << h.y * 1e3 << " mm, radius " << h.r * 1e3 << " mm, hole z " << h.z * 1e3 << " mm; faces over its disk "
-            << nFaces << (nFaces > 0 ? "" : " (no ring: the full faces there)") << ", slab zc " << g.z * 1e3 << " mm, dz " << g.dz * 1e6 << " um, ring sagitta " << (g.ok ? g.cover.MaxSag() * 1e6 : 0.0) << " um";
-      m_holeRings.push_back(std::move(g));
-   }
-   return m_holeRings;
-}
-
 double ContactSurfaceHost::ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, const int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, const double a, const double hMax, const double touchM, const double arriveM) const
 {
    CheckProfScope checkProf(2);   // P3a profile (diagnostics only)
@@ -2288,8 +2079,6 @@ double ContactSurfaceHost::ArrivalS(const RubberContact::BallSI &bs, const Surfa
    const RubberContact::FaceRead *const fr = ft != nullptr ? &frd : nullptr;
    checkProf.Tab(ft);
    const TabCheck tabCheck(ft, this, it, c);
-   if (m_surface != nullptr && m_surfaceKind == "playfield" && PlayfieldCuts::Any(this))   // (as Probe: the faces not inside a cut, and the cut's rim contacts other than the probe's nearest)
-      return PlayfieldCuts::ArrivalS(this, bs, m_surface->tris, it.Faces(c), nearestSeg, c, v, a, hMax, touchM, arriveM, it.candR >= 0.0 ? it.candR : 1e30, ft, FinderCutsOf(it));
    if (m_surface != nullptr)
       return RubberContact::ArrivalTriangles(bs, m_surface->tris, it.Faces(c), nearestSeg, c, v, a, hMax, touchM, arriveM, fr);
    return hMax;   // a tube: never called (the one caller, the group step's ringCap, skips an item with no face list, candR < 0, and a tube item never gets one)
@@ -3147,62 +2936,14 @@ void ContactSurfaceHost::FinderRun(void *const qv, const double r)
       q.per[k].assign(q.faces.begin() + b, q.faces.end());
    }
    q.first.push_back((int)q.faces.size());
-   // P4b: the playfield's cuts in the same query, pieces of the playfield host with their own boxes. The cut readers reach R + reach from a ball anywhere inside the
-   // volume (within ext of c0, r = R + ext), so the cuts are found within r + reach: no re-query in the usual case.
-   if (PlayfieldCuts::Count() > 0)
-      FinderCuts(q.cq, q.c0, r + q.reach);
 }
 
-static bool CutProfOn() { return ContactProf::CheckOn() || FinderCheckOn(); }   // P4b counters (diagnostics only)
-
-void ContactSurfaceHost::FinderCuts(PlayfieldCuts::CutQuery &cq, const RubberContact::V3 &c0, const double r)
-{
-   FinderIndex &g = g_finder;
-   const bool prof = CutProfOn();
-   const uint64_t t0 = prof ? __rdtsc() : 0;
-   const uint64_t ver = PlayfieldCuts::Version();
-   const auto box = [](const int i, RubberContact::V3 &lo, RubberContact::V3 &hi) { PlayfieldCuts::Box(i, lo, hi); };
-   if (g.cutVer != ver)   // the cuts' box tree, once per cut Setup (4 cuts per leaf, as the faces)
-   {
-      const int n = PlayfieldCuts::Count();
-      g.cutNodes.clear();
-      g.cutOrder.resize(n);
-      for (int i = 0; i < n; i++)
-         g.cutOrder[i] = i;
-      if (n > 0)
-         BuildTree(g.cutNodes, g.cutOrder, box, 0, n, 4);
-      g.cutVer = ver;
-   }
-   cq.c0 = c0;
-   cq.r = r;
-   cq.ver = ver;
-   cq.cuts.clear();
-   QueryTree(g.cutNodes, g.cutOrder, box, c0, r * r, cq.cuts);
-   std::sort(cq.cuts.begin(), cq.cuts.end());   // index order (R9)
-   if (prof)
-   {
-      PlayfieldCuts::CutStats &st = PlayfieldCuts::Stats();
-      st.queries++;
-      st.queryTicks += __rdtsc() - t0;
-   }
-}
-
-PlayfieldCuts::CutQuery *ContactSurfaceHost::FinderCutsOf(const SurfaceContact &it)
-{
-   FinderBallQ *const q = static_cast<FinderBallQ *>(it.finderQ);
-   if (q != nullptr)
-      return &q->cq;
-   thread_local PlayfieldCuts::CutQuery none;   // no query for this item: NearCuts queries around the ball (counted as a re-query)
-   none.r = -1.0;
-   return &none;
-}
-
-// P4b counters (VPX_CHECK_PROFILE=1 or VPX_FINDER_CHECK=1; diagnostics only): once a second of table time
-static void FinderP4Log(const uint64_t cycles)
+// P5 counters (VPX_CHECK_PROFILE=1 or VPX_FINDER_CHECK=1; diagnostics only): once a second of table time
+static void FinderP5Log(const uint64_t cycles)
 {
    static uint32_t next = 0;
    const uint32_t now = g_pplayer != nullptr ? g_pplayer->m_time_msec : 0;
-   if (!CutProfOn() || now < next || cycles == 0)
+   if (!(ContactProf::CheckOn() || FinderCheckOn()) || now < next || cycles == 0)
       return;
    next = now + 1000;
    static const uint64_t tsc0 = __rdtsc();
@@ -3212,10 +2953,6 @@ static void FinderP4Log(const uint64_t cycles)
    if (dt == 0 || s <= 0.0)
       return;
    const double nsPerTick = s * 1e9 / (double)dt, cyc = (double)cycles;
-   const PlayfieldCuts::CutStats &c = PlayfieldCuts::Stats();
-   PLOGI << "Finder P4b totals: " << cycles << " cycles; NearCuts calls " << c.calls << " (" << (double)c.calls / cyc << " per cycle), cuts tested per call "
-         << (c.calls > 0 ? (double)c.tested / (double)c.calls : 0.0) << ", us per cycle " << (double)c.ticks * nsPerTick * 1e-3 / cyc << ", re-queries " << c.requery << "; cut queries " << c.queries
-         << ", us per cycle " << (double)c.queryTicks * nsPerTick * 1e-3 / cyc << "; check calls " << c.checks << ", mismatches " << c.mismatch << ", misses " << c.miss;
    // P5: per tube reader (probe, bars, patch): calls, segments in the tube per call, segments read per call (a cord: the whole tube), us per cycle; check calls, mismatches, misses
    const SegStats &t = g_segStats;
    static const char *const names[3] = { "probe", "bars", "patch" };
@@ -3390,7 +3127,7 @@ void ContactSurfaceHost::FinderTotals(const bool force)
    FinderIndex &g = g_finder;
    if (!force)
       g.cycle++;
-   FinderP4Log(g.cycle);   // P4b counters (profile or check mode)
+   FinderP5Log(g.cycle);   // P5 counters (profile or check mode)
    if (!g.on)
       return;
    const uint32_t now = g_pplayer != nullptr ? g_pplayer->m_time_msec : 0;
@@ -3434,16 +3171,14 @@ void ContactSurfaceHost::FinderTotals(const bool force)
             << p.nsWorst << " ns); skipped contacts tested on the path " << p.tested << " (cleared at the object box " << p.clearA << ", at the piece boxes " << p.clearB << ", by the exact distance " << p.clearC
             << ", reached " << p.reached << "), exact kit tests " << p.kit << ", pieces passed over by their box " << p.boxSkip << "; tested by the two probes (moving) " << p.twoPoint
             << ", reached there " << p.reachedTwo << "; by kind tested / reached / in the sagitta band: post " << p.kTested[0] << " / " << p.kReached[0] << " / " << p.kBand[0] << ", bumper body "
-            << p.kTested[1] << " / " << p.kReached[1] << " / " << p.kBand[1] << ", playfield with cuts or holes " << p.kTested[2] << " / " << p.kReached[2] << " (an end below the top " << p.cutBelow
-            << "), disc " << p.kTested[3] << " / " << p.kReached[3] << " / " << p.kBand[3];
+            << p.kTested[1] << " / " << p.kReached[1] << " / " << p.kBand[1] << ", disc " << p.kTested[2] << " / " << p.kReached[2] << " / " << p.kBand[2];
    }
    if (RubberContact::PathCheckOn())   // the covers' self-check (VPX_FINDER_CHECK=1; groupstep.h PathSelfCheck): checks / disagreements per kind, a WARN with the first of each kind
    {
       RubberContact::PathCheck &c = RubberContact::pathCheck;
-      PLOGI << "Path test self-check: checks / disagreements: post " << c.n[0] << " / " << c.bad[0] << ", bumper body " << c.n[1] << " / " << c.bad[1] << ", playfield with cuts or holes " << c.n[2]
-            << " / " << c.bad[2] << ", disc " << c.n[3] << " / " << c.bad[3];
-      static const char *const kinds[4] = { "post", "bumper body", "playfield with cuts or holes", "disc" };
-      for (int k = 0; k < 4; k++)
+      PLOGI << "Path test self-check: checks / disagreements: post " << c.n[0] << " / " << c.bad[0] << ", bumper body " << c.n[1] << " / " << c.bad[1] << ", disc " << c.n[2] << " / " << c.bad[2];
+      static const char *const kinds[3] = { "post", "bumper body", "disc" };
+      for (int k = 0; k < 3; k++)
          if (c.warned[k] && !c.logged[k])
          {
             c.logged[k] = true;

@@ -12,11 +12,10 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-In flight: N3 (holes as meshes), pieces 1-4 committed; next piece 5 (paper section 9 lists the pieces). Main and GL built 11-16 from 05c9ebd13 (before piece 1). Lead log runs/2026-11-16-lead.
+N3 (holes as meshes) finished 11-16; nothing in flight. Next: the user's call. Main and GL built 11-16 from 05c9ebd13 (before mesh holes). Lead log runs/2026-11-16-lead.
 Judge a change by one exe, its setting on vs off; never by an older exe's md5 (ModelStandards trap 112). Query outliers 0.3-9 ms are the OS (measured). 1.33: cut B kept.
 Stand-up targets: code pulled from the tree 2026-11-15 (crashed VPX; user), backup backups/2026-11-15-standup-pulled; piece 5 in backups/2026-11-14-standup-build6; simpler draft runs/2026-11-15-standup-simple/design.md, unreviewed. Next step is the user's call.
-Button bounce (a ball on a flush Button lands on the wood through the cap, e 0.86; user expects much more loss): recheck once N3's Button hole lands.
-N3. Holes as meshes in ANY static mesh (user 2026-11-16): paper runs/2026-11-16-meshholes/paper.md, all 8 sections accepted; one mesh built at load before the finder; replaces the math cuts (bbdee9278), CarvedHoles and the playfield's multi-contact exclusion.
+Button bounce (a ball on a flush Button lands on the wood through the cap, e 0.86; user expects much more loss): recheck now: the Button hole landed with N3.
 N5. One reach rule from physics (speed plus force) for grouping and step length; first built in 1.34 P2. Grouping: Gate001's 81 mm swing as one-cycle travel joins two lanes. Step length: speed only, no force. Check all parts; ball pairs of unequal mass and resting-ball wake (read only).
 N7. Stress v2 bench: ball travel energy +2 % at 57 ms; spin not counted. Check total energy in the saved run (no new run).
 N8. Test driver must refuse a ball placed inside any object, unless the file declares the overlap (rule 10b: then judged on recovery, no energy gained).
@@ -74,7 +73,6 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 
 ## 7. Turntable
 1. Constant-speed AC motor option.
-2. Cost: with a turntable hole the playfield's probe tests every face on every call (contactsurfacehost.cpp, the short list is dropped). Keep the short list and leave out points inside the hole, as the cuts do.
 
 ## 8. Testing
 1. Accuracy bench, judged by impulse: all 750 pass (worst 0.68 mm at the next contact, limit 1 mm). Step or fault by path error over VPX_STEP_SCALE 1/0.5/0.25: 24 bounce faults, all under 1 mm, parked by the user (judge_RA3); add speed error (arrival timing).

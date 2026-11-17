@@ -1,6 +1,6 @@
 #pragma once
 // The playfield's cuts as drawn (playfieldcutdraw.cpp; design runs/2026-11-09-slot-hole/design.md section 8): the hole in the drawn playfield, the walls and the ramp floors in the wood.
-// Only for the cuts the physics read for this table (physics/playfieldcut.h, [Features] playfield_cuts): no cut active, nothing drawn or changed.
+// Only for the cuts the physics read for this table (physics/meshholes.h, [PlayfieldCut:<name>] sections): no cut, nothing drawn or changed.
 
 class Primitive;
 class Renderer;

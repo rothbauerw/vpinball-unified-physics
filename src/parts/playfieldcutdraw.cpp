@@ -1,6 +1,6 @@
 // license:GPLv3+
 
-// The playfield's cuts as drawn (design runs/2026-11-09-slot-hole/design.md section 8). The shape is the physics' (physics/playfieldcut.h, PlayfieldCuts::Drawn, the same numbers as the rim):
+// The playfield's cuts as drawn (design runs/2026-11-09-slot-hole/design.md section 8). The shape is the physics' (physics/meshholes.h, MeshHoles::Drawn: the mesh hole's outline):
 // the sharp outline (the rim's 0.25 mm rounding is not drawn), the through-hole's walls straight down the playfield's thickness, the ramp floors. All made once with the playfield's render
 // buffers (Primitive::RenderSetup): the hole is cut in the playfield's own mesh, so every pass that draws the playfield (static prepass, dynamic pass, VR) draws it; the walls and floors are
 // one mesh drawn right after the playfield (Primitive::Render) with its material and the wood texture assets/PlayfieldCutWood.png. Per frame: that one draw call.
@@ -8,7 +8,6 @@
 #include "core/stdafx.h"
 #include "parts/playfieldcutdraw.h"
 #include "parts/primitive.h"
-#include "physics/playfieldcut.h"
 #include "physics/meshholes.h"
 #include "core/VPApp.h"
 #include "renderer/IndexBuffer.h"
@@ -24,14 +23,14 @@
 
 namespace
 {
-   using PlayfieldCuts::DrawnSlot;
+   using MeshHoles::DrawnSlot;
 
    // Curves are drawn as chords within kDrawTolM inside the true curve. kDrawTolM is a tenth of a pixel where the playfield is seen finest: in VR, the eye 30 cm from the playfield at about
    // 25 pixels per degree, a pixel is 0.21 mm; on a 4K cabinet screen (2160 pixels across a 20.25 in playfield) 0.24 mm. A tenth of a pixel is finer than antialiasing resolves, so the
    // chords look like the curve. On the 5.03 mm slot: 1 chord per round end of the outline (its 9.9 deg arc of 2.515 mm radius strays 0.009 mm), 19 per ramp (round the tip, whose
    // 0.43 mm radius is the outline's tightest curve).
    constexpr double kDrawTolM = 0.02e-3;
-   constexpr double kTopTolM = 1e-6;   // a face is at the playfield's top over a cut when its corners are within this of it (the physics' flatness test, PlayfieldCuts::Setup)
+   constexpr double kTopTolM = 1e-6;   // a face is at the playfield's top over a cut when its corners are within this of it (the drawing's own flatness limit)
 
    struct P2
    {
@@ -50,7 +49,7 @@ namespace
    // w = c tau round its tip, the round end back to the side t = a), then the same turned half round (the end at -s); the points shared by two parts once
    std::vector<P2> Outline(const DrawnSlot &d)
    {
-      if (!d.outlineU.empty())   // mesh_holes 1: the physics outline itself (drawn hole = physics outline, paper R5)
+      if (!d.outlineU.empty())   // the physics outline itself (drawn hole = physics outline, paper R5)
       {
          std::vector<P2> o;
          for (size_t i = 0; i + 1 < d.outlineU.size(); i += 2)
@@ -279,7 +278,7 @@ namespace
    }
 
    // Cut d's walls and ramp floors in the wood (world, VPX units; normals into the hole), appended to v and idx. The slot's frame (s, t, z up) turns as the world's (p is l turned by +90 deg,
-   // PlayfieldCuts::Setup), so each quad is wound from its sides' directions to be seen from its normals' side, as the playfield's top (counter-clockwise seen from above). Texture: the
+   // meshholes.cpp AddIniCuts), so each quad is wound from its sides' directions to be seen from its normals' side, as the playfield's top (counter-clockwise seen from above). Texture: the
    // grain along the wall at the texture's own scale, its height the wall's depth: u = length along the wall (on the floor: along the slot) / rep, v = depth / thick (the floor shows the
    // layer of wood at its depth, as the wall beside it).
    void Wood(const DrawnSlot &d, const double rep, std::vector<Vertex3D_NoTex2> &v, std::vector<unsigned int> &idx)
@@ -390,7 +389,7 @@ namespace PlayfieldCutDraw
 {
    void Setup(Primitive *const pf, Renderer *const renderer)
    {
-      const std::vector<DrawnSlot> cuts = MeshHoles::On() ? MeshHoles::Drawn() : PlayfieldCuts::Drawn(pf->GetPTable());   // mesh_holes 1: fed the mesh holes' outline list
+      const std::vector<DrawnSlot> cuts = MeshHoles::Drawn();   // the mesh holes' outline list
       if (cuts.empty() || g_drawing.prim != nullptr)
          return;
       Mesh &mesh = pf->m_mesh;

@@ -88,7 +88,7 @@ namespace DiscModel
       void GroupProbe(int, const V3 &c, const double R, const double *, GroupStep::Hit &h) const override { gp.ProbeSurface(c, R, h); }
       double GroupPathCoverSag(int, int &kind) const override   // (the self-check, VPX_FINDER_CHECK)
       {
-         kind = 3;
+         kind = 2;
          return gp.pathCover.MaxSag();
       }
       int GroupPathReach(int, const V3 &s, const V3 &d, const double R) const override   // the path test: the surface never moves (DiscGroup::Part::PathReach)
@@ -99,9 +99,9 @@ namespace DiscModel
          if (prof)
          {
             RubberContact::PathStats &ps = RubberContact::pathStats;
-            ps.kTested[3]++;
-            ps.kReached[3] += r > 0;
-            ps.kBand[3] += band;
+            ps.kTested[2]++;
+            ps.kReached[2] += r > 0;
+            ps.kBand[2] += band;
          }
          return r;
       }

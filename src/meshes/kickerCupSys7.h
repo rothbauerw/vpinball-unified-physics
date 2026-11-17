@@ -1,7 +1,7 @@
 // license:GPLv3+
 // System 7 kicker collision cup (kicker build plan K1). Source: runs/2026-11-12-kicker-cup/handmade/Sys7_N24_R11.tri (the full Blender Sys7 kicker + round cutout
 // top surface sampled on 11 rings, 0-20 mm every 2 mm, x 24 azimuth segments; 341 faces), moved to the kicker frame: centre (-50.8, -76.2) -> origin,
-// units mm, z up, playfield top z = 0. Faces at the playfield level or above dropped (48): the rim and the playfield come from the playfield's carved hole.
+// units mm, z up, playfield top z = 0. Faces at the playfield level or above dropped (48): the rim and the playfield come from the hole cut into the playfield's mesh (meshholes.h).
 // Kept: 293 faces (cup and hole wall below the rim), 175 vertices. Hole radius = the real cutout's edge at the playfield top (Cutout_-_Round.005): 18.932 mm.
 // Generator: runs/2026-11-12-kicker-cup/K1/gen_K1.py
 #pragma once

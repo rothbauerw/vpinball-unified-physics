@@ -939,8 +939,7 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       const GroupStep::V3 axis((double)m_d.m_vCenter.x * U, (double)m_d.m_vCenter.y * U, (double)height * U);
       auto model = std::make_shared<ButtonCap::Cap>();
       model->Build(s, axis, m_d.m_radius * U, RubberContact::BallSI(), star ? ButtonCap::Top::Star : ButtonCap::Top::Button);
-      if (MeshHoles::On())   // mesh_holes: the cap's hole cut into the mesh under it (paper Q7, Q2): the cap's plan outline + the gap (no walls: smaller than the ball, the rim is the top's open edge)
-      {
+      {   // the cap's hole cut into the mesh under it (paper Q7, Q2): the cap's plan outline + the gap (no walls: smaller than the ball, the rim is the top's open edge)
          constexpr double kGapM = 0.79375e-3;   // the gap between the cap's side and the hole, 1/32 in (PartData S9b, ESTIMATED)
          const double R = m_d.m_radius * U;
          if (star)   // the star's plan outline (buttoncap.h kStarPlan*), turned as drawn (GenerateMesh's matrix), each edge moved out by the gap
