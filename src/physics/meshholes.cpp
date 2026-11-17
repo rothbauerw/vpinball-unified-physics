@@ -31,6 +31,11 @@ namespace
    constexpr double kGridM = 54e-3;     // the plan grid round a hole and the margin past its outline's box: 4 ball radii (paper section 3, INFERRED choice)
    constexpr double kGridClearM = 1e-6; // no grid line passes this near an outline vertex, and no outline edge this near a grid node (the grid's origin is moved till none does; lead 2026-11-16)
    double g_excessM = 0.2e-3;           // a round outline's vertex stands at most this far outside its circle ([Features] hole_round_mm, physicsini.h; set by Clear each load)
+   // the true curves of the outlines' round parts, for the drawing only (brief 6, user 2026-11-17: the drawn rim on the true curve, not the physics' polygon): each circle Round or a
+   // rounded corner made (R > r: vertices at R, every edge tangent to the circle of radius r) and each slot end (R = r: vertices on the circle, chords); cleared by Clear
+   struct Arc { double cx, cy, r, R; };
+   std::vector<Arc> g_arcs;
+   constexpr double kDrawTolM = 0.02e-3;   // the drawn curve's chord stands at most this far inside the true curve (playfieldcutdraw's kDrawTolM)
    constexpr double kSnapM = 0.1e-6;    // two points of the cut closer than this (3D) are one: the clip's double rounding and crossings a few float32 steps apart (the stored float32 is 0.03 um near
                                         // the table: a 68 nm wall face was degenerate in it, p3 run T2); an existing vertex of the region wins (Cut::pool is seeded with them)
    constexpr double kOnEdgeM = 1e-7;    // a new point this close to a face's edge lies on it (no T-junction)
@@ -38,7 +43,7 @@ namespace
    constexpr double kIsTopTolM = 0.25e-3;   // a face of the cut's top: an up face whose plane at the outline's centre is within this of the top (under a 1 VPU slab's 0.54 mm; lead 2026-11-16)
    constexpr double kUpNz = 0.5;        // a face facing up: |n z| over this (within 60 deg of horizontal; the stored winding is either way, rubbercontact.h SurfaceTri)
    constexpr double kBallRM = 25.0 * U; // the ball the walls rule is judged for: the standard ball (the table carries no ball size)
-   constexpr double kTurnRad = kPi / 12.0;   // a rounded corner's tangent polygon turns 15 deg per vertex (paper section 4: 6 per quarter)
+   constexpr double kTurnRad = kPi / 12.0;   // a rounded corner's tangent polygon turns at most 15 deg per vertex (paper section 4: at least 6 per quarter, more by hole_round_mm)
    // [PlayfieldCut:<name>] shapes (slot-hole design 1, 4, 9; paper section 4 for the groove)
    constexpr double kRampM = 7.5e-3;          // the slot's drilled ramp: the outline narrows to a point this far from the end of the straight sides (user 2026-11-09; fixed)
    constexpr double kRampDepthM = 1.75e-3;    // the ramp floor's depth on the axis at the round end's far edge (u = a), rising linearly to 0 at the tip (slot-hole design 2: drill cross-section)
@@ -681,9 +686,11 @@ namespace
             if (used[s0])
                continue;
             std::vector<double> loop;
+            std::vector<size_t> ps;   // the loop's pieces in order
             for (size_t s = s0; s < bd.size() && !used[s];)
             {
                used[s] = 1;
+               ps.push_back(s);
                loop.push_back(bd[s].a.x / U);
                loop.push_back(bd[s].a.y / U);
                size_t nx = bd.size();
@@ -697,6 +704,69 @@ namespace
                s = nx;
             }
             dh.rim.push_back(std::move(loop));
+            // the drawn rim (drawing only): each corner of a tangent polygon (both its edges tangent to one circle of g_arcs, the corner at most R from its centre) replaced by the
+            // true arc from the in edge's touching point to the out edge's (a clipped edge whose touching point is off it: its end, moved onto the circle); an edge with both
+            // ends on a slot end's circle (R = r) drawn as the arc between them; every other point as cut. Arc points at most kDrawTolM inside the circle's chord
+            constexpr double tol = 1e-8;   // a point within this of the circle (m): the clip's doubles
+            std::vector<double> drawn;
+            std::vector<char> fl;   // per drawn point: the edge from it is floored (no rim wall)
+            const auto put = [&](const P2 &p, const char f) {
+               const size_t k = drawn.size();
+               if (k >= 2 && std::hypot(p.x - drawn[k - 2] * U, p.y - drawn[k - 1] * U) <= kSnapM)
+                  return;
+               drawn.push_back(p.x / U);
+               drawn.push_back(p.y / U);
+               fl.push_back(f);
+            };
+            const auto arc = [&](const Arc &C, const P2 &f0, const P2 &f1, const bool ends, const char f) {   // f0 to f1 counter-clockwise about C (ends: f0 and f1 too)
+               const double t0 = std::atan2(f0.y - C.cy, f0.x - C.cx);
+               double d = std::atan2(f1.y - C.cy, f1.x - C.cx) - t0;
+               while (d < 0.0)
+                  d += 2.0 * kPi;
+               int m = std::max(1, (int)std::ceil(d / (2.0 * std::acos(std::max(-1.0, 1.0 - kDrawTolM / C.r)))));
+               m += ends ? m % 2 : 0;   // a corner's arc (symmetric about its vertex): even, so one point lies straight in from the vertex (the distance to it is the vertex excess, run 6)
+               for (int j = ends ? 0 : 1; j <= (ends ? m : m - 1); j++)
+                  put({ C.cx + C.r * std::cos(t0 + d * j / m), C.cy + C.r * std::sin(t0 + d * j / m) }, f);
+            };
+            const auto touch = [&](const P2 &p, const P2 &q, const Arc &C, P2 &f) {   // the edge p q tangent to C (C on its left); f its touching point, or its end moved onto C
+               const double lx = q.x - p.x, ly = q.y - p.y, l2 = lx * lx + ly * ly;
+               if (l2 <= 0.0 || std::abs((lx * (C.cy - p.y) - ly * (C.cx - p.x)) / std::sqrt(l2) - C.r) > tol)
+                  return false;
+               const double t = ((C.cx - p.x) * lx + (C.cy - p.y) * ly) / l2;
+               const P2 e = t < 0.0 ? p : q;
+               const double de = std::hypot(e.x - C.cx, e.y - C.cy);
+               f = t >= 0.0 && t <= 1.0 ? P2 { p.x + t * lx, p.y + t * ly } : P2 { C.cx + C.r * (e.x - C.cx) / de, C.cy + C.r * (e.y - C.cy) / de };
+               return true;
+            };
+            const size_t n = ps.size();
+            for (size_t i = 0; i < n; i++)
+            {
+               const P2 &a = bd[ps[(i + n - 1) % n]].a, &v = bd[ps[i]].a, &b = bd[ps[i]].b;
+               const char f = g[bd[ps[i]].m]->floored[bd[ps[i]].e];
+               bool done = false;
+               for (const Arc &C : g_arcs)
+                  if (P2 f0, f1; C.R > C.r && std::hypot(v.x - C.cx, v.y - C.cy) <= C.R + tol && touch(a, v, C, f0) && touch(v, b, C, f1))
+                  {
+                     arc(C, f0, f1, true, f);
+                     done = true;
+                     break;
+                  }
+               if (!done)
+                  put(v, f);
+               for (const Arc &C : g_arcs)
+                  if (C.R == C.r && std::abs(std::hypot(v.x - C.cx, v.y - C.cy) - C.r) <= tol && std::abs(std::hypot(b.x - C.cx, b.y - C.cy) - C.r) <= tol)
+                  {
+                     arc(C, v, b, false, f);
+                     break;
+                  }
+            }
+            if (drawn.size() >= 4 && std::hypot(drawn[0] - drawn[drawn.size() - 2], drawn[1] - drawn.back()) * U <= kSnapM)
+            {
+               drawn.resize(drawn.size() - 2);
+               fl.pop_back();
+            }
+            dh.drawRim.push_back(std::move(drawn));
+            dh.drawFloored.push_back(std::move(fl));
          }
       }
       double along = 0.0;   // the drawing's wood: the rim length so far (the grain along the walls)
@@ -1250,7 +1320,7 @@ namespace
    }
    // a convex counter-clockwise polygon's corners rounded: each corner of radius r > 0 becomes the tangent polygon of its arc, 15 deg per vertex, the sides tangent where they meet it
    // (vertices at the arc's angles theta + phi (k + 1/2) / n, radius r / cos(phi / 2n): the piece 1 rule, 6 per quarter); "" or why not (the arcs do not fit the sides)
-   std::string Rounded(const std::vector<P2> &c, const std::vector<double> &rad, std::vector<P2> &out)
+   std::string Rounded(const std::vector<P2> &c, const std::vector<double> &rad, std::vector<P2> &out, std::ostringstream &log)   // log: each rounded corner's edges and excess
    {
       const size_t n = c.size();
       for (size_t i = 0; i < n; i++)   // the arcs' tangent lengths must fit each side
@@ -1277,8 +1347,14 @@ namespace
          const double k = -rad[i] / (1.0 + n1.x * n2.x + n1.y * n2.y);
          const P2 ctr { b.x + k * (n1.x + n2.x), b.y + k * (n1.y + n2.y) };   // the arc's centre, r inside both sides
          const double th = std::atan2(n1.y, n1.x), phi = std::atan2(n1.x * n2.y - n1.y * n2.x, n1.x * n2.x + n1.y * n2.y);
-         const int m = std::max(1, (int)std::lround(phi / kTurnRad));
+         // paper section 4 'quarter arcs at the same rule' as a circle (Round): at least 6 per quarter, more till the vertex stands at most hole_round_mm outside the arc
+         // (lead 2026-11-17: the fixed 15 deg step gave a 25 mm corner 0.216 mm, above the 0.2 mm default)
+         int m = std::max(1, (int)std::lround(phi / kTurnRad));
+         while (rad[i] * (1.0 / std::cos(0.5 * phi / m) - 1.0) > g_excessM)
+            m++;
          const double R = rad[i] / std::cos(0.5 * phi / m);
+         log << (log.tellp() > 0 ? ", " : "") << "corner " << i << ": radius " << rad[i] * 1e3 << " mm, " << m << " edges, excess " << (R - rad[i]) * 1e3 << " mm";
+         g_arcs.push_back({ ctr.x, ctr.y, rad[i], R });   // (the drawing's true curve)
          for (int j = 0; j < m; j++)
             out.push_back({ ctr.x + R * std::cos(th + phi * (j + 0.5) / m), ctr.y + R * std::sin(th + phi * (j + 0.5) / m) });
       }
@@ -1587,6 +1663,7 @@ void MeshHoles::Clear(const double roundMm)
    g_excessM = mm * 1e-3;
    PLOGI << "Mesh holes: hole_round_mm " << mm << " (a round hole's vertex at most this far outside its circle)";
    g_drawn.clear();
+   g_arcs.clear();
    g_outlines.clear();   // (the kickers add theirs in PhysicSetup, the turntables in Turntables::Setup, the [PlayfieldCut:<name>] sections in AddIniCuts, all after this)
 }
 
@@ -1636,6 +1713,7 @@ std::vector<double> MeshHoles::Round(double x, double y, double r, int n)
          n++;
    }
    const double R = r / std::cos(kPi / n);   // vertices outside the circle: every edge touches it at its midpoint (paper section 4)
+   g_arcs.push_back({ x, y, r, R });   // (the drawing's true curve)
    std::vector<double> xy;
    for (int k = 0; k < n; k++)
    {
@@ -1684,6 +1762,15 @@ void MeshHoles::AddIniCuts(const std::filesystem::path &file)
       if (!k.keys.cut)
       {
          PLOGI << "Mesh holes: Cut " << k.name << ": cut_hole = 0, no hole";
+         continue;
+      }
+      // a named ramp host: not cut (Build says why for a ramp found at the rim; here before its top is looked up, so the refusal names the reason, not a missing top)
+      if (!k.host.empty() && std::any_of(ContactHost::AllHosts().begin(), ContactHost::AllHosts().end(), [&](ContactHost *const h) {
+             const ContactSurfaceHost *const s = dynamic_cast<ContactSurfaceHost *>(h);
+             return s != nullptr && s->MeshKind() == "ramp" && PhysicsIni::Lower(s->Name()) == PhysicsIni::Lower(k.host);
+          }))
+      {
+         Notice(where + "host ramp " + k.host + ": holes in ramps are not supported yet: hole not cut");
          continue;
       }
       // the hole's height: with host named, that host's top at x, y (its highest up face there); else the highest playfield surface at x, y
@@ -1811,11 +1898,14 @@ void MeshHoles::AddIniCuts(const std::filesystem::path &file)
             std::reverse(c.begin(), c.end());
             std::reverse(rad.begin(), rad.end());
          }
-         if (const std::string why = Rounded(c, rad, o.v); !why.empty())
+         std::ostringstream corners;
+         if (const std::string why = Rounded(c, rad, o.v, corners); !why.empty())
          {
             Notice(where + why + ": the cut is ignored (physics ini)");
             continue;
          }
+         if (!corners.str().empty())
+            log << " (" << corners.str() << ")";
       }
       else if (k.shape == "slot")
       {
@@ -1860,6 +1950,11 @@ void MeshHoles::AddIniCuts(const std::filesystem::path &file)
          {
             o.v.push_back(W(q.x, q.y));
             o.floored.push_back(f);
+         }
+         for (const double e : { 1.0, -1.0 })   // the round ends' circles (vertices on them: the drawing's true curve; the ramp stays as cut)
+         {
+            const P2 ce = W(e * hs, 0.0);
+            g_arcs.push_back({ ce.x, ce.y, a, a });
          }
          for (const double e : { 1.0, -1.0 })   // the ramp floors
          {
@@ -2025,6 +2120,13 @@ void MeshHoles::Build()
          }
          host = hosts[0];
       }
+      // a ramp host (named or found at the rim): not cut, in the physics or the drawing (user 2026-11-17: not allowed for now). A ramp's floor is sloped and, curved, not one plane:
+      // the drawing's re-cut (playfieldcutdraw.cpp Fill) takes one flat plane, and the ramp's mesh is rebuilt while playing (ramp.cpp GenerateVertexBuffer)
+      if (host->MeshKind() == "ramp")
+      {
+         Notice("Mesh holes: " + o.name + ": host ramp " + host->Name() + ": holes in ramps are not supported yet: hole not cut");
+         continue;
+      }
       if (byHost.find(host) == byHost.end())
          order.push_back(host);
       byHost[host].push_back(&o);
@@ -2088,6 +2190,7 @@ void MeshHoles::Build()
       double expectTop = before.top;
       std::vector<std::pair<P3, P3>> bottoms, rims;   // the walls' bottom edges and the open rims (open by design)
       std::ostringstream per;
+      std::vector<std::pair<size_t, const Group *>> made;   // each drawn hole of this host (its g_drawn index) and its group: the floors as finally cut (below)
       for (const Group &g : groups)
       {
          std::string names;
@@ -2139,6 +2242,7 @@ void MeshHoles::Build()
          dh.thick = thickM / U;
          dh.physWallTris = 2 * r.nWalls;
          dh.onTop = !(g.size() == 1 && second[std::find(list.begin(), list.end(), g[0]) - list.begin()]);
+         made.push_back({ g_drawn.size(), &g });
          g_drawn.push_back(std::move(dh));
          cut += (int)g.size();
          expectTop += -(r.holeArea - r.missing) - r.dropUp + r.floorUp - r.underCut;
@@ -2151,6 +2255,47 @@ void MeshHoles::Build()
          if (r.nDrop > 0 || r.nDeep > 0 || r.missing > 1e-6 * r.holeArea)
             per << ", over an existing hole: " << r.missing * 1e6 << " mm2 with no top, " << r.nDrop << " faces inside deleted (" << r.dropUp * 1e6 << " mm2 facing up), " << r.nDeep << " inside below the wall's depth kept";
          per << ");";
+      }
+      // the drawing's floors as Build finally leaves them (brief 6 item 2): a hole whose floor a later outline was cut into (a slot in the groove) takes, instead of the floor faces
+      // its own cut emitted, the host's up faces now below its top inside its outline and no deeper than its deepest floor point, less those inside the inner outline (that hole's own
+      // floors, drawn with it): the inner hole's opening is in the drawn floor
+      for (const auto &[di, gi] : made)
+      {
+         MeshHoles::DrawnHole &dh = g_drawn[di];
+         if (!dh.onTop)
+            continue;
+         std::vector<const Outline *> inner;
+         for (const auto &[dj, gj] : made)
+         {
+            const Outline *const in = (*gj)[0];
+            if (!g_drawn[dj].onTop && std::any_of(gi->begin(), gi->end(), [&](const Outline *o) { return InPoly(o->v, in->v[0]); }))
+               inner.push_back(in);
+         }
+         if (inner.empty())
+            continue;
+         double floorMax = 0.0;
+         for (const Outline *o : *gi)
+            for (const FTri &t : o->floor)
+               floorMax = std::max({ floorMax, t.d[0], t.d[1], t.d[2] });
+         std::vector<float> wood;
+         for (size_t i = 0; i + 18 <= dh.wood.size(); i += 18)
+            if (dh.wood[i + 5] != 0.f)
+               wood.insert(wood.end(), dh.wood.begin() + i, dh.wood.begin() + i + 18);
+         const double top = dh.topZ * U;
+         int nf = 0;
+         for (const T3 &t : c.f)
+         {
+            const P2 m { (t.a.x + t.b.x + t.c.x) / 3.0, (t.a.y + t.b.y + t.c.y) / 3.0 };
+            const double dm = top - (t.a.z + t.b.z + t.c.z) / 3.0;
+            if (!Up(t) || dm <= 1e-6 || dm > floorMax + kSnapM || !std::any_of(gi->begin(), gi->end(), [&](const Outline *o) { return InPoly(o->v, m); })
+                || std::any_of(inner.begin(), inner.end(), [&](const Outline *o) { return InPoly(o->v, m); }))
+               continue;
+            for (const P3 *p : { &t.a, &t.b, &t.c })
+               wood.insert(wood.end(), { (float)(p->x / U), (float)(p->y / U), (float)(p->z / U), (float)((p->x + p->y) / U), (float)((top - p->z) / U), 0.f });
+            nf++;
+         }
+         PLOGI << "Mesh holes: " << dh.name << ": drawn floor as finally cut (an inner hole cut into it): " << nf << " faces";
+         dh.wood.swap(wood);
       }
       if (cut == 0)
          continue;

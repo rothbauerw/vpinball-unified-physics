@@ -19,6 +19,9 @@ namespace MeshHoles
       double unit = 1.0;                   // metres per VPX unit
       std::string hostKind, hostName;      // the static mesh host the physics cut
       std::vector<std::vector<double>> rim;   // the joined outline's boundary loops as Build cut them (x0 y0 x1 y1 ..., counter-clockwise; Pieces' points in order, the same doubles / unit)
+      std::vector<std::vector<double>> drawRim;   // the rim loops as drawn (the same order): the round parts on their true curve (circles, corner radii, slot ends; chords within 0.02 mm
+                                           // inside it), the rest as cut; a tangent polygon's drawn curve lies inside its rim by at most its vertex excess (hole_round_mm)
+      std::vector<std::vector<char>> drawFloored;   // per drawRim point: the edge from it is floored (a floor meets the top there: no rim wall)
       double topZ = 0.0, thick = 0.0;      // the host's top at the hole and the walls' depth (VPX units)
       bool walls = false;                  // walls cut (the joined outline's inscribed circle at least the ball's radius)
       bool draw = true;                    // drawn (false: every joined outline says draw = 0)

@@ -13,6 +13,8 @@
 #include "renderer/Renderer.h"
 #include "renderer/Shader.h"
 #include "renderer/trace.h"
+#include "parts/playfieldcutdraw.h"
+#include "ui/live/LiveUI.h"
 #include "physics/contactsurfacehost.h"
 #include "physics/contactsystem.h"
 #include "renderer/VertexBuffer.h"
@@ -781,6 +783,47 @@ void Surface::RenderSetup(Renderer *renderer)
       vector<WORD> topBottomIndices, sideIndices;
       GenerateMesh(topBottomBuf, sideBuf, topBottomIndices, sideIndices);
 
+      // a wall with holes cut in its top (mesh holes, physics/meshholes.h): the top re-cut with each hole's rim left out (playfieldcutdraw.h SetupWallTop), the dropped top and the
+      // bottom the same triangles at their heights; the holes' walls and floors drawn after the top (RenderWallsAtHeight). topN: the vertices of each of the three copies
+      unsigned int topN = m_numVertices;
+      if (m_numPolys > 0)
+      {
+         std::vector<Vertex3D_NoTex2> top(topBottomBuf.begin(), topBottomBuf.begin() + m_numVertices);
+         std::vector<unsigned int> idx(topBottomIndices.begin(), topBottomIndices.begin() + m_numPolys * 3);
+         if (PlayfieldCutDraw::SetupWallTop(this, m_renderer, top, idx))
+         {
+            if (sideBuf.size() + 3 * top.size() > 65536)   // (this buffer's indices are 16 bit)
+            {
+               PlayfieldCutDraw::Release(this);
+               const std::string msg = "Mesh holes drawn, wall " + GetName() + ": the cut top needs " + std::to_string(sideBuf.size() + 3 * top.size()) + " vertices, above the wall buffer's 65536: drawn uncut";
+               PLOGW << msg;
+               if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+                  g_pplayer->m_liveUI->PushNotification(msg, 8000);
+            }
+            else
+            {
+               const float zDropped = topBottomBuf[m_numVertices].z, zBottom = topBottomBuf[m_numVertices * 2].z;
+               vector<Vertex3D_NoTex2> buf;
+               buf.reserve(3 * top.size());
+               for (int k = 0; k < 3; k++)
+                  for (Vertex3D_NoTex2 v : top)
+                  {
+                     if (k > 0)
+                        v.z = k == 1 ? zDropped : zBottom;
+                     if (k == 2)
+                        v.nz = -1.0f;
+                     buf.push_back(v);
+                  }
+               topBottomBuf.swap(buf);
+               topBottomIndices.clear();
+               for (const unsigned int q : idx)
+                  topBottomIndices.push_back((WORD)q);
+               m_numPolys = (unsigned int)(idx.size() / 3);
+               topN = (unsigned int)top.size();
+            }
+         }
+      }
+
       std::shared_ptr<VertexBuffer> VBuffer = std::make_shared<VertexBuffer>(m_renderer->m_renderDevice, static_cast<const unsigned int>(sideBuf.size() + topBottomBuf.size()));
       Vertex3D_NoTex2 *verts;
       VBuffer->Lock(verts);
@@ -794,10 +837,10 @@ void Surface::RenderSetup(Renderer *renderer)
       topBottomIndices.reserve(m_numPolys*3 * 3);
       // Append indices for dropped top
       for (unsigned int i = 0; i < m_numPolys * 3; i++)
-         topBottomIndices.push_back(topBottomIndices[i] + m_numVertices);
+         topBottomIndices.push_back(topBottomIndices[i] + topN);
       // Append indices for bottom (used when rendering reflections)
       for (unsigned int i = 0; i < m_numPolys * 3; i++)
-         topBottomIndices.push_back(topBottomIndices[i] + m_numVertices * 2);
+         topBottomIndices.push_back(topBottomIndices[i] + topN * 2);
 
       std::shared_ptr<IndexBuffer> IBuffer = std::make_shared<IndexBuffer>(m_renderer->m_renderDevice, (unsigned int)topBottomIndices.size() + (unsigned int)sideIndices.size());
       WORD* buf;
@@ -815,6 +858,7 @@ void Surface::RenderSetup(Renderer *renderer)
 
 void Surface::RenderRelease()
 {
+   PlayfieldCutDraw::Release(this);   // the holes' walls and floors (RenderSetup)
    assert(m_renderer != nullptr);
    m_slingshotMeshBuffer = nullptr;
    m_meshBuffer = nullptr;
@@ -962,6 +1006,10 @@ void Surface::RenderWallsAtHeight(const bool drop, const bool isReflectionPass)
       // Top
       m_renderer->m_renderDevice->DrawMesh(
          m_renderer->m_renderDevice->m_basicShader, m_isDynamic, m_boundingSphereCenter, 0.f, m_meshBuffer, RenderDevice::TRIANGLELIST, m_numVertices * 6 + (drop ? m_numPolys * 3 : 0), m_numPolys * 3);
+
+      // the walls and floors of the holes cut in its top (playfieldcutdraw.h; none when no hole is cut in it): not when dropped (the holes are cut at the top's height)
+      if (!drop && !isReflectionPass)
+         PlayfieldCutDraw::Draw(this, m_renderer, mat, m_boundingSphereCenter, 0.f);
 
       // Only render Bottom for Reflections
       if (isReflectionPass)

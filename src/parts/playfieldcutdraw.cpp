@@ -8,6 +8,7 @@
 #include "core/stdafx.h"
 #include "parts/playfieldcutdraw.h"
 #include "parts/primitive.h"
+#include "parts/surface.h"
 #include "physics/meshholes.h"
 #include "physics/physicsini.h"
 #include "core/VPApp.h"
@@ -297,32 +298,24 @@ namespace
 
    struct Drawing
    {
-      const Primitive *prim = nullptr;
-      std::vector<Vertex3D_NoTex2> vertices;   // the table's own mesh while the cut one is drawn
+      std::vector<Vertex3D_NoTex2> vertices;   // a primitive's own mesh while the cut one is drawn
       std::vector<unsigned int> indices;
       std::shared_ptr<MeshBuffer> wood;        // the walls and floors (world, VPX units)
       unsigned int woodIndices = 0;
       std::unique_ptr<Texture> tex;
    };
-   Drawing g_drawing;
-}
+   std::map<const void *, Drawing> g_drawings;   // by part (a Primitive or a Surface): each host's own drawing
 
-namespace PlayfieldCutDraw
-{
-   void Setup(Primitive *const pf, Renderer *const renderer)
+   // mesh: the host's drawn top (M: its frame to the world), re-cut with the rim loops of holes (each cut in this host) left out (the originals kept in d), the walls and floors made in d.
+   // true when the mesh was re-cut
+   bool CutHost(Mesh &mesh, const Matrix3D &M, const std::string &where, const std::vector<const DrawnHole *> &holes, Drawing &d, Renderer *const renderer)
    {
-      const std::vector<DrawnHole> &holes = MeshHoles::Drawn();   // every joined hole as the physics cut it (MeshHoles::Build: in the physics engine's setup, before the render setup, every load)
-      if (holes.empty() || g_drawing.prim != nullptr)
-         return;
-      Mesh &mesh = pf->m_mesh;
-      const std::string where = "Mesh holes drawn, playfield " + pf->GetName() + ": ";
       if (!mesh.m_animationFrames.empty())
       {
          PLOGW << where << "an animated mesh (its frames rewrite the vertices): drawn uncut";
-         return;
+         return false;
       }
       // the corners in the world (VPX units)
-      const Matrix3D &M = pf->RecalculateMatrices();
       const size_t nTri = mesh.m_indices.size() / 3;
       std::vector<P2> wp(mesh.m_vertices.size());
       std::vector<double> wz(mesh.m_vertices.size());
@@ -334,16 +327,16 @@ namespace PlayfieldCutDraw
       }
       // each hole's rim loops as the physics cut them, and the faces of the drawn top they overlap seen from above (their convex hull's), but those wholly under the top (the playfield's
       // underside, left as they are): re-cut (Fill: they must be flat at the top). The drawn top under a hole: the highest of the drawn faces' planes at its first rim point
-      const double tol = kTopTolM / holes[0].unit;
+      const double tol = kTopTolM / holes[0]->unit;
       std::vector<std::vector<P2>> outl;
       std::vector<const DrawnHole *> owner;
       std::vector<char> sel(nTri, 0);
       double z0 = 0.0;
-      for (const DrawnHole &h : holes)
+      for (const DrawnHole *const hp : holes)
       {
+         const DrawnHole &h = *hp;
          std::ostringstream line;
-         const bool same = PhysicsIni::Lower(h.hostName) == PhysicsIni::Lower(pf->GetName());
-         line << where << h.name << ": cut by the physics in the " << h.hostKind << " host " << h.hostName << (same ? " (the drawn primitive)" : " (not the drawn primitive: drawn on it)")
+         line << where << h.name << ": cut by the physics in the " << h.hostKind << " host " << h.hostName << " (drawn in it)"
               << ", walls " << (h.walls ? "yes, " : "no, ") << h.thick << " VPU deep, physics top z " << h.topZ << " VPU";
          if (!h.draw)
          {
@@ -352,7 +345,7 @@ namespace PlayfieldCutDraw
          }
          if (!h.onTop || h.rim.empty() || h.rim[0].size() < 2)
          {
-            PLOGI << line.str() << (h.onTop ? "; no rim recorded: not cut in the drawn top" : "; cut into another hole's floor: its rim is not cut in the drawn top, and that floor is drawn whole over it");
+            PLOGI << line.str() << (h.onTop ? "; no rim recorded: not cut in the drawn top" : "; cut into another hole's floor: that floor is drawn as finally cut, with this hole's opening (meshholes.cpp Build)");
             continue;
          }
          const P2 q0 { h.rim[0][0], h.rim[0][1] };
@@ -380,7 +373,31 @@ namespace PlayfieldCutDraw
          if (outl.empty())
             z0 = zt;
          line << ", drawn top z " << zt << " VPU (drawn - physics " << zt - h.topZ << " VPU)";
-         for (const std::vector<double> &L : h.rim)
+         // the rim as drawn (brief 6: round parts on their true curve, MeshHoles::DrawnHole::drawRim): the largest plan distance from a physics rim point to the drawn rim (a tangent
+         // polygon's corner: its vertex excess, at most hole_round_mm)
+         double inset = 0.0;
+         size_t nDrawn = 0, nPhys = 0;
+         for (size_t li = 0; li < h.rim.size() && li < h.drawRim.size(); li++)
+         {
+            const std::vector<double> &Pr = h.rim[li], &D = h.drawRim[li];
+            const size_t nd = D.size() / 2;
+            nDrawn += nd;
+            nPhys += Pr.size() / 2;
+            for (size_t i = 0; i + 1 < Pr.size(); i += 2)
+            {
+               double best = 1e300;
+               for (size_t k = 0; k < nd; k++)
+               {
+                  const size_t j = (k + 1) % nd;
+                  const double ax = D[2 * k], ay = D[2 * k + 1], dx = D[2 * j] - ax, dy = D[2 * j + 1] - ay, l2 = dx * dx + dy * dy;
+                  const double t = l2 > 0.0 ? std::clamp(((Pr[i] - ax) * dx + (Pr[i + 1] - ay) * dy) / l2, 0.0, 1.0) : 0.0;
+                  best = std::min(best, std::hypot(Pr[i] - ax - t * dx, Pr[i + 1] - ay - t * dy));
+               }
+               inset = std::max(inset, best);
+            }
+         }
+         line << ", rim drawn on the true curve: " << nDrawn << " points vs physics " << nPhys << ", largest distance physics rim -> drawn rim " << inset * h.unit * 1e3 << " mm";
+         for (const std::vector<double> &L : h.drawRim)
          {
             std::vector<P2> o;
             for (size_t i = 0; i + 1 < L.size(); i += 2)
@@ -414,8 +431,8 @@ namespace PlayfieldCutDraw
          const size_t base = verts.size();
          if (const char *const why = Fill(mesh, wp, wz, z0, tol, sel, outl, verts, idx))
          {
-            PLOGW << where << why << ": the playfield is drawn uncut";
-            return;
+            PLOGW << where << why << ": the host is drawn uncut";
+            return false;
          }
          // each rim loop as drawn (Fill's new vertices, float, in the order Fill added them: each loop's points reversed) against the physics' rim points
          size_t at = base;
@@ -429,41 +446,46 @@ namespace PlayfieldCutDraw
                dmax = std::max(dmax, std::hypot(w.x - outl[i][k].x, w.y - outl[i][k].y));
             }
             at += outl[i].size();
-            PLOGI << where << owner[i]->name << ": rim points drawn " << outl[i].size() << " vs physics " << outl[i].size()
+            PLOGI << where << owner[i]->name << ": drawn rim points in the top " << outl[i].size() << " vs drawRim " << outl[i].size()
                   << ", largest plan distance between matching vertices " << dmax << " VPU (the drawn vertex's float rounding)";
          }
-         g_drawing.vertices = std::exchange(mesh.m_vertices, std::move(verts));
-         g_drawing.indices = std::exchange(mesh.m_indices, std::move(idx));
+         d.vertices = std::exchange(mesh.m_vertices, std::move(verts));
+         d.indices = std::exchange(mesh.m_indices, std::move(idx));
          PLOGI << where << "re-cut with the physics' rim loops left out (the faces over them filled again by PolygonToTriangles): " << nTri << " triangles -> " << mesh.m_indices.size() / 3
-               << ", " << g_drawing.vertices.size() << " vertices -> " << mesh.m_vertices.size() << ", " << outl.size() << " rim loops";
+               << ", " << d.vertices.size() << " vertices -> " << mesh.m_vertices.size() << ", " << outl.size() << " rim loops";
       }
-      g_drawing.prim = pf;
       // the walls, floors and side faces: the physics' own triangles, each with its flat normal (a rim wall faces into the hole, a floor up, as the physics wound them; a wall under a
       // floor's open edge and a side face turned to face the hole's first rim loop's centre). Texture: the grain along the rim on walls, its height the wall's depth
       const std::filesystem::path file = g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, "PlayfieldCutWood.png");
-      g_drawing.tex.reset(Texture::CreateFromFile(file));
-      if (g_drawing.tex == nullptr || g_drawing.tex->m_width == 0 || g_drawing.tex->m_height == 0)
+      d.tex.reset(Texture::CreateFromFile(file));
+      if (d.tex == nullptr || d.tex->m_width == 0 || d.tex->m_height == 0)
       {
-         g_drawing.tex.reset();
+         d.tex.reset();
          PLOGW << where << "no wood texture " << file.string() << ": the holes' walls and floors are not drawn";
-         return;
+         return !outl.empty();
       }
-      const double rep = holes[0].thick * (double)g_drawing.tex->m_width / (double)g_drawing.tex->m_height;   // the texture's height is the wall's depth; its width along the grain
+      const double rep = holes[0]->thick * (double)d.tex->m_width / (double)d.tex->m_height;   // the texture's height is the wall's depth; its width along the grain
       std::vector<Vertex3D_NoTex2> v;
       std::vector<unsigned int> wi;
-      for (const DrawnHole &h : holes)
+      for (const DrawnHole *const hp : holes)
       {
+         const DrawnHole &h = *hp;
          if (!h.draw)   // draw = 0: no walls or floors drawn either
             continue;
          P2 ctr { 0.0, 0.0 };
          const size_t nr = h.rim.empty() ? 0 : h.rim[0].size() / 2;
          for (size_t i = 0; i < nr; i++)
             ctr = { ctr.x + h.rim[0][2 * i] / (double)nr, ctr.y + h.rim[0][2 * i + 1] / (double)nr };
-         int walls = 0, others = 0;
+         int walls = 0, others = 0, rimWalls = 0;
          for (size_t i = 0; i + 18 <= h.wood.size(); i += 18)
          {
             const float *f = &h.wood[i];
             const int kind = (int)f[5];
+            if (kind == 1)   // a rim wall: drawn under the drawn rim instead (below)
+            {
+               rimWalls++;
+               continue;
+            }
             const double ux = f[6] - f[0], uy = f[7] - f[1], uz = f[8] - f[2], vx = f[12] - f[0], vy = f[13] - f[1], vz = f[14] - f[2];
             double nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
             const double l = std::sqrt(nx * nx + ny * ny + nz * nz);
@@ -484,15 +506,18 @@ namespace PlayfieldCutDraw
          // a hole the physics cut without walls (narrower than the ball: Button, Star, slot, a small cut): drawn walls all the same (user 2026-11-17), one quad per rim edge from the
          // top down to the wall depth (h.thick) at the physics top's height (h.topZ), facing into the hole (the hole lies left of every rim piece). Under a floor (the slot's ramps,
          // the groove's strips) the floor hides the part below it. Looks only: no physics face
+         // A hole with walls (brief 6): its rim walls (the physics' kind 1, not drawn) drawn the same way under the drawn rim, where no floor meets the top (drawFloored)
          int drawnOnly = 0;
-         if (!h.walls)
-            for (const std::vector<double> &loop : h.rim)
+         for (size_t li = 0; li < h.drawRim.size(); li++)
             {
+               const std::vector<double> &loop = h.drawRim[li];
                const size_t n = loop.size() / 2;
                double along = 0.0;
                for (size_t i = 0; i < n; i++)
                {
                   const size_t j = (i + 1) % n;
+                  if (h.walls && li < h.drawFloored.size() && i < h.drawFloored[li].size() && h.drawFloored[li][i])
+                     continue;
                   const double ax = loop[2 * i], ay = loop[2 * i + 1], bx = loop[2 * j], by = loop[2 * j + 1], len = std::hypot(bx - ax, by - ay);
                   if (len <= 0.0)
                      continue;
@@ -509,36 +534,86 @@ namespace PlayfieldCutDraw
                   drawnOnly += 2;
                }
             }
-         PLOGI << where << h.name << ": walls drawn " << walls << " triangles vs physics " << h.physWallTris << ", floors and sides drawn " << others << " triangles"
-               << (h.walls ? std::string() : ", walls drawn without physics walls " + std::to_string(drawnOnly) + " triangles (" + std::to_string(h.thick) + " VPU deep)");
+         PLOGI << where << h.name << ": physics walls " << h.physWallTris << " triangles (rim walls " << rimWalls << ": drawn under the drawn rim instead; under a floor's open edge " << walls << ": drawn as cut), floors and sides drawn " << others << " triangles"
+               << ", walls under the drawn rim " << drawnOnly << " triangles (" << h.thick << " VPU deep" << (h.walls ? ")" : ", no physics walls)");
       }
       if (wi.empty())
-         return;
-      g_drawing.woodIndices = (unsigned int)wi.size();
-      g_drawing.wood = std::make_shared<MeshBuffer>("PlayfieldCuts.Wood"s, std::make_shared<VertexBuffer>(renderer->m_renderDevice, (unsigned int)v.size(), (const float *)v.data()),
+         return !outl.empty();
+      d.woodIndices = (unsigned int)wi.size();
+      d.wood = std::make_shared<MeshBuffer>("PlayfieldCuts.Wood"s, std::make_shared<VertexBuffer>(renderer->m_renderDevice, (unsigned int)v.size(), (const float *)v.data()),
          std::make_shared<IndexBuffer>(renderer->m_renderDevice, wi), true);
-      PLOGI << where << "walls, floors and sides: " << wi.size() / 3 << " triangles, " << v.size() << " vertices; wood " << file.filename().string() << " " << g_drawing.tex->m_width << " x "
-            << g_drawing.tex->m_height << " px: its height is the wall's depth, its width " << rep << " VPU along the grain";
+      PLOGI << where << "walls, floors and sides: " << wi.size() / 3 << " triangles, " << v.size() << " vertices; wood " << file.filename().string() << " " << d.tex->m_width << " x "
+            << d.tex->m_height << " px: its height is the wall's depth, its width " << rep << " VPU along the grain";
+      return !outl.empty();
    }
 
-   void Draw(const Primitive *const pf, Renderer *const renderer, const Material *const mat)
+   // the holes cut in the host kind / name (case as the editor's); the playfield host: the playfield primitive, whatever its name
+   std::vector<const DrawnHole *> HolesIn(const std::string &kind, const std::string &name, const bool isPlayfield)
    {
-      if (g_drawing.prim != pf || g_drawing.wood == nullptr)
+      std::vector<const DrawnHole *> in;
+      for (const DrawnHole &h : MeshHoles::Drawn())   // every joined hole as the physics cut it (MeshHoles::Build: in the physics engine's setup, before the render setup, every load)
+         if (h.hostKind == "playfield" ? isPlayfield : h.hostKind == kind && PhysicsIni::Lower(h.hostName) == PhysicsIni::Lower(name))
+            in.push_back(&h);
+      return in;
+   }
+}
+
+namespace PlayfieldCutDraw
+{
+   void Setup(Primitive *const prim, Renderer *const renderer)
+   {
+      const std::vector<const DrawnHole *> holes = HolesIn("primitive", prim->GetName(), prim->IsPlayfield());
+      if (holes.empty() || g_drawings.count(prim))
          return;
+      const std::string where = "Mesh holes drawn, " + std::string(prim->IsPlayfield() ? "playfield " : "primitive ") + prim->GetName() + ": ";
+      CutHost(prim->m_mesh, prim->RecalculateMatrices(), where, holes, g_drawings[prim], renderer);
+   }
+
+   bool SetupWallTop(const Surface *const wall, Renderer *const renderer, std::vector<Vertex3D_NoTex2> &top, std::vector<unsigned int> &idx)
+   {
+      const std::vector<const DrawnHole *> holes = HolesIn("wall", wall->GetName(), false);
+      g_drawings.erase(wall);   // (made again with the wall's buffers)
+      if (holes.empty())
+         return false;
+      const std::string where = "Mesh holes drawn, wall " + wall->GetName() + ": ";
+      Mesh mesh;   // the wall's top (world already)
+      mesh.m_vertices = top;
+      mesh.m_indices = idx;
+      Matrix3D I;
+      I.SetIdentity();
+      if (!CutHost(mesh, I, where, holes, g_drawings[wall], renderer))
+         return false;
+      top.swap(mesh.m_vertices);
+      idx.swap(mesh.m_indices);
+      return true;
+   }
+
+   void Draw(const void *const part, Renderer *const renderer, const Material *const mat, const Vertex3Ds &center, const float depthBias)
+   {
+      const auto it = g_drawings.find(part);
+      if (it == g_drawings.end() || it->second.wood == nullptr)
+         return;
+      const Drawing &d = it->second;
       RenderDevice *const rd = renderer->m_renderDevice;
       renderer->UpdateBasicShaderMatrix();   // (made in the world)
       rd->EnableAlphaBlend(false);
-      rd->m_basicShader->SetBasic(mat, g_drawing.tex.get());
-      rd->m_basicShader->SetTexture(ShaderUniform::tex_base_color, g_drawing.tex.get(), false, SamplerFilter::SF_ANISOTROPIC, SamplerAddressMode::SA_REPEAT, SamplerAddressMode::SA_REPEAT);
-      rd->DrawMesh(rd->m_basicShader, false, pf->m_d.m_vPosition, pf->m_d.m_depthBias, g_drawing.wood, RenderDevice::TRIANGLELIST, 0, g_drawing.woodIndices);
+      rd->m_basicShader->SetBasic(mat, d.tex.get());
+      rd->m_basicShader->SetTexture(ShaderUniform::tex_base_color, d.tex.get(), false, SamplerFilter::SF_ANISOTROPIC, SamplerAddressMode::SA_REPEAT, SamplerAddressMode::SA_REPEAT);
+      rd->DrawMesh(rd->m_basicShader, false, center, depthBias, d.wood, RenderDevice::TRIANGLELIST, 0, d.woodIndices);
    }
 
-   void Release(Primitive *const pf)
+   void Release(Primitive *const prim)
    {
-      if (g_drawing.prim != pf)
+      const auto it = g_drawings.find(prim);
+      if (it == g_drawings.end())
          return;
-      pf->m_mesh.m_vertices.swap(g_drawing.vertices);
-      pf->m_mesh.m_indices.swap(g_drawing.indices);
-      g_drawing = Drawing();
+      if (!it->second.vertices.empty())
+      {
+         prim->m_mesh.m_vertices.swap(it->second.vertices);
+         prim->m_mesh.m_indices.swap(it->second.indices);
+      }
+      g_drawings.erase(it);
    }
+
+   void Release(const Surface *const wall) { g_drawings.erase(wall); }
 }
