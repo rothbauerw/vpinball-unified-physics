@@ -66,6 +66,7 @@ PhysicsEngine::PhysicsEngine(PinTable *const table)
 {
    StockCount::SetPlanes(&m_hitPlayfield, &m_hitTopGlass);
    ContactSystem::SetTable(table->m_filename);   // unified or stock for this table: from its physics ini, before any part's PhysicSetup asks
+   PLOGI << "Contact system: ball entries at table start: " << ContactSystem::Count() << " (0: nothing left from an earlier play, ContactSystem::EndTable)";
    m_physicsMaxLoops = table->m_PhysicsMaxLoops == 0xFFFFFFFFu ? 0 : table->m_PhysicsMaxLoops * (10000 / PHYSICS_STEPTIME) /*2*/;
    m_contacts.reserve(8);
 
@@ -135,6 +136,8 @@ PhysicsEngine::~PhysicsEngine()
       g_pplayer->m_pluginAPI.ReleaseMsgID(m_onUpdatePhysicsMsgId);
 
    // We should release objects from the dynamic tree except HitBall (but there are only HitBall...)
+
+   ContactSystem::EndTable();   // the contact system's per-ball stores go with the play (last: the hosts released above still read them; the balls are alive until the player drops them)
 }
 
 void PhysicsEngine::ReleaseVHO(const vector<HitObject *> &vho, bool isUI)

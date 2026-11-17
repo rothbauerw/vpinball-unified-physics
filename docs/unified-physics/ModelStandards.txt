@@ -86,6 +86,9 @@ e. Every test run writes its pass/fail report to disk the day it runs.
 - The acceleration bound left out the part's own drive: overlap at first sight.
 - A destroyed part kept balls pointing at it: crash at play end (ReleaseBat).
 - A host object left in the registry across table restarts: turntable slowdown.
+- A per-ball store kept past the play: the contact system's ball list (one entry per ball, for its life) was never emptied when a play ended, so the next play in the same editor
+  session stepped freed balls: NaN velocities, energy steps, then a crash in a magnet lookup (runs/2026-11-16-crash). The bench (one play per process) can't see it. Catches it:
+  'ball entries at table start' in the log (must be 0) and the non-finite ball notice; any new static keyed by a ball is cleared in ContactSystem::EndTable.
 - A duplicate ini key silently won: magnet ball_interaction.
 - Long steps create energy: bumper replay at a 100 us step launches at 10.6 m/s vs about 0.5 m/s at 1 us. Catches it: 5a step sweep (energy may not rise).
 - A fix went into one copy of a copied rule (parts use a fixed 9.81 m/s2, the core uses gravity plus nudge). Catches it: none yet (2c removes the copies).

@@ -107,6 +107,9 @@ void NotePlaced(const HitBall *ball);   // a script or the driver put this ball 
    void Release(HitBall *ball, const char *why);                  // no-op if the contact system does not hold the ball
    void Remove(HitBall *ball);                                     // the ball leaves play: its entry is erased (one entry per ball: the only way an entry ends)
    void ReleaseHost(ContactHost *host);                            // the host is destroyed
+   // The play ends (PhysicsEngine's destructor, after its hosts went; the balls are still alive): every store keyed by a ball goes (the engaged list, ball pairs, kept doubles, sleep groups,
+   // the snapshot, ...), and a ball that outlives the play (an editor ball) keeps no pointer into them. Nothing that moves a ball changes.
+   void EndTable();
    bool Holds(const HitBall *ball);
    bool Owns(const BallS &ball, const ContactSurface *surface);  // the contact that holds the ball includes this surface
    size_t Count();                                               // balls held

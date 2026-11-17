@@ -362,8 +362,34 @@ struct ContactSystemImpl
    };
 
    // The constants of a body come from the ball's radius, mass and inertia each cycle
+   // Always on (DevelopmentRules 8): a ball whose centre, velocity or spin is not a finite number reached the step: a fault upstream (a freed ball, a script, a solver). Reported only,
+   // never repaired: one WARN and one on-screen notice per table start (EndTable resets it), naming the ball, its place in the player's ball list (-1 = not a ball in play) and its state.
+   inline static bool s_nonFiniteTold = false;
+   static void NonFiniteBall(const HitBall *const pb)
+   {
+      s_nonFiniteTold = true;
+      const char *const name = TestDriver::BallName(pb);
+      int index = -1;
+      for (size_t i = 0; i < g_pplayer->m_vball.size(); i++)
+         if (&g_pplayer->m_vball[i]->m_hitBall == pb)
+            index = (int)i;
+      const Vertex3Ds &p = pb->m_d.m_pos, &v = pb->m_d.m_vel, &am = pb->m_angularmomentum;
+      std::ostringstream o;
+      o << "Contact: ball " << (name != nullptr ? name : "") << " (index " << index << " of " << g_pplayer->m_vball.size() << " balls in play) has a non-finite state at t=" << g_pplayer->m_time_msec
+        << " ms: centre (" << p.x << ", " << p.y << ", " << p.z << ") velocity (" << v.x << ", " << v.y << ", " << v.z << ") spin (" << am.x << ", " << am.y << ", " << am.z
+        << "): a fault upstream, reported only (once per table start)";
+      PLOGW << o.str();
+      if (g_pplayer->m_liveUI != nullptr)
+         g_pplayer->m_liveUI->PushNotification(o.str(), 8000);
+   }
    static void LoadBody(Body &w, HitBall *const pb)
    {
+      if (!s_nonFiniteTold)
+      {
+         const Vertex3Ds &p = pb->m_d.m_pos, &v = pb->m_d.m_vel, &am = pb->m_angularmomentum;
+         if (!(std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z) && std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z) && std::isfinite(am.x) && std::isfinite(am.y) && std::isfinite(am.z)))
+            NonFiniteBall(pb);
+      }
       w.pb = pb;
       w.bs.R = (double)pb->m_d.m_radius * U;
       w.bs.m = kMassUnitKg * (double)pb->m_d.m_mass;
@@ -1734,6 +1760,7 @@ struct ContactSystemImpl
    // would make the cord re-solve its path, and a pulley could change with nothing paying. Keyed by the ball; a ball gone leaves an entry no other ball's floats match.
    struct KeptDoubles { Vertex3Ds pos, vel, am; V3 c, v, w; };
    inline static std::unordered_map<const HitBall *, KeptDoubles> g_keptDoubles;
+   inline static std::unordered_map<const HitBall *, long long> g_coilBooked;   // a coil's current change: the physics step its work was last booked for each ball (once per ball per step); cleared at play end (EndTable)
 
    static void CordFollow(CordBand &cb, const GroupStep::Ball *const groupBalls, HitBall *const *balls, const int n)
    {
@@ -2116,7 +2143,7 @@ struct ContactSystemImpl
       for (const PullField &pf : pulls)
          if (pf.p.amps != pf.p.ampsBefore)
          {
-            static std::unordered_map<const HitBall *, long long> booked;
+            std::unordered_map<const HitBall *, long long> &booked = g_coilBooked;
             const long long stepNo = Magnets::StepNumber();
             for (int i = 0; i < g.nb; i++)
             {
@@ -4547,6 +4574,41 @@ static void RestoreSnap()
       ContactSystemImpl::s_pendingCy->releases.clear();
       ContactSystemImpl::s_pendingCy = nullptr;
    }
+}
+
+// The play ends: one entry per ball keeps a ball's entry for its life and the player frees its balls without Remove, so without this a later play in the same process steps freed balls
+// (runs/2026-11-16-crash: NaN, energy steps, a crash). Called once per play, at the end of PhysicsEngine's destructor: its hosts have gone (ReleaseHost has run for each), the player's balls are
+// still alive. Only bookkeeping goes; no ball's place, velocity or spin is touched.
+void ContactSystem::EndTable()
+{
+   size_t notInPlay = 0;   // entries whose ball is not in the player's list (should be 0: a ball leaving play is removed); compared by address only, never read
+   for (const BallContact &e : g_engaged)
+      if (g_pplayer == nullptr || std::none_of(g_pplayer->m_vball.begin(), g_pplayer->m_vball.end(), [&e](const Ball *b) { return &b->m_hitBall == e.ball; }))
+         notInPlay++;
+   PLOGI << "Contact system: play end: " << g_engaged.size() << " ball entries (" << notInPlay << " of balls not in play), " << g_ballPairs.size() << " ball pairs, "
+         << ContactSystemImpl::g_keptDoubles.size() << " kept doubles, " << ContactSystemImpl::g_sleep.size() << " sleep groups: cleared";
+   if (g_pplayer != nullptr)
+      for (Ball *const b : g_pplayer->m_vball)   // a ball that outlives the play (an editor ball): no pointer into the stores, no sleep group
+      {
+         b->m_hitBall.m_contact = nullptr;
+         b->m_hitBall.m_sleepGroup = 0;
+         b->m_hitBall.m_sleepOwe = false;
+      }
+   g_engaged.clear();
+   g_ballPairs.clear();
+   g_placed.clear();
+   g_deferred.clear();   // (events of the last step: their parts are gone)
+   ContactSystemImpl::g_keptDoubles.clear();
+   ContactSystemImpl::g_coilBooked.clear();
+   ContactSystemImpl::s_ballOrderLast.clear();
+   ContactSystemImpl::s_ballGroupLast.clear();
+   ContactSystemImpl::s_pairReachLast.clear();
+   ContactSystemImpl::s_pairReachNow.clear();
+   ContactSystemImpl::g_sleep.clear();
+   ContactSystemImpl::g_sleepOwner = nullptr;   // (SleepTable resets the rest at the next play, even if the new player has the old one's address)
+   ContactSystemImpl::s_pendingCy = nullptr;
+   ContactSystemImpl::s_nonFiniteTold = false;
+   g_snap = StartSnap();   // (ball and part pointers)
 }
 
 void ContactSystem::RestoreStart()
