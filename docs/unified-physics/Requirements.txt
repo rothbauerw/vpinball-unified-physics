@@ -231,3 +231,43 @@ Drop targets later, separately.
 10. Cost stated with 1, 2 and 6 balls; limit 30 us per contact in the worst cycle. Light sprung parts cost 54-271 us today (to-do 11.1): the model must avoid that.
 11. Values: estimated from part geometry and published material data, each labelled estimated with its source; tuned for feel only where no data exists; replaced
     when measured.
+
+H. PLUNGERS (all items AGREED with the user 2026-11-17; draft runs/2026-11-17-plunger/requirements_draft.md; hardware data PartData section 11)
+----------------------------------------------------------------------------------------------------------------------------------------------
+1. Types and scope: two types, mechanical (spring shooter, pulled by the player) and auto (fired by a coil). A VPX plunger is one or the other by its Auto Plunger
+   property; a table may have both in one lane. On the unified engine both replace stock completely: the ball never meets stock's plunger, and the plunger leaves the
+   allowed-stock list.
+2. What drives the mechanical plunger: on release the main spring is the only drive, pushing the rod, knob and tip forward. Its force is the real spring's: its rate
+   (from wire, coil diameter and active coils, or given directly) and free length. Two inputs per plunger: the gap at rest the rod leaves for the spring (housing to
+   tip washer, less any spacers: the spring's length at rest, the same for every spring in that plunger) and the spring. Full pull ends where the spring goes solid,
+   so travel = gap - that spring's solid length (coils x wire); travel, preload and energy follow from the two. VPX's Stroke is not an input. The moving mass is the
+   rod, knob and tip. Defaults: the user's long dark-brown spring (6 in free, 1 mm wire, 12 mm OD, 24 - 25 active coils, about 0.30 N/mm) and a gap of 93.3 mm
+   (the user's simulator rod without its spacer); not the simulator's own spring.
+3. Player input: a. key or button: while held, the knob is drawn back at the table's pull speed against the spring, up to full pull; on letting go the spring alone
+   drives it. b. a real plunger in the cabinet (analogue sensor, VPX's mechanical plunger option): while held, the knob follows the sensor; after a release from a
+   pull the model's spring drives the knob from where it was released, and the sensor's samples during the release do not move it. c. a partial pull launches with
+   that pull's energy. d. palm smash (analogue only): when the sensor reports positions forward of rest the knob follows it that way too, against the outer spring,
+   and the tip meets the ball at the speed the hand gave it; a slow sensor understates a smash.
+4. Return and rest: after release the rod moves forward until the knob's outer spring meets the housing; the outer spring takes the return shock and stops the rod,
+   with a physical rebound. The ball leaves the tip because the tip slows or stops, not by a rule. At rest the rod sits where the main spring's preload and the
+   outer spring balance.
+5. The ball and the tip: a. a ball resting in the lane stays put (no creep, jitter or sinking); a wall at the lane's end, the table's own, holds it near the tip's
+   rest position, so it does not follow a pulled tip back. b. the tip pushes the ball through the shared contact law; a ball rolling back into the tip meets the same
+   contact; no launch rule. The tip is ring rubber, a hemisphere 3/8 in (9.5 mm) across where it meets the ball. c. two balls in the lane: tip pushes ball, ball
+   pushes ball. d. the lane groove is unchanged; the tip never pushes a ball into the lane floor or walls.
+6. Auto plunger: a. its own moving part with a much shorter stroke, not the mechanical rod; on tables with both, a metal carriage whose two steel plates, one each
+   side of the mechanical tip, cup the ball and launch it (reference: a coil pulls a crank that swings the forks up the lane about a pivot). b. first version: the
+   coil and mechanism are left out; on fire a stand-in drive pushes the part with a set force over its stroke or swing (energy set per table); a coil model may
+   replace it later without changing the rest; then it returns to rest. c. the ball meets the steel plates through the shared contact law; no impulse on the ball
+   directly. Data still needed: stroke, mass, plate shape and spacing.
+7. Script: PullBack starts the pull, Fire releases it (an auto plunger: fires its drive), PullBackandRetract as stock, Position reads the physical position on
+   stock's scale, MechPlunger / MotionDevice select the cabinet input; CreateBall is not supported. LimitBOS and LimitEOS fire at rest and full pull with the speed.
+   FireSpeed, MechStrength, MomentumXfer, ScatterVelocity, ParkPosition and Stroke are not used by the physics, silently; drawing properties still draw it.
+   Existing tables' tuning is not a concern.
+8. Energy and stock: energy enters only through the main spring (loaded by the player's pull), the player's hand moving the knob (cabinet input: pull and palm
+   smash, a named drive like nudge) and the auto plunger's stand-in drive; the outer spring and the tip only return what they took, less losses. No route to stock
+   at any input.
+9. Cost: DevelopmentRules 5: 30 us in each 1 ms cycle with a ball on the plunger (worst cycle), any 7 consecutive cycles under 3 ms including the launch; a plunger
+   with no ball near it sleeps at rest.
+10. What the player sees: the drawn plunger (rod, spring, tip) at its physical position every frame, its travel the physical travel, the spring squeezing as it
+   really does; the auto plunger's forks at their physical swing. Drawn = touched.

@@ -1,0 +1,166 @@
+PLUNGER DESIGN (all sections AGREED with the user 2026-11-17; built in pieces, each measured)
+=============================================================================================================
+Requirements: Requirements.txt section H (agreed 2026-11-17). Hardware data: PartData.txt section 11. Rules: DevelopmentRules, ModelStandards.
+Closest models (ModelStandards 1b; survey 2026-11-17): the rod is a one-axis slide on BodyPart (bodypart.h), as the Button cap is (buttoncap.h: linear spring, two
+stops, ball contact through a revolved profile); the auto plunger's fork carriage is a second one-axis slide on BodyPart (no hinge, user 2026-11-17).
+Units: mm, N, g, J unless stated. Values: MEASURED (user), DERIVED (lead, from measured), ESTIMATED (no data; labelled).
+
+
+1. MECHANICAL PLUNGER: THE BODY AND ITS LAWS (AGREED 2026-11-17)
+--------------------------------------------------------------------------
+1a. One body. Rod, knob, tip, tip washer and clip move as one rigid body along the lane's axis: one coordinate s, the pull, 0 at rest, + away from the ball
+    (pulled), - toward the ball (pushed in, palm smash). A BodyPart slide like the Button cap; the lane axis is the plunger's VPX direction in the table plane.
+    Moving mass m = rod + knob + tip + washer + one third of the main spring (a spring's own mass moves with the rod as m/3 to first order):
+    rod 110 (DERIVED: 3/8 in x 7-3/4 in steel), knob 10 (MEASURED typical; ball knobs 15 - 25, a setting), tip about 3 and washer + clip about 2 (ESTIMATED),
+    spring 6.9 / 3 = 2.3 (DERIVED: 32.5 coils x pi x 11 mm x 0.785 mm2 x 7.85 g/cm3) -> m about 127 g.
+1b. Main spring (the only drive on release; Requirements H2). Linear, F = k_m (x0 + s) toward the ball, from the spring data:
+    k_m = G d^4 / (8 D^3 n), G 79.3 GPa (music wire), D = OD - d; x0 = free length - gap (preload compression); solid length = (active + closed coils) x d.
+    Travel = gap - solid. Defaults (brown spring, gap 93.3): k_m 0.30 N/mm, x0 59.1, solid 32.5, travel 60.8, preload 17.7 N, full pull 36.0 N.
+    Stored energy V_m(s) = k_m (x0 + s)^2 / 2: exact for a linear spring, so the energy book closes by construction (ModelStandards 2h).
+1c. Full-pull stop: the main spring going solid at s = travel (Requirements H2; the user's plunger has no other stop). A steel-on-steel stop: BodyStop, the Hertz
+    stop with viscoelastic restitution (ModelStandards 3a: impact law, no stiff spring). Coil-bind restitution ESTIMATED (as gates' steel stops) until measured.
+1d. Outer spring (rest and return; Requirements H4). Between the knob and the housing, it pushes the knob back (s +) only while touching: F_o = k_o (c0 - s) for
+    s < c0, 0 beyond. k_o about 9.4 N/mm (MEASURED: about 20 lbf at 0.375 in; linear ASSUMED). Rest s = 0 is where the two springs balance:
+    k_m x0 = k_o c0 -> c0 = 17.7 / 9.4 = 1.9 mm (the user saw it hardly compressed: consistent).
+    Its own solid length ends its travel: a second Hertz steel stop where it goes solid, s = -(19.05 - 8.5 - c0) = -8.6 mm (MEASURED geometry: 5 coils of
+    1.7 mm wire, OD 14 - 15 mm; the formula's 9.9 N/mm at 4 active coils agrees with the push measurement). From rest to solid it stores at most about 0.5 J.
+    Paper check, empty release from full pull: the spring gives 1.6 J -> rod about 5.0 m/s at rest; the outer spring would need c = v sqrt(m / k_o) = 18 mm to
+    stop it, more than its 19 mm free length allows once its solid length is counted: an empty full release BOTTOMS the outer spring. So its solid stop is
+    part of the model, not an edge case.
+    MEASURED (user 2026-11-17, phone slow-motion video, simulator plunger, blue spring, empty full-pull release): the outer spring ends nearly or fully closed.
+    Paper for that case: spring energy over the pull about 0.59 J plus about 0.07 J of main-spring push past rest; the outer spring holds about 0.52 J when
+    closed: so the losses on the way are about 0 - 25 % (the video cannot say more). The user's sliding-sound question is answered: friction and rattle take a
+    modest share, not most of the energy. A slow return (pull 10 mm, let go) reaches rest fully (user): Coulomb friction below the 7 N spring force near rest.
+1e. Gravity along the lane, with the cabinet's acceleration (as every part): m g sin(slope) about 0.14 N toward the player at 6.5 deg: small against 17.7 N.
+1f. Losses on the rod: (i) Coulomb friction in the housing, a FrictionLimit as gates have, side load = the rod's weight plus the sideways part of the tip's
+    contact force, mu ESTIMATED 0.2; (ii) a viscous drag F = -c v for the rod and spring rubbing and rattling in the sleeve at speed (the sound the user hears),
+    c chosen so the simulator's empty full release loses about 15 % before the outer spring (the middle of the measured 0 - 25 %), labelled DERIVED from the
+    slow-motion observation, to be refined when a release is measured more closely. Both are losses only (no energy enters).
+1g. The tip: a hemisphere 9.5 mm across on the rod's end (MEASURED), ring rubber (rubber ring material values: rubber_e_mpa 12 MPa, as rings), meeting the ball
+    through the shared contact law (ContactCore) as a revolved profile carried by the slide, as the Button cap's top. Height on the ball: the tip's axis at the
+    rod's height in the lane (from the VPX plunger's Z / Height; to settle in section 3).
+1h. Paper check of a full launch (ball resting at the wall at s = 0, default plunger): the rod reaches the ball at about 5.0 m/s with 127 g against the ball's
+    80.6 g; for a rubber restitution e 0.7 - 0.8 the ball leaves at (1 + e) m / (m + m_ball) x 5.0 = 5.2 - 5.5 m/s, before rolling losses (DERIVED; the
+    contact law decides it in the model, this is the order to expect). A softer spring or a shorter gap scales it as the square root of the spring energy.
+1i. Stiffest internal contact and steps (ModelStandards 3): the outer spring (9.4 N/mm on 127 g: period 23 ms) and the main spring (period 130 ms) are soft;
+    the stiff ones are the two steel stops (impact law) and the rubber tip on the ball (the shared law's own clock). No new stiff spring.
+1j. Not modelled (stated): spring surge (waves along the coils), the knob's spin, the rod bending, sound.
+
+
+2. PLAYER INPUT: THE HAND (AGREED 2026-11-17; Requirements H3)
+------------------------------------------------------------------------
+2a. The hand is two one-sided moving stops on the rod (BodyPart's driven stop, DriveStop: a stop that moves at a set rate toward a target, carrying a body that
+    rests on it; its work is booked as a drive, bodypart.h). A HOLD stop in front of the knob: it can only pull (stops the rod moving toward the ball past it).
+    A PUSH stop behind the knob: it can only push (palm smash). Neither touches the rod unless the rod presses on it, so a hand never pulls and pushes at once.
+    Energy enters through the hand only as the work of these stops (a named drive, as nudge; Requirements H8).
+2b. Key or button (H3a): key down: the hold stop starts at the rod's position and moves back at the pull speed to full pull; the spring presses the rod onto
+    it, so the rod follows. Key up: the hold stop is removed: the spring alone drives the rod (no launch rule). Pull speed: stock's PullSpeed has no physical
+    unit, so a new key pull_mm_s, default 120 mm/s (ESTIMATED: a hand pulling the default 61 mm in about half a second); a setting per plunger.
+2c. Cabinet sensor (H3b): the sensor's position maps to s linearly: its rest reading to s = 0, its full-pull reading to s = travel (VPX's plunger
+    calibration), forward of rest to s < 0 on the same scale. Each sample moves the hold stop (s > 0) or the push stop (s < 0) toward the new reading at the
+    speed between the last two samples, so the hand moves smoothly between samples, not in jumps.
+2d. Release (H3b: after a release the model's spring drives the rod, the sensor's samples do not). Players do not calibrate and cabinet plungers differ, so the
+    rule uses only what holds for every plunger (user 2026-11-17):
+    - Only a reading BEHIND rest (pulled) can start a release. A sample counts as a release when the knob moves toward rest faster than 0.5 m/s: between a
+      hand-guided return (rarely over about 0.3 m/s) and a released knob (about 0.7 m/s from a 5 mm pull on the weakest spring measured, the user's blue one;
+      about 3 m/s from a full pull; stiffer springs faster). The hold stop also drops at once when the sensor reads ahead of the model's rod (the rod has left
+      the hand). A sensor that reports speed (e.g. Pinscape) uses its own speed in the same test.
+    - The test decides only WHETHER the knob was released; the launch comes from the table's model spring (2b, 1b), so a release seen one sample late costs
+      about 10 ms of delay, not launch energy. Limit: a pull under about 2 mm may not count as a release.
+    - After a release the hand stays off, whatever the samples say (the real knob bouncing past rest and back is not a grab), and re-arms when both the
+      model rod is at rest (the engine's own rest test, the one that lets parts sleep) and the sensor reads rest within VPX's plunger dead zone (user's rule).
+      Limit: a player who grabs the real knob while it still bounces is ignored until the rod settles (a fraction of a second).
+    Stock (hitplunger.cpp, PlungerHandler.cpp, read 2026-11-17): a release when the reading drops 10 % of the travel below its furthest point in the last
+    100 ms, launch speed = a fixed factor (100/13) x the pull, re-sync after a fixed timer even if the plunger is still moving. Ours replaces all three.
+2e. Palm smash (H3d): a reading forward of rest is always the hand pushing, never a release, however fast. It moves the push stop forward against the outer spring; the push stop drives the rod, and the tip meets the ball
+    through the contact law at the rod's speed. When the reading comes back to rest or behind, the push stop is removed. A smash is as fast as the sensor
+    samples it (stated limit, H3d).
+2f. Partial pulls (H3c) need nothing extra: the rod starts from where the hand let go, with that pull's spring energy.
+2g. Script (H7): PullBack = key down (2b), Fire = key up, PullBackandRetract as stock's (pull, then return slowly at the pull speed with the hold stop), Position
+    reads s on stock's scale. LimitBOS / LimitEOS when the rod reaches rest / the full-pull stop.
+2h. A cabinet plunger on an auto-plunger table (kept from stock, user 2026-11-17): the mechanical plunger is not simulated; a pull-and-release (the 2d release
+    test) or pressing the knob in past rest (a gentle palm smash, held in) acts as the Launch Ball button: key down on the release or the press, key up about
+    100 ms after a release (as stock) or when the knob returns to rest after a press. Input handling, not physics.
+
+
+3. THE TIP AND THE BALL (AGREED 2026-11-17, 3b changed by the user; Requirements H5)
+----------------------------------------------------------------------
+3a. Shape: the rubber tip as a solid of revolution about the rod's axis: a hemisphere of radius 4.76 mm (3/8 in across, MEASURED) on a short cylinder of the
+    same radius back to the washer, carried by the slide (a revolved profile, as the Button cap's top, but about the rod's axis, which lies along the lane).
+    The cylinder matters: see 3d.
+3b. Placement: the author places the plunger, height and all (user 2026-11-17): the rod's axis, its rest position and direction are the VPX plunger's own
+    placement (position, surface, height properties), as drawn, so drawn = touched. Nothing is derived from the lane. (For reference: in the lane groove a
+    resting ball's centre is about 8.7 mm above the playfield top.)
+3c. Law: the shared contact law (ContactCore) with the ring rubber's material (rubber_e_mpa 12 MPa and the rings' damping and friction), the ball as for every
+    rubber. One contact; the ball pressed into it by the rod or rolling back into it, the same law (H5b). No launch rule.
+3d. Paper check of a full launch (default plunger, rod 127 g at about 5 m/s on a resting ball, Hertz ball on rubber hemisphere, E* about 16 MPa, R* 3.5 mm):
+    peak squeeze about 3.8 mm, peak force about 300 N, contact about 2.3 ms (DERIVED). 3.8 mm is close to the tip's 4.76 mm radius, past where a small-squeeze
+    Hertz law holds, so the cylinder behind the hemisphere has to take part (the contact widens and stiffens), and the hit is to be checked against the 1 us
+    reference in the offline test (ModelStandards 5a). A softer spring squeezes less (about 2.3 mm at 2.7 m/s, the simulator's).
+3e. At rest: the lane-end wall (the table's own) holds the ball; the tip at rest touches it lightly or stands just off it, as the table places them. A ball at
+    rest against the tip is a resting contact (no jitter: Requirements H5a; ModelStandards 3a resting constraint).
+3f. Two balls: tip on ball, ball on ball (the existing ball-pair contact). The lane groove and walls unchanged (H5d).
+
+
+4. AUTO PLUNGER (AGREED 2026-11-17, straight slide, no hinge; Requirements H6)
+--------------------------------------------------------------
+4a. One body sliding straight along the lane, horizontal, no hinge (user 2026-11-17: a straight drive for now, not the real crank's swing): the carriage
+    with its two steel forks, a one-axis slide on BodyPart like the rod (section 1). Placed by the author, as the mechanical plunger (its VPX plunger
+    object's placement, Auto Plunger set). A table may have both in one lane.
+4b. Forks (user's estimates, PartData 11): two steel strips, one each side of the mechanical tip, 20 mm apart inside (3/4 of the ball), meeting the ball about
+    18 mm above the playfield (2/3 up). Steel faces carried by the slide, with the steel contact law. Paper: on a ball centred 13.5 mm up, each fork's push points
+    about 10 mm sideways, 4.5 mm down and 7.9 mm along the lane: the two sideways parts cancel (the cup holds the ball centred), the downward part keeps it on
+    the lane floor (no hop), and 58 % of each push drives it up the lane (DERIVED).
+4c. Stroke: about one ball diameter (27 mm) from first contact (user's estimate), a setting. Stops: rest (the return spring holds it there) and end of stroke
+    (the coil's plunger bottoming): BodyStop, Hertz steel, impact law.
+4d. Drive, stand-in for the coil (H6b): on Fire a constant force pushes the carriage from rest to the end stop and then switches off: its energy is exactly
+    force x stroke = the table's auto_energy_j (ESTIMATED default 1.0 J: about a strong mechanical shot; tuned for feel until a coil model replaces it).
+    BodyPart's DriveForce (as the turntable motor uses it), booked as a drive.
+4e. Return: a light return spring to the rest stop (ESTIMATED); the ball, already gone, is not touched on the way back unless it rolls back into the lane.
+4f. Moving mass ESTIMATED: carriage and forks about 50 g plus the coil's plunger (about 20 g) and linkage: about 80 g (a setting). With 1.0 J
+    over 27 mm the forks reach about 4 - 5 m/s; the ball leaves at roughly 4 - 6 m/s (DERIVED order; the contact law decides it).
+4g. Data the user does not have (all labelled ESTIMATED, settings): mass, return spring, energy. Later, if wanted: the real crank's swing and a coil model.
+
+
+5. ENERGY AND COST (AGREED 2026-11-17; Requirements H8, H9; ModelStandards 2h, 4)
+-------------------------------------------------------------------------------------------
+5a. Every way energy enters, and that only these add it (ModelStandards 2h):
+    - the main spring and the outer spring: exact stored energies (linear: V = k x^2 / 2), so they return only what they took;
+    - the hand: the work of the hold and push stops (2a), booked as a drive by the driven-stop code that exists (bodypart.h), as nudge is a named drive;
+    - the auto plunger's stand-in drive: force x distance moved, booked through DriveForce while it acts, and off at the end stop (exactly force x stroke);
+    - gravity along the lane with the cabinet's acceleration, as every part.
+    Losses only: Coulomb friction and the viscous drag (1f), the stops' impact law (restitution from the Hertz law, never more out than in: ModelStandards
+    3a), the tip's and forks' contact damping. The group's energy book (ball + parts + stored) closes every cycle; any rise is a fault.
+5b. Cost estimate (to be measured, DevelopmentRules 5: 30 us in each 1 ms cycle with a ball on it, any 7 cycles under 3 ms):
+    - plunger alone (no ball near, at rest): asleep, nothing (the engine's rest test, 2d);
+    - pulling with a ball at the wall and not touching: the rod steps alone (one coordinate, soft springs): a few us;
+    - ball resting on the tip: a resting contact; both asleep once still;
+    - the launch: the tip's rubber contact lasts about 2.3 ms (3d) and sets short steps for 2 - 3 cycles: the cycles most at risk of the 30 us limit. The rod is
+      heavy (127 g), not a light part like the 1 g Button cap whose contact costs 54 - 271 us (to-do 11.1), so its clock is the contact's, not the part's;
+      INFERRED within the limit, to be measured.
+5c. How it is measured: the offline test against the 1 us reference first (launch speed, energy book, step sweep: ModelStandards 5a), then a focused driver run
+    on a table with a plunger (worst cycle, worst 7-cycle window, p99), per DevelopmentRules 3 and 5.
+
+
+6. WHAT BREAKS (AGREED 2026-11-17; DevelopmentRules 7). Each case: how the design handles it, and how it is checked (M = measured in the tests,
+   R = reasoned only, INFERRED until measured).
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+6a. Bad settings: a gap shorter than the spring's solid length (no travel), a zero or negative rate, mass or stroke: refused at load with an on-screen notice
+    naming the key (rule 8); the plunger stays at rest and pushes nothing; never handed to stock. R, then one load per case (M).
+6b. A ball placed inside the tip or forks at start (rule 10b): judged on recovery: no crash, no energy gained. Stress set (M).
+6c. Ball rolling back fast into a resting or moving tip (e.g. a weak launch falling back): the same contact (3c); the outer spring takes the rod's share. M.
+6d. Two or more balls in the lane: tip on ball, ball on ball (3f). M.
+6e. Mechanical and auto plunger in one lane: they never touch each other (forks straddle the tip; parts do not collide with parts); a ball between the tip
+    and the forks meets both through the contact law. The author's placement decides whether they overlap. R.
+6f. Fire or PullBack from the script while the player holds the cabinet plunger: the script's key acts as the hand (2b); the sensor's hand is ignored while a
+    script pull is active. Fire with no pull: nothing to release, no launch. R.
+6g. Sensor unplugged, noisy or drifting at rest: readings within VPX's dead zone are rest; a reading that jumps behind rest is a pull at most as fast as the
+    hold stop moves (2c); the release test needs a real forward speed (2d). R, one input-replay test (M).
+6h. Palm smash with no ball, or into a ball still rolling back: push stop and contact law, no special case. R.
+6i. Nudge and tilt during a pull: the cabinet's acceleration acts on the rod and ball as on every part (1e). R.
+6j. Table restart and teardown: no per-ball store kept past the play (ModelStandards trap: cleared in ContactSystem::EndTable); the plunger's part state
+    rebuilt at load; the hand latch (2d) reset. M (two plays in one process).
+6k. A plunger made invisible, or one not in a lane: still physical where the author placed it; the author's choice. R.
+6l. Extremes: the stiffest spring listed (0.047 in wire) at full pull, an empty release (the outer spring bottoms: its stop takes it, 1d), a 25 g ball knob,
+    auto_energy_j large: stress set at about twice the strongest real case (rule 10b). M.
+6m. Limits written down, not handled: spring surge, the real auto crank's swing and coil (section 4), a sensor slower than about 10 ms per sample (2d, 2e).

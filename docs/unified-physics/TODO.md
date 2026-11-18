@@ -12,7 +12,7 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-Next: the user's call. Lead log runs/2026-11-17-lead. Holes in ramps refused for now (user 2026-11-17). GL exe and main_exe stale: pass -Exe. Stress v2 bench bytes moved with the part-placing step (1 ulp, trap 112).
+Next: plunger build (PlungerDesign.txt agreed): piece 1 offline rod (springs, stops, tip) against the 1 us reference; then engine, hand, auto plunger. Lead log runs/2026-11-17-lead. GL exe and main_exe stale: pass -Exe. Stress v2 bench bytes moved with the part-placing step (1 ulp, trap 112).
 Judge a change by one exe, its setting on vs off; never by an older exe's md5 (ModelStandards trap 112). Query outliers 0.3-9 ms are the OS (measured). 1.33: cut B kept.
 Stand-up targets: code pulled from the tree 2026-11-15 (crashed VPX; user), backup backups/2026-11-15-standup-pulled; piece 5 in backups/2026-11-14-standup-build6; simpler draft runs/2026-11-15-standup-simple/design.md, unreviewed. Next step is the user's call.
 N5. One reach rule from physics (speed plus force) for grouping and step length; first built in 1.34 P2. Grouping: Gate001's 81 mm swing as one-cycle travel joins two lanes. Step length: speed only, no force. Check all parts; ball pairs of unequal mass and resting-ball wake (read only).
@@ -86,7 +86,6 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 ## 9. Still stock (ask before converting)
 1. Stand-up and drop targets.
 4. Plunger: other tables, auto plunger, mechanical input.
-5. Ramps: wire-ramp types, rebound, cost.
 6. Playfield material values unverified: compare with the user's video of a ball rolling on a playfield.
 
 ## 10. Branch and housekeeping (release path 3, 5, 10: see ReleasePlan.txt)
@@ -102,3 +101,8 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 
 ## 12. Kickers (when kickers are extended)
 1. Physical cup settles too slowly (user's play): find the missing damping, maybe the switch blade. Resting cost 102 us per cycle is the contact system's (runs/2026-11-12-lead).
+
+## 13. Ramps (converted: floor and side walls as a hard surface, ramphardsurface.cpp)
+1. Performance: cost with a ball rolling and resting on a ramp never measured; measure against rule 5 (worst cycle, worst 7-cycle window).
+2. Wire ramps as wires (enhancement, not a priority; user 2026-11-17): today a flat floor with walls, as stock; the ball should ride on the rods, a tube contact along each wire.
+3. Holes in ramps: refused with a notice (user 2026-11-17). Physics cuts in ramps left unexplained stray edges (mesh holes P2); a curved ramp's drawing needs per-face clipping.
