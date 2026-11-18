@@ -185,7 +185,7 @@ private:
       const int ev = r.SensorStep(present, pos, vel, band, ContactSystem::SubIntervalS());
       if (ev != PlungerHost::Rod::kSensorNone && m_sensorLines++ < 60)
       {
-         static const char *const names[] = { "", "takes the knob", "release (speed)", "release (reading ahead of the rod)", "lets go at rest", "re-armed", "sensor gone: lets go" };
+         static const char *const names[] = { "", "takes the knob", "release (speed)", "release (reading ahead of the rod)", "lets go at rest", "re-armed", "sensor gone: lets go", "palm pushes the knob in", "palm lets go" };
          PLOGI << "Plunger " << m_plunger->GetName() << ": sensor hand " << names[ev] << " at reading " << pos << " p.u., " << vel << " p.u./s; rod " << r.part.q * 1e3 << " mm at " << r.part.rate
                << " m/s, t=" << g_pplayer->m_time_msec << " ms";
       }

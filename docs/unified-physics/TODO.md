@@ -12,7 +12,7 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-Next: plunger (PlungerDesign.txt): step 1 in VPX (keys, script, drawing, tip; plungerhost.h); cost fails (44); next: step 2 cabinet sensor, 3 auto. Lead log runs/2026-11-17-lead. GL exe and main_exe stale: pass -Exe. Stress v2 bench bytes moved with the part-placing step (1 ulp, trap 112).
+Next: plunger (PlungerDesign.txt): steps 1-2 in VPX (keys, script, drawing, tip, cabinet sensor; plungerhost.h); cost fails (44); next: step 3 auto. Lead log runs/2026-11-17-lead. GL exe and main_exe stale: pass -Exe. Stress v2 bench bytes moved with the part-placing step (1 ulp, trap 112).
 Judge a change by one exe, its setting on vs off; never by an older exe's md5 (ModelStandards trap 112). Query outliers 0.3-9 ms are the OS (measured). 1.33: cut B kept.
 Stand-up targets: code pulled from the tree 2026-11-15 (crashed VPX; user), backup backups/2026-11-15-standup-pulled; piece 5 in backups/2026-11-14-standup-build6; simpler draft runs/2026-11-15-standup-simple/design.md, unreviewed. Next step is the user's call.
 N5. One reach rule from physics (speed plus force) for grouping and step length; first built in 1.34 P2. Grouping: Gate001's 81 mm swing as one-cycle travel joins two lanes. Step length: speed only, no force. Check all parts; ball pairs of unequal mass and resting-ball wake (read only).
