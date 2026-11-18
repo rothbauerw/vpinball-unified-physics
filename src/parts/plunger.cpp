@@ -127,6 +127,7 @@ public:
    {
       PlungerHost::Rod &r = *m_plunger->m_rod;
       r.Collect();
+      SensorHand(r);
       r.bookMs = (int)g_pplayer->m_time_msec;
       m_plunger->RodPublish();
       if (r.energySteps > m_esSeen)   // detector (rule 8)
@@ -164,9 +165,35 @@ public:
    }
 
 private:
+   // The cabinet sensor's hand (engine step 2A, design 2c - 2d, H7): VPX's filtered 1 ms sensor state (PlungerHandler, stepped at the cycle's start), read once per physics
+   // millisecond after the cycle, drives the rod's hold stop for the next. Only for a cabinet plunger (MechPlunger) with a sensor (or the external override: plugins, tests)
+   void SensorHand(PlungerHost::Rod &r)
+   {
+      const PlungerHandler *const ph = g_pplayer->m_physics->GetPlungerHandler();
+      const bool present = m_plunger->m_d.m_mechPlunger && ph != nullptr && ph->HasPlungerSensor();
+      double vel = present ? ph->GetRawVelocity() : 0.0, band = 0.01;   // p.u./s; the rest band, p.u.: stock's own (PlungerHandler.cpp:265)
+      if (present)
+         for (int i = 0; i < ph->GetSensorCount(); i++)   // the first active sensor, the one the handler reads
+            if (const std::unique_ptr<PlungerSensor> &sn = ph->GetSensor(i); sn != nullptr && sn->IsActive())
+            {
+               if (sn->GetVelocitySensor()->IsMapped())   // a velocity sensor (Pinscape): its own speed (the override's when on: GetHitVelocity at rest 0 returns either, p.u./s)
+                  vel = ph->GetHitVelocity(0.f);
+               band = std::max(band, (double)sn->GetPositionSensor()->GetMapping().GetDeadZone());   // the position mapping's dead zone, at least stock's band
+               break;
+            }
+      const double pos = present ? ph->GetRawPosition() : 0.0;
+      const int ev = r.SensorStep(present, pos, vel, band, ContactSystem::SubIntervalS());
+      if (ev != PlungerHost::Rod::kSensorNone && m_sensorLines++ < 60)
+      {
+         static const char *const names[] = { "", "takes the knob", "release (speed)", "release (reading ahead of the rod)", "lets go at rest", "re-armed", "sensor gone: lets go" };
+         PLOGI << "Plunger " << m_plunger->GetName() << ": sensor hand " << names[ev] << " at reading " << pos << " p.u., " << vel << " p.u./s; rod " << r.part.q * 1e3 << " mm at " << r.part.rate
+               << " m/s, t=" << g_pplayer->m_time_msec << " ms";
+      }
+   }
+
    Plunger *m_plunger;
    long m_esSeen = 0;
-   int m_esLines = 0, m_lines = 0;
+   int m_esLines = 0, m_lines = 0, m_sensorLines = 0;
    bool m_failShown = false;
 };
 
@@ -203,7 +230,7 @@ void Plunger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 
       // Unified engine: the mechanical plunger is the physical rod of the contact system (physics/plungerhost.h, docs/unified-physics/PlungerDesign.txt; engine step 1). Chosen once
       // here, never handed to stock in play. An Auto Plunger stays on stock until engine step 3. The stock HitPlunger is built but not added: m_pos (drawn, Position) and CreateBall's place.
-      // A cabinet plunger (MechPlunger) does not move the rod in this step and does not reach stock either: its readings are ignored (the sensor's hand is engine step 2, design 2c-2d)
+      // A cabinet plunger (MechPlunger with a sensor) moves the rod through the hand's hold stop (PlungerRodAdapter::SensorHand, engine step 2A); it never reaches stock
       const std::filesystem::path ini = ContactHost::IniPathFor(m_ptable->m_filename);
       if (ContactSystem::Unified() && !m_d.m_autoPlunger && ContactHost::PlungerWanted(ini, GetName()))
       {
@@ -247,7 +274,7 @@ void Plunger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          PLOGI << "Plunger " << GetName() << ": mechanical rod on the group step; apex at rest (" << m_d.m_v.x << ", " << m_rodDrawRest << ", " << axisZ << ") VPU, axis +y; travel " << p.travel * 1e3
                << " mm full pull, " << p.outerSolidS * 1e3 << " mm pushed in; k_m " << p.km * 1e-3 << " N/mm, preload " << p.km * p.x0 << " N, mass " << p.mass * 1e3 << " g, drag " << p.c << " N s/m, pull "
                << p.pullRate * 1e3 << " mm/s. Drawn range (Stroke " << m_d.m_stroke << " VPU, ParkPosition " << m_d.m_parkPosition << "): " << drawBack * U * 1e3 << " mm back, " << drawFwd * U * 1e3
-               << " mm forward of rest" << ((double)drawBack * U < p.travel || (double)drawFwd * U < -p.outerSolidS ? ": the physical travel is drawn clamped" : "");
+               << " mm forward of rest" << ((double)drawBack * U < p.travel || (double)drawFwd * U < -p.outerSolidS ? ": the physical travel is drawn clamped" : "") << "; MechPlunger " << (int)m_d.m_mechPlunger;
          return;
       }
       physics->AddCollider(php, isUI);

@@ -22,6 +22,8 @@
 #include "physics/turntable.h"
 #include "physics/stockcount.h"
 #include "physics/contactsystem.h"
+#include "physics/PhysicsEngine.h"
+#include "input/PlungerHandler.h"
 
 // Test driver (docs/unified-physics/TestMatrixDesign.txt section 2; keys and file format in docs/unified-physics/archive/NewPhysicsReference.txt). Harness only: off unless VPX_TEST_INPUT is set.
 // Input file: one action per line, "<t_ms> <action> <args>", '#' starts a comment; actions with the same time run in file order. Time 0 is the first cycle after the
@@ -30,6 +32,7 @@
 //    destroy NAME                             remove the ball
 //    flip PART 1|0                            flipper solenoid on / off (as the script's RotateToEnd / RotateToStart)
 //    plunger PART 1|0                         plunger key down / up (as the script's PullBack / Fire)
+//    plungersensor POS VEL | off              the cabinet plunger sensor's state, p.u. (0 rest, 1 full pull) and p.u./s, as a plugin's override sets it; off: the override off
 //    enabled PART 1|0                         a flipper's, a trigger's or a kicker's Enabled (as the script's Flipper.Enabled, Trigger.Enabled, Kicker.Enabled)
 //    kick NAME angle speed [incl [x y z]]     a kicker kicks its ball out (as the script's Kicker.Kick angle, speed, inclination; inclination default 0; with x y z, U, as KickXYZ's offset)
 //    kickerball NAME KICKER                   a kicker makes a ball (as the script's Kicker.CreateBall); the ball is NAME from then on. Refused (an occupied kicker): a log line, no ball
@@ -412,6 +415,17 @@ namespace TestDriver
                pl->PullBack();
             else
                pl->Fire();
+         }
+         else if (a.verb == "plungersensor")   // plungersensor <position> <velocity> (p.u., p.u./s) | off: the cabinet sensor's state as a plugin sets it (PlungerHandler::SetExternalPlunger)
+         {
+            float pos = 0.f, vel = 0.f;
+            PlungerHandler *const ph = g_pplayer->m_physics->GetPlungerHandler();
+            if (ph != nullptr && a.args.size() == 1 && a.args[0] == "off")
+               ph->SetExternalPlunger(false, 0.f, 0.f);
+            else if (ph != nullptr && a.args.size() == 2 && Num(a, 0, pos) && Num(a, 1, vel))
+               ph->SetExternalPlunger(true, vel, pos);
+            else
+               Warn(at + "expected a position and a velocity (p.u., p.u./s), or off");
          }
          else if (a.verb == "enabled")
          {

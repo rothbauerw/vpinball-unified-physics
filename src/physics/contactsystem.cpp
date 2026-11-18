@@ -2354,7 +2354,12 @@ struct ContactSystemImpl
       const bool cordEnergyOn = cordEnergy && !cords.empty();
       const double cordE0 = cordEnergyOn ? g.Energy() : 0.0;
       // a part's books (always on, rule 8): the group's energy across the cycle against what its drives did and its losses took
-      const double partE0 = hasPart ? g.Energy() : 0.0;
+      const double partE0 = hasPart ? [&]() {
+         double e = g.Energy();
+         for (int p = 0; p < g.np; p++)
+            e -= g.part[p]->PendingNetJ();   // an impact taken at CycleBegin (a driven stop's touch) is in Energy() and in this cycle's books: start before it (as GroupStep::CycleBook)
+         return e;
+      }() : 0.0;
       const double hFix = GroupStep::GroupFixedStepS();
       // the group's moving parts and cords by name
       const auto groupParts = [&]() {
