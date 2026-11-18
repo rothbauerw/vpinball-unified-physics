@@ -12,6 +12,7 @@
 #include "parts/ball.h"
 #include "parts/flipper.h"
 #include "parts/kicker.h"
+#include "parts/plunger.h"
 #include "parts/rubber.h"
 #include "parts/trigger.h"
 #include "parts/pintable.h"
@@ -28,6 +29,7 @@
 //    ball NAME x y z vx vy vz [radius mass]   create a ball: x, y in VPX units, z = height of the ball's bottom above the playfield (U), velocity in m/s
 //    destroy NAME                             remove the ball
 //    flip PART 1|0                            flipper solenoid on / off (as the script's RotateToEnd / RotateToStart)
+//    plunger PART 1|0                         plunger key down / up (as the script's PullBack / Fire)
 //    enabled PART 1|0                         a flipper's, a trigger's or a kicker's Enabled (as the script's Flipper.Enabled, Trigger.Enabled, Kicker.Enabled)
 //    kick NAME angle speed [incl [x y z]]     a kicker kicks its ball out (as the script's Kicker.Kick angle, speed, inclination; inclination default 0; with x y z, U, as KickXYZ's offset)
 //    kickerball NAME KICKER                   a kicker makes a ball (as the script's Kicker.CreateBall); the ball is NAME from then on. Refused (an occupied kicker): a log line, no ball
@@ -400,6 +402,16 @@ namespace TestDriver
                f->RotateToEnd();
             else
                f->RotateToStart();
+         }
+         else if (a.verb == "plunger")   // plunger <name> 1|0: PullBack (the key down) / Fire (the key up), as the table's script calls them
+         {
+            Plunger *const pl = a.args.size() == 2 ? static_cast<Plunger *>(FindPart(a.args[0], eItemPlunger)) : nullptr;
+            if (pl == nullptr || (a.args[1] != "1" && a.args[1] != "0"))
+               Warn(at + "expected a plunger name and 1 or 0");
+            else if (a.args[1] == "1")
+               pl->PullBack();
+            else
+               pl->Fire();
          }
          else if (a.verb == "enabled")
          {

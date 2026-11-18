@@ -262,7 +262,8 @@ H. PLUNGERS (all items AGREED with the user 2026-11-17; draft runs/2026-11-17-pl
    directly. Data still needed: stroke, mass, plate shape and spacing.
 7. Script: PullBack starts the pull, Fire releases it (an auto plunger: fires its drive), PullBackandRetract as stock, Position reads the physical position on
    stock's scale, MechPlunger / MotionDevice select the cabinet input; CreateBall is not supported. LimitBOS and LimitEOS fire at rest and full pull with the speed.
-   FireSpeed, MechStrength, MomentumXfer, ScatterVelocity, ParkPosition and Stroke are not used by the physics, silently; drawing properties still draw it.
+   FireSpeed, MechStrength, MomentumXfer, ScatterVelocity, ParkPosition and Stroke are not used by the physics, silently, except that they place the tip at rest
+   where stock draws it (drawn = touched); drawing properties still draw it.
    Existing tables' tuning is not a concern.
 8. Energy and stock: energy enters only through the main spring (loaded by the player's pull), the player's hand moving the knob (cabinet input: pull and palm
    smash, a named drive like nudge) and the auto plunger's stand-in drive; the outer spring and the tip only return what they took, less losses. No route to stock

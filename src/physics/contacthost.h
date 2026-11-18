@@ -100,6 +100,7 @@ public:
    static bool LoadHardSurfaceSettings(RubberObjectSettings &s, const std::filesystem::path &file, const char *kind, const std::string &name, double elasticity, double friction);
    static bool IsSurfaceKey(const std::string &key);   // a key of the surface material (LoadHardSurfaceSettings): a part's own loader does not call it unknown
    static double HardSurfaceE(const HitObject *first);   // the part's restitution at 1 m/s: its elasticity with the stock falloff (0.3 without a collider)
+   static bool PlungerWanted(const std::filesystem::path &file, const std::string &name);   // like HingeWanted, for [Features] plunger: a mechanical plunger's rod ([Plunger:<name>] rubber = 0 opts out)
    static bool HingeWanted(const std::filesystem::path &file, const char *kind, const std::string &name);   // like HardSurfaceWanted, for [Features] hinges (gates and spinners)
    // The playfield as a surface on the force model. s gets the material of the [Playfield] section (defaults: a steel ball on lacquered wood, all UNVERIFIED), tableMu the
    // table's friction. False if [Features] playfield_contact is off.

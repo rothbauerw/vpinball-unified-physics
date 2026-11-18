@@ -272,6 +272,16 @@ bool ContactHost::HingeWanted(const std::filesystem::path &file, const char *kin
    return probe.surfaceRubber;
 }
 
+bool ContactHost::PlungerWanted(const std::filesystem::path &file, const std::string &name)
+{
+   if (!PhysicsIni::Active(file).plunger)   // no file: on with the defaults
+      return false;
+   RubberObjectSettings probe;
+   probe.surfaceRubber = true;
+   ApplySection(probe, file, "plunger:" + name);
+   return probe.surfaceRubber;
+}
+
 bool ContactHost::IsSurfaceKey(const std::string &key)
 {
    RubberObjectSettings scratch;

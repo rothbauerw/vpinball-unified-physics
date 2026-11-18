@@ -38,6 +38,7 @@ namespace PhysicsIni
       bool hardSurfaces = true;   // unified engine: every other wall and primitive is a hard surface of the contact model (material from the part's elasticity and friction, [Surfaces] and [Wall:<name>] / [Primitive:<name>] override); off = stock collisions
       bool triggers = true;       // unified engine: wire triggers (WireA-D) are rollover wire switches of the contact system (design-wire.md); off = stock sensors. On by default (user 2026-11-04)
       bool hinges = true;         // unified engine: gates and spinners are hinged plates of the contact model (mass, torque from the balls touching them); off = the stock kick of the plate by the ball
+      bool plunger = true;        // unified engine: a mechanical plunger (Auto Plunger off) is the physical rod of the contact model (plungerrod.h, PlungerDesign.txt; [Plunger:<name>] rubber = 0 opts one out); off = the stock plunger. On while tested
       bool bumpers = true;        // read only so bumpers = 0 can be told as ignored (bumper.cpp): a unified table has no other bumper
       bool bands = true;          // band model (rubber stretched between posts); off = stock collisions
       bool slings = true;         // slings (plate, coil, switches) on bands; off = a plain band
@@ -93,8 +94,8 @@ namespace PhysicsIni
    inline void WarnUnknownSection(const std::string &lowerName)
    {
       // every section a loader reads (PartsIni::ReadSections' plain and kind names, ContactHost::ApplySection's, the magnet/turntable/playfield-cut parsers)
-      static const char *const plain[] = { "features", "contact", "flippers", "rubbers", "slings", "playfield", "surfaces", "gates", "spinners", "bumpers", "triggers" };
-      static const char *const kinds[] = { "flipper:", "rubber:", "sling:", "wall:", "primitive:", "magnet:", "turntable:", "playfieldcut:", "gate:", "spinner:", "ramp:", "bumper:", "kicker:", "trigger:" };
+      static const char *const plain[] = { "features", "contact", "flippers", "rubbers", "slings", "playfield", "surfaces", "gates", "spinners", "bumpers", "triggers", "plungers" };
+      static const char *const kinds[] = { "flipper:", "rubber:", "sling:", "wall:", "primitive:", "magnet:", "turntable:", "playfieldcut:", "gate:", "spinner:", "ramp:", "bumper:", "kicker:", "trigger:", "plunger:" };
       for (const char *p : plain)
          if (lowerName == p)
             return;
@@ -103,7 +104,7 @@ namespace PhysicsIni
             return;
       static std::set<std::string> warned;
       if (warned.insert(lowerName).second)
-         PLOGW << "Physics settings: section [" << lowerName << "] is not a known kind (features, contact, flippers, rubbers, slings, playfield, surfaces, gates, spinners, bumpers, triggers, or a part's kind: flipper, rubber, sling, wall, primitive, magnet, turntable, playfieldcut, gate, spinner, ramp, bumper, kicker, trigger); it is ignored";
+         PLOGW << "Physics settings: section [" << lowerName << "] is not a known kind (features, contact, flippers, rubbers, slings, playfield, surfaces, gates, spinners, bumpers, triggers, plungers, or a part's kind: flipper, rubber, sling, wall, primitive, magnet, turntable, playfieldcut, gate, spinner, ramp, bumper, kicker, trigger, plunger); it is ignored";
    }
 
    // true if the file has a [Features] section (it is a unified file); `f` gets its switches (a missing key = on)
@@ -152,6 +153,8 @@ namespace PhysicsIni
             f.hardSurfaces = on;
          else if (key == "hinges")
             f.hinges = on;
+         else if (key == "plunger")
+            f.plunger = on;
          else if (key == "triggers")
             f.triggers = on;
          else if (key == "bumpers")
@@ -189,7 +192,7 @@ namespace PhysicsIni
       Features f;
       if (!ContactSystem::Unified())
       {
-         f.flippers = f.flipperRubber = f.rubbers = f.playfieldContact = f.surfaceRubbers = f.hardSurfaces = f.hinges = f.triggers = false;
+         f.flippers = f.flipperRubber = f.rubbers = f.playfieldContact = f.surfaceRubbers = f.hardSurfaces = f.hinges = f.plunger = f.triggers = false;
          f.bands = f.slings = f.contact = f.magnets = f.turntables = f.meshOverlapRepair = f.hitSpeed = f.aircoreInStep = f.seatEditorBalls = false;
          return f;
       }

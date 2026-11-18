@@ -14,6 +14,8 @@
 constexpr int MAXTIPSHAPE = 256;
 
 class MeshBuffer;
+class ContactPartHost;
+namespace PlungerHost { class Rod; }
 
 class PlungerData final : public BaseProperty
 {
@@ -172,6 +174,15 @@ private:
    std::shared_ptr<MeshBuffer> m_meshBuffer;
 
    HitPlunger *m_phitplunger = nullptr;
+
+   // unified engine, [Features] plunger: the mechanical rod of the contact system (physics/plungerhost.h). m_phitplunger is then built but not in the physics: it carries
+   // m_pos for the renderer and the script, its geometry for CreateBall. m_rodRefused: a bad [Plunger:<name>] value; the plunger stays at rest and pushes nothing
+   std::shared_ptr<PlungerHost::Rod> m_rod;
+   ContactPartHost *m_partHost = nullptr;
+   bool m_rodRefused = false;
+   float m_rodDrawRest = 0.f;   // m_pos (VPU) where stock draws its tip at rest: the rod's s = 0
+   void RodPublish();           // m_pos from the rod's pull, every physics interval (drawn = touched)
+   friend class PlungerRodAdapter;
 
    //
    // Plunger animation details.  We calculate these in RenderSetup()

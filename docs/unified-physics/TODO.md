@@ -12,7 +12,7 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-Next: plunger (PlungerDesign.txt): offline rod + tip done (plungerrod.h); owed: tip energy at tight solve, roll-back rebound; then hand, engine, auto. Lead log runs/2026-11-17-lead. GL exe and main_exe stale: pass -Exe. Stress v2 bench bytes moved with the part-placing step (1 ulp, trap 112).
+Next: plunger (PlungerDesign.txt): step 1 in VPX (keys, script, drawing, tip; plungerhost.h); cost fails (44); next: step 2 cabinet sensor, 3 auto. Lead log runs/2026-11-17-lead. GL exe and main_exe stale: pass -Exe. Stress v2 bench bytes moved with the part-placing step (1 ulp, trap 112).
 Judge a change by one exe, its setting on vs off; never by an older exe's md5 (ModelStandards trap 112). Query outliers 0.3-9 ms are the OS (measured). 1.33: cut B kept.
 Stand-up targets: code pulled from the tree 2026-11-15 (crashed VPX; user), backup backups/2026-11-15-standup-pulled; piece 5 in backups/2026-11-14-standup-build6; simpler draft runs/2026-11-15-standup-simple/design.md, unreviewed. Next step is the user's call.
 N5. One reach rule from physics (speed plus force) for grouping and step length; first built in 1.34 P2. Grouping: Gate001's 81 mm swing as one-cycle travel joins two lanes. Step length: speed only, no force. Check all parts; ball pairs of unequal mass and resting-ball wake (read only).
@@ -41,6 +41,9 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 40. Jet skirt resting on its seat is stepped as a stiff spring and sets short steps whenever the jet is grouped (bumpergroup.h ~283): ModelStandards 3a resting constraint. Gorgar +6 % steps with energy_reach (runs/2026-11-14-reach-p1b).
 42. Step halvings (failed solves, groupstep.h:2190): stress v2 ~560 at 34e4185da (519 near 77 s). Repro: slow ball rocking on a slope below the flippers, 1,269 halvings (runs/2026-11-15-finder-P6b3/drive_burst.txt). Find surface and cause.
 43. After the finder work (1.34): tables/turn table/turn table test 4 (user's worst-case table) runs slower on today's build than on the 11-09 build (user's play). Measure both on one machine and find the cause.
+44. Plunger launch cost FAILS H9: worst cycle 305 us vs 30 us; 17 steps/cycle on the tip's stiffness clock (runs/2026-11-17-plunger/e1-why); 70-90 us per launch cycle outside the steps unexplained. Same root as 11.1. User 2026-11-18: does not hold up the model.
+45. Plunger LimitBOS / LimitEOS: which end each means, and re-firing on the rod's bounces (10-16 per launch); no table in tables/ uses them. Left as built (BOS rest, EOS full pull); user 2026-11-18: to address later.
+46. Plunger spring animation does not work on the unified rod (user 2026-11-18, play); cause unknown. H10: the spring drawn squeezing as it really does.
 41. Magnet pull in the energy reach is taken at the ball's place, not the largest over its travel: a true bound needs current, saturation, in-winding and per-type terms. Re-looks while a magnet is on (stress C1).
 
 ## 2. Flippers

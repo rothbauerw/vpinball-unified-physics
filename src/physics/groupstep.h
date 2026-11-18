@@ -763,6 +763,7 @@ namespace GroupStep
       const unsigned char *SavedState() const { return sv.data(); }   // the net's saved records, in the order the part declared them (its notes)
       virtual double KineticJ() const { return 0.0; }
       virtual double StopSquashJ() const { return 0.0; }   // the energy reach: what its compliant stops hold above their unloaded state, by each stop's own law (J); a stop that acts by restitution holds nothing
+      virtual double PendingNetJ() const { return 0.0; }   // drive less loss already in its state but not yet booked (an impact taken before the cycle's book opens, booked at the next Accept): the book opens before it (J)
       virtual void ScaleSpeeds(double) {}
       virtual void AfterEnergyStep() {}
       virtual void HoldArcs() {}   // no solve in this attempt: what the part solves within itself stays as it is
@@ -5606,6 +5607,8 @@ namespace GroupStep
          if (terms)
             startTerms = g.Terms();
          e0 = g.Energy();
+         for (int p = 0; p < g.np; p++)
+            e0 -= g.part[p]->PendingNetJ();   // an impact taken at CycleBegin (a driven stop's touch) is in Energy() and in this cycle's drive and loss: open the book before it
          t0 = std::chrono::steady_clock::now();
       }
       void AfterStep()

@@ -15,7 +15,8 @@
 //   hand          (piece 2, design 2a/2b/2g) two stops the player's hand moves (bodypart.h driven stops), off until used: HOLD (side -1: the rod cannot move toward the
 //                 ball past it; the hand pulls) and PUSH (side +1: the rod cannot move away from the ball past it; the hand pushes, palm smash). Each placed at the rod
 //                 when the hand takes hold (BodyPart::SetStop), then driven at the hand's rate; their work is the hand's drive. No launch rule: let go, the spring drives.
-//                 Same steel law as the other stops at the rod's radius (ESTIMATED: a hand is softer; no data)
+//                 A soft gripping hand, not steel (user 2026-11-18): restitution 0, the knob joins the hand on contact (a perfectly inelastic catch: the rod takes
+//                 the stop's speed, the kinetic energy difference booked as stop loss; no bounce). The Hertz k at the rod's radius stays only for the rest test
 // Stored energy V(s) = k_m s (x0 + s / 2) + k_o max(c0 - s, 0)^2 / 2 - m (g.axis) s; its chord across the outer spring's kink at c0 is exact (piecewise), so the book closes at any step.
 // Pure SI inside; the settings in mm, g, N/mm as the hardware data is given (PartData.txt section 11). No VPX types.
 
@@ -58,7 +59,7 @@ namespace PlungerRod
       double stopVRef = 0.1;
       // viscous drag c, N s/m: DERIVED (fitted, runs/2026-11-17-plunger/p1a: the simulator plunger's empty full release loses 15 % of the spring energy released
       // between full pull and the outer spring's first touch, the middle of the 0 - 25 % read from the user's slow-motion video)
-      double dragNsPerM = 0.0;
+      double dragNsPerM = 0.781;
       // Coulomb friction in the bore (piece 1b): mu ESTIMATED; the rod's radius for the bearing patch (3/8 in rod, DERIVED)
       double boreMu = 0.2;
       double rodRadiusMm = 4.7625;
@@ -151,6 +152,7 @@ namespace PlungerRod
          stopPull = PlaceStop(stop(travel, 1, 0.5 * d));
          stopIn = PlaceStop(stop(outerSolidS, -1, 0.5 * s.outerWireMm * mm));
          GroupStep::BodyStopPlace hand = stop(0.0, -1, rRod);   // the hand's stops, off until the hand takes hold (KeyDown, Push)
+         hand.law = GroupStep::BodyStopLaw{};   // restitution 0 at every speed: the hand catches the knob, no rebound (Impact rests it on the stop)
          hand.enabled = false;
          stopHold = PlaceStop(hand);
          hand.side = 1;

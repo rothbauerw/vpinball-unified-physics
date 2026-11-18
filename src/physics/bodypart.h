@@ -227,6 +227,7 @@ namespace GroupStep
          return c;
       }
       double KineticJ() const override { return 0.5 * mass * rate * rate; }
+      double PendingNetJ() const override { return pendDrive - pendLoss; }
       double Energy(const Ball *, int) const override { return KineticJ() + StoredEnergy(q) + PinSpringJ(); }
       void StepFacts(const Ball *, int, const Settings &, StepFactList &f) override
       {

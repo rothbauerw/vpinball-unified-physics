@@ -9,6 +9,11 @@
 #include "parts/Collection.h"
 #include "parts/PartGroup.h"
 #include "physics/collideex.h"
+#include "physics/contacthost.h"
+#include "physics/contactparthost.h"
+#include "physics/contactsystem.h"
+#include "physics/plungerhost.h"
+#include "ui/live/LiveUI.h"
 #include "physics/PhysicsEngine.h"
 #include "renderer/IndexBuffer.h"
 #include "renderer/RenderDevice.h"
@@ -113,6 +118,58 @@ void Plunger::WriteRegDefaults()
 
 #pragma region Physics
 
+// The table side of the rod (physics/plungerhost.h): m_pos from s each interval, its LimitBOS / LimitEOS (deferred, as the gate's), the detectors
+class PlungerRodAdapter final : public PartAdapter
+{
+public:
+   explicit PlungerRodAdapter(Plunger *plunger) : m_plunger(plunger) { }
+   void Publish() override
+   {
+      PlungerHost::Rod &r = *m_plunger->m_rod;
+      r.Collect();
+      r.bookMs = (int)g_pplayer->m_time_msec;
+      m_plunger->RodPublish();
+      if (r.energySteps > m_esSeen)   // detector (rule 8)
+      {
+         m_esSeen = r.energySteps;
+         if (m_esLines < 5)
+         {
+            m_esLines++;
+            PLOGW << "Group step: energy step alone, part " << m_plunger->GetName() << ", balls 0, t=" << g_pplayer->m_time_msec << " ms, " << m_esSeen << " so far; " << r.StateNote() << ". A net, not expected to fire: keep vpinball.log and report it";
+         }
+      }
+      if (r.failedSteps > 0 && !m_failShown)
+      {
+         m_failShown = true;
+         const std::string msg = m_plunger->GetName() + ": a step of the plunger rod alone could not be solved: the rest of that cycle was lost";
+         PLOGW << msg;
+         if (g_pplayer->m_liveUI != nullptr)
+            g_pplayer->m_liveUI->PushNotification(msg, 6000);
+      }
+   }
+   void Fire(const std::vector<ContactMovingPart::Event> &events) override
+   {
+      for (const ContactMovingPart::Event &e : events)
+      {
+         const float speed = (float)(e.value / ContactSystem::kVelocityScale);   // stock's unit: VPU per 10 ms
+         if (e.kind == ContactMovingPart::Event::LimitBOS)
+            m_plunger->FireVoidEventParm(DISPID_LimitEvents_BOS, speed);
+         else if (e.kind == ContactMovingPart::Event::LimitEOS)
+            m_plunger->FireVoidEventParm(DISPID_LimitEvents_EOS, speed);
+         else
+            continue;
+         if (m_lines++ < 40)
+            PLOGI << "Plunger " << m_plunger->GetName() << ": " << (e.kind == ContactMovingPart::Event::LimitBOS ? "LimitBOS (rest)" : "LimitEOS (full pull)") << " at " << e.value << " m/s, t=" << g_pplayer->m_time_msec << " ms";
+      }
+   }
+
+private:
+   Plunger *m_plunger;
+   long m_esSeen = 0;
+   int m_esLines = 0, m_lines = 0;
+   bool m_failShown = false;
+};
+
 void Plunger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 {
    if (!isUI && GetPartGroup() != nullptr && GetPartGroup()->GetReferenceSpace() != PartGroupData::SpaceReference::SR_PLAYFIELD)
@@ -140,17 +197,84 @@ void Plunger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       const float zheight = m_ptable->GetSurfaceHeight(m_d.m_szSurface, m_d.m_v.x, m_d.m_v.y);
 
       HitPlunger *const php = new HitPlunger(m_d.m_v.x - m_d.m_width, m_d.m_v.y + m_d.m_height, m_d.m_v.x + m_d.m_width, zheight, m_d.m_v.y - m_d.m_stroke, m_d.m_v.y, this);
-
-      physics->AddCollider(php, isUI);
       php->m_pplunger = this;
       m_phitplunger = php;
+      m_rodRefused = false;
+
+      // Unified engine: the mechanical plunger is the physical rod of the contact system (physics/plungerhost.h, docs/unified-physics/PlungerDesign.txt; engine step 1). Chosen once
+      // here, never handed to stock in play. An Auto Plunger stays on stock until engine step 3. The stock HitPlunger is built but not added: m_pos (drawn, Position) and CreateBall's place.
+      // A cabinet plunger (MechPlunger) does not move the rod in this step and does not reach stock either: its readings are ignored (the sensor's hand is engine step 2, design 2c-2d)
+      const std::filesystem::path ini = ContactHost::IniPathFor(m_ptable->m_filename);
+      if (ContactSystem::Unified() && !m_d.m_autoPlunger && ContactHost::PlungerWanted(ini, GetName()))
+      {
+         constexpr double U = ContactSystem::kMetresPerUnit;
+         PlungerRod::Settings s;
+         std::vector<std::string> bad;
+         PlungerHost::Load(s, ini, GetName(), bad);
+         // placement (design 3b, H10 drawn = touched): +s = pulled = +y; the tip's apex at s = 0 where stock draws its tip at rest; the axis at the drawn rod's centre, Width above the
+         // surface plus ZAdjust (RenderSetup: the rod's radius about zheight + width)
+         const PlungerMoverObject &pm = php->m_plungerMover;
+         m_rodDrawRest = pm.m_frameEnd + pm.m_restPos * pm.m_frameLen;
+         const float axisZ = zheight + m_d.m_zAdjust + m_d.m_width;
+         const RubberContact::V3 apex((double)m_d.m_v.x * U, (double)m_rodDrawRest * U, (double)axisZ * U), axis(0.0, 1.0, 0.0);
+         if (!bad.empty())
+         {
+            std::string keys;
+            for (const std::string &k : bad)
+               keys += (keys.empty() ? "" : ", ") + k;
+            const std::string msg = "Plunger " + GetName() + ": [Plunger:" + GetName() + "] " + keys + " cannot build a working rod; the plunger stays at rest and pushes nothing";
+            PLOGW << msg;
+            if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+               g_pplayer->m_liveUI->PushNotification(msg, 10000);
+            m_rodRefused = true;
+            php->m_plungerMover.m_pos = m_rodDrawRest;
+            return;
+         }
+         m_rod = std::make_shared<PlungerHost::Rod>();
+         m_rod->Build(s, axis, ContactPartHost::PartGravitySI(), apex, RubberContact::BallSI());
+         const RubberContact::V3 o = m_rod->Origin();
+         const double reach = m_rod->Reach();
+         const float lo[3] = { (float)((o.x - reach) / U), (float)((o.y - reach) / U), (float)((o.z - reach) / U) };
+         const float hi[3] = { (float)((o.x + reach) / U), (float)((o.y + reach) / U), (float)((o.z + reach) / U) };
+         RubberObjectSettings hs;   // (a moving part's contact law and step are its own, on the group step: the tip's ring rubber, GroupLaw)
+         hs.surfaceRubber = true;
+         hs.contact = true;
+         m_partHost = new ContactPartHost(this, m_rod, std::make_unique<PlungerRodAdapter>(this), hs, ini, GetName(), "plunger", lo, hi);
+         physics->AddCollider(m_partHost, isUI);
+         RodPublish();
+         const PlungerRod::Part &p = m_rod->part;
+         const float drawFwd = pm.m_restPos * pm.m_frameLen, drawBack = (1.f - pm.m_restPos) * pm.m_frameLen;
+         PLOGI << "Plunger " << GetName() << ": mechanical rod on the group step; apex at rest (" << m_d.m_v.x << ", " << m_rodDrawRest << ", " << axisZ << ") VPU, axis +y; travel " << p.travel * 1e3
+               << " mm full pull, " << p.outerSolidS * 1e3 << " mm pushed in; k_m " << p.km * 1e-3 << " N/mm, preload " << p.km * p.x0 << " N, mass " << p.mass * 1e3 << " g, drag " << p.c << " N s/m, pull "
+               << p.pullRate * 1e3 << " mm/s. Drawn range (Stroke " << m_d.m_stroke << " VPU, ParkPosition " << m_d.m_parkPosition << "): " << drawBack * U * 1e3 << " mm back, " << drawFwd * U * 1e3
+               << " mm forward of rest" << ((double)drawBack * U < p.travel || (double)drawFwd * U < -p.outerSolidS ? ": the physical travel is drawn clamped" : "");
+         return;
+      }
+      physics->AddCollider(php, isUI);
    }
+}
+
+void Plunger::RodPublish()
+{
+   // drawn = touched (H10): the drawn tip at the physical pull; the stock mesh's frames span Stroke only, so a pull past them is drawn clamped (the mesh is not rebuilt in this step)
+   PlungerMoverObject &pm = m_phitplunger->m_plungerMover;
+   const float pos = m_rodDrawRest + (float)(m_rod->part.q / ContactSystem::kMetresPerUnit);
+   pm.m_pos = std::clamp(pos, pm.m_frameEnd, pm.m_frameStart);
+   pm.m_speed = (float)(m_rod->part.rate / ContactSystem::kVelocityScale);
 }
 
 void Plunger::PhysicRelease(PhysicsEngine* physics, const bool isUI)
 {
    if (!isUI)
+   {
+      // a unified rod's (or a refused one's) HitPlunger is not in the physics: the plunger owns it. The rod, its hand and its host go with the play (design 6j; the host is the engine's)
+      if (m_rod != nullptr || m_rodRefused)
+         delete m_phitplunger;
       m_phitplunger = nullptr; // possible memory leak here?
+      m_rod = nullptr;
+      m_partHost = nullptr;
+      m_rodRefused = false;
+   }
 }
 
 #pragma endregion
@@ -923,6 +1047,14 @@ void Plunger::Load(IObjectReader& reader)
 STDMETHODIMP Plunger::PullBack()
 {
    // initiate a pull; the speed is set by our pull speed property
+   if (m_rod != nullptr)   // the rod (design 2b, 2g): the hand takes the knob and pulls at pull_mm_s (PullSpeed has no physical unit, not used)
+   {
+      m_rod->KeyDown(g_pplayer->m_pininput.m_plungerHandler->IsPullBackandRetract());
+      PLOGI << "Plunger " << GetName() << ": PullBack at pull " << m_rod->part.q * 1e3 << " mm, t=" << g_pplayer->m_time_msec << " ms";
+      return S_OK;
+   }
+   if (m_rodRefused)
+      return S_OK;
    if (m_phitplunger)
    {
       if (g_pplayer->m_pininput.m_plungerHandler->IsPullBackandRetract())
@@ -937,6 +1069,13 @@ STDMETHODIMP Plunger::PullBack()
 STDMETHODIMP Plunger::PullBackandRetract()
 {
    // initiate a pull; the speed is set by our pull speed property
+   if (m_rod != nullptr)   // the rod (design 2g): pull to full, then the hand eases it back to rest at the pull speed
+   {
+      m_rod->KeyDown(true);
+      return S_OK;
+   }
+   if (m_rodRefused)
+      return S_OK;
    if (m_phitplunger)
       m_phitplunger->m_plungerMover.PullBackandRetract(m_d.m_speedPull);
 
@@ -955,6 +1094,16 @@ return S_OK;
 // device was attached; scripts now observe the filtered, spring-chased virtual plunger instead.
 STDMETHODIMP Plunger::Position(float *pVal)
 {
+   if (m_rod != nullptr)   // the rod (H7): its pull on stock's 0 - 25 scale over the physical travel (rest 0, full pull 25; pushed in reads 0)
+   {
+      *pVal = 25.f * saturate((float)(m_rod->part.q / m_rod->part.travel));
+      return S_OK;
+   }
+   if (m_rodRefused)
+   {
+      *pVal = 0.f;
+      return S_OK;
+   }
    const PlungerMoverObject &pa = m_phitplunger->m_plungerMover;
    const float frame = (pa.m_frameEnd - pa.m_pos) / (pa.m_frameEnd - pa.m_frameStart);
    *pVal = 25.f * saturate(frame);
@@ -965,7 +1114,12 @@ STDMETHODIMP Plunger::Position(float *pVal)
 
 STDMETHODIMP Plunger::Fire()
 {
-   if (m_phitplunger)
+   if (m_rod != nullptr)   // the rod (design 2b): the hand lets go, the spring alone drives it. With no pull there is nothing to release (design 6f)
+   {
+      PLOGI << "Plunger " << GetName() << ": Fire at pull " << m_rod->part.q * 1e3 << " mm (" << m_rod->part.rate << " m/s), drawn m_pos " << m_phitplunger->m_plungerMover.m_pos << " VPU (rest " << m_rodDrawRest << "), Position " << 25.f * saturate((float)(m_rod->part.q / m_rod->part.travel)) << ", t=" << g_pplayer->m_time_msec << " ms";
+      m_rod->KeyUp();
+   }
+   else if (m_phitplunger && !m_rodRefused)
    {
       // check for an auto plunger
       if (m_d.m_autoPlunger)
