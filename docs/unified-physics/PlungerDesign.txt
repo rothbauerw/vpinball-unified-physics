@@ -97,6 +97,9 @@ Units: mm, N, g, J unless stated. Values: MEASURED (user), DERIVED (lead, from m
     peak squeeze about 3.8 mm, peak force about 300 N, contact about 2.3 ms (DERIVED). 3.8 mm is close to the tip's 4.76 mm radius, past where a small-squeeze
     Hertz law holds, so the cylinder behind the hemisphere has to take part (the contact widens and stiffens), and the hit is to be checked against the 1 us
     reference in the offline test (ModelStandards 5a). A softer spring squeezes less (about 2.3 mm at 2.7 m/s, the simulator's).
+    Offline result (piece 1b, 2026-11-17, runs/2026-11-17-plunger/p1b): with the rings' material (alpha 0.18, fitted to the user's ring rebound guesses, not
+    measured) the tip's restitution at 4.75 m/s is about 0.47, not the 0.7 - 0.8 assumed in 1h: full launch 4.28 m/s, squeeze 2.78 mm, peak 503 N, contact 2.15 ms.
+    The user kept the ring rubber (2026-11-17) until a real launch is measured.
 3e. At rest: the lane-end wall (the table's own) holds the ball; the tip at rest touches it lightly or stands just off it, as the table places them. A ball at
     rest against the tip is a resting contact (no jitter: Requirements H5a; ModelStandards 3a resting constraint).
 3f. Two balls: tip on ball, ball on ball (the existing ball-pair contact). The lane groove and walls unchanged (H5d).

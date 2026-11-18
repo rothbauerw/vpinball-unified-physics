@@ -179,6 +179,19 @@ namespace GroupStep
          if (pinStop == i)
             pinStop = -1;
       }
+      // the owner places stop i at `at` (fixed there) and turns it on or off, between cycles: armed as PlaceStop arms it; a body resting on it is let go and keeps its rate
+      // (a hand that takes hold of or lets go of the part: the plunger's hold and push stops)
+      void SetStop(const int i, const double at, const bool enabled)
+      {
+         BodyStop &s = stops[i];
+         s.at = s.target = at;
+         s.rate = s.speed = 0.0;
+         s.enabled = enabled;
+         s.touching = false;
+         s.armed = s.side * (q - s.at) <= 0.0;
+         if (pinStop == i)
+            pinStop = -1;
+      }
       void ClearLoads()   // no ball now: what the last one pressed with is gone
       {
          gBallQ = 0.0;
@@ -321,7 +334,16 @@ namespace GroupStep
          const double r1 = EndRate(gDqLast, rate, gH), f = mass * (r1 - rate) / gH;
          const double vRel = std::fabs(rate - s.speed) * s.lever, F = s.side * f > 0.0 ? std::fabs(f) / s.lever : 0.0;
          if (0.5 * s.EffMass(mass) * vRel * vRel > s.HeldEnergy(F))
-            return false;
+         {
+            // on the stop and closing on it: the impact law at once (a rebound, or a rest), as DrivenTouch takes it between steps
+            Impact(gExcessStop, F, pendDrive, pendLoss);
+            if (pinStop >= 0)
+            {
+               gGiven = stops[pinStop].AfterStep(gH) - stops[pinStop].at;
+               gPinnedInStep = true;
+            }
+            return true;
+         }
          pendLoss += 0.5 * mass * (rate * rate - s.speed * s.speed);
          bk.stopJ += 0.5 * mass * (rate * rate - s.speed * s.speed);
          if (s.speed != 0.0)   // what the stop gave it is the stop's work: nothing here is lost beyond the book above, whose sign the drive's share closes
@@ -425,7 +447,7 @@ namespace GroupStep
          return msg;
       }
       double EndResidual() const override { return 1e-8; }   // a noise stop can land past a steep onset (a light body's first touch): 0.45 uJ, runs/2026-10-31-gate-spinner-disc
-      void ScaleSpeeds(const double f) override { rate *= f; }
+      void ScaleSpeeds(const double f) override { if (pinStop < 0) rate *= f; }   // a carried body's speed is its stop's (given, as a held ball's)
       void ExplicitMove(const double *Res, const int off, const double h, double *x) const override
       {
          if (NumDof() == 1)
@@ -581,7 +603,13 @@ namespace GroupStep
          s.touching = true;
          const double e = stopLaw[i].Restitution(vClose), vOut = e * vClose;
          double rNew = s.speed - e * vr;
-         if (0.5 * s.EffMass(mass) * vOut * vOut <= s.HeldEnergy(F))
+         // a fixed stop with a fixed stop facing it at its place (opposite side, within kNearStop): the zero-gap bounce series (zero time, zero distance) ends at rest
+         // with all its kinetic energy lost: its own limit, not a cutoff
+         bool closed = false;
+         for (const BodyStop &o : stops)
+            if (s.speed == 0.0 && o.enabled && o.armed && o.side == -s.side && o.speed == 0.0 && std::fabs(o.at - s.at) <= kNearStop)
+               closed = true;
+         if (closed || 0.5 * s.EffMass(mass) * vOut * vOut <= s.HeldEnergy(F))
          {
             rNew = s.speed;
             pinStop = i;
