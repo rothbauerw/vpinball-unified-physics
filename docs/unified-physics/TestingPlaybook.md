@@ -102,6 +102,7 @@ VPX_WIRE_GAP=1             probe gap and hold state of balls near a wire switch 
 VPX_TRACE_BALL=<name>      the driver ball's position, velocity, contact items and every stock Collide / Contact, per stage of the cycle.
 VPX_GROUP_BOOK=<csv>       one row per group per cycle: steps, rounds, halvings, stop steps, energy steps, failures, energy books, cost.
 VPX_GROUP_BOOK_STEPS=1|2   with GROUP_BOOK: energy rise per step (1); also every stored energy term at cycle start and end (2, slow).
+VPX_PLUNGER_TRACE=<file>   the cabinet plunger sensor per ms while active: raw reading, last report time, filtered position and speed (does the filter lag or overshoot).
 VPX_GROUP_STATS=<file>     run totals (cycles, us/cycle, steps, rounds, halvings, energy steps, failures) every 200 ms of table time; line 2: steps alone and sleeps per part kind.
 VPX_GROUP_PHASE_TIMING=<csv>  per-step phase timing and counts (attempts, evals, linear solves, halvings, capsules, terms).
 VPX_STEP_RULE=<csv>        one row per group step: what set the step, h, solve rounds.

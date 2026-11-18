@@ -44,6 +44,7 @@ namespace PlungerHost
          else if (k == "stop_v_ref") s.stopVRef = v;                     // the speed of stop_e, m/s
          else if (k == "drag_ns_per_m") s.dragNsPerM = v;                // viscous drag on the rod, N s/m
          else if (k == "bore_mu") s.boreMu = v;                          // Coulomb friction of the rod in its bore
+         else if (k == "rub_n") s.rubN = v;                              // the rod and main spring rubbing in the sleeve: a constant Coulomb force, N
          else if (k == "rod_radius_mm") s.rodRadiusMm = v;               // the rod's radius, mm
          else if (k == "tip_radius_mm") s.tipRadiusMm = v;               // the tip's hemisphere radius, mm
          else if (k == "tip_cyl_mm") s.tipCylMm = v;                     // the tip's cylinder behind the hemisphere, mm
@@ -55,6 +56,8 @@ namespace PlungerHost
          else if (k == "tip_shear_scale") s.tipShearScale = v;           // the tip's sideways stiffness factor
          else if (k == "tip_tan_delta") s.tipTanDelta = v;               // the tip's loss tangent
          else if (k == "pull_mm_s") s.pullMmS = v;                       // the hand's pull speed on a key, mm/s
+         else if (k == "release_min_mm") s.releaseMinMm = v;             // the cabinet sensor: a release only from a pull at least this deep, mm (M1)
+         else if (k == "sensor_filtered") s.sensorFiltered = v != 0.0;   // the cabinet sensor: 0 = its own reports (default), 1 = VPX's filtered position and speed (2i a)
          else if (ContactHost::IsSurfaceKey(k)) {}                       // (rubber = 0: the opt-out, ContactHost::PlungerWanted)
       });
       const auto need = [&](const bool ok, const char *key) {
@@ -77,6 +80,7 @@ namespace PlungerHost
       need(s.stopVRef > 0.0, "stop_v_ref");
       need(s.dragNsPerM >= 0.0, "drag_ns_per_m");
       need(s.boreMu >= 0.0, "bore_mu");
+      need(s.rubN >= 0.0, "rub_n");
       need(s.rodRadiusMm > 0.0, "rod_radius_mm");
       need(s.tipRadiusMm > 0.0, "tip_radius_mm");
       need(s.tipCylMm > 0.0, "tip_cyl_mm");
@@ -85,6 +89,7 @@ namespace PlungerHost
       need(s.tipAlpha >= 0.0, "tip_alpha");
       need(s.tipMu >= 0.0, "tip_mu");
       need(s.pullMmS > 0.0, "pull_mm_s");
+      need(s.releaseMinMm >= 0.0, "release_min_mm");
       if (bad.empty())   // the outer spring must reach its solid length forward of rest: its free length less solid exceeds its rest squeeze c0 = preload / k_o
       {
          const double d = s.mainWireMm, D = s.mainOdMm - d, km = s.shearModulusGPa * 1e3 * d * d * d * d / (8.0 * D * D * D * s.mainActiveCoils);   // N/mm
@@ -117,6 +122,8 @@ namespace PlungerHost
       {
          ball = b;
          part.Build(s, axis, gravity, apex);
+         releaseMin = s.releaseMinMm * 1e-3;
+         sensorFiltered = s.sensorFiltered;
          slope = part.prof.Slope();
          mid = apex + axis * (0.5 * (part.travel + part.outerSolidS));
          idle = true;   // at rest on its springs' balance: nothing to step until a ball comes near, the hand moves or the gravity changes
@@ -127,12 +134,13 @@ namespace PlungerHost
       // ---- the hand (between cycles; keys and script, design 2b, 2g) ----
       void KeyDown(const bool andRetract)
       {
-         if (hand == Hand::Palm)   // 6f: the script has priority: the sensor's palm lets go before the hold stop takes the knob (the two stops never both on)
-            part.PushEnd();
+         if (hand == Hand::Sensor)   // 6f: the script has priority: the sensor's tie lets go before the hold stop takes the knob
+            part.Untie();
          part.KeyDown(part.pullRate);
          retract = andRetract;
          hand = Hand::Script;    // 6f: the script's (key's) hand holds; the sensor is ignored while it does
-         sensorLatched = true;   // ... and after it, until the rod rests and the sensor reads rest (the 2d re-arm)
+         resync = false;
+         sensorLatched = true;   // ... and after it, until the rod rests (U2: then the tie resyncs to the reading)
          Wake();
       }
       void KeyUp()
@@ -144,32 +152,39 @@ namespace PlungerHost
          Wake();
       }
 
-      // ---- the cabinet sensor's hand (engine step 2A; design 2c, 2d, 6f; runs/2026-11-17-plunger/e2a-sensor/brief.md) ----
-      enum class Hand { None, Sensor, Script, Palm };
-      Hand hand = Hand::None;       // who holds the knob: nobody, the sensor's hand on the hold stop, the script's PullBack (6f), or the sensor's palm on the push stop (2e, piece 2B)
-      bool sensorLatched = false;   // 2d: after a release (or a script pull) the sensor is ignored until the rod rests and the sensor reads rest
+      // ---- the cabinet sensor's hand (engine step 2A; design 2c, 2d, 6f; user U1, U2 2026-11-18, runs/2026-11-17-plunger/e2c-tie/brief.md) ----
+      enum class Hand { None, Sensor, Script };
+      Hand hand = Hand::None;       // who holds the knob: nobody, the sensor's tie (hold and push stops together at the reading, U1), or the script's PullBack (6f)
+      bool sensorLatched = false;   // 2d: after a release (or a script pull) the sensor is ignored until the rod rests (U2)
+      bool resync = false;          // U2: the tie is moving the rod from where it rested to the reading at the pull speed (until the stops reach the reading)
       double sensorPrev = 0.0;      // the s of the last distinct raw reading, m (the first reading is taken from rest)
       double sensorRawPrev = 0.0;   // the last distinct raw reading, p.u. (G2: a sample is a change of the raw reading, not of s: noise within the dead zone is samples at s = 0)
       double sensorSince = 0.0;     // s since the raw reading last changed (a USB sensor's sample is held about 8 ms between reports)
+      double pullPeak = 0.0;        // M1: the deepest reading (s, m) since the tie took the knob; a release needs it at least releaseMin
+      double releaseMin = 0.005;    // M1: Settings::releaseMinMm, m
+      bool sensorFiltered = false;  // 2i a: Settings::sensorFiltered (the adapter reads VPX's filtered state instead of the sensor's own reports)
+      static constexpr double kRestBandPu = 0.01;   // p.u. (D1, 2i c): the hand's rest band on the mapped reading, a noise floor only (stock's own, PlungerHandler.cpp:276);
+                                                     // VPX's mapping has already removed its dead zone (SensorMapping.h:188-195), so it is not applied again here
       static constexpr double kSampleMaxS = 0.010;   // s (G2, lead 2026-11-18): VPX's own sensor timeout (PlungerHandler.cpp:290 repeats a sample older than 10 ms): a reading
                                                       // held longer is a hand at rest, not a slow move, so the time between two samples is at most this
-      static constexpr double kHomeM = 1e-5;         // m (0.01 mm, lead 2026-11-18, fix F2): the rod and the hold stop are "at rest position 0" within this when the hand lets go
       static constexpr double kReleaseSpeed = 0.5;   // m/s, design 2d (user 2026-11-17): above a hand-guided return (about 0.3), below a released knob (about 0.7 from 5 mm on the weakest spring)
-      enum SensorEvent { kSensorNone, kSensorTake, kSensorReleaseSpeed, kSensorReleaseAhead, kSensorLetGoRest, kSensorRearm, kSensorLost, kSensorSmash, kSensorSmashEnd };
-      // Once per physics millisecond, after the cycle: VPX's filtered sensor state. present: a cabinet plunger (MechPlunger) with a sensor (H7); posPu: p.u. (0 rest, 1 full pull,
-      // < 0 forward); velPuS: p.u./s (a velocity sensor's own when mapped); restBandPu: the rest band of the re-arm, p.u.; dt: the millisecond, s. Returns what the hand did (the log's)
-      int SensorStep(const bool present, const double posPu, const double velPuS, const double restBandPu, const double dt)
+      enum SensorEvent { kSensorNone, kSensorTake, kSensorReleaseSpeed, kSensorReleaseAhead, kSensorLetGoRest, kSensorRearm, kSensorLost, kSensorResync };
+      // Once per physics millisecond, after the cycle: the sensor's state (2i a: its own reports, or VPX's filtered state with sensor_filtered). present: a cabinet plunger
+      // (MechPlunger) with a sensor (H7); posPu: p.u. (0 rest, 1 full pull, < 0 forward); velPuS: p.u./s, used only when velOwn (a velocity sensor's own when mapped, or the
+      // filtered speed); else the speed for the release test is the step between distinct reports over the time between them (2i a); dt: the millisecond, s. Returns what
+      // the hand did (the log's)
+      int SensorStep(const bool present, const double posPu, const double velPuS, const bool velOwn, const double dt)
       {
          PlungerRod::Part &p = part;
-         // 2c: calibrated rest -> 0, full pull -> travel. D1 (6g, piece 2B): a reading within the rest band (the position mapping's dead zone, at least 0.01 p.u., the re-arm's
-         // band) is rest, s = 0 on both sides: a noisy or drifting sensor at rest neither takes the knob nor moves it, and the hand lets go at rest. G1 (fix): outside the band
-         // the reading is measured from the band's edge and rescaled, s = sign(p) (|p| - band) / (1 - band) x travel, so s is continuous at the edge (no step of band x travel
-         // when the reading crosses it) and a full pull 1.0 still maps to the full travel. D2 (2e): a reading forward of rest is the palm pushing the knob in, s < 0 on the
-         // same scale, no further than the outer spring's solid point (the filter reads to -1/3 p.u. fully extended, past it)
-         const double over = std::max(std::fabs(posPu) - restBandPu, 0.0) / (1.0 - restBandPu) * p.travel;
+         // 2c: calibrated rest -> 0, full pull -> travel. D1 (6g): a reading within the rest band (kRestBandPu, a noise floor on the mapped reading: VPX's mapping already
+         // removed its dead zone) is rest, s = 0 on both sides: a noisy sensor at rest neither ties the knob nor moves it. G1: outside the band the reading is measured from
+         // the band's edge and rescaled, s = sign(p) (|p| - band) / (1 - band) x travel, so s is continuous at the edge and a full pull 1.0 still maps to the full travel.
+         // D2 (2e): a reading forward of rest is the palm pushing the knob in, s < 0 on the same scale, no further than the outer spring's solid point (the filter reads to
+         // -1/3 p.u. fully extended, past it)
+         const double over = std::max(std::fabs(posPu) - kRestBandPu, 0.0) / (1.0 - kRestBandPu) * p.travel;
          const double s = std::max(posPu < 0.0 ? -over : over, p.outerSolidS);
-         // G2 (fix): a sample is a distinct raw reading. The speed between samples is the step in s since the previous distinct raw reading over the time since it, that time
-         // at most kSampleMaxS (VPX's sensor timeout: a reading held longer is a hand at rest, not a slow move). Used by the hold stop, the take and the palm
+         // G2: a sample is a distinct raw reading. The speed between samples is the step in s since the previous distinct raw reading over the time since it, that time at
+         // most kSampleMaxS (VPX's sensor timeout: a reading held longer is a hand at rest, not a slow move)
          const bool rawChanged = posPu != sensorRawPrev;
          const double prev = sensorPrev, interval = std::min(sensorSince + dt, kSampleMaxS);
          const bool changed = s != prev;   // the stops move only on a step in s (a raw change within the dead zone is a sample at rest, s stays 0)
@@ -181,131 +196,98 @@ namespace PlungerHost
          }
          else
             sensorSince += dt;
-         if (!present)   // no sensor (or the override turned off): a hand or palm it held lets go, the next reading starts from rest
+         // the knob's speed toward rest for the release test, m/s: the sensor's own (velOwn), else the step in s between distinct reports over the time between them (0 between
+         // reports: a release is seen on the report that shows it)
+         const double inSpeed = velOwn ? -velPuS * p.travel : (changed ? (prev - s) / interval : 0.0);
+         if (!present)   // no sensor (or the override turned off): a tie lets go, the next reading starts from rest
          {
             sensorPrev = sensorRawPrev = sensorSince = 0.0;
-            if (hand == Hand::Palm)
-            {
-               p.PushEnd();
-               hand = Hand::None;
-               Wake();
-               return kSensorLost;
-            }
+            resync = false;
             if (hand != Hand::Sensor)
                return kSensorNone;
-            p.KeyUp();
+            p.Untie();
             hand = Hand::None;
             Wake();
             return kSensorLost;
          }
-         if (hand == Hand::Script)   // 6f (a palm on the push stop let go in KeyDown)
+         if (hand == Hand::Script)   // 6f (a tie let go in KeyDown)
             return kSensorNone;
-         if (hand == Hand::Palm)   // D2: the palm pushes the knob in on the push stop (side +1: it only pushes, the springs press the rod back onto it)
+         // U2: after a release (or a script pull) the sensor is ignored, a smash or pull included, until the model rod rests (the engine's rest test, the one that lets it
+         // sleep), wherever the sensor reads. Then a reading outside the rest band ties the rod where it rests and moves it to the reading at the key's pull speed (no jump);
+         // a reading at rest leaves it to the springs
+         if (sensorLatched)
          {
-            if (s > 0.0)   // a reading behind rest: the palm ends at once, the springs return the rod and the hold stop may take the knob below (a pulled reading behind it)
-            {
-               p.PushEnd();
-               hand = Hand::None;
-               Wake();
-               if (s <= p.q)
-                  return kSensorSmashEnd;
-            }
-            else
-            {
-               const GroupStep::BodyStop &h = p.stops[p.stopPush];
-               if (changed)   // 2c's rule: toward the new reading (rest included) at the speed between the last two samples (restitution 0, the hand's catch law)
-               {
-                  p.DriveStop(p.stopPush, s, std::fabs(s - prev) / interval);
-                  Wake();
-               }
-               // G3 (fix, as the hold stop's F2): the palm guides the knob home: a reading at rest drives the push stop to 0 (above) at the reading's speed, and the palm lets
-               // go only when the rod rests there: the stop at 0 within kHomeM, the rod on it or ahead of it (free of the palm), the rod's speed within the rest test's
-               // (RestWatch: kMoveM per cycle)
-               else if (s == 0.0 && h.target == 0.0 && std::fabs(h.at) <= kHomeM && p.q <= h.at + kHomeM
-                        && std::fabs(p.rate) <= GroupStep::RestWatch::kMoveM / GroupStep::RestWatch::kCycleS)
-               {
-                  p.PushEnd();
-                  hand = Hand::None;
-                  Wake();
-                  return kSensorSmashEnd;
-               }
-               return kSensorNone;
-            }
-         }
-         if (sensorLatched)   // 2d re-arm: the rod at rest (the engine's rest test, the one that lets it sleep) and the sensor reading rest within the band
-         {
-            if (!AtRest() || std::fabs(posPu) > restBandPu)
+            if (!AtRest())
                return kSensorNone;
             sensorLatched = false;
-            return kSensorRearm;
+            if (s == 0.0)
+               return kSensorRearm;
+            p.Tie(p.q);
+            p.DriveTie(s, p.pullRate);
+            hand = Hand::Sensor;
+            pullPeak = std::max(s, 0.0);
+            resync = true;
+            Wake();
+            return kSensorResync;
          }
          if (hand == Hand::Sensor)
          {
-            // 2d release, only from a pulled reading (the hand held the knob behind rest: the previous reading > 0): the knob toward rest faster than kReleaseSpeed (the
-            // sensor's speed x travel), or the reading ahead of the model rod (the rod has left the hand): the gap between the rod and the new reading, over the time since
-            // the previous reading came, faster than the same speed (a hand-guided return keeps the rod within one sample's move of the reading)
-            // A reading forward of rest is tested from rest (max(s, 0)): its forward part is the palm (D2), never a release; the part from the rod to rest is the knob's
-            // own run (a pulled knob read forward one sample later has left the hand)
-            if (prev > 0.0)
+            // 2d release, only from a pulled reading (the previous reading > 0): the knob toward rest faster than kReleaseSpeed (the sensor's speed x travel), or the reading
+            // ahead of the model rod (the rod has left the hand): the gap between the rod and the new reading, over the time since the previous reading came, faster than the
+            // same speed (a hand-guided return keeps the rod within one sample's move of the reading). A reading forward of rest is tested from rest (max(s, 0)): its forward
+            // part is the palm, never a release; the part from the rod to rest is the knob's own run
+            // M1 (user 2026-11-18): and only from a pull of at least releaseMin (the deepest reading since the tie took): below it the tie follows the knob both ways
+            pullPeak = std::max(pullPeak, s);
+            if (prev > 0.0 && pullPeak >= releaseMin)
             {
-               const bool fast = -velPuS * p.travel > kReleaseSpeed;
+               const bool fast = inSpeed > kReleaseSpeed;
                const bool ahead = changed && (p.q - std::max(s, 0.0)) / interval > kReleaseSpeed;
                if (fast || ahead)
                {
-                  p.KeyUp();   // the hold stop is removed: the spring alone drives the rod
+                  p.Untie();   // the hand lets go: the spring alone drives the rod
                   hand = Hand::None;
+                  resync = false;
                   sensorLatched = true;
                   Wake();
                   return fast ? kSensorReleaseSpeed : kSensorReleaseAhead;
                }
             }
-            if (s < 0.0)   // D2: the hand, not released, now pushes the knob in: the hold stop lets go and the palm's push stop takes the knob where it is (never both on)
-            {
-               p.KeyUp();
-               return Smash(s, prev, interval);
-            }
             const GroupStep::BodyStop &h = p.stops[p.stopHold];
-            if (changed)   // 2c (fix F1): the hold stop toward the new reading at the speed between the last two distinct samples, the step over the time between them (a held
-            {              // 125 Hz sample moves it over its 8 ms, not in a 1 ms burst; through VPX's filter each 1 ms reading is a sample, so the same rule serves both)
-               p.DriveStop(p.stopHold, s, std::fabs(s - prev) / interval);
+            if (!p.AnyStopMoving())   // U2: the stops have reached the reading: the tie follows normally from here
+               resync = false;
+            if (changed)   // U1, 2c: the tie toward the new reading (either side of rest, rest included) at the speed between samples (resync: the pull speed). The tie never jumps
+            {
+               p.DriveTie(s, resync ? p.pullRate : TieRate(s, prev, h.at, interval));
                Wake();
             }
-            // fix F2: the hand guides the knob home: a reading at rest drives the hold stop to 0 (above), and the hand lets go only when the rod rests there: the stop at 0 within
-            // kHomeM, the rod on it or behind it (2B fix: a ball resting on the tip holds the rod a little behind rest, 0.057 mm in run f1, free of the stop: the hand holds
-            // nothing), the rod's speed within the rest test's (RestWatch: kMoveM per cycle). Not when the reading first reads rest: the rod would fly on at the hand's speed
-            else if (s == 0.0 && h.target == 0.0 && std::fabs(h.at) <= kHomeM && p.q >= h.at - kHomeM
-                     && std::fabs(p.rate) <= GroupStep::RestWatch::kMoveM / GroupStep::RestWatch::kCycleS)
+            // U1: a reading at rest with the stops at 0 and the rod caught on them (its speed within the rest test's, RestWatch: kMoveM per cycle; the stops arrive at the
+            // end of a cycle with the rod still at their speed, and the catch, restitution 0, stops it in the next): the tie lets go, the springs hold the rod at rest
+            else if (s == 0.0 && h.target == 0.0 && h.at == 0.0 && std::fabs(p.rate) <= GroupStep::RestWatch::kMoveM / GroupStep::RestWatch::kCycleS)
             {
-               p.KeyUp();
+               p.Untie();
                hand = Hand::None;
+               resync = false;
                Wake();
                return kSensorLetGoRest;
             }
             return kSensorNone;
          }
-         // the hand off: a pulled reading behind the rod takes the knob (the hold stop placed at the rod, then driven to the reading); a reading at rest leaves it off
-         if (s > 0.0 && s > p.q)
+         // the hand off: a reading leaving the rest band (either side) ties the knob where the rod is, then drives it to the reading at 2c's rate from the first report
+         // (2i c: no leaving-rest rule; a board's step at rest is removed by VPX's dead zone)
+         if (s != 0.0)
          {
-            p.SetStop(p.stopHold, p.q, true);
-            p.DriveStop(p.stopHold, s, std::max(std::fabs(s - prev), s - p.q) / interval);   // (F1: the speed between the last two distinct samples; at least the rod's gap over that time)
+            p.Tie(p.q);
+            p.DriveTie(s, TieRate(s, prev, p.q, interval));
             hand = Hand::Sensor;
+            pullPeak = std::max(s, 0.0);
             Wake();
             return kSensorTake;
          }
-         if (s < 0.0)   // D2: a reading forward of rest is the palm pushing, however fast
-            return Smash(s, prev, interval);
          return kSensorNone;
       }
-      // D2 (2e, piece 2B): the palm takes the knob on the push stop placed at the rod and drives it toward s (< 0, at or behind the outer spring's solid point) at 2c's speed: the
-      // step between the last two distinct samples over the time between them, at least the rod's gap over that time (as the take). The rod meets the ball through the tip's
-      // contact law at the speed the hand gives it: no launch rule
-      int Smash(const double s, const double prev, const double interval)
-      {
-         part.Push(s, std::max(std::fabs(s - prev), part.q - s) / interval);
-         hand = Hand::Palm;
-         Wake();
-         return kSensorSmash;
-      }
+      // 2c's rule (F1): the step between the last two distinct samples over the time between them; at least the stops' gap to the new reading over that time (from the rod
+      // when the tie takes it), so the tie reaches each sample by the next. restitution 0 (the hand's catch law, plungerrod.h): the rod takes the stops' speed
+      static double TieRate(const double s, const double prev, const double from, const double interval) { return std::max(std::fabs(s - prev), std::fabs(s - from)) / interval; }
       // the hand changed a stop: step it from the next cycle. Its CycleBegin (the hold stop's touch, an impact booked as the hand's drive) is the engine's, inside that cycle's book
       void Wake() { idle = false; }
 
@@ -346,11 +328,20 @@ namespace PlungerHost
       V3 Origin() const override { return mid; }
       double Reach() const override { return BumperGroup::FarR(part.prof) + part.travel - part.outerSolidS; }   // every point of the tip at any pull
       double MotionRange() const override { return part.travel - part.outerSolidS; }
-      double SurfaceSpeedBound(const double cycleS) const override { return std::fabs(part.rate) + part.pullRate + MaxStoredForce() / part.mass * cycleS; }
-      // the energy reach (translating parts, as the Button cap): its springs and weight as the drive over its whole travel, the hand's slow pull inside the speed bound
+      // 2i d: the hand's speed: the key's pull speed, or a hand stop's drive rate while it moves to its target when faster (the sensor's tie, up to about 1.3 m/s)
+      double HandRate() const
+      {
+         double v = part.pullRate;
+         for (const int i : { part.stopHold, part.stopPush })
+            if (i >= 0 && part.stops[i].enabled && part.stops[i].at != part.stops[i].target)
+               v = std::max(v, part.stops[i].rate);
+         return v;
+      }
+      double SurfaceSpeedBound(const double cycleS) const override { return std::fabs(part.rate) + HandRate() + MaxStoredForce() / part.mass * cycleS; }
+      // the energy reach (translating parts, as the Button cap): its springs and weight as the drive over its whole travel, the hand's move inside the speed bound
       double EnergyMove(const V3 &, const double E, const double T, double *const work) const override
       {
-         const double F = MaxStoredForce(), D = F * (part.travel - part.outerSolidS), v0 = std::fabs(part.rate) + part.pullRate;
+         const double F = MaxStoredForce(), D = F * (part.travel - part.outerSolidS), v0 = std::fabs(part.rate) + HandRate();
          const double x = DriveCappedReach(v0, E, part.mass, F / part.mass, D, T);
          if (work != nullptr)
             *work = 0.5 * part.mass * v0 * v0 + std::min(F * x, D);

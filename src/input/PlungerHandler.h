@@ -26,6 +26,7 @@ public:
    float GetRawVelocity() const; // p.u/s
    float GetHitVelocity(float restPos) const; // restPos must be in t.u., returned velocity is in t.u/s.
    float GetPosition(float restPos) const; // t.u.
+   float GetReportPosition() const; // p.u.: the first active sensor's own last report (its position mapping's value, unfiltered), or the external override's position
 
    bool IsPullBackandRetract() const;
    void SetPullBackandRetract(bool isPullBackAndRetract);

@@ -94,6 +94,17 @@ float PlungerHandler::GetPosition(float restPos) const
    return saturate(lerp(restPos, 1.f, m_position));
 }
 
+float PlungerHandler::GetReportPosition() const
+{
+   // The unified plunger's hand (design 2i a): the sensor's own reports, not the Kalman-filtered m_position. The override (plugins, the test driver) gives its position as a report
+   if (m_externalOverride)
+      return m_externalPosition;
+   for (const auto& sensor : m_sensors)
+      if (sensor->IsActive())
+         return sensor->GetPositionSensor()->GetValue();
+   return 0.f;
+}
+
 bool PlungerHandler::IsPullBackandRetract() const { return m_isPullBackAndRetract; }
 
 void PlungerHandler::SetPullBackandRetract(bool isPullBackAndRetract) { m_isPullBackAndRetract = isPullBackAndRetract; }
@@ -301,6 +312,23 @@ void PlungerSensor::StepOneMillisecond()
    m_position = m_emaPosition.Update(m_pvKalmanFilter.GetPosition() / m_kalmanUnitScale, 0.001f);
    m_prevPosition[m_PrevPositionPos] = m_position;
    m_PrevPositionPos = (m_PrevPositionPos + 1) % m_prevPosition.size();
+
+   // VPX_PLUNGER_TRACE=<file> (a diagnostic, read once; unified plunger 2026-11-18): one row per ms while the sensor is active: the raw reading (as mapped, dead zone
+   // applied), the time of the last report the filter took, and the filtered position and speed the engine's hand reads. To see whether the filter lags or overshoots the knob
+   static FILE *const trace = []() -> FILE * {
+      const char *const e = std::getenv("VPX_PLUNGER_TRACE");
+      FILE *const f = e != nullptr && *e ? fopen(e, "w") : nullptr;
+      if (f != nullptr)
+         fprintf(f, "t_ms,raw_pu,report_ms,filtered_pu,filtered_vel_pus\n");
+      return f;
+   }();
+   if (trace != nullptr && IsActive())
+   {
+      static int rows = 0;
+      fprintf(trace, "%llu,%.6f,%.3f,%.6f,%.5f\n", (unsigned long long)(m_timeNs / 1000000ull), m_positionSensor->GetValue(), (double)m_lastTimestampNs * 1e-6, m_position, m_emaVelocity.Get());
+      if (++rows % 200 == 0)
+         fflush(trace);   // (kept on disk as it goes: the play may end any way)
+   }
 
    // Log for debugging purposes as CSV
    if (false && IsActive())

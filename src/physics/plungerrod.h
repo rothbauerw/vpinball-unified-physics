@@ -13,8 +13,9 @@
 //   tip           (piece 1b, design 3a/3c) the rubber tip as a Revolve about the rod's axis: a hemisphere of the rod's radius on a cylinder of the same radius tipCylMm back from its
 //                 centre, then closed (ButtonCap::RoundedOutline). Apex at s = 0 is the point tipApex; the surface moves along +axis for +q. Ring rubber (RubberObjectSettings defaults)
 //   hand          (piece 2, design 2a/2b/2g) two stops the player's hand moves (bodypart.h driven stops), off until used: HOLD (side -1: the rod cannot move toward the
-//                 ball past it; the hand pulls) and PUSH (side +1: the rod cannot move away from the ball past it; the hand pushes, palm smash). Each placed at the rod
-//                 when the hand takes hold (BodyPart::SetStop), then driven at the hand's rate; their work is the hand's drive. No launch rule: let go, the spring drives.
+//                 ball past it; the hand pulls) and PUSH (side +1: the rod cannot move away from the ball past it). A key uses HOLD alone; the cabinet sensor ties
+//                 both together at its reading (Tie). Each placed at the rod when the hand takes hold (BodyPart::SetStop), then driven at the hand's rate; their work
+//                 is the hand's drive. No launch rule: let go, the spring drives.
 //                 A soft gripping hand, not steel (user 2026-11-18): restitution 0, the knob joins the hand on contact (a perfectly inelastic catch: the rod takes
 //                 the stop's speed, the kinetic energy difference booked as stop loss; no bounce). The Hertz k at the rod's radius stays only for the rest test
 // Stored energy V(s) = k_m s (x0 + s / 2) + k_o max(c0 - s, 0)^2 / 2 - m (g.axis) s; its chord across the outer spring's kink at c0 is exact (piecewise), so the book closes at any step.
@@ -57,10 +58,13 @@ namespace PlungerRod
       // stops: steel on steel coil bind, restitution stopE at stopVRef m/s (the gates' steel stop value): ESTIMATED (coil bind not measured)
       double stopE = 0.5;
       double stopVRef = 0.1;
-      // viscous drag c, N s/m: DERIVED (fitted, runs/2026-11-17-plunger/p1a: the simulator plunger's empty full release loses 15 % of the spring energy released
-      // between full pull and the outer spring's first touch, the middle of the 0 - 25 % read from the user's slow-motion video)
-      double dragNsPerM = 0.781;
-      // Coulomb friction in the bore (piece 1b): mu ESTIMATED; the rod's radius for the bearing patch (3/8 in rod, DERIVED)
+      // viscous drag c, N s/m: DERIVED (runs/2026-11-18-plunger-bounce/results_damping.txt: with rubN, the simulator plunger's empty full release in the user's
+      // 960 fps video, 2026-11-18: about 40 % of the spring energy lost by rest, 4 bounces back past 0.5 mm, still at about 220 ms; rounded, not a close fit)
+      double dragNsPerM = 1.0;
+      // the rod and main spring rubbing in the sleeve: a constant Coulomb force, N, whatever the side load. DERIVED from the same video (2.0 N fits it; the bounce
+      // ratio falling with amplitude is Coulomb's signature) less an ESTIMATED share for the simulator's optical slide sensor (user 2026-11-18): 1.5 N
+      double rubN = 1.5;
+      // Coulomb friction in the bore on the side load (piece 1b): mu ESTIMATED; the rod's radius for the bearing patch (3/8 in rod, DERIVED)
       double boreMu = 0.2;
       double rodRadiusMm = 4.7625;
       // the tip (design 3a): hemisphere radius MEASURED (3/8 in across); the cylinder behind it ESTIMATED (only has to exceed any squeeze); rubber from the apex to the rod end
@@ -72,6 +76,12 @@ namespace PlungerRod
       double tipEMpa = 12.0, tipAlpha = 0.18, tipBetaLayer = 0.33, tipMu = 0.8, tipShearScale = 0.1, tipTanDelta = 0.05;
       // the hand's pull speed on a key (key down to full pull, PullBackandRetract's return), mm/s: ESTIMATED (design 2b: a hand pulling the 61 mm in about half a second)
       double pullMmS = 120.0;
+      // the cabinet sensor (user M1 2026-11-18): a release only from a pull of at least this, mm (the deepest reading since the tie took); below it the tie follows the knob
+      // both ways, a palm push included. ESTIMATED (the user finds the tie right on short pulls)
+      double releaseMinMm = 5.0;
+      // the cabinet sensor's source (design 2i a, user 2026-11-18): false (default) = the sensor's own reports (the position mapping's value, a new one about every 6 ms);
+      // true = VPX's filtered position and speed (PlungerSensor's Kalman filter: lags 10-20 ms, overshoots 2-4 mm, MEASURED), for a noisy or irregular sensor
+      bool sensorFiltered = false;
    };
 
    // its own state beside the body's (PartRecords)
@@ -92,6 +102,7 @@ namespace PlungerRod
       int stopPull = -1, stopIn = -1, stopHold = -1, stopPush = -1;
       double pullRate = 0.0;                                    // m/s: the key's pull speed (Settings::pullMmS)
       double boreMu = 0.0, rRod = 0.0;                          // bore friction, the rod's radius (m)
+      double rub = 0.0;                                         // N: the sleeve rub (Settings::rubN), added to the bore's Coulomb limit
       V3 tipApex;                                               // the tip's apex at s = 0 in the world, m
       JetBumper::Revolve prof;                                  // the tip in (rho from the axis, z along the ball-ward axis -axis, apex at z 0)
       RubberContact::RubberParams rp;                           // the tip's ball law
@@ -115,6 +126,7 @@ namespace PlungerRod
          springMass = (s.mainActiveCoils + 2.0 * s.mainClosedPerEnd) * pi * D * (0.25 * pi * d * d) * s.steelDensity;
          mass = (s.rodG + s.knobG + s.tipG + s.washerClipG) * 1e-3 + springMass / 3.0;
          c = s.dragNsPerM;
+         rub = s.rubN;
          boreMu = s.boreMu;
          rRod = s.rodRadiusMm * mm;
          tipApex = apex;
@@ -151,7 +163,7 @@ namespace PlungerRod
          };
          stopPull = PlaceStop(stop(travel, 1, 0.5 * d));
          stopIn = PlaceStop(stop(outerSolidS, -1, 0.5 * s.outerWireMm * mm));
-         GroupStep::BodyStopPlace hand = stop(0.0, -1, rRod);   // the hand's stops, off until the hand takes hold (KeyDown, Push)
+         GroupStep::BodyStopPlace hand = stop(0.0, -1, rRod);   // the hand's stops, off until the hand takes hold (KeyDown, Tie)
          hand.law = GroupStep::BodyStopLaw{};   // restitution 0 at every speed: the hand catches the knob, no rebound (Impact rests it on the stop)
          hand.enabled = false;
          stopHold = PlaceStop(hand);
@@ -184,13 +196,23 @@ namespace PlungerRod
       void KeyUp() { SetStop(stopHold, q, false); }
       // PullBackandRetract after its pull: the hand eases the rod back to rest on the hold stop
       void Retract(const double rate) { DriveStop(stopHold, 0.0, rate); }
-      // palm smash: the hand pushes the knob in toward target (< 0) at rate; PushEnd: it lets go
-      void Push(const double target, const double rate)
+      // the cabinet sensor's tie (design 2c, user U1 2026-11-18): the hold and push stops together at `at` hold the knob both ways (the rod is where the sensor says);
+      // DriveTie moves both toward the reading at one rate, so the hand carries the rod either way (pull and palm alike); Untie: the hand lets go, the springs drive
+      void Tie(const double at)
       {
-         SetStop(stopPush, q, true);
+         SetStop(stopHold, at, true);
+         SetStop(stopPush, at, true);
+      }
+      void DriveTie(const double target, const double rate)
+      {
+         DriveStop(stopHold, target, rate);
          DriveStop(stopPush, target, rate);
       }
-      void PushEnd() { SetStop(stopPush, q, false); }
+      void Untie()
+      {
+         SetStop(stopHold, q, false);
+         SetStop(stopPush, q, false);
+      }
       double GravityForce() const { return mass * g.Dot(axis); }   // along +s, N
 
       // ---- the body's terms ----
@@ -229,11 +251,11 @@ namespace PlungerRod
          const V3 f = g * mass + ballForce;
          return (f - axis * f.Dot(axis)).Length();
       }
-      double FrictionLimit(double, double, const V3 &ballForce) const override { return boreMu * BoreLoad(ballForce); }
+      double FrictionLimit(double, double, const V3 &ballForce) const override { return rub + boreMu * BoreLoad(ballForce); }   // the sleeve rub plus the bore on the side load
       // the rod on its bore: Mindlin's sideways spring 8 G* a of the Hertz patch (the hinge's law, lever 1)
       double PinStiffness(double, double, const V3 &ballForce) const override
       {
-         if (boreMu <= 0.0)
+         if (boreMu <= 0.0 && rub <= 0.0)
             return 0.0;
          const double a = std::cbrt(3.0 * BoreLoad(ballForce) * rRod / (4.0 * kSteelEStar));
          return 8.0 * kSteelGStar * a;

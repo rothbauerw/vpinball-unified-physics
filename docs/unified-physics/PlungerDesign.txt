@@ -36,6 +36,9 @@ Units: mm, N, g, J unless stated. Values: MEASURED (user), DERIVED (lead, from m
     contact force, mu ESTIMATED 0.2; (ii) a viscous drag F = -c v for the rod and spring rubbing and rattling in the sleeve at speed (the sound the user hears),
     c chosen so the simulator's empty full release loses about 15 % before the outer spring (the middle of the measured 0 - 25 %), labelled DERIVED from the
     slow-motion observation, to be refined when a release is measured more closely. Both are losses only (no energy enters).
+    Revised 2026-11-18 (user's 960 fps video of the simulator's empty release: 4 bounces back past 0.5 mm, still at about 220 ms; each bounce shrinks by a smaller
+    fraction than the last, Coulomb's signature; runs/2026-11-18-plunger-bounce): (iii) a constant sleeve rub of the rod and main spring, 1.5 N (2.0 N fits the
+    video, less an ESTIMATED share for the simulator's optical slide sensor; user's choice), added to (i); drag c 1.0 N s/m. Both DERIVED, rounded, not a close fit.
 1g. The tip: a hemisphere 9.5 mm across on the rod's end (MEASURED), ring rubber (rubber ring material values: rubber_e_mpa 12 MPa, as rings), meeting the ball
     through the shared contact law (ContactCore) as a revolved profile carried by the slide, as the Button cap's top. Height on the ball: the tip's axis at the
     rod's height in the lane (from the VPX plunger's Z / Height; to settle in section 3).
@@ -81,6 +84,42 @@ Units: mm, N, g, J unless stated. Values: MEASURED (user), DERIVED (lead, from m
 2h. A cabinet plunger on an auto-plunger table (kept from stock, user 2026-11-17): the mechanical plunger is not simulated; a pull-and-release (the 2d release
     test) or pressing the knob in past rest (a gentle palm smash, held in) acts as the Launch Ball button: key down on the release or the press, key up about
     100 ms after a release (as stock) or when the knob returns to rest after a press. Input handling, not physics.
+2i. Sensor input, revised (AGREED 2026-11-18 part by part: a, c, d; b dropped). Data: the user's PinOne traces (tables/logs/plunger_trace_20261118_*.csv) and
+    the replay runs/2026-11-17-plunger/e2e-replay. Rule (user 2026-11-18): the rod never jumps: the tie moves at a finite speed the ball's contact knows ahead.
+    (a) Raw reports (user: "let's try raw"): the tie follows the sensor's own reports (the mapping's value, a new one about every 6 ms), not VPX's filtered
+        position, which lags 10-20 ms and overshoots 2-4 mm (MEASURED). Each step is spread over the time since the previous report (2c, G2).
+        AGREED (user 2026-11-18): raw by default; a setting sensor_filtered (default off) takes VPX's filtered position instead, for noisy or irregular
+        sensors (raw passes a sensor's noise to the rod; the PinOne moves about 1 count, 0.1 mm, at rest, inside the rest band). Parts c and d hold either way.
+    (b) Forward scale: a board may scale the two sides of rest separately. The PinOne maps its forward range (rest 201 to full push 46 counts: 155) and its
+        pull range (201 to 740: 539) each to a full axis, so a push reads 539/155 = 3.5 x too far (MEASURED: hard pushes read 11-37 mm; the real knob goes at
+        most about 10.5 mm by the outer spring's solid length, 15.6 mm by the counts). New setting sensor_forward_scale multiplies s < 0: default 1 (one scale,
+        stock's assumption); the PinOne 155/539 = 0.29, read from its calibration screen. MEASURED per board, not tuned for feel.
+        DROPPED (user 2026-11-18): no setting. The board is calibrated instead with its push range equal to its pull range (PinOne: min -338, rest 201,
+        max 740, 539 counts each side), so both sides share one scale as stock assumes and the push side's band step is no larger than the pull side's
+        (about 2.8 mm). User tested: a good palm smash. Setup note for players: calibrate the push range equal to the pull range.
+    (c) Leaving rest: the PinOne reports rest until the knob is about 29 counts out (about 2.8 mm), then the whole offset in one report, on both sides
+        (MEASURED, trace 16:44: 0 -> 0.052 pulling, +0.006 -> -0.194 pushing; coming back it reports smoothly). That first step is a band edge, not a speed.
+        So when the tie takes the knob from rest it moves at the pull speed (pull_mm_s, 120 mm/s) until the next report, then at the speed between reports
+        (2c) plus the pull speed until it reaches the reading. Cost: the rod lags the knob by up to the band at the start of a slow push or pull (2.8 mm,
+        about 23 ms at 120 mm/s); a fast palm shows its speed in the next report, about 6 ms later. The same for any band (VPX's dead zone or a board's):
+        no board setting.
+        AGREED (user 2026-11-18), as written. Worked cases (lead): a slow pull (0.066 m/s) trails 2.5 mm, caught in about 27 ms; a 1 m/s palm trails about
+        8 mm (8 ms in time) and meets the ball at 1.12 m/s (+12 %). Once caught, the tie follows by 2c. A VPX dead zone set just above the board's step
+        (about 0.055 p.u. on the PinOne) removes the step, and part c then has nearly nothing to do.
+        REPLACED (user 2026-11-18, after e2f T1: slow pushes 0.013 / 0.041 m/s gave the resting ball 0.24 / 0.28 m/s: any start or catch-up faster than the
+        knob is launch speed for a ball on the tip). Now: no leaving-rest rule. The board's step is handled by VPX's own plunger dead zone, set just above it
+        (PinOne about 0.055); the rod then moves at about 1.05 x the knob from the first report, no floor; cost about 2.8 mm dead at rest. The dead zone is
+        applied once: VPX's mapping removes it (SensorMapping.h:188-195), so the hand's rest band is only a noise floor (0.01 p.u.) on the mapped value
+        (e2f found it applied twice: 0.05 gave 5.9 mm). A board with a step and no dead zone set gets the step spread over one report (2.8 mm: about
+        0.47 m/s; an 11 mm miscalibrated forward step: 0.9-1.4 m/s into the solid point, ball 1.8 m/s MEASURED, no overlap). No warning (user).
+    (d) Speed bound: the contact bounds how fast the tip can come at the ball (SurfaceSpeedBound and EnergyMove, plungerhost.h:319-327) from the rod's speed
+        plus the key's pull speed (0.12 m/s). The tie moves at its own rate (up to about 1.3 m/s in the replay), so the tip can arrive faster than the contact
+        planned: a missed contact (INFERRED cause of the 0.08 mm overlap in the user's play log). The bound uses the tie's rate when it is faster.
+        AGREED (user 2026-11-18). Only more cautious, so safe on every board; its cost (more contact search while the tie drives fast) is measured (TODO 44).
+    Not changed here: a tied short release overdrives the ball (the infinite-mass knob, e2d: 2 mm gives 0.79 m/s against the key's 0.51); its own design next.
+    Tests: replay both traces (13:50, 16:44) with a ball on the tip: every push gives the ball at most (1 + e) x the knob's scaled speed; a slow push (about
+    0.02 m/s scaled) barely moves it; hard pushes stop at the outer spring's solid point; no ball found inside, no rises, no failed steps; full-pull launch
+    unchanged.
 
 
 3. THE TIP AND THE BALL (AGREED 2026-11-17, 3b changed by the user; Requirements H5)

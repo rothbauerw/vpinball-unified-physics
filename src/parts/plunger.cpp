@@ -165,27 +165,32 @@ public:
    }
 
 private:
-   // The cabinet sensor's hand (engine step 2A, design 2c - 2d, H7): VPX's filtered 1 ms sensor state (PlungerHandler, stepped at the cycle's start), read once per physics
+   // The cabinet sensor's hand (engine step 2A, design 2c - 2d, 2i, H7): the sensor's state (PlungerHandler, stepped at the cycle's start), read once per physics
    // millisecond after the cycle, drives the rod's hold stop for the next. Only for a cabinet plunger (MechPlunger) with a sensor (or the external override: plugins, tests)
    void SensorHand(PlungerHost::Rod &r)
    {
       const PlungerHandler *const ph = g_pplayer->m_physics->GetPlungerHandler();
       const bool present = m_plunger->m_d.m_mechPlunger && ph != nullptr && ph->HasPlungerSensor();
-      double vel = present ? ph->GetRawVelocity() : 0.0, band = 0.01;   // p.u./s; the rest band, p.u.: stock's own (PlungerHandler.cpp:265)
+      // 2i a: the sensor's own reports by default (a new value about every 6 ms; the speed for the release test from the steps between them unless a velocity sensor is
+      // mapped); sensor_filtered: VPX's filtered position and speed. The override (plugins, the test driver's plungersensor) feeds either: its position is a report in raw mode
+      double vel = present ? ph->GetRawVelocity() : 0.0;   // p.u./s
+      bool velOwn = r.sensorFiltered;
       if (present)
          for (int i = 0; i < ph->GetSensorCount(); i++)   // the first active sensor, the one the handler reads
             if (const std::unique_ptr<PlungerSensor> &sn = ph->GetSensor(i); sn != nullptr && sn->IsActive())
             {
                if (sn->GetVelocitySensor()->IsMapped())   // a velocity sensor (Pinscape): its own speed (the override's when on: GetHitVelocity at rest 0 returns either, p.u./s)
+               {
                   vel = ph->GetHitVelocity(0.f);
-               band = std::max(band, (double)sn->GetPositionSensor()->GetMapping().GetDeadZone());   // the position mapping's dead zone, at least stock's band
+                  velOwn = true;
+               }
                break;
             }
-      const double pos = present ? ph->GetRawPosition() : 0.0;
-      const int ev = r.SensorStep(present, pos, vel, band, ContactSystem::SubIntervalS());
+      const double pos = !present ? 0.0 : r.sensorFiltered ? ph->GetRawPosition() : ph->GetReportPosition();
+      const int ev = r.SensorStep(present, pos, vel, velOwn, ContactSystem::SubIntervalS());
       if (ev != PlungerHost::Rod::kSensorNone && m_sensorLines++ < 60)
       {
-         static const char *const names[] = { "", "takes the knob", "release (speed)", "release (reading ahead of the rod)", "lets go at rest", "re-armed", "sensor gone: lets go", "palm pushes the knob in", "palm lets go" };
+         static const char *const names[] = { "", "takes the knob", "release (speed)", "release (reading ahead of the rod)", "lets go at rest", "re-armed", "sensor gone: lets go", "resync: ties the rod at rest and moves it to the reading" };
          PLOGI << "Plunger " << m_plunger->GetName() << ": sensor hand " << names[ev] << " at reading " << pos << " p.u., " << vel << " p.u./s; rod " << r.part.q * 1e3 << " mm at " << r.part.rate
                << " m/s, t=" << g_pplayer->m_time_msec << " ms";
       }
