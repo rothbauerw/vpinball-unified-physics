@@ -342,6 +342,7 @@ namespace HingeGroup
             const V3 pb = cb - nb * (R - 0.5 * std::max(d, 0.0));
             GroupStep::HitTerm &t = h.t[h.nt++];
             t.id = pieceId;
+            t.over = nullptr;
             t.d = d;
             t.n = E * nb.x + dn * nb.y + fr * nb.z;
             t.slope = nb.z * pb.y - nb.y * pb.z;
@@ -385,6 +386,7 @@ namespace HingeGroup
                const V3 cv = cb - j.v;
                const double dist = cv.Length();
                add(S - dist, dist > 1e-12 ? cv / dist : bestN, -(double)j.weight, 0.0, -1);
+               h.t[h.nt - 1].over = &j.over;
             }
             else if (pc.kind == 2)   // each flat quad by its own two triangles (convex and flat: its nearest point is exact)
             {
@@ -676,7 +678,8 @@ namespace HingeGroup
          rp.gammaKK = RubberContact::CalibrateKK(rp, b.R, b.m, 1.0, std::min(0.99, std::max(0.05, elasticity)));
       }
       std::vector<Seg> wires;
-      struct Joint { V3 v; int surface, weight; };   // a point shared by weight + 1 touchable pieces of one side (hinge_piece_sum's negative terms)
+      struct Joint { V3 v; int surface, weight; std::vector<int> over; };   // a point shared by weight + 1 touchable pieces of one side (hinge_piece_sum's negative terms);
+                                                                          // over: those pieces' ids in the side's list (HitTerm::over: the joint's zero is floored by theirs)
       mutable std::vector<Joint> joints;
       mutable bool jointsBuilt = false;
       void BuildJoints() const
@@ -709,7 +712,16 @@ namespace HingeGroup
                   ps.push_back({ 0, i, wires[i].m, wires[i].half, rho });
             for (int i = 0; i < (int)joints.size(); i++)
                if (joints[i].surface == sf)
+               {
                   ps.push_back({ 1, i, joints[i].v, 0.0, rho });
+                  for (int id = 0; id < (int)ps.size(); id++)   // (the wires come first in the list: the ones with an end on this joint)
+                     if (ps[(size_t)id].kind == 0)
+                     {
+                        const Seg &w = wires[(size_t)ps[(size_t)id].i];
+                        if ((w.a - joints[i].v).Length() < 1e-9 || (w.b - joints[i].v).Length() < 1e-9)
+                           joints[i].over.push_back(id);
+                     }
+               }
             if (sf != 0)
                continue;
             for (int i = 0; i < (int)quads.size(); i++)

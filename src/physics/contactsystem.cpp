@@ -2221,6 +2221,8 @@ struct ContactSystemImpl
                      it.dZero = std::max(it.dZero, it.tZero[j].second);
                   }
                }
+               if (g.set.jointZeroFloor)   // [Contact] joint_zero_floor: a raised piece raises its joints' zeros with it (d_J <= min d_p, U >= 0)
+                  it.FloorJointZeros(hp);
             }
             else if (hp.delta > was + 1e-9)
                it.dZero += hp.delta - was;

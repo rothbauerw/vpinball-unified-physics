@@ -199,6 +199,7 @@ namespace GroupStep
       double d, slope, s;
       V3 n;
       int id = -1;   // the piece it comes from (the same piece at every place and in every list): its found-inside zero is kept under it (Item::tZero)
+      const std::vector<int> *over = nullptr;   // a joint term: the pieces (ids) it corrects, its zero floored by theirs (jointZeroFloor); null for any other term
    };
    // a contact's terms: kInline held in the Hit (no allocation for a usual list), the rest on the heap, grown as needed (storage, not a limit). A Hit copies only its nt terms
    struct HitTerms
@@ -421,6 +422,12 @@ namespace GroupStep
       // (1 / fe) sum_t h tk_t [gdT_t . dq - dd (g . gdT_t)] tgE_t, 0 for one term) and in N's slope kv, kvE. The exact derivative of the residual with each term's
       // direction held fixed. The force is unchanged. true (default) = on; false = the mid gradient tg_t as the row (today's slope).
       bool termForceRows = true;
+      // termEnergy ([Contact] term_energy; TODO 48 a): a terms contact's stored energy (Item::Energy, every book) is sum_t s_t V(max(d_t, 0)), the potential the terms' force
+      // (Elastic: sum_t s_t Chord(a0_t, a1_t)) conserves. false = V of the union's depth (they agree only for pure Hertz and a positive sum).
+      bool termEnergy = true;
+      // jointZeroFloor ([Contact] joint_zero_floor; TODO 48 b): a joint term's zero >= the largest zero of the pieces it corrects (HitTerm::over), at first sight, follow-out
+      // and the raise between cycles (FloorJointZeros), so d_J <= min(d_pieces) and U >= 0. false = each term's zero on its own.
+      bool jointZeroFloor = true;
       // gripInStep ([Contact] grip_in_step; runs/2026-11-08-lead/cord_grip_design.md): a part's grip limit (the cord's mu Tm Gfree) is worked out inside each Eval from that
       // Eval's own mid tension and mid geometry, as a contact's mu N is, so the solve's residual is one fixed function of the unknowns; Newton's slope takes the sliding grip's
       // change through the limit (mu Gfree dTm/du). true (default) = on; false = the limit refreshed between the solve's rounds from the last round (Part::UpdateGrip), which
@@ -805,6 +812,29 @@ namespace GroupStep
                return z.second;
          return 0.0;
       }
+      // [Contact] joint_zero_floor: each joint term of h (HitTerm::over) takes a zero no smaller than the largest zero of the pieces it corrects, so its depth from its zero
+      // is never above theirs (d_J <= min d_p: the joint never subtracts more than its pieces add, U >= 0). Raises a joint's zero only: a joint at or below its pieces' depths
+      // stays where it was. The caller keeps dZero (the largest) in step
+      void FloorJointZeros(const Hit &h)
+      {
+         for (int t = 0; t < h.nt; t++)
+         {
+            if (h.t[t].over == nullptr)
+               continue;
+            double f = 0.0;
+            for (const int p : *h.t[t].over)
+               f = std::max(f, TermZero(p));
+            if (f <= 0.0)
+               continue;
+            size_t j = 0;
+            while (j < tZero.size() && tZero[j].first != h.t[t].id)
+               j++;
+            if (j == tZero.size())
+               tZero.emplace_back(h.t[t].id, 0.0);
+            tZero[j].second = std::max(tZero[j].second, f);
+            dZero = std::max(dZero, f);
+         }
+      }
       // the held law
       double kH = 0.0, cL = 0.0, hL = 0.0, reff = 0.0, ktPerA = 0.0, E = 0.0, mRed = 0.0, mt = 0.0;
       double alpha = 0.0, gammaKK = 0.0, tanDelta = 0.0, shearTan = 0.0, mu = 0.0, rollingMu = 0.0;
@@ -848,7 +878,18 @@ namespace GroupStep
          return d > 0.0 ? 0.4 * kH * d * d * std::sqrt(d) + (cL > 0.0 ? cL * W(d) : 0.0) : 0.0;
       }
       // [Contact] the elastic seam (multi-contact piece 1): the contact's stored energy at a place of the ball, V of its depth. The energy books read it here.
-      double Energy(const Hit &h) const { return V(h.delta); }
+      // termSum ([Contact] term_energy): a contact made of terms reads the potential its force conserves, sum_t s_t V(max(d_t, 0)) over its zeroed terms (Elastic sums
+      // s_t Chord(a0_t, a1_t) of the same V); a one-term contact (nt = 0) is V of its depth as before
+      double Energy(const Hit &h, const bool termSum) const
+      {
+         if (!termSum || h.nt == 0)
+            return V(h.delta);
+         double e = 0.0;
+         for (int t = 0; t < h.nt; t++)
+            if (h.t[t].d > 0.0)
+               e += h.t[t].s * V(h.t[t].d);
+         return e;
+      }
       // the stiffness slot k: the held kH (dk/dc = 0), read through here so a later piece can give it a law of its own. No reader yet. (An accessor, not a field:
       // kH is also written outside this file, contactsystem.cpp and cordfixed.h, and a second copy could drift from it.)
       double Stiff() const { return kH; }
@@ -1566,7 +1607,7 @@ namespace GroupStep
             const Item &it = item[k];
             Hit hp;
             Probe(it, ball, hp);
-            const double vn = it.touching ? it.Energy(hp) : 0.0, vs = it.touching ? 0.5 * it.Kt(hp.delta) * it.xi.Dot(it.xi) : 0.0;
+            const double vn = it.touching ? it.Energy(hp, set.termEnergy) : 0.0, vs = it.touching ? 0.5 * it.Kt(hp.delta) * it.xi.Dot(it.xi) : 0.0;
             const double vr = it.touching && set.rollModel == 1 ? 0.5 * it.Kr(hp.delta) * it.ra.th.Dot(it.ra.th) + 0.5 * it.Ktw(hp.delta) * it.ra.tw * it.ra.tw : 0.0;
             snprintf(t, sizeof(t), "|i%d a%d b%d s%d t%d d=%.6g z=%.6g Vn=%.6g Vs=%.6g Vr=%.6g", k, it.a, it.b, it.s, it.touching ? 1 : 0, hp.delta * 1e6, it.dZero * 1e6, vn * 1e6, vs * 1e6, vr * 1e6);
             o += t;
@@ -1596,7 +1637,7 @@ namespace GroupStep
             {
                Hit hp;
                Probe(item[k], ball, hp);
-               e += item[k].Energy(hp) + 0.5 * item[k].Kt(hp.delta) * item[k].xi.Dot(item[k].xi);
+               e += item[k].Energy(hp, set.termEnergy) + 0.5 * item[k].Kt(hp.delta) * item[k].xi.Dot(item[k].xi);
                if (set.rollModel == 1)
                   e += 0.5 * item[k].Kr(hp.delta) * item[k].ra.th.Dot(item[k].ra.th) + 0.5 * item[k].Ktw(hp.delta) * item[k].ra.tw * item[k].ra.tw;
             }
@@ -1628,7 +1669,7 @@ namespace GroupStep
       {
          Hit hp;
          Probe(item[k], ball, hp);
-         double e = item[k].Energy(hp) + 0.5 * item[k].Kt(hp.delta) * item[k].xi.Dot(item[k].xi);
+         double e = item[k].Energy(hp, set.termEnergy) + 0.5 * item[k].Kt(hp.delta) * item[k].xi.Dot(item[k].xi);
          if (set.rollModel == 1)
             e += 0.5 * item[k].Kr(hp.delta) * item[k].ra.th.Dot(item[k].ra.th) + 0.5 * item[k].Ktw(hp.delta) * item[k].ra.tw * item[k].ra.tw;
          return e;
@@ -1749,6 +1790,8 @@ namespace GroupStep
                      it.tZero.emplace_back(hp.t[t].id, hp.t[t].d);
                      it.dZero = std::max(it.dZero, hp.t[t].d);
                   }
+               if (set.jointZeroFloor)
+                  it.FloorJointZeros(hp);
             }
          }
          else
@@ -2295,7 +2338,7 @@ namespace GroupStep
             {
                Hit hp;
                Probe(item[k], ball, hp);
-               s.con += item[k].Energy(hp) + 0.5 * item[k].Kt(hp.delta) * item[k].xi.Dot(item[k].xi);
+               s.con += item[k].Energy(hp, set.termEnergy) + 0.5 * item[k].Kt(hp.delta) * item[k].xi.Dot(item[k].xi);
                if (set.rollModel == 1)
                   s.con += 0.5 * item[k].Kr(hp.delta) * item[k].ra.th.Dot(item[k].ra.th) + 0.5 * item[k].Ktw(hp.delta) * item[k].ra.tw * item[k].ra.tw;
                s.touching++;
@@ -2379,7 +2422,7 @@ namespace GroupStep
                continue;
             Hit hp;
             Probe(it, ball, hp);
-            const double vn = it.touching ? it.Energy(hp) : 0.0, vs = it.touching ? 0.5 * it.Kt(hp.delta) * it.xi.Dot(it.xi) : 0.0;
+            const double vn = it.touching ? it.Energy(hp, set.termEnergy) : 0.0, vs = it.touching ? 0.5 * it.Kt(hp.delta) * it.xi.Dot(it.xi) : 0.0;
             const double vr = it.touching && set.rollModel == 1 ? 0.5 * it.Kr(hp.delta) * it.ra.th.Dot(it.ra.th) + 0.5 * it.Ktw(hp.delta) * it.ra.tw * it.ra.tw : 0.0;
             const bool cd = e.active && (int)cDiag.size() >= ni;
             snprintf(t, sizeof t, " | c%d b%d %s%d t%d d %.5g um (solve d1 %.5g zero %.4g) n_z %.4f N %.5g Ft %.4g muN %.4g %s V %.5g Vs %.4g Vr %.4g uJ", k, it.a, it.b >= 0 ? "ball b" : "s", it.b >= 0 ? it.b : it.s,
@@ -5455,6 +5498,8 @@ namespace GroupStep
                         z = std::max(0.0, std::min(z, z + hr.t[t].d));
                         break;
                      }
+               if (set.jointZeroFloor)   // (a joint's zero follows its own term out only down to its pieces' zeros: it stays off, no energy)
+                  it.FloorJointZeros(hr);
                size_t n = 0;
                for (size_t j = 0; j < it.tZero.size(); j++)
                   if (it.tZero[j].second > 0.0)

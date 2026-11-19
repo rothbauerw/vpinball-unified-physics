@@ -41,7 +41,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 40. Jet skirt resting on its seat is stepped as a stiff spring and sets short steps whenever the jet is grouped (bumpergroup.h ~283): ModelStandards 3a resting constraint. Gorgar +6 % steps with energy_reach (runs/2026-11-14-reach-p1b).
 42. Step halvings (failed solves, groupstep.h:2190): stress v2 ~560 at 34e4185da (519 near 77 s). Repro: slow ball rocking on a slope below the flippers, 1,269 halvings (runs/2026-11-15-finder-P6b3/drive_burst.txt). Find surface and cause.
 43. After the finder work (1.34): tables/turn table/turn table test 4 (user's worst-case table) runs slower on today's build than on the 11-09 build (user's play). Measure both on one machine and find the cause.
-48. Rule 8 (shared contact path): a ball-surface contact whose zero was set by a found-inside overlap stored 9.1 mJ with no work when a part drove the ball deeper (runs/2026-11-17-plunger/a3b-trace). Find the law.
+48. Joint zero floor (joint_zero_floor): at a joint of 3+ wires the raise between cycles could add energy (INFERRED, not seen; 2 wires only lose). Shared-line negative terms get no floor. Check on paper.
 41. Magnet pull in the energy reach is taken at the ball's place, not the largest over its travel: a true bound needs current, saturation, in-winding and per-type terms. Re-looks while a magnet is on (stress C1).
 
 ## 2. Flippers
