@@ -12,7 +12,7 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-Next: plunger (PlungerDesign.txt): steps 1-3 in VPX (auto: autoplungerhost.h; tip head and drawing unchecked); cost fails (44), parked 46-48; next: 2h. Lead log runs/2026-11-17-lead. GL exe and main_exe stale: pass -Exe. Stress v2 bench bytes moved with the part-placing step (1 ulp, trap 112).
+Next: plunger (PlungerDesign.txt): steps 1-3 in VPX (auto: autoplungerhost.h; tip head and drawing unchecked); open items: section 14; next: user's call. Lead log runs/2026-11-17-lead. GL exe and main_exe stale: pass -Exe. Stress v2 bench bytes moved with the part-placing step (1 ulp, trap 112).
 Judge a change by one exe, its setting on vs off; never by an older exe's md5 (ModelStandards trap 112). Query outliers 0.3-9 ms are the OS (measured). 1.33: cut B kept.
 Stand-up targets: code pulled from the tree 2026-11-15 (crashed VPX; user), backup backups/2026-11-15-standup-pulled; piece 5 in backups/2026-11-14-standup-build6; simpler draft runs/2026-11-15-standup-simple/design.md, unreviewed. Next step is the user's call.
 N5. One reach rule from physics (speed plus force) for grouping and step length; first built in 1.34 P2. Grouping: Gate001's 81 mm swing as one-cycle travel joins two lanes. Step length: speed only, no force. Check all parts; ball pairs of unequal mass and resting-ball wake (read only).
@@ -41,11 +41,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 40. Jet skirt resting on its seat is stepped as a stiff spring and sets short steps whenever the jet is grouped (bumpergroup.h ~283): ModelStandards 3a resting constraint. Gorgar +6 % steps with energy_reach (runs/2026-11-14-reach-p1b).
 42. Step halvings (failed solves, groupstep.h:2190): stress v2 ~560 at 34e4185da (519 near 77 s). Repro: slow ball rocking on a slope below the flippers, 1,269 halvings (runs/2026-11-15-finder-P6b3/drive_burst.txt). Find surface and cause.
 43. After the finder work (1.34): tables/turn table/turn table test 4 (user's worst-case table) runs slower on today's build than on the 11-09 build (user's play). Measure both on one machine and find the cause.
-44. Plunger launch cost FAILS H9: worst cycle 305 us vs 30 us; 17 steps/cycle on the tip's stiffness clock (runs/2026-11-17-plunger/e1-why); 70-90 us per launch cycle outside the steps unexplained. Same root as 11.1. User 2026-11-18: does not hold up the model.
-45. Plunger LimitBOS / LimitEOS: which end each means, and re-firing on the rod's bounces (10-16 per launch); no table in tables/ uses them. Left as built (BOS rest, EOS full pull); user 2026-11-18: to address later.
-46. Plunger: a pull too short to release stays tied to the sensor, an infinite-mass knob (2 mm: ball 0.79 m/s vs key 0.51, e2d). User's park placement makes it feel right; parked.
 48. Rule 8 (shared contact path): a ball-surface contact whose zero was set by a found-inside overlap stored 9.1 mJ with no work when a part drove the ball deeper (runs/2026-11-17-plunger/a3b-trace). Find the law.
-47. Plunger: the same 2 mm key launch gives 0.513-0.580 m/s between bench runs (e2d, e2f, e2g); INFERRED driver start offset, unproven. Understand before any release design.
 41. Magnet pull in the energy reach is taken at the ball's place, not the largest over its travel: a true bound needs current, saturation, in-winding and per-type terms. Re-looks while a magnet is on (stress C1).
 
 ## 2. Flippers
@@ -111,3 +107,11 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 1. Performance: cost with a ball rolling and resting on a ramp never measured; measure against rule 5 (worst cycle, worst 7-cycle window).
 2. Wire ramps as wires (enhancement, not a priority; user 2026-11-17): today a flat floor with walls, as stock; the ball should ride on the rods, a tube contact along each wire.
 3. Holes in ramps: refused with a notice (user 2026-11-17). Physics cuts in ramps left unexplained stray edges (mesh holes P2); a curved ramp's drawing needs per-face clipping.
+
+## 14. Plungers (PlungerDesign.txt; steps 1-3 built)
+1. Launch cost FAILS H9: rod worst cycle 305 us vs 30 us, 17 steps/cycle on the tip's stiffness clock (e1-why); auto fork 147 us, 24 steps. Same root as 11.1. User 2026-11-18: does not hold up the model.
+2. LimitBOS / LimitEOS: which end each means, and re-firing on the rod's bounces (10-16 per launch); no table in tables/ uses them. Left as built (BOS rest, EOS full pull); user 2026-11-18: later.
+3. A pull too short to release stays tied to the sensor, an infinite-mass knob (2 mm: ball 0.79 m/s vs key 0.51, e2d). User's park placement makes it feel right; parked.
+4. The same 2 mm key launch gives 0.513-0.580 m/s between bench runs (e2d, e2f, e2g); INFERRED driver start offset, unproven. Understand before any release design.
+5. Extension (user 2026-11-18, later): design 2h, a cabinet plunger on an auto-plunger table acts as the Launch Ball button (pull-and-release or a press past rest).
+6. Auto plunger not rechecked with a clean ball: the tip head, a lower energy (0.64 J), the fork drawing on screen (a3c-clean ran the fork at 1 J only).
