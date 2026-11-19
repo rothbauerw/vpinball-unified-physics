@@ -189,11 +189,12 @@ private:
             }
       const double pos = !present ? 0.0 : r.sensorFiltered ? ph->GetRawPosition() : ph->GetReportPosition();
       const int ev = r.SensorStep(present, pos, vel, velOwn, ContactSystem::SubIntervalS());
-      if (ev != PlungerHost::Rod::kSensorNone && m_sensorLines++ < 60)
+      if (ev != PlungerHost::Rod::kSensorNone && m_sensorLines++ < 200)
       {
-         static const char *const names[] = { "", "takes the knob", "release (speed)", "release (reading ahead of the rod)", "lets go at rest", "re-armed", "sensor gone: lets go", "resync: ties the rod at rest and moves it to the reading" };
+         static const char *const names[] = { "", "takes the knob", "release (speed)", "release (reading ahead of the rod)", "lets go at rest", "re-armed", "sensor gone: lets go", "resync: ties the rod at rest and moves it to the reading",
+            "release (acceleration)", "release cancelled (reading forward of rest): retakes the knob" };
          PLOGI << "Plunger " << m_plunger->GetName() << ": sensor hand " << names[ev] << " at reading " << pos << " p.u., " << vel << " p.u./s; rod " << r.part.q * 1e3 << " mm at " << r.part.rate
-               << " m/s, t=" << g_pplayer->m_time_msec << " ms";
+               << " m/s; fit " << r.fitN << " reports over " << r.fitSpan * 1e3 << " ms: " << r.fitSpeed << " m/s, " << r.fitAccel << " m/s^2 (step " << r.boardStep * 1e3 << " mm), t=" << g_pplayer->m_time_msec << " ms";
       }
    }
 

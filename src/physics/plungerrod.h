@@ -76,9 +76,16 @@ namespace PlungerRod
       double tipEMpa = 12.0, tipAlpha = 0.18, tipBetaLayer = 0.33, tipMu = 0.8, tipShearScale = 0.1, tipTanDelta = 0.05;
       // the hand's pull speed on a key (key down to full pull, PullBackandRetract's return), mm/s: ESTIMATED (design 2b: a hand pulling the 61 mm in about half a second)
       double pullMmS = 120.0;
-      // the cabinet sensor (user M1 2026-11-18): a release only from a pull of at least this, mm (the deepest reading since the tie took); below it the tie follows the knob
-      // both ways, a palm push included. ESTIMATED (the user finds the tie right on short pulls)
-      double releaseMinMm = 5.0;
+      // the cabinet sensor's release by acceleration (design 2k): a release when a quadratic fit of the pulled reports gives the knob an acceleration toward rest over
+      // release_accel, m/s^2. MEASURED boundary (the user's PinOne traces: free releases 13-28, guided returns -1.1 to 0.5; the middle of the 0.5-13 gap)
+      double releaseAccel = 5.0;
+      // ... and a fitted speed toward rest over release_accel_min_speed, m/s: above a hand easing back from a hold (e2k run U: a guided return starting from a hold
+      // fitted 5.7 m/s^2 at 0.081 m/s, a false release at 0.05; with 0.15 none, and 6 of the user's 7 free releases released)
+      double releaseAccelMinSpeed = 0.15;
+      // the fit's window W (s) from the board's step q (m, the smallest change seen between reports): W = sqrt(2 C q / release_accel), so a steady move's quantization
+      // noise C q / W^2 stays under release_accel / 2; at least 4 reports. C = release_window_c, from the lead's simulation (20000 steady returns 0.03-0.2 m/s, +-1 ms
+      // jitter, 3 ms reports: worst fake acceleration 4.7 m/s^2 at q 0.1 mm, W 15 ms: C = 4.7 x 0.015^2 / 1e-4). The PinOne (q about 0.1 mm): W about 21 ms
+      double releaseWindowC = 10.6;
       // the cabinet sensor's source (design 2i a, user 2026-11-18): false (default) = the sensor's own reports (the position mapping's value, a new one about every 6 ms);
       // true = VPX's filtered position and speed (PlungerSensor's Kalman filter: lags 10-20 ms, overshoots 2-4 mm, MEASURED), for a noisy or irregular sensor
       bool sensorFiltered = false;

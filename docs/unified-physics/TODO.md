@@ -111,7 +111,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 ## 14. Plungers (PlungerDesign.txt; steps 1-3 built)
 1. Launch cost FAILS H9: rod worst cycle 305 us vs 30 us, 17 steps/cycle on the tip's stiffness clock (e1-why); auto fork 147 us, 24 steps. Same root as 11.1. User 2026-11-18: does not hold up the model.
 2. LimitBOS / LimitEOS: which end each means, and re-firing on the rod's bounces (10-16 per launch); no table in tables/ uses them. Left as built (BOS rest, EOS full pull); user 2026-11-18: later.
-3. A pull too short to release stays tied to the sensor, an infinite-mass knob (2 mm: ball 0.79 m/s vs key 0.51, e2d). User's park placement makes it feel right; parked.
+3. Release logic is tuned, not proven robust (2k): thresholds from one board and ~20 moves, thin margins. Record a broad set (3-20 mm releases, slow and brisk guided returns, palms from rest and small pulls, holds) as a replayed regression; then merge the 3 release tests.
 4. The same 2 mm key launch gives 0.513-0.580 m/s between bench runs (e2d, e2f, e2g); INFERRED driver start offset, unproven. Understand before any release design.
 5. Extension (user 2026-11-18, later): design 2h, a cabinet plunger on an auto-plunger table acts as the Launch Ball button (pull-and-release or a press past rest).
 6. Auto plunger not rechecked with a clean ball: the tip head, a lower energy (0.64 J), the fork drawing on screen (a3c-clean ran the fork at 1 J only).

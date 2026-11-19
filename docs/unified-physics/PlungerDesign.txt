@@ -84,6 +84,70 @@ Units: mm, N, g, J unless stated. Values: MEASURED (user), DERIVED (lead, from m
 2h. A cabinet plunger on an auto-plunger table (kept from stock, user 2026-11-17): the mechanical plunger is not simulated; a pull-and-release (the 2d release
     test) or pressing the knob in past rest (a gentle palm smash, held in) acts as the Launch Ball button: key down on the release or the press, key up about
     100 ms after a release (as stock) or when the knob returns to rest after a press. Input handling, not physics.
+2k. Release by acceleration (AGREED 2026-11-18 part by part, a-d and the tests). A released knob is free: its spring keeps it speeding up into rest; a hand
+    guiding it back slows to a stop. Data (the user's PinOne, raw reports every ~3 ms, dead zone 0.055; quadratic fit of the last 15 ms before the band):
+    7 free releases from 4.5-11 mm: acceleration toward rest 13.3-27.7 m/s^2 at 0.19-0.59 m/s, one (5.8 mm) 2.0 m/s^2 at 0.09 m/s; 4 guided returns
+    from 15-22 mm: -1.1 to +0.5 m/s^2 at 0.04-0.12 m/s (tables/logs/plunger_trace_20261118_212416 and _212735).
+    (a) The fit: while the reading is pulled (s > 0), a least-squares quadratic over the distinct raw reports of the last 15 ms (at least 4) gives the
+        knob's speed and acceleration toward rest. Cabinet units: the reading's s (the table's travel scale), not the board's counts.
+        CHANGED, AGREED (user 2026-11-18): the window is sized from the board: its step q is the smallest change seen between reports, and the window W the
+        shortest (at least 4 reports) whose quantization noise on a steady move stays under half release_accel (lead's simulation, 20000 steady returns
+        0.03-0.2 m/s, +-1 ms jitter: fake acceleration grows with q / W^2; worst at W 15 ms, 3 ms reports: q 0.1 mm 4.7, 0.2 mm 8.5, 0.5 mm 21 m/s^2; the
+        PinOne needs about 20 ms, worst 2.6). The same fit gives the speed for both release tests (fake speed q / W instead of q / interval). A board
+        too coarse to fit a short release keeps the speed tests only.
+    (b) Release when the fitted acceleration toward rest exceeds release_accel (5 m/s^2, MEASURED boundary: the middle of the 0.5-13 gap) with the fitted
+        speed toward rest over release_accel_min_speed (0.05 m/s, above the board's 1-count noise of 0.03 m/s per 3 ms report). The 0.5 m/s speed test
+        and the reading-ahead test stay (long pulls fire them first). AGREED (user 2026-11-18). For reference, stock (PlungerHandler.cpp:372) counts a
+        free release when the reading is 10 % of travel below its deepest point in the last 100 ms (robust to coarse boards, blind to short pulls and to
+        how the knob moves: a 0.1 m/s guided return counts) and invents the speed from the pull (x 100/13).
+    (c) release_min (5 mm) is removed: it was added for the filtered input's lag (a palm from a 1.2 mm pull read as a release); raw input removed that.
+        Risk, not in the data: a palm push from a small pull accelerates the knob through rest and could read as a release, after which the sensor is
+        ignored until the rod rests. Test it; if it happens, a release is cancelled when the reading goes forward of rest within the next reports.
+        AGREED (user 2026-11-18). (A free knob passes rest only by the outer spring's small bounce, hidden by the dead zone.)
+    (d) The tie stays for a held knob (the ball feels hand and arm, the tie overstates by about 10-20 %). After a release the table's spring and the
+        rod's own mass drive the ball (2d).
+    BUILT (e2k, e2m; user played 2026-11-18: "feels pretty good and consistent"). release_accel_min_speed default 0.15 m/s (MEASURED: 0.05 released a
+    guided return starting from a hold, fit 5.7 m/s^2 at 0.081 m/s; free releases at detection 0.15 and up). Window W = sqrt(2 C q / release_accel), C 10.6,
+    at least 4 reports (about 21 ms on the PinOne); guard 8 reports. Tie timing (e2l, 2c's law, user 2026-11-18): after a still spell (a gap over 1.5 x the
+    board's report period T_b, the median of the last 15 gaps, 3 ms on the PinOne) the first step is timed over T_b; the tie is never faster than the
+    knob's step plus pull_mm_s; the fit restarts after a still spell over 10 ms. Result: a 1 m/s palm from a 2.5 mm pull gives the ball 2.01 m/s (was 2.93);
+    the user's releases: 6 of 7 caught (the 2.8 mm one stays tied), none of 4 guided returns or 8 palms.
+    Tests: the user's two traces replayed (each release detected, no guided return or palm released), e2d's synthetic 2/5/10 mm, a palm from a 2-3 mm pull
+    (synthetic), key and full launches unchanged; ball speed on short releases against the rod-mass prediction.
+2j. DROPPED 2026-11-18 (user), after e2h: no grip law works. Lead's arithmetic error: a 10 ms grip on 127 g is k 50 kN/m, c 160 N s/m (not 50, 5).
+    A grip stiff enough to beat the 1.5 N rub carries the hand's mass through a 3 ms hit (c x 3 ms = 0.48 kg at 10 ms); one soft enough to free the rod's
+    mass sticks rub / k off the reading (12 mm at 200 ms; at 317 ms MEASURED 3.8 mm stuck, then a false release at 2.13 m/s). While a hand holds the knob
+    the ball does feel hand and arm (the tie overstates by about 10-20 %); the fault is undetected free releases: see 2k. Code removed (copy kept in
+    runs/2026-11-17-plunger/e2h-handforce/2j_code). Text below kept as the record of what was tried.
+    Was: the hand as a force on the rod's own mass (user's idea). Replaces the tie's infinite mass (2i, e2c).
+    Why: a tied rod drives the ball as an infinitely heavy knob: (1 + e) v against the free rod's (1 + e) m_r / (m_r + m_b) v = 0.61 (1 + e) v, 1.63 x
+    (MEASURED 1.54 x: e2d 2 mm 0.790 against the key's 0.513 m/s). A real knob is the rod's mass, plus the hand's only while a hand holds it.
+    (a) The rod is always a free body of its own mass in the solve. The hand acts on it as a force F_h, booked as a drive (energy enters only there).
+    (b) Hand law, set at each sensor report and held between: F_h = -F_stored(s*) + k_h (s* - s) + c_h (v* - v). s* is the reading spread over the report
+        interval (2c), v* its speed; -F_stored(s*) holds the rod's springs and weight at the reading (feed-forward, so the grip needs no large error);
+        k_h, c_h: a grip spring and damper set by one period T_h = 2 pi sqrt(m / k_h), critically damped (c_h = 2 sqrt(k_h m)).
+        CHANGED (user 2026-11-18, after the lead's paper: a 50 N/m grip alone lags 13 cm on a palm reaching 1 m/s in 20 ms, 6 N needed): add the
+        reading's acceleration, F_h = -F_stored(s*) + m a* + k_h (s* - s) + c_h (v* - v), a* from a quadratic fit of the last ~15 ms of reports (the fit
+        that separated releases, 13-28 m/s^2, from guided returns, -1 to 0.5, in the user's traces). The first two terms do the work; the grip corrects.
+        Cost: a palm that jumps from rest within one report is followed one or two reports late (3-6 ms).
+    (c) T_h default 10 ms (ESTIMATED, a feel setting hand_grip_ms): only how fast errors are corrected. Long against a ball impact (2-3 ms: the ball meets
+        the rod's mass; the grip changes by about 1 N against 10-300 N in the contact). k_h = 50 N/m at 127 g, c_h = 5 N s/m. AGREED (user 2026-11-18).
+    (d) After an impact the grip pulls the rod back to the reading over about T_h; the ball has left faster than the knob ((1 + e) 0.61 v > v for e > 0.64),
+        so no second hit unless the hand speeds up (a real palm does the same). Paper (lead): e about 0.87 (ring rubber, p1b): ball 1.14 v, rod 0.27 v
+        after the hit; a critically damped catch-up overshoots by about e^-2 of the deficit, rod at most about 1.1 v: below the ball, small margin (tested).
+        AGREED (user 2026-11-18).
+    (e) Limit: |F_h| at most hand_max_n (ESTIMATED 100 N, a strong push), so the contact's speed bound and energy reach have a finite hand force:
+        SurfaceSpeedBound and EnergyMove use (max stored force + hand_max_n) / m. Replaces 2i d's tie rate. AGREED (user 2026-11-18): a physical limit
+        (a hand's push), not a cutoff; it binds only on a jumping reading (100 N + 36 N on 127 g is over 1000 m/s^2).
+    (f) Kept: release (2d, raw speed and reading ahead; release_min) then the hand force is off and the table's spring drives; resync (U2) re-engages
+        the hand with the grip from where the rod rests. A palm push: the ball meets the rod's mass, not hand and arm (about 25 % below a real palm,
+        ESTIMATED); the hand keeps pushing after the impact. AGREED (user 2026-11-18). Watch: after an impact the rod lags the reading; on a return
+        toward rest that can read as "reading ahead of the rod" (an early release): measured in the tests; if so the ahead test allows the grip's lag.
+    (g) Deleted: the sensor tie (Tie / DriveTie / Untie as the sensor's hand), TieRate, HandRate; the resync glide becomes the hand force following a
+        target moving to the reading at pull_mm_s. Kept: the key and script hand stops (2b, PullBack, PullBackandRetract: the rod rests on the stop, the
+        ball in front, no impact through them). An on/off setting (hand_force) until the user has played it. AGREED (user 2026-11-18); 2j AGREED.
+    Paper cases before build: a slow pull and hold (follows, no creep with a ball on the tip); free releases from 2, 5, 10 mm through the tie path
+    (ball near the rod-mass ideal); a 1 m/s palm push from rest (lag, ball speed); a full pull and release (unchanged); the energy book (hand work = drive).
 2i. Sensor input, revised (AGREED 2026-11-18 part by part: a, c, d; b dropped). Data: the user's PinOne traces (tables/logs/plunger_trace_20261118_*.csv) and
     the replay runs/2026-11-17-plunger/e2e-replay. Rule (user 2026-11-18): the rod never jumps: the tie moves at a finite speed the ball's contact knows ahead.
     (a) Raw reports (user: "let's try raw"): the tie follows the sensor's own reports (the mapping's value, a new one about every 6 ms), not VPX's filtered

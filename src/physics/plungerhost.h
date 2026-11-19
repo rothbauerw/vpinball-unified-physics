@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <string>
@@ -56,7 +57,9 @@ namespace PlungerHost
          else if (k == "tip_shear_scale") s.tipShearScale = v;           // the tip's sideways stiffness factor
          else if (k == "tip_tan_delta") s.tipTanDelta = v;               // the tip's loss tangent
          else if (k == "pull_mm_s") s.pullMmS = v;                       // the hand's pull speed on a key, mm/s
-         else if (k == "release_min_mm") s.releaseMinMm = v;             // the cabinet sensor: a release only from a pull at least this deep, mm (M1)
+         else if (k == "release_accel") s.releaseAccel = v;              // the cabinet sensor: release when the fitted acceleration toward rest exceeds this, m/s^2 (2k b)
+         else if (k == "release_accel_min_speed") s.releaseAccelMinSpeed = v;   // ... with the fitted speed toward rest over this, m/s (2k b)
+         else if (k == "release_window_c") s.releaseWindowC = v;         // the fit's window constant C: W = sqrt(2 C q / release_accel) (2k a)
          else if (k == "sensor_filtered") s.sensorFiltered = v != 0.0;   // the cabinet sensor: 0 = its own reports (default), 1 = VPX's filtered position and speed (2i a)
          else if (ContactHost::IsSurfaceKey(k)) {}                       // (rubber = 0: the opt-out, ContactHost::PlungerWanted)
       });
@@ -89,7 +92,9 @@ namespace PlungerHost
       need(s.tipAlpha >= 0.0, "tip_alpha");
       need(s.tipMu >= 0.0, "tip_mu");
       need(s.pullMmS > 0.0, "pull_mm_s");
-      need(s.releaseMinMm >= 0.0, "release_min_mm");
+      need(s.releaseAccel > 0.0, "release_accel");
+      need(s.releaseAccelMinSpeed >= 0.0, "release_accel_min_speed");
+      need(s.releaseWindowC > 0.0, "release_window_c");
       if (bad.empty())   // the outer spring must reach its solid length forward of rest: its free length less solid exceeds its rest squeeze c0 = preload / k_o
       {
          const double d = s.mainWireMm, D = s.mainOdMm - d, km = s.shearModulusGPa * 1e3 * d * d * d * d / (8.0 * D * D * D * s.mainActiveCoils);   // N/mm
@@ -122,7 +127,9 @@ namespace PlungerHost
       {
          ball = b;
          part.Build(s, axis, gravity, apex);
-         releaseMin = s.releaseMinMm * 1e-3;
+         releaseAccel = s.releaseAccel;
+         releaseAccelMinSpeed = s.releaseAccelMinSpeed;
+         releaseWindowC = s.releaseWindowC;
          sensorFiltered = s.sensorFiltered;
          slope = part.prof.Slope();
          mid = apex + axis * (0.5 * (part.travel + part.outerSolidS));
@@ -140,6 +147,7 @@ namespace PlungerHost
          retract = andRetract;
          hand = Hand::Script;    // 6f: the script's (key's) hand holds; the sensor is ignored while it does
          resync = false;
+         guardLeft = 0;
          sensorLatched = true;   // ... and after it, until the rod rests (U2: then the tie resyncs to the reading)
          Wake();
       }
@@ -160,15 +168,31 @@ namespace PlungerHost
       double sensorPrev = 0.0;      // the s of the last distinct raw reading, m (the first reading is taken from rest)
       double sensorRawPrev = 0.0;   // the last distinct raw reading, p.u. (G2: a sample is a change of the raw reading, not of s: noise within the dead zone is samples at s = 0)
       double sensorSince = 0.0;     // s since the raw reading last changed (a USB sensor's sample is held about 8 ms between reports)
-      double pullPeak = 0.0;        // M1: the deepest reading (s, m) since the tie took the knob; a release needs it at least releaseMin
-      double releaseMin = 0.005;    // M1: Settings::releaseMinMm, m
+      double releaseAccel = 5.0, releaseAccelMinSpeed = 0.15, releaseWindowC = 10.6;   // 2k: Settings::releaseAccel (m/s^2), releaseAccelMinSpeed (m/s), releaseWindowC
+      // 2k a: the pulled reports (s > 0) since the tie took the knob, (time s, s m), oldest first, at most kFitMax; the board's step q (m, the smallest change seen between
+      // two pulled reports, 0 until seen); the fit's result at the last report (speed and acceleration toward rest, the reports and span used; fitN 0 = no fit)
+      static constexpr int kFitMax = 32;
+      double fitT[kFitMax] = {}, fitS[kFitMax] = {};
+      int fitCount = 0;
+      double sensorClock = 0.0, boardStep = 0.0;
+      double fitSpeed = 0.0, fitAccel = 0.0, fitSpan = 0.0;
+      int fitN = 0;
+      // 2k c: reports left in the guard after a release (a reading forward of rest within them is a palm, not a free knob: the release is cancelled)
+      static constexpr int kGuardReports = 8;
+      int guardLeft = 0;
+      // e2m a: the board's report period T_b (s, 0 until measured): the median of the last kGapRing gaps between distinct raw reports (gaps over kSampleMaxS left out),
+      // once kGapMin are seen. 15 gaps: about 45 ms of a 3 ms board, enough that one jittered gap does not move the median
+      static constexpr int kGapRing = 15, kGapMin = 3;
+      double gapS[kGapRing] = {};
+      int gapCount = 0, gapNext = 0;
+      double reportPeriod = 0.0;
       bool sensorFiltered = false;  // 2i a: Settings::sensorFiltered (the adapter reads VPX's filtered state instead of the sensor's own reports)
       static constexpr double kRestBandPu = 0.01;   // p.u. (D1, 2i c): the hand's rest band on the mapped reading, a noise floor only (stock's own, PlungerHandler.cpp:276);
                                                      // VPX's mapping has already removed its dead zone (SensorMapping.h:188-195), so it is not applied again here
       static constexpr double kSampleMaxS = 0.010;   // s (G2, lead 2026-11-18): VPX's own sensor timeout (PlungerHandler.cpp:290 repeats a sample older than 10 ms): a reading
                                                       // held longer is a hand at rest, not a slow move, so the time between two samples is at most this
       static constexpr double kReleaseSpeed = 0.5;   // m/s, design 2d (user 2026-11-17): above a hand-guided return (about 0.3), below a released knob (about 0.7 from 5 mm on the weakest spring)
-      enum SensorEvent { kSensorNone, kSensorTake, kSensorReleaseSpeed, kSensorReleaseAhead, kSensorLetGoRest, kSensorRearm, kSensorLost, kSensorResync };
+      enum SensorEvent { kSensorNone, kSensorTake, kSensorReleaseSpeed, kSensorReleaseAhead, kSensorLetGoRest, kSensorRearm, kSensorLost, kSensorResync, kSensorReleaseAccel, kSensorCancel };
       // Once per physics millisecond, after the cycle: the sensor's state (2i a: its own reports, or VPX's filtered state with sensor_filtered). present: a cabinet plunger
       // (MechPlunger) with a sensor (H7); posPu: p.u. (0 rest, 1 full pull, < 0 forward); velPuS: p.u./s, used only when velOwn (a velocity sensor's own when mapped, or the
       // filtered speed); else the speed for the release test is the step between distinct reports over the time between them (2i a); dt: the millisecond, s. Returns what
@@ -185,14 +209,63 @@ namespace PlungerHost
          const double s = std::max(posPu < 0.0 ? -over : over, p.outerSolidS);
          // G2: a sample is a distinct raw reading. The speed between samples is the step in s since the previous distinct raw reading over the time since it, that time at
          // most kSampleMaxS (VPX's sensor timeout: a reading held longer is a hand at rest, not a slow move)
+         // e2m a (design 2c, the tie at the knob's speed between reports): after a still spell (no raw change for over 1.5 report periods: at least one report missed,
+         // beyond the board's jitter) a step of more than one board step was made within the board's last report period, so it is timed over that period T_b
+         // (reportPeriod, measured below); a one-step change (a slow move of one count per spell) keeps the time since the last change. Until T_b and q are measured: today's timing
          const bool rawChanged = posPu != sensorRawPrev;
-         const double prev = sensorPrev, interval = std::min(sensorSince + dt, kSampleMaxS);
+         const double still = sensorSince + dt;   // s since the previous distinct raw reading
+         const bool afterStill = rawChanged && reportPeriod > 0.0 && still > 1.5 * reportPeriod;
+         const double prev = sensorPrev;
+         const double interval = afterStill && boardStep > 0.0 && std::fabs(s - prev) > 1.5 * boardStep ? reportPeriod : std::min(still, kSampleMaxS);
          const bool changed = s != prev;   // the stops move only on a step in s (a raw change within the dead zone is a sample at rest, s stays 0)
+         sensorClock += dt;
+         fitN = 0;
          if (rawChanged)
          {
             sensorRawPrev = posPu;
             sensorPrev = s;
             sensorSince = 0.0;
+            // e2m a: the board's report period T_b, the median of the last kGapRing gaps between distinct reports no longer than kSampleMaxS (a longer gap is a still
+            // spell, not a report period): the typical gap, not the shortest (a 2 ms report among 3 ms ones would time steps 1.5 x fast). 0 until kGapMin gaps are seen
+            if (still <= kSampleMaxS)
+            {
+               gapS[gapNext] = still;
+               gapNext = (gapNext + 1) % kGapRing;
+               gapCount = std::min(gapCount + 1, kGapRing);
+               if (gapCount >= kGapMin)
+               {
+                  double g[kGapRing];
+                  std::copy(gapS, gapS + gapCount, g);
+                  std::nth_element(g, g + gapCount / 2, g + gapCount);
+                  reportPeriod = g[gapCount / 2];
+               }
+            }
+            // e2m c: a still spell longer than kSampleMaxS (VPX's sensor timeout: a hand at rest) ends the fit's motion: the fit restarts from this report (the reports
+            // before the spell are a held knob, not this move: e2l, a 300 ms hold fitted with the first move's reports)
+            if (still > kSampleMaxS)
+               fitCount = 0;
+            // 2k a: a pulled report joins the fit's list (a reading at or forward of rest empties it); the board's step q is the smallest change between two pulled reports
+            if (s > 0.0)
+            {
+               if (fitCount > 0 && s != fitS[fitCount - 1])
+               {
+                  const double d = std::fabs(s - fitS[fitCount - 1]);
+                  boardStep = boardStep > 0.0 ? std::min(boardStep, d) : d;
+               }
+               if (fitCount == kFitMax)
+               {
+                  for (int i = 1; i < kFitMax; i++)
+                  {
+                     fitT[i - 1] = fitT[i];
+                     fitS[i - 1] = fitS[i];
+                  }
+                  fitCount--;
+               }
+               fitT[fitCount] = sensorClock;
+               fitS[fitCount++] = s;
+            }
+            else
+               fitCount = 0;
          }
          else
             sensorSince += dt;
@@ -203,6 +276,7 @@ namespace PlungerHost
          {
             sensorPrev = sensorRawPrev = sensorSince = 0.0;
             resync = false;
+            fitCount = guardLeft = 0;
             if (hand != Hand::Sensor)
                return kSensorNone;
             p.Untie();
@@ -217,15 +291,32 @@ namespace PlungerHost
          // a reading at rest leaves it to the springs
          if (sensorLatched)
          {
+            // 2k c: a reading forward of rest within kGuardReports reports of a release is a palm pushing through rest, not a free knob (a free knob passes rest only by
+            // the outer spring's bounce, hidden by the dead zone: none read forward in the user's 7 free releases): the release is cancelled and the tie retakes the knob
+            if (guardLeft > 0 && rawChanged)
+            {
+               guardLeft--;
+               if (s < 0.0)
+               {
+                  guardLeft = 0;
+                  sensorLatched = false;
+                  p.Tie(p.q);
+                  p.DriveTie(s, TieRate(s, prev, p.q, interval));
+                  hand = Hand::Sensor;
+                  Wake();
+                  return kSensorCancel;
+               }
+            }
             if (!AtRest())
                return kSensorNone;
             sensorLatched = false;
             if (s == 0.0)
                return kSensorRearm;
+            guardLeft = 0;
+            FitRestart(s);
             p.Tie(p.q);
             p.DriveTie(s, p.pullRate);
             hand = Hand::Sensor;
-            pullPeak = std::max(s, 0.0);
             resync = true;
             Wake();
             return kSensorResync;
@@ -236,20 +327,23 @@ namespace PlungerHost
             // ahead of the model rod (the rod has left the hand): the gap between the rod and the new reading, over the time since the previous reading came, faster than the
             // same speed (a hand-guided return keeps the rod within one sample's move of the reading). A reading forward of rest is tested from rest (max(s, 0)): its forward
             // part is the palm, never a release; the part from the rod to rest is the knob's own run
-            // M1 (user 2026-11-18): and only from a pull of at least releaseMin (the deepest reading since the tie took): below it the tie follows the knob both ways
-            pullPeak = std::max(pullPeak, s);
-            if (prev > 0.0 && pullPeak >= releaseMin)
+            // 2k: or the knob speeding up toward rest (a free knob; a hand guiding it back slows it): a quadratic fit of the pulled reports gives its speed and acceleration
+            // toward rest; the speed test takes the fitted speed when there is a fit (the sensor's own speed with velOwn). The guard (2k c) watches the next reports
+            if (prev > 0.0)
             {
-               const bool fast = inSpeed > kReleaseSpeed;
+               const bool fit = changed && s > 0.0 && !velOwn && Fit();
+               const bool fast = (fit ? fitSpeed : inSpeed) > kReleaseSpeed;
                const bool ahead = changed && (p.q - std::max(s, 0.0)) / interval > kReleaseSpeed;
-               if (fast || ahead)
+               const bool accel = fit && fitAccel > releaseAccel && fitSpeed > releaseAccelMinSpeed;
+               if (fast || ahead || accel)
                {
                   p.Untie();   // the hand lets go: the spring alone drives the rod
                   hand = Hand::None;
                   resync = false;
                   sensorLatched = true;
+                  guardLeft = kGuardReports;
                   Wake();
-                  return fast ? kSensorReleaseSpeed : kSensorReleaseAhead;
+                  return fast ? kSensorReleaseSpeed : ahead ? kSensorReleaseAhead : kSensorReleaseAccel;
                }
             }
             const GroupStep::BodyStop &h = p.stops[p.stopHold];
@@ -276,18 +370,64 @@ namespace PlungerHost
          // (2i c: no leaving-rest rule; a board's step at rest is removed by VPX's dead zone)
          if (s != 0.0)
          {
+            FitRestart(s);
             p.Tie(p.q);
             p.DriveTie(s, TieRate(s, prev, p.q, interval));
             hand = Hand::Sensor;
-            pullPeak = std::max(s, 0.0);
             Wake();
             return kSensorTake;
          }
          return kSensorNone;
       }
+      // 2k a: the tie takes the knob: the fit starts from this report (the pulls before it are another hand's)
+      void FitRestart(const double s)
+      {
+         fitCount = 0;
+         if (s > 0.0)
+         {
+            fitT[0] = sensorClock;
+            fitS[fitCount++] = s;
+         }
+      }
+      // 2k a: a least-squares quadratic s(t) over the pulled reports of the last W = sqrt(2 C q / release_accel) before the newest (at least 4), evaluated at the newest:
+      // fitSpeed = -ds/dt, fitAccel = -d2s/dt2 (toward rest positive). False (no fit) under 4 reports or before the board's step q is known
+      bool Fit()
+      {
+         if (fitCount < 4 || boardStep <= 0.0)
+            return false;
+         const double w = std::sqrt(2.0 * releaseWindowC * boardStep / releaseAccel), tn = fitT[fitCount - 1];
+         int i0 = 0;
+         while (i0 < fitCount - 4 && fitT[i0] < tn - w - 1e-9)
+            i0++;
+         double S1 = 0.0, S2 = 0.0, S3 = 0.0, S4 = 0.0, Y0 = 0.0, Y1 = 0.0, Y2 = 0.0;   // tau in ms from the newest report (conditioning)
+         const double S0 = fitCount - i0;
+         for (int i = i0; i < fitCount; i++)
+         {
+            const double u = (fitT[i] - tn) * 1e3, u2 = u * u, y = fitS[i];
+            S1 += u; S2 += u2; S3 += u2 * u; S4 += u2 * u2;
+            Y0 += y; Y1 += u * y; Y2 += u2 * y;
+         }
+         // Cramer on the normal equations [S0 S1 S2; S1 S2 S3; S2 S3 S4] (b0 b1 b2) = (Y0 Y1 Y2)
+         const double det = S0 * (S2 * S4 - S3 * S3) - S1 * (S1 * S4 - S3 * S2) + S2 * (S1 * S3 - S2 * S2);
+         if (!(std::fabs(det) > 1e-12))
+            return false;
+         const double d1 = S0 * (Y1 * S4 - S3 * Y2) - Y0 * (S1 * S4 - S3 * S2) + S2 * (S1 * Y2 - Y1 * S2);
+         const double d2 = S0 * (S2 * Y2 - Y1 * S3) - S1 * (S1 * Y2 - Y1 * S2) + Y0 * (S1 * S3 - S2 * S2);
+         fitSpeed = -d1 / det * 1e3;           // m/ms -> m/s
+         fitAccel = -2.0 * d2 / det * 1e6;     // m/ms^2 -> m/s^2
+         fitN = fitCount - i0;
+         fitSpan = tn - fitT[i0];
+         return true;
+      }
       // 2c's rule (F1): the step between the last two distinct samples over the time between them; at least the stops' gap to the new reading over that time (from the rod
-      // when the tie takes it), so the tie reaches each sample by the next. restitution 0 (the hand's catch law, plungerrod.h): the rod takes the stops' speed
-      static double TieRate(const double s, const double prev, const double from, const double interval) { return std::max(std::fabs(s - prev), std::fabs(s - from)) / interval; }
+      // when the tie takes it), so the tie reaches each sample by the next. restitution 0 (the hand's catch law, plungerrod.h): the rod takes the stops' speed.
+      // e2m b: the catch-up is at most the key's pull speed over the knob's own (the agreed glide): the tie never moves faster than the knob plus the pull speed
+      // (e2l: a lag closed in one 3 ms report drove the rod at 1.8 m/s behind a 1 m/s palm, and a cancelled release retook the knob at 2 x a 0.3 m/s palm)
+      double TieRate(const double s, const double prev, const double from, const double interval) const
+      {
+         const double step = std::fabs(s - prev);
+         return std::min(std::max(step, std::fabs(s - from)), step + part.pullRate * interval) / interval;
+      }
       // the hand changed a stop: step it from the next cycle. Its CycleBegin (the hold stop's touch, an impact booked as the hand's drive) is the engine's, inside that cycle's book
       void Wake() { idle = false; }
 
