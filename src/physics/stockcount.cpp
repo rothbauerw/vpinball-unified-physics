@@ -53,7 +53,7 @@ namespace StockCount
          switch (t)
          {
          case eItemPlunger: return "plunger: not converted (map step 8)";
-         case eItemHitTarget: return "drop or stand-up target: not converted (map step 8)";
+         case eItemHitTarget: return "drop target, or a stand-up set back to stock ([target:<name>] rubber = 0): not converted (map step 8)";
          case eItemTrigger: return "trigger: a sensor, not converted (map step 8)";
          default: return nullptr;
          }

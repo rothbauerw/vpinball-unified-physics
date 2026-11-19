@@ -24,6 +24,8 @@
 #include "renderer/VertexBuffer.h"
 #include "utils/objloader.h"
 #include "physics/contactsettings.h"
+#include "physics/contactsurfacehost.h"
+#include "physics/contactsystem.h"
 
 
 HitTarget::~HitTarget()
@@ -314,6 +316,15 @@ void HitTarget::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    }
    else
    {
+      // unified engine (stand-up piece 1): the target's drawn mesh is a fixed hard surface of the contact model, as a wall or ramp (ramphardsurface.cpp).
+      // The face does not move yet; piece 2 replaces this host with the face's massless coordinates (runs/2026-11-15-standup-simple/design.md).
+      // Setting: [Features] hard_surfaces (on by default); one target back to stock with [target:<name>] rubber = 0.
+      std::shared_ptr<RubberSurface> rubberFaces;
+      const std::filesystem::path rubberIni = isUI ? std::filesystem::path() : ContactSurfaceHost::IniPathFor(m_ptable->m_filename);
+      if (!isUI && ContactSystem::Unified() && ContactSurfaceHost::HardSurfaceWanted(rubberIni, "target", GetName()))
+         rubberFaces = std::make_shared<RubberSurface>();
+      const size_t collidersBefore = m_vhoCollidable.size();
+
       ankerl::unordered_dense::set<std::pair<unsigned, unsigned>> addedEdges;
       // add collision triangles and edges
       for (unsigned i = 0; i < m_numIndices; i += 3)
@@ -326,6 +337,8 @@ void HitTarget::PhysicSetup(PhysicsEngine* physics, const bool isUI)
             Vertex3Ds(m_hitUIVertices[i0].x, m_hitUIVertices[i0].y, m_hitUIVertices[i0].z), Vertex3Ds(m_hitUIVertices[i2].x, m_hitUIVertices[i2].y, m_hitUIVertices[i2].z),
             Vertex3Ds(m_hitUIVertices[i1].x, m_hitUIVertices[i1].y, m_hitUIVertices[i1].z)
          };
+         if (rubberFaces && CrossProduct(rgv3D[1] - rgv3D[0], rgv3D[2] - rgv3D[0]).LengthSquared() > 1e-6f)   // the same faces stock collides with, in its order
+            rubberFaces->Add(rgv3D[0], rgv3D[1], rgv3D[2]);
          HitTriangle *ht = new HitTriangle(this, rgv3D);
          if (ht->IsDegenerate())
             delete ht;
@@ -341,6 +354,23 @@ void HitTarget::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       if (!isUI)
          for (unsigned i = 0; i < m_numVertices; ++i)
             SetupHitObject(physics, new HitPoint(this, m_hitUIVertices[i]), true, isUI);
+
+      if (rubberFaces && !rubberFaces->tris.empty())
+      {
+         // material from the target's own physics material (stock values, not measured); its first collider carries the table's Hit event
+         const HitObject *const first = collidersBefore < m_vhoCollidable.size() ? m_vhoCollidable[collidersBefore] : nullptr;
+         RubberObjectSettings rubberSettings;
+         ContactSurfaceHost::LoadHardSurfaceSettings(rubberSettings, rubberIni, "target", GetName(), ContactSurfaceHost::HardSurfaceE(first), first != nullptr ? first->m_friction : 0.2);
+         ContactSurfaceHost *const host = new ContactSurfaceHost(this, rubberFaces, rubberSettings, rubberIni, GetName(), "target");
+         if (first != nullptr)
+            host->SetHardSurface(ContactSurfaceHost::HardSurfaceE(first), first->m_friction);
+         host->SetEventCarrier(collidersBefore < m_vhoCollidable.size() ? m_vhoCollidable[collidersBefore] : nullptr);
+         for (size_t i = collidersBefore; i < m_vhoCollidable.size(); i++)
+            m_vhoCollidable[i]->m_surfaceHost = host;   // the target's own colliders hand a hit to the host
+         physics->KeepHostedCopiesOutOfTrees(m_vhoCollidable, collidersBefore);   // stock's copies out of its trees (PhysicsEngine.cpp)
+         SetupHitObject(physics, host, false, isUI);    // enabled and disabled with the target (Collidable); the carrier fires Hit, not the host
+         PLOGI << "Target " << GetName() << ": hard surface on (" << rubberFaces->tris.size() << " faces, mu " << rubberSettings.mu << ")";
+      }
    }
 }
 

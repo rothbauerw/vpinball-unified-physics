@@ -2642,7 +2642,7 @@ void ContactSurfaceHost::FinderBuild(const bool atLoad)
       ContactSurfaceHost *const h = dynamic_cast<ContactSurfaceHost *>(o);
       if (h == nullptr || h->m_surface == nullptr || h->m_surface->tris.empty())
          continue;
-      if (h->m_surfaceKind != "playfield" && h->m_surfaceKind != "wall" && h->m_surfaceKind != "ramp" && h->m_surfaceKind != "primitive" && h->m_surfaceKind != "kicker")
+      if (h->m_surfaceKind != "playfield" && h->m_surfaceKind != "wall" && h->m_surfaceKind != "ramp" && h->m_surfaceKind != "primitive" && h->m_surfaceKind != "kicker" && h->m_surfaceKind != "target")
       {
          skipped++;
          continue;
