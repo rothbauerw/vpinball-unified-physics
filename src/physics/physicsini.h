@@ -94,7 +94,7 @@ namespace PhysicsIni
    inline void WarnUnknownSection(const std::string &lowerName)
    {
       // every section a loader reads (PartsIni::ReadSections' plain and kind names, ContactHost::ApplySection's, the magnet/turntable/playfield-cut parsers)
-      static const char *const plain[] = { "features", "contact", "flippers", "rubbers", "slings", "playfield", "surfaces", "gates", "spinners", "bumpers", "triggers", "plungers" };
+      static const char *const plain[] = { "features", "contact", "flippers", "rubbers", "slings", "playfield", "surfaces", "gates", "spinners", "bumpers", "triggers", "plungers", "targets" };
       static const char *const kinds[] = { "flipper:", "rubber:", "sling:", "wall:", "primitive:", "magnet:", "turntable:", "playfieldcut:", "gate:", "spinner:", "ramp:", "bumper:", "kicker:", "trigger:", "plunger:", "target:" };
       for (const char *p : plain)
          if (lowerName == p)
@@ -104,7 +104,7 @@ namespace PhysicsIni
             return;
       static std::set<std::string> warned;
       if (warned.insert(lowerName).second)
-         PLOGW << "Physics settings: section [" << lowerName << "] is not a known kind (features, contact, flippers, rubbers, slings, playfield, surfaces, gates, spinners, bumpers, triggers, plungers, or a part's kind: flipper, rubber, sling, wall, primitive, magnet, turntable, playfieldcut, gate, spinner, ramp, bumper, kicker, trigger, plunger, target); it is ignored";
+         PLOGW << "Physics settings: section [" << lowerName << "] is not a known kind (features, contact, flippers, rubbers, slings, playfield, surfaces, gates, spinners, bumpers, triggers, plungers, targets, or a part's kind: flipper, rubber, sling, wall, primitive, magnet, turntable, playfieldcut, gate, spinner, ramp, bumper, kicker, trigger, plunger, target); it is ignored";
    }
 
    // true if the file has a [Features] section (it is a unified file); `f` gets its switches (a missing key = on)

@@ -15,6 +15,7 @@
 #include "physics/contactbumper.h"
 #include "physics/wireswitchgroup.h"
 #include "physics/buttoncap.h"
+#include "physics/standupface.h"
 #include "physics/contacthost.h"
 
 namespace PartsIni
@@ -179,6 +180,19 @@ namespace PartsIni
          else if (k == "steel_e_gpa") s.steelEGpa = v;
          else if (k == "hit_window_deg") s.hitWindowDeg = v;
          else if (k == "rubber") {}
+         else if (ContactHost::IsSurfaceKey(k)) {}   // the surface material's (ContactHost::LoadHardSurfaceSettings reads it)
+      });
+   }
+
+   // Stand-up target settings over `s` (runs/2026-11-19-standup-p2/design.md section 1; the comment beside each in StandupFace::Settings): [Targets] for all, then [Target:<name>].
+   // The surface material's keys and rubber (the opt-out, ContactHost::HardSurfaceWanted) are read by the host's loader. Unknown keys are ignored
+   inline void LoadTarget(StandupFace::Settings &s, const std::filesystem::path &file, const std::string &name)
+   {
+      ReadSections(file, "targets", "target:" + name, [&](const std::string &k, double v, const std::string &) {
+         if (k == "face_travel") s.faceTravel = v != 0.0;               // 1 = the face travels on its blade; 0 = the fixed face of piece 1
+         else if (k == "blade_thickness_in") s.bladeThicknessIn = v;    // the blade's thickness, in (0.020; 0.025 the stiffer blade)
+         else if (k == "blade_lever_in") s.bladeLeverIn = v;            // the blade's clamp to the face centre, in (1.625)
+         else if (k == "rubber") {}   // the opt-out key (ContactHost::HardSurfaceWanted)
          else if (ContactHost::IsSurfaceKey(k)) {}   // the surface material's (ContactHost::LoadHardSurfaceSettings reads it)
       });
    }

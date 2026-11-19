@@ -26,6 +26,11 @@
 #include "physics/contactsettings.h"
 #include "physics/contactsurfacehost.h"
 #include "physics/contactsystem.h"
+#include "physics/contactparthost.h"
+#include "physics/contactpartsini.h"
+#include "physics/standupface.h"
+#include "parts/ball.h"
+#include "core/player.h"
 
 
 HitTarget::~HitTarget()
@@ -223,6 +228,55 @@ static constexpr WORD dropTargetHitPlaneIndices[num_dropTargetHitPlaneIndices] =
 
 // Ported at: VisualPinball.Engine/VPT/HitTarget/HitTargetHitGenerator.cs
 
+namespace
+{
+   // The table side of a stand-up target's face on its blade (StandupFace::Engine, standupface.h; piece 2): the part's Hit event as the target's, through its first stock
+   // collider (the carrier: its Hit setting and threshold, as piece 1). No drawing of the travel yet (piece 6)
+   class StandupFaceAdapter final : public PartAdapter
+   {
+   public:
+      StandupFaceAdapter(HitTarget *target, std::shared_ptr<StandupFace::Engine> model, HitObject *carrier) : m_target(target), m_model(std::move(model)), m_carrier(carrier) {}
+      void Publish() override { m_model->SetCollidable(m_target->m_d.m_collidable); }
+      void Fire(const std::vector<ContactMovingPart::Event> &events) override
+      {
+         for (const ContactMovingPart::Event &e : events)
+         {
+            if (e.kind != ContactMovingPart::Event::Hit || m_carrier == nullptr)
+               continue;
+            const float speed = (float)(e.value / ContactSystem::kVelocityScale);   // the closing speed, VPX units (the carrier's threshold)
+            if (speed < m_carrier->m_threshold)
+               continue;
+            // the ball: the nearest to the face (the event's ball index is the group's)
+            HitBall *best = nullptr;
+            double bestD = INFINITY;
+            const RubberContact::V3 o = m_model->Origin();
+            for (Ball *b : g_pplayer->m_vball)
+            {
+               const Vertex3Ds &p = b->m_hitBall.m_d.m_pos;
+               constexpr double U = ContactSystem::kMetresPerUnit;
+               const double dx = p.x * U - o.x, dy = p.y * U - o.y, dz = p.z * U - o.z, d = dx * dx + dy * dy + dz * dz;
+               if (d < bestD)
+               {
+                  bestD = d;
+                  best = &b->m_hitBall;
+               }
+            }
+            if (best == nullptr)
+               continue;
+            g_pplayer->m_pactiveball = best->m_pBall;
+            if (m_carrier->m_obj != nullptr)
+               m_carrier->m_obj->m_currentHitThreshold = speed;
+            m_carrier->FireHitEvent(best);
+         }
+      }
+
+   private:
+      HitTarget *m_target;
+      std::shared_ptr<StandupFace::Engine> m_model;
+      HitObject *m_carrier;
+   };
+}
+
 void HitTarget::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 {
    m_hitEvent = false;
@@ -316,8 +370,8 @@ void HitTarget::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    }
    else
    {
-      // unified engine (stand-up piece 1): the target's drawn mesh is a fixed hard surface of the contact model, as a wall or ramp (ramphardsurface.cpp).
-      // The face does not move yet; piece 2 replaces this host with the face's massless coordinates (runs/2026-11-15-standup-simple/design.md).
+      // unified engine (stand-up targets): the target's drawn mesh is a hard surface of the contact model. Piece 2 (default): the face travels on its blade, a massless
+      // coordinate (standupface.h); [Targets] / [Target:<name>] face_travel = 0: piece 1's fixed surface, as a wall or ramp (ramphardsurface.cpp).
       // Setting: [Features] hard_surfaces (on by default); one target back to stock with [target:<name>] rubber = 0.
       std::shared_ptr<RubberSurface> rubberFaces;
       const std::filesystem::path rubberIni = isUI ? std::filesystem::path() : ContactSurfaceHost::IniPathFor(m_ptable->m_filename);
@@ -361,15 +415,45 @@ void HitTarget::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          const HitObject *const first = collidersBefore < m_vhoCollidable.size() ? m_vhoCollidable[collidersBefore] : nullptr;
          RubberObjectSettings rubberSettings;
          ContactSurfaceHost::LoadHardSurfaceSettings(rubberSettings, rubberIni, "target", GetName(), ContactSurfaceHost::HardSurfaceE(first), first != nullptr ? first->m_friction : 0.2);
-         ContactSurfaceHost *const host = new ContactSurfaceHost(this, rubberFaces, rubberSettings, rubberIni, GetName(), "target");
-         if (first != nullptr)
-            host->SetHardSurface(ContactSurfaceHost::HardSurfaceE(first), first->m_friction);
-         host->SetEventCarrier(collidersBefore < m_vhoCollidable.size() ? m_vhoCollidable[collidersBefore] : nullptr);
+         HitObject *const carrier = collidersBefore < m_vhoCollidable.size() ? m_vhoCollidable[collidersBefore] : nullptr;
+         StandupFace::Settings faceSet;
+         PartsIni::LoadTarget(faceSet, rubberIni, GetName());
+         ContactHost *host = nullptr;
+         if (faceSet.faceTravel)
+         {
+            // piece 2 (runs/2026-11-19-standup-p2/design.md sections 1, 4): the mesh moves with the face's travel x along its normal, one massless coordinate on the blade's
+            // spring; a moving part on a ContactPartHost (as a gate or bumper) in place of piece 1's fixed surface. Front normal at rotZ + 90 deg (the ball's side); travel away from it
+            const double rz = ANGTORAD(m_d.m_rotZ);
+            const RubberContact::V3 travel(std::sin(rz), -std::cos(rz), 0.0);
+            const double kBlade = StandupFace::Part::BladeK(faceSet.bladeThicknessIn, faceSet.bladeLeverIn);
+            auto model = std::make_shared<StandupFace::Engine>();
+            model->Build(rubberFaces->tris, travel, kBlade, rubberSettings.edgeRadiusMm * 1e-3, RubberContact::BallSI());
+            model->SetCollidable(m_d.m_collidable);
+            constexpr double U = ContactSystem::kMetresPerUnit;
+            const RubberContact::V3 &o = model->Origin();
+            const double r = model->Reach();
+            const float lo[3] = { (float)((o.x - r) / U), (float)((o.y - r) / U), (float)((o.z - r) / U) };
+            const float hi[3] = { (float)((o.x + r) / U), (float)((o.y + r) / U), (float)((o.z + r) / U) };
+            ContactPartHost *const ph = new ContactPartHost(this, model, std::make_unique<StandupFaceAdapter>(this, model, carrier), rubberSettings, rubberIni, GetName(), "target", lo, hi);
+            if (first != nullptr)
+               ph->SetHardSurface(ContactSurfaceHost::HardSurfaceE(first), first->m_friction);
+            host = ph;
+            PLOGI << "Target " << GetName() << ": face on its blade (" << rubberFaces->tris.size() << " faces, mu " << rubberSettings.mu << ", blade " << faceSet.bladeThicknessIn << " in thick, "
+                  << faceSet.bladeLeverIn << " in lever, k " << kBlade << " N/m, travel (" << travel.x << " " << travel.y << "), reach " << r * 1e3 << " mm)";
+         }
+         else
+         {
+            ContactSurfaceHost *const sh = new ContactSurfaceHost(this, rubberFaces, rubberSettings, rubberIni, GetName(), "target");
+            if (first != nullptr)
+               sh->SetHardSurface(ContactSurfaceHost::HardSurfaceE(first), first->m_friction);
+            sh->SetEventCarrier(carrier);
+            host = sh;
+            PLOGI << "Target " << GetName() << ": hard surface on (" << rubberFaces->tris.size() << " faces, mu " << rubberSettings.mu << ")";
+         }
          for (size_t i = collidersBefore; i < m_vhoCollidable.size(); i++)
             m_vhoCollidable[i]->m_surfaceHost = host;   // the target's own colliders hand a hit to the host
          physics->KeepHostedCopiesOutOfTrees(m_vhoCollidable, collidersBefore);   // stock's copies out of its trees (PhysicsEngine.cpp)
          SetupHitObject(physics, host, false, isUI);    // enabled and disabled with the target (Collidable); the carrier fires Hit, not the host
-         PLOGI << "Target " << GetName() << ": hard surface on (" << rubberFaces->tris.size() << " faces, mu " << rubberSettings.mu << ")";
       }
    }
 }

@@ -43,6 +43,8 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 43. After the finder work (1.34): tables/turn table/turn table test 4 (user's worst-case table) runs slower on today's build than on the 11-09 build (user's play). Measure both on one machine and find the cause.
 48. Joint zero floor (joint_zero_floor): at a joint of 3+ wires the raise between cycles could add energy (INFERRED, not seen; 2 wires only lose). Shared-line negative terms get no floor. Check on paper.
 41. Magnet pull in the energy reach is taken at the ball's place, not the largest over its travel: a true bound needs current, saturation, in-winding and per-type terms. Re-looks while a magnet is on (stress C1).
+49. Jacobian: rolling resistance's torque has no slope with depth (Kr ~ a^3, its damper, its turn at the limit); every contact. Measured 1e-4 of the row (runs/2026-11-19-standup-p2/fix2).
+50. Jacobian: a mesh contact's depth slopes come from the mid-step probe; when the end lies on another facet they are wrong (0.36 of the row at a stand-up face crossing, fix2).
 
 ## 2. Flippers
 1. Rubber separation at the end stop: details from the user.

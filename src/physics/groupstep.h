@@ -705,6 +705,16 @@ namespace GroupStep
       double KineticSlope(const double dInvI) const { return dInvI * 0.25 * (p0 * p0 + p1 * p1); }
    };
 
+   // A massless coordinate's contacts as its first guess sees them (Group::MasslessGuess, Part::MasslessGuess): Push(dq) their push along it at the step's end (N) when it
+   // moves dq, by the full end-push law (Group::EndNormal, the law the solve's row takes) along each contact's depth linearized at the step's start in dq, the balls' guessed
+   // moves and every other unknown held; dPush its slope (N/m; <= 0 where the law's force rises with depth: each push falls as the part moves on). Law evaluations only, no
+   // probe. start: the move that keeps the depth of the contacts touching at the step's start (-inf with none); tol: the solver's tolerance on depth as a move of it (m)
+   struct MasslessRow
+   {
+      virtual double Push(double dq, double &dPush) const = 0;
+      double start = -INFINITY, tol = 0.0;
+   };
+
    // A moving part of a group (GroupStepDesign.txt piece 1; 10.1; 18): it describes its bodies, stored energy, losses, drives and grip, and the group moves them with
    // the balls in one solve. The unknowns x: per ball the move (3) and the spin change (3), then each part's own (NumDof of them, from off). The balls' residual
    // rows are 2 m dc / h - 2 m v - h F and I dw - h M; a part adds its forces on the balls (averaged over the step) to F and M and writes its own rows.
@@ -788,6 +798,12 @@ namespace GroupStep
       virtual void BallsMoved(const Ball *, int) {}              // the balls were moved with no step of its own
       virtual void ExplicitMove(const double *, int, double, double *) const {}   // its own unknowns in an energy step's explicit round
       virtual double EndResidual() const { return 0.0; }         // > 0: a step of a group holding this part counts as solved only with its residual within this (m/s; Settings::tolEndRes)
+      // a part with a massless coordinate (CoordInfo invM 0 with an unknown: a stand-up target's face, standupface.h): its stored energy's change over the move x (J), which the
+      // balls touching it pay (Group::MasslessEnergy; runs/2026-11-19-standup-p2/design.md section 3 b); slope (not null): its change with each of its unknowns, added at off + d
+      virtual double MasslessStoredChange(const double *, int, double *) const { return 0.0; }
+      // its massless coordinate d's first guess (Group::MasslessGuess, design section 1 a: a massless face follows the ball): its own row solved with its contacts' end push
+      // (row: MasslessRow), the balls' guessed moves held; into x at off + d
+      virtual void MasslessGuess(int, const MasslessRow &, double *, int) {}
 
    private:
       std::vector<unsigned char> sv;   // the net's copy of its state (SaveState)
@@ -1264,8 +1280,9 @@ namespace GroupStep
             WipeEachUse(b);
          for (Buf<Hit> *b : { &hNow, &h1c, &hmc, &h0s })
             WipeEachUse(b);
-         for (Buf<double> *b : { &d0s, &x, &resS, &stpS, &xPrevS, &stpPrevS, &trialS, &zeroS, &esRes, &xpS, &rpS, &rmS, &qEnd, &qMid, &qF, &fieldE0 })
+         for (Buf<double> *b : { &d0s, &x, &resS, &stpS, &xPrevS, &stpPrevS, &trialS, &zeroS, &esRes, &xpS, &rpS, &rmS, &qEnd, &qMid, &qF, &fieldE0, &mlJii, &mlWork, &mlGm, &mlDq, &mlIm, &mlOut, &mlWg, &mlSnap, &mlDmis })
             WipeEachUse(b);
+         WipeEachUse(&mlCt);
          for (Buf<Ball> *b : { &b1r, &bmr, &evB1, &evBm, &farB1, &farBm, &esB0 })
             WipeEachUse(b);
          for (Buf<V3> *b : { &aLast, &alphaLast, &fNetS, &evF, &evM, &evDc, &evDw, &evWm, &esA0, &esAl0, &warmA, &warmAl, &loadF })
@@ -1523,6 +1540,12 @@ namespace GroupStep
             qEnd.Grow(nCoord);
             qMid.Grow(nCoord);
             qF.Grow(nCoord);
+            mlJii.Grow(nCoord);
+            mlWork.Grow(np);
+            mlGm.Grow(3 * (size_t)nb);
+            mlDq.Grow(3 * (size_t)nb);
+            mlIm.Grow(3 * (size_t)nb);
+            mlOut.Grow(3 * (size_t)nb);
             loadF.Grow(np);
             carried = false;
             for (int s = 0; s < ns; s++)
@@ -1553,6 +1576,9 @@ namespace GroupStep
                rpS.Grow(nJ);
                rmS.Grow(nJ);
             }
+            mlWg.Grow((size_t)np * (size_t)jStride);
+            mlSnap.Grow(7 * (size_t)jStride);
+            mlDmis.Grow((size_t)jStride);
          }
          set.tolEndRes = 0.0;
          for (int p = 0; p < np; p++)
@@ -2601,6 +2627,21 @@ namespace GroupStep
       Buf<CoordInfo> ci;
       Buf<double> qEnd, qMid, qF;
       Buf<V3> loadF;
+      // a massless coordinate (CoordInfo invM 0 with an unknown; runs/2026-11-19-standup-p2/design.md section 3): any this attempt (CoordsNow); each one's row slope at the last
+      // Eval with the Jacobian (the line search's units, CoordRes2); per part the work the contacts' step-mean reaction does on it in an Eval (the energy correction); scratch
+      bool anyMassless = false;
+      Buf<double> mlJii, mlWork, mlGm, mlDq, mlIm, mlOut;
+      // with the Jacobian: per part the slope of mlWork over every unknown (row p, stride jStride); each massless column's row as the contact's shear and spin terms
+      // left it (mlSnap, 7 per contact: a Hit's columns); the mismatch's slope (mlDmis)
+      Buf<double> mlWg, mlSnap, mlDmis;
+      // the first guess (MasslessGuess): each contact a massless column reaches in the step, its coordinate c, its item k, its depth at the coordinate's move 0 (a: the start
+      // depth d0 plus the balls' guessed moves and every other unknown's) and its slope s along the move
+      struct MlContact
+      {
+         int c = 0, k = 0;
+         double a = 0.0, s = 0.0, d0 = 0.0;
+      };
+      Buf<MlContact> mlCt;
       static constexpr int kGradMax = 3 + 7;   // a discrete gradient's entries: a ball's centre and a hit's columns (two balls: 6)
       // stick_zone_trial: each contact's linear model of its trial force along a move, written by a round's Eval (with the Jacobian) at its point
       struct StickRec
@@ -2942,6 +2983,7 @@ namespace GroupStep
       // the coordinates as this attempt has them (after the parts' BeginStep)
       void CoordsNow()
       {
+         anyMassless = false;
          for (int p = 0; p < np; p++)
          {
             const int n = part[p]->NumCoords();
@@ -2950,17 +2992,20 @@ namespace GroupStep
                const int i = coordOff[p] + c, d = part[p]->DofOf(c);
                ci[i] = part[p]->Coord(c);
                cUnk[i] = d >= 0 ? partOff[p] + d : -1;
+               anyMassless = anyMassless || (cUnk[i] >= 0 && ci[i].invM == 0.0);
             }
          }
       }
-      // the parts' rows in the line search's speed units: over the mass, times the reach
-      double CoordRes2(const double *Res) const
+      bool Massless(const int c) const { return anyMassless && cUnk[c] >= 0 && ci[c].invM == 0.0; }   // a massless coordinate with an unknown (design section 3)
+      // the parts' rows in the line search's speed units: over the mass, times the reach. A massless row (design section 3 c): its residual turned into a move by its own slope
+      // (the last Jacobian's diagonal, mlJii), then into a speed (2 / h)
+      double CoordRes2(const double *Res, const double h) const
       {
          double r = 0.0;
          for (int c = 0; c < nCoord; c++)
             if (cUnk[c] >= 0)
             {
-               const double s = Res[cUnk[c]] * ci[c].invM * ci[c].reach;
+               const double s = Massless(c) ? (mlJii[c] != 0.0 ? Res[cUnk[c]] / mlJii[c] * (2.0 / h) : 0.0) : Res[cUnk[c]] * ci[c].invM * ci[c].reach;
                r += s * s;
             }
          return r;
@@ -3479,6 +3524,12 @@ namespace GroupStep
                qF[c] = 0.0;
             for (int p = 0; p < np; p++)
                loadF[p] = V3();
+            for (int p = 0; anyMassless && p < np; p++)
+            {
+               mlWork[p] = 0.0;
+               for (int u = 0; J && u < nU; u++)
+                  mlWg[(size_t)p * jStride + u] = 0.0;
+            }
          }
          driveW = 0.0;
          for (int i = 0; i < nb; i++)
@@ -4016,8 +4067,22 @@ namespace GroupStep
                   qf[j] -= Mr.Dot(hm.c[j].W());
                e.roll = sRo * wt.Dot(wt) * h;
             }
+            bool mlCol[7] = {};     // a massless coordinate's column (design section 3 a): its row takes the push at the step's end
+            double mlSlope[7] = {};  // its end normal force's slope dN1/dd1 (N/m)
             for (int j = 0; j < nq; j++)
-               qF[qc0 + hm.c[j].coord] += qf[j];
+            {
+               const int cj = qc0 + hm.c[j].coord;
+               if (Massless(cj))
+               {
+                  // rule C (runs/2026-11-19-standup-p2/design.md section 2 C): the force balance at the step's end, so the contacts' push on it is the end probe's; the
+                  // work the step's mean reaction does on it is kept for the energy correction (MasslessEnergy)
+                  mlCol[j] = true;
+                  mlWork[shape[it.s]->part] += qf[j] * dq[3 + j];
+                  qF[cj] += MasslessPush(L, h1, j, d0, d1, h, Ft, mlSlope[j]);
+               }
+               else
+                  qF[cj] += qf[j];
+            }
 
             if (clampDump && nq > 0)   // VPX_GROUP_CLAMP_TRACE: this carried surface's contact at this Eval (read only): the residual's switches
             {
@@ -4092,7 +4157,7 @@ namespace GroupStep
                   {
                      const double kd = di ? dSl : L.gammaKK > 0.0 ? kkJac : cD + cDp * dd;
                      for (int p = 0; p < 4; p++)
-                        if (ix[p] >= 0)
+                        if (ix[p] >= 0 && !(p >= 3 && mlCol[p - 3]))   // (a massless row: its slope below)
                            for (int q = 0; q < 4; q++)
                               if (ix[q] >= 0)
                               {
@@ -4108,10 +4173,24 @@ namespace GroupStep
                }
                else
                   for (int p = 0; p < na + nq; p++)
-                     if (ix[p] >= 0)
+                     if (ix[p] >= 0 && !(p >= na && mlCol[p - na]))
                         for (int q = 0; q < na + nq; q++)
                            if (ix[q] >= 0)
                               J[ix[p]][ix[q]] += kn * gm[p] * gm[q];
+               // a massless row (rule C): -h times the end push's slope, h s1 dN1/dd1 g1 over the unknowns (g1 the end depth's gradient: the ball's centre -n1 grad1, the
+               // columns' slope x grad1); the shear's push keeps its slope below
+               for (int j = 0; j < nq; j++)
+                  if (mlCol[j] && ix[na + j] >= 0 && mlSlope[j] > 0.0)
+                  {
+                     const double s1 = h1.c[j].slope * h1.grad, a = h * s1 * mlSlope[j];
+                     const int qi = ix[na + j];
+                     for (int q = 0; q < 3; q++)
+                        if (ix[q] >= 0)
+                           J[qi][ix[q]] += a * -(q == 0 ? h1.n.x : q == 1 ? h1.n.y : h1.n.z) * h1.grad;
+                     for (int jj = 0; jj < nq; jj++)
+                        if (ix[na + jj] >= 0)
+                           J[qi][ix[na + jj]] += a * h1.c[jj].slope * h1.grad;
+                  }
                if (jacWinDump)   // VPX_GROUP_JAC_WINDOW: this contact's state at this Eval (read only)
                {
                   const int sp = !pr && shape[it.s] != nullptr ? shape[it.s]->part : -1;
@@ -4134,6 +4213,11 @@ namespace GroupStep
                         jacWinCon += ln;
                      }
                }
+               // a massless column (MasslessEnergy's slope): its row as it stands before the shear's and the spins' terms, so their share of the mean reaction's slope is the change below
+               for (int j = 0; j < nq; j++)
+                  if (mlCol[j] && ix[3 + j] >= 0)
+                     for (int u = 0; u < nU; u++)
+                        mlSnap[(size_t)j * jStride + u] = J[ix[3 + j]][u];
                // shear: the tangential force Ft changes with the slip rate ut (dFt/dut = Cm, in the contact plane) and with the depth d1 (dFt/dd1 = fd1).
                // ut = sp (dc_p / h + 1/2 Skew(r_p)^T dw_p) projected, d1 changes by -sq n . dc_q; on ball p the force is -sp Ft at r_p. So, for the residual of p:
                //    d/d dc_q: sp sq [Cm; Skew(r_p) Cm] - h sp sq [fd1; Skew(r_p) fd1] n^T,   d/d dw_q: 1/2 h sp sq [Cm; Skew(r_p) Cm] Skew(r_q)^T
@@ -4431,8 +4515,42 @@ namespace GroupStep
                            }
                         }
                   }
+               // a massless column: the slope of the work its contact's mean reaction does on it, qf q (MasslessEnergy), over every unknown: q dqf/du + qf on its own.
+               // dqf/du: the normal push -gd N by the slope a coordinate with mass takes in its row (h d(gd N)/du, above), the shear's and the spins' by their change to the row
+               for (int j = 0; j < nq; j++)
+                  if (mlCol[j] && ix[3 + j] >= 0)
+                  {
+                     const int qi = ix[3 + j], p3 = 3 + j;
+                     double *const wg = (double *)mlWg + (size_t)shape[it.s]->part * jStride;
+                     const double *const sn = (const double *)mlSnap + (size_t)j * jStride;
+                     const double wq = dq[p3];
+                     for (int u = 0; u < nU; u++)
+                        wg[u] -= wq * (J[qi][u] - sn[u]) / h;
+                     if (fe + fd > 0.0)
+                        for (int q = 0; q < na + nq; q++)
+                           if (ix[q] >= 0)
+                           {
+                              double a;
+                              if (terms)
+                              {
+                                 const double kd = di ? dSl : L.gammaKK > 0.0 ? kkJac : cD + cDp * dd;
+                                 a = kd * gd[p3] * gd[q];
+                                 for (int t = 0; t < hm.nt; t++)
+                                    if (tOn[t])
+                                       a += h * tk[t] * tgF[t][p3] * tgE[t][q];
+                                 if (dirOn)
+                                    a += gK[p3][q];
+                              }
+                              else
+                                 a = kn * gm[p3] * gm[q];
+                              wg[ix[q]] -= wq * a / h;
+                           }
+                     wg[qi] += qf[j];
+                  }
             }
          }
+         if (anyMassless)
+            MasslessEnergy(xv, dc, F, J, h);
          if (carried)
             for (int p = 0; p < np; p++)
                if (part[p]->NumCoords() > 0)
@@ -4494,10 +4612,235 @@ namespace GroupStep
                   J[6 * i + 3 + a][6 * i + 3 + a] += b.I();
                }
          }
+         if (J && anyMassless)   // (each massless row's slope: the line search's units, CoordRes2)
+            for (int c = 0; c < nCoord; c++)
+               if (Massless(c))
+                  mlJii[c] = J[cUnk[c]][cUnk[c]];
          for (int a = 0; a < nU; a++)
             if (!std::isfinite(Res[a]))
                return false;
          return true;
+      }
+
+      // the first guess of a massless coordinate (design section 1 a: a massless face follows the ball): its own row, the part's force against its contacts' push at the step's end
+      // by the full end-push law (EndNormal, as the solve's row: MasslessPush), solved exactly by the part (Part::MasslessGuess) along the depths linearized at the step's
+      // start in its own move dq, the balls' guessed moves (x, filled before the parts' BeginStep) and every other unknown held: depth d = a + s dq, a = d0 + g . dc (g = -n grad,
+      // the ball's guessed move dc; plus a carried coordinate's slope times its guessed move), s = slope x grad. Every contact the step can reach counts, touching at the start or
+      // not (a touch that starts inside the step: its start probe's terms carried on). Each contact's start probe is taken again here; nothing per round, and the part's solve
+      // evaluates the law only. One massless column per contact (piece 2's face): with more, each coordinate's guess holds the others' at 0
+      struct MlRow : MasslessRow
+      {
+         const Group *g = nullptr;
+         int c = 0;
+         double h = 0.0;
+         double Push(const double dq, double &dPush) const override
+         {
+            double P = 0.0;
+            dPush = 0.0;
+            for (int e = 0; e < g->mlN; e++)
+            {
+               const MlContact &m = g->mlCt[e];
+               if (m.c != c)
+                  continue;
+               double nS;
+               const double N = EndNormal(g->law[m.k], m.d0, m.a + m.s * dq, h, nS);
+               P -= m.s * N;
+               dPush -= m.s * m.s * nS;
+            }
+            return P;
+         }
+      };
+      int mlN = 0;   // (mlCt's entries this attempt)
+      void MasslessGuess(const double h)
+      {
+         mlN = 0;
+         for (int k = 0; k < ni; k++)
+         {
+            const Item &it = item[k];
+            if (farNow[k] || it.b >= 0 || it.s < 0 || shape[it.s] == nullptr || shape[it.s]->part < 0)
+               continue;
+            const int p = shape[it.s]->part;
+            Hit h0;
+            if (nowStamp == stamp && it.nearK < 0)   // (as BeginAttempt takes the start)
+               h0 = hNow[k];
+            else
+               Probe(it, ball, h0);
+            double a = d0s[k] - h0.grad * h0.n.Dot(V3(x[6 * it.a], x[6 * it.a + 1], x[6 * it.a + 2]));
+            for (int j = 0; j < h0.nc; j++)
+            {
+               const int c = coordOff[p] + h0.c[j].coord;
+               if (!Massless(c) && cUnk[c] >= 0)
+                  a += h0.c[j].slope * h0.grad * x[cUnk[c]];
+            }
+            for (int j = 0; j < h0.nc; j++)
+            {
+               const int c = coordOff[p] + h0.c[j].coord;
+               if (!Massless(c))
+                  continue;
+               mlCt.Grow((size_t)mlN + 1);
+               MlContact &m = mlCt[mlN++];
+               m.c = c;
+               m.k = k;
+               m.a = a;
+               m.s = h0.c[j].slope * h0.grad;
+               m.d0 = d0s[k];
+            }
+         }
+         for (int p = 0; p < np; p++)
+            for (int c = coordOff[p]; c < coordOff[p] + part[p]->NumCoords(); c++)
+            {
+               if (!Massless(c))
+                  continue;
+               // where the part's solve starts: the move that keeps the touching contacts' depths (least squares over them; with one, its own: the part's first Newton step is
+               // then the row linearized at the start depth). Its tolerance: the solver's on depth (a ball's move within tolV h / 2: Solve's convergence test), as a move of
+               // c by its steepest contact
+               MlRow row;
+               row.g = this;
+               row.c = c;
+               row.h = h;
+               double num = 0.0, den = 0.0, sMax = 0.0;
+               for (int e = 0; e < mlN; e++)
+                  if (mlCt[e].c == c)
+                  {
+                     const MlContact &m = mlCt[e];
+                     sMax = std::max(sMax, std::fabs(m.s));
+                     if (m.d0 > 0.0)
+                     {
+                        num += m.s * (m.d0 - m.a);
+                        den += m.s * m.s;
+                     }
+                  }
+               row.start = den > 0.0 ? num / den : -INFINITY;
+               row.tol = sMax > 0.0 ? 0.5 * set.tolV * h / sMax : INFINITY;
+               part[p]->MasslessGuess(c - coordOff[p], row, x, partOff[p]);
+            }
+      }
+
+      // a contact's normal force at the step's end on a massless coordinate (rule C, design section 2 C): N1 = max(0, F(d1) + c(d1) (d1 - max(d0, 0)) / h), the law's elastic
+      // force and its damping at the end depth on the step's depth rate (as the paper, runs/2026-11-19-standup-p2/paper_kk.py). nSlope: dN1/dd1 (0 when N1 is 0)
+      static double EndNormal(const Item &L, const double d0, const double d1, const double h, double &nSlope)
+      {
+         double N1 = 0.0;
+         nSlope = 0.0;
+         if (d1 > 0.0)
+         {
+            const double f = L.F(d1), c = L.DampC(d1, f), rate = (d1 - std::max(d0, 0.0)) / h;
+            N1 = f + c * rate;
+            if (N1 > 0.0)
+            {
+               const double e = 1e-6 * d1;   // (the damping coefficient's slope by a central difference: Newton's only)
+               const double cp = (L.DampC(d1 + e, L.F(d1 + e)) - L.DampC(d1 - e, L.F(d1 - e))) / (2.0 * e);
+               nSlope = L.K(d1) + cp * rate + c / h;
+            }
+            else
+               N1 = 0.0;
+         }
+         return N1;
+      }
+      // a contact's push on a massless coordinate at the step's end: its end normal force (EndNormal) on the end column (-slope1 N1), and the shear's push on its point
+      // (Ft . v: the step's, the shear has no end value of its own). nSlope: dN1/dd1 (0 when N1 is 0)
+      static double MasslessPush(const Item &L, const Hit &h1, const int j, const double d0, const double d1, const double h, const V3 &Ft, double &nSlope)
+      {
+         return -h1.c[j].slope * h1.grad * EndNormal(L, d0, d1, h, nSlope) + Ft.Dot(h1.c[j].V());
+      }
+      // the energy correction of a massless coordinate (design section 3 b): per part, its contacts' stored change, its own (MasslessStoredChange) and the step's losses on those
+      // contacts, less the work the contacts' forces do on the balls; by the contacts' own energy books (every contact's forces on the balls and on the part, its mean reaction qf,
+      // do minus its stored change and loss) that mismatch is the part's stored change less the work its contacts' mean reaction does on it (mlWork). It is added to the balls
+      // touching the part as a Gonzalez correction in the mass metric, the part's weight 0: the ball, the only body with mass, pays the blade's energy. In 1-D the ball's force is
+      // then (dU + dV + loss) / dc (paper_kk.py). Its full slope goes in Newton's Jacobian (the mismatch's through mlWg, the metric's through the balls' moves)
+      void MasslessEnergy(const double *xv, const V3 *dc, V3 *F, const Jac J, const double h)
+      {
+         for (int p = 0; p < np; p++)
+         {
+            bool ml = false;
+            for (int c = coordOff[p]; c < coordOff[p] + part[p]->NumCoords(); c++)
+               ml = ml || Massless(c);
+            if (!ml)
+               continue;
+            const double dV = part[p]->MasslessStoredChange(xv, partOff[p], nullptr), mis = dV - mlWork[p];
+            int n = 0;
+            for (int i = 0; i < nb; i++)
+            {
+               bool touches = false;
+               for (int k = 0; k < ni && !touches; k++)
+                  touches = ie[k].active && item[k].a == i && item[k].b < 0 && shape[item[k].s] != nullptr && shape[item[k].s]->part == p;
+               if (!touches || ball[i].held)
+                  continue;
+               for (int a = 0; a < 3; a++)
+               {
+                  mlGm[n + a] = 0.0;
+                  mlDq[n + a] = a == 0 ? dc[i].x : a == 1 ? dc[i].y : dc[i].z;
+                  mlIm[n + a] = 1.0 / ball[i].m;
+               }
+               n += 3;
+            }
+            if (n == 0)
+               continue;
+            Gonzalez(mlGm, mis, 16.0 * 2.220446049250313e-16 * (std::fabs(dV) + std::fabs(mlWork[p])), mlDq, mlIm, n, set.gonzalezMass, mlOut);
+            // its slope (with the Jacobian): out_a = cf W_a dq_a, cf = mis / qq, qq = sum_a W_a dq_a^2 (W the metric's weights, as Gonzalez's), so on ball row a over unknown u
+            // h W_a (dq_a dcf/du + cf [u = a]), dcf/du = (dmis/du - cf dqq/du) / qq, dqq/du = 2 W_u dq_u on the balls' own moves; dmis/du = the part's stored change's slope less
+            // mlWork's (mlWg). The smooth law's slope inside the rounding band Gonzalez leaves out too
+            double cfS = 0.0, qqS = 0.0;
+            const auto Wt = [&](const int a) { return !set.gonzalezMass ? mlIm[a] : mlIm[a] > 0.0 ? mlIm[0] / mlIm[a] : 0.0; };
+            if (J)
+            {
+               for (int a = 0; a < n; a++)
+                  qqS += mlDq[a] * Wt(a) * mlDq[a];
+               if (qqS > 1e-300)
+               {
+                  cfS = mis / qqS;
+                  double *const dm = mlDmis;
+                  for (int u = 0; u < nUnk; u++)
+                     dm[u] = 0.0;
+                  part[p]->MasslessStoredChange(xv, partOff[p], dm);
+                  const double *const wg = (const double *)mlWg + (size_t)p * jStride;
+                  for (int u = 0; u < nUnk; u++)
+                     dm[u] -= wg[u];
+                  int s = 0;
+                  for (int i = 0; i < nb; i++)
+                  {
+                     bool touches = false;
+                     for (int k = 0; k < ni && !touches; k++)
+                        touches = ie[k].active && item[k].a == i && item[k].b < 0 && shape[item[k].s] != nullptr && shape[item[k].s]->part == p;
+                     if (!touches || ball[i].held)
+                        continue;
+                     for (int a = 0; a < 3; a++)
+                        dm[6 * i + a] -= cfS * 2.0 * Wt(s + a) * mlDq[s + a];
+                     s += 3;
+                  }
+                  for (int u = 0; u < nUnk; u++)
+                     dm[u] /= qqS;   // (dcf/du)
+               }
+            }
+            n = 0;
+            for (int i = 0; i < nb; i++)
+            {
+               bool touches = false;
+               for (int k = 0; k < ni && !touches; k++)
+                  touches = ie[k].active && item[k].a == i && item[k].b < 0 && shape[item[k].s] != nullptr && shape[item[k].s]->part == p;
+               if (!touches || ball[i].held)
+                  continue;
+               const V3 corr(mlOut[n], mlOut[n + 1], mlOut[n + 2]);
+               F[i] = F[i] - corr;
+               if (J && qqS > 1e-300)
+                  for (int a = 0; a < 3; a++)
+                  {
+                     const int r = 6 * i + a;
+                     const double w = h * Wt(n + a);
+                     for (int u = 0; u < nUnk; u++)
+                        J[r][u] += w * mlDq[n + a] * mlDmis[u];
+                     J[r][r] += w * cfS;
+                  }
+               if (ImpOn())   // (test tooling: booked on the ball's first contact with the part, the force it corrects)
+                  for (int k = 0; k < ni; k++)
+                     if (ie[k].active && item[k].a == i && item[k].b < 0 && shape[item[k].s] != nullptr && shape[item[k].s]->part == p)
+                     {
+                        impIt[4 * (size_t)k] = impIt[4 * (size_t)k] - corr;
+                        break;
+                     }
+               n += 3;
+            }
+         }
       }
 
       // Settings::jacMode: the residual's Jacobian at x by central differences, into jacFd (diagnostic; overwrites ie[], so an Eval at x must follow)
@@ -4804,6 +5147,8 @@ namespace GroupStep
             }
          }
          CoordsNow();
+         if (anyMassless)
+            MasslessGuess(h);
          for (int it = 0; !InRange(x); it++)   // a first guess past a layer's range is shortened
          {
             if (it == 60)
@@ -4969,7 +5314,7 @@ namespace GroupStep
                   for (int a = 0; a < 3; a++)
                      rc += Res[6 * i + a] * Res[6 * i + a] * ic * ic + Res[6 * i + 3 + a] * Res[6 * i + 3 + a] * iw * iw;
                }
-               rc += CoordRes2(Res);
+               rc += CoordRes2(Res, h);
                if (rc <= set.tolRes * set.tolRes)
                {
                   converged = true;
@@ -5020,7 +5365,7 @@ namespace GroupStep
                for (int a = 0; a < 3; a++)
                   rn += Res[6 * i + a] * Res[6 * i + a] * ic * ic + Res[6 * i + 3 + a] * Res[6 * i + 3 + a] * iw * iw;
             }
-            rn += CoordRes2(Res);
+            rn += CoordRes2(Res, h);
             rn = std::sqrt(rn);
             if (set.jacMode != 0 && jacWinLines < 2000 && JacWindow(phaseMs))   // VPX_GROUP_JAC_WINDOW (diagnostics, read only)
             {
