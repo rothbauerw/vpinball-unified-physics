@@ -16,6 +16,7 @@ constexpr int MAXTIPSHAPE = 256;
 class MeshBuffer;
 class ContactPartHost;
 namespace PlungerHost { class Rod; }
+namespace AutoPlungerHost { class Auto; }
 
 class PlungerData final : public BaseProperty
 {
@@ -183,6 +184,13 @@ private:
    float m_rodDrawRest = 0.f;   // m_pos (VPU) where stock draws its tip at rest: the rod's s = 0
    void RodPublish();           // m_pos from the rod's pull, every physics interval (drawn = touched)
    friend class PlungerRodAdapter;
+   // unified engine, an Auto Plunger: the auto plunger of the contact system (physics/autoplungerhost.h, design 4), same switch (PlungerWanted). Drawn: its head only
+   // (m_autoMesh: the fork's two strips or the tip, one frame per VPU of travel); the stock rod is not drawn
+   std::shared_ptr<AutoPlungerHost::Auto> m_auto;
+   std::shared_ptr<MeshBuffer> m_autoMesh;
+   int m_autoFrames = 0, m_autoIndicesPerFrame = 0;
+   void AutoMeshSetup();
+   friend class AutoPlungerAdapter;
 
    //
    // Plunger animation details.  We calculate these in RenderSetup()

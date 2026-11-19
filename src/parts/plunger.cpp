@@ -13,6 +13,7 @@
 #include "physics/contactparthost.h"
 #include "physics/contactsystem.h"
 #include "physics/plungerhost.h"
+#include "physics/autoplungerhost.h"
 #include "ui/live/LiveUI.h"
 #include "physics/PhysicsEngine.h"
 #include "renderer/IndexBuffer.h"
@@ -202,6 +203,42 @@ private:
    bool m_failShown = false;
 };
 
+// The table side of the auto plunger (physics/autoplungerhost.h): the alone-step detectors. No stroke events (Monster Bash's script reads none)
+class AutoPlungerAdapter final : public PartAdapter
+{
+public:
+   explicit AutoPlungerAdapter(Plunger *plunger) : m_plunger(plunger) { }
+   void Publish() override
+   {
+      AutoPlungerHost::Auto &a = *m_plunger->m_auto;
+      a.bookMs = (int)g_pplayer->m_time_msec;
+      if (a.energySteps > m_esSeen)   // detector (rule 8)
+      {
+         m_esSeen = a.energySteps;
+         if (m_esLines < 5)
+         {
+            m_esLines++;
+            PLOGW << "Group step: energy step alone, part " << m_plunger->GetName() << ", balls 0, t=" << g_pplayer->m_time_msec << " ms, " << m_esSeen << " so far; " << a.StateNote() << ". A net, not expected to fire: keep vpinball.log and report it";
+         }
+      }
+      if (a.failedSteps > 0 && !m_failShown)
+      {
+         m_failShown = true;
+         const std::string msg = m_plunger->GetName() + ": a step of the auto plunger alone could not be solved: the rest of that cycle was lost";
+         PLOGW << msg;
+         if (g_pplayer->m_liveUI != nullptr)
+            g_pplayer->m_liveUI->PushNotification(msg, 6000);
+      }
+   }
+   void Fire(const std::vector<ContactMovingPart::Event> &) override { }
+
+private:
+   Plunger *m_plunger;
+   long m_esSeen = 0;
+   int m_esLines = 0;
+   bool m_failShown = false;
+};
+
 void Plunger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 {
    if (!isUI && GetPartGroup() != nullptr && GetPartGroup()->GetReferenceSpace() != PartGroupData::SpaceReference::SR_PLAYFIELD)
@@ -237,6 +274,55 @@ void Plunger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       // here, never handed to stock in play. An Auto Plunger stays on stock until engine step 3. The stock HitPlunger is built but not added: m_pos (drawn, Position) and CreateBall's place.
       // A cabinet plunger (MechPlunger with a sensor) moves the rod through the hand's hold stop (PlungerRodAdapter::SensorHand, engine step 2A); it never reaches stock
       const std::filesystem::path ini = ContactHost::IniPathFor(m_ptable->m_filename);
+      // Unified engine, an Auto Plunger (design 4, engine step 3): the auto plunger of the contact system, same switch. Placement (drawn = touched): the ball that touches the
+      // head at rest is centred one ball radius ahead of where stock draws its tip at rest, on the plunger's x, Width above the surface plus ZAdjust (the rod's axis: the tip
+      // head's axis; the fork's contact height is measured from a ball centred there); the carriage slides along the plunger's axis, +s = toward the ball = -y
+      if (ContactSystem::Unified() && m_d.m_autoPlunger && ContactHost::PlungerWanted(ini, GetName()))
+      {
+         constexpr double U = ContactSystem::kMetresPerUnit;
+         AutoPlunger::Settings s;
+         std::vector<std::string> bad;
+         AutoPlungerHost::Load(s, ini, GetName(), bad);
+         const PlungerMoverObject &pm = php->m_plungerMover;
+         m_rodDrawRest = pm.m_frameEnd + pm.m_restPos * pm.m_frameLen;
+         const float axisZ = zheight + m_d.m_zAdjust + m_d.m_width;
+         const RubberContact::BallSI b;
+         const RubberContact::V3 axis(0.0, -1.0, 0.0), up(0.0, 0.0, 1.0);
+         const RubberContact::V3 cradle((double)m_d.m_v.x * U, (double)m_rodDrawRest * U - b.R, (double)axisZ * U);
+         if (!bad.empty())
+         {
+            std::string keys;
+            for (const std::string &k : bad)
+               keys += (keys.empty() ? "" : ", ") + k;
+            const std::string msg = "Plunger " + GetName() + ": [Plunger:" + GetName() + "] " + keys + " cannot build a working auto plunger; it stays at rest and pushes nothing";
+            PLOGW << msg;
+            if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+               g_pplayer->m_liveUI->PushNotification(msg, 10000);
+            m_rodRefused = true;
+            php->m_plungerMover.m_pos = m_rodDrawRest;
+            return;
+         }
+         m_auto = std::make_shared<AutoPlungerHost::Auto>();
+         m_auto->Build(s, axis, up, ContactPartHost::PartGravitySI(), cradle, b);
+         const RubberContact::V3 o = m_auto->Origin();
+         const double reach = m_auto->Reach();
+         const float lo[3] = { (float)((o.x - reach) / U), (float)((o.y - reach) / U), (float)((o.z - reach) / U) };
+         const float hi[3] = { (float)((o.x + reach) / U), (float)((o.y + reach) / U), (float)((o.z + reach) / U) };
+         RubberObjectSettings hs;   // (the head's law and step are its own, on the group step: GroupLaw)
+         hs.surfaceRubber = true;
+         hs.contact = true;
+         m_partHost = new ContactPartHost(this, m_auto, std::make_unique<AutoPlungerAdapter>(this), hs, ini, GetName(), "plunger", lo, hi);
+         physics->AddCollider(m_partHost, isUI);
+         php->m_plungerMover.m_pos = m_rodDrawRest;
+         const AutoPlunger::Part &p = m_auto->part;
+         PLOGI << "Plunger " << GetName() << ": auto plunger on the group step, head " << (p.head == AutoPlunger::Head::Fork ? "fork" : "tip") << "; ball touching at rest centred at ("
+               << cradle.x / U << ", " << cradle.y / U << ", " << cradle.z / U << ") VPU, axis -y; stroke " << p.stroke * 1e3 << " mm, drive " << p.force << " N (" << s.autoEnergyJ
+               << " J), mass " << p.mass * 1e3 << " g, return " << p.pRet << " N + " << p.kRet * 1e-3 << " N/mm";
+         if (p.head == AutoPlunger::Head::Fork)
+            PLOGI << "Plunger " << GetName() << ": fork tines at rest (" << p.tine[0].x / U << ", " << p.tine[0].y / U << ", " << p.tine[0].z / U << ") and (" << p.tine[1].x / U << ", "
+                  << p.tine[1].y / U << ", " << p.tine[1].z / U << ") VPU, corner radius " << p.rTine * 1e3 << " mm";
+         return;
+      }
       if (ContactSystem::Unified() && !m_d.m_autoPlunger && ContactHost::PlungerWanted(ini, GetName()))
       {
          constexpr double U = ContactSystem::kMetresPerUnit;
@@ -300,10 +386,11 @@ void Plunger::PhysicRelease(PhysicsEngine* physics, const bool isUI)
    if (!isUI)
    {
       // a unified rod's (or a refused one's) HitPlunger is not in the physics: the plunger owns it. The rod, its hand and its host go with the play (design 6j; the host is the engine's)
-      if (m_rod != nullptr || m_rodRefused)
+      if (m_rod != nullptr || m_auto != nullptr || m_rodRefused)
          delete m_phitplunger;
       m_phitplunger = nullptr; // possible memory leak here?
       m_rod = nullptr;
+      m_auto = nullptr;
       m_partHost = nullptr;
       m_rodRefused = false;
    }
@@ -925,6 +1012,7 @@ void Plunger::RenderSetup(Renderer *renderer)
 
    // Create the mesh buffer
    m_meshBuffer = std::make_shared<MeshBuffer>(GetName(), vertexBuffer, indexBuffer, true);
+   AutoMeshSetup();
 
    // delete our custom descriptor, if we created one
    if (customDesc != 0)
@@ -934,10 +1022,80 @@ void Plunger::RenderSetup(Renderer *renderer)
    }
 }
 
+// The unified auto plunger's head (drawn = touched): the fork's two steel strips (each a box 2 rTine thick whose inner top front edge is the tine's rounded corner,
+// 30 mm long behind it, from 2 mm above the floor) or, for the tip head, a box around the tip (the tip's radius, from the apex back over the hemisphere and cylinder).
+// One frame per VPU of travel; Render picks the carriage's
+void Plunger::AutoMeshSetup()
+{
+   m_autoMesh = nullptr;
+   if (m_auto == nullptr)
+      return;
+   constexpr double U = ContactSystem::kMetresPerUnit;
+   const AutoPlunger::Part &p = m_auto->part;
+   struct Box { double x0, x1, y0, y1, z0, z1; };   // VPU
+   std::vector<Box> boxes;
+   const double floorZ = (double)m_ptable->GetSurfaceHeight(m_d.m_szSurface, m_d.m_v.x, m_d.m_v.y);
+   if (p.head == AutoPlunger::Head::Fork)
+      for (int i = 0; i < 2; i++)
+      {
+         const RubberContact::V3 t = p.tine[i] * (1.0 / U);
+         const double r = p.rTine / U, out = t.x > m_d.m_v.x ? 1.0 : -1.0;   // the strip lies outward of its corner
+         const double xa = t.x - out * r, xb = t.x + out * r;
+         boxes.push_back({ std::min(xa, xb), std::max(xa, xb), t.y - r, t.y - r + 30e-3 / U, floorZ + 2e-3 / U, t.z + r });
+      }
+   else
+   {
+      const RubberContact::V3 a = p.tipApex * (1.0 / U);
+      const double len = BumperGroup::FarR(p.prof) / U, rt = p.prof.v.empty() ? 5e-3 / U : len * 0.5;
+      boxes.push_back({ a.x - rt, a.x + rt, a.y, a.y + len, a.z - rt, a.z + rt });
+   }
+   m_autoFrames = (int)std::ceil(p.stroke / U) + 1;
+   m_autoIndicesPerFrame = (int)boxes.size() * 36;
+   std::shared_ptr<VertexBuffer> vb = std::make_shared<VertexBuffer>(m_renderer->m_renderDevice, m_autoFrames * (int)boxes.size() * 24);
+   Vertex3D_NoTex2 *buf;
+   vb->Lock(buf);
+   std::vector<unsigned int> idx;
+   idx.reserve((size_t)m_autoFrames * m_autoIndicesPerFrame);
+   int n = 0;
+   for (int f = 0; f < m_autoFrames; f++)
+   {
+      const double dx = p.axis.x * (double)f, dy = p.axis.y * (double)f;   // f VPU along +s
+      for (const Box &b : boxes)
+      {
+         // six faces: the normal, then four corners counter-clockwise seen from outside
+         const float X0 = (float)(b.x0 + dx), X1 = (float)(b.x1 + dx), Y0 = (float)(b.y0 + dy), Y1 = (float)(b.y1 + dy), Z0 = (float)b.z0, Z1 = (float)b.z1;
+         const struct { float nx, ny, nz; float c[4][3]; } F[6] = {
+            { 0.f, 0.f, 1.f, { { X0, Y0, Z1 }, { X1, Y0, Z1 }, { X1, Y1, Z1 }, { X0, Y1, Z1 } } },
+            { 0.f, 0.f, -1.f, { { X0, Y0, Z0 }, { X0, Y1, Z0 }, { X1, Y1, Z0 }, { X1, Y0, Z0 } } },
+            { 1.f, 0.f, 0.f, { { X1, Y0, Z0 }, { X1, Y1, Z0 }, { X1, Y1, Z1 }, { X1, Y0, Z1 } } },
+            { -1.f, 0.f, 0.f, { { X0, Y0, Z0 }, { X0, Y0, Z1 }, { X0, Y1, Z1 }, { X0, Y1, Z0 } } },
+            { 0.f, -1.f, 0.f, { { X0, Y0, Z0 }, { X1, Y0, Z0 }, { X1, Y0, Z1 }, { X0, Y0, Z1 } } },
+            { 0.f, 1.f, 0.f, { { X0, Y1, Z0 }, { X0, Y1, Z1 }, { X1, Y1, Z1 }, { X1, Y1, Z0 } } } };
+         for (const auto &fc : F)
+         {
+            for (int c = 0; c < 4; c++)
+            {
+               Vertex3D_NoTex2 &v = buf[n + c];
+               v.x = fc.c[c][0]; v.y = fc.c[c][1]; v.z = fc.c[c][2];
+               v.nx = fc.nx; v.ny = fc.ny; v.nz = fc.nz;
+               v.tu = (c == 1 || c == 2) ? 1.f : 0.f; v.tv = (c >= 2) ? 1.f : 0.f;
+            }
+            for (const int c : { 0, 1, 2, 0, 2, 3 })
+               idx.push_back((unsigned int)(n + c));
+            n += 4;
+         }
+      }
+   }
+   vb->Unlock();
+   std::shared_ptr<IndexBuffer> ib = std::make_shared<IndexBuffer>(m_renderer->m_renderDevice, idx);
+   m_autoMesh = std::make_shared<MeshBuffer>(GetName() + ".AutoHead", vb, ib, true);
+}
+
 void Plunger::RenderRelease()
 {
    assert(m_renderer != nullptr);
    m_meshBuffer = nullptr;
+   m_autoMesh = nullptr;
    m_renderer = nullptr;
 }
 
@@ -957,6 +1115,18 @@ void Plunger::Render(const unsigned int renderMask)
 
    if (isStaticOnly || !m_d.m_visible || (isReflectionPass && !m_d.m_reflectionEnabled))
       return;
+
+   if (m_auto != nullptr)   // the unified auto plunger: its head only, at the carriage's travel (one frame per VPU)
+   {
+      if (m_autoMesh == nullptr)
+         return;
+      const int f = std::clamp((int)std::lround(m_auto->part.q / ContactSystem::kMetresPerUnit), 0, m_autoFrames - 1);
+      m_renderer->m_renderDevice->ResetRenderState();
+      m_renderer->m_renderDevice->m_basicShader->SetBasic(m_ptable->GetMaterial(m_d.m_szMaterial), nullptr);
+      m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, false, m_boundingSphereCenter, 0.f, m_autoMesh, RenderDevice::TRIANGLELIST, f * m_autoIndicesPerFrame,
+         m_autoIndicesPerFrame);
+      return;
+   }
 
    // TODO: get rid of frame stuff
    assert(m_phitplunger != nullptr);
@@ -1079,6 +1249,8 @@ void Plunger::Load(IObjectReader& reader)
 STDMETHODIMP Plunger::PullBack()
 {
    // initiate a pull; the speed is set by our pull speed property
+   if (m_auto != nullptr)   // the auto plunger (design 4): a coil-driven carriage has no pull; nothing
+      return S_OK;
    if (m_rod != nullptr)   // the rod (design 2b, 2g): the hand takes the knob and pulls at pull_mm_s (PullSpeed has no physical unit, not used)
    {
       m_rod->KeyDown(g_pplayer->m_pininput.m_plungerHandler->IsPullBackandRetract());
@@ -1101,6 +1273,8 @@ STDMETHODIMP Plunger::PullBack()
 STDMETHODIMP Plunger::PullBackandRetract()
 {
    // initiate a pull; the speed is set by our pull speed property
+   if (m_auto != nullptr)   // the auto plunger: no pull; nothing
+      return S_OK;
    if (m_rod != nullptr)   // the rod (design 2g): pull to full, then the hand eases it back to rest at the pull speed
    {
       m_rod->KeyDown(true);
@@ -1146,6 +1320,12 @@ STDMETHODIMP Plunger::Position(float *pVal)
 
 STDMETHODIMP Plunger::Fire()
 {
+   if (m_auto != nullptr)   // the auto plunger (design 4d): the coil fires, the drive pushes the carriage to its end stop
+   {
+      PLOGI << "Plunger " << GetName() << ": auto Fire at travel " << m_auto->part.q * 1e3 << " mm (" << m_auto->part.rate << " m/s), t=" << g_pplayer->m_time_msec << " ms";
+      m_auto->Fire();
+      return S_OK;
+   }
    if (m_rod != nullptr)   // the rod (design 2b): the hand lets go, the spring alone drives it. With no pull there is nothing to release (design 6f)
    {
       PLOGI << "Plunger " << GetName() << ": Fire at pull " << m_rod->part.q * 1e3 << " mm (" << m_rod->part.rate << " m/s), drawn m_pos " << m_phitplunger->m_plungerMover.m_pos << " VPU (rest " << m_rodDrawRest << "), Position " << 25.f * saturate((float)(m_rod->part.q / m_rod->part.travel)) << ", t=" << g_pplayer->m_time_msec << " ms";

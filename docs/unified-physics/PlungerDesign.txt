@@ -162,6 +162,10 @@ Units: mm, N, g, J unless stated. Values: MEASURED (user), DERIVED (lead, from m
 4f. Moving mass ESTIMATED: carriage and forks about 50 g plus the coil's plunger (about 20 g) and linkage: about 80 g (a setting). With 1.0 J
     over 27 mm the forks reach about 4 - 5 m/s; the ball leaves at roughly 4 - 6 m/s (DERIVED order; the contact law decides it).
 4g. Data the user does not have (all labelled ESTIMATED, settings): mass, return spring, energy. Later, if wanted: the real crank's swing and a coil model.
+4h. Head (user 2026-11-18): some auto plungers push with a rod and rubber tip, some with the fork. A per-plunger setting auto_head = fork (default) or tip;
+    tip = the mechanical tip's revolved ring-rubber profile (section 3) on the same carriage, drive and stops. Drawn: the fork head only (user 2026-11-18),
+    or the tip for a tip head. Energy is per table (user: speeds vary with slope and lane length): [Plunger:<name>] auto_energy_j.
+    Monster Bash (s3-facts): Plunger.Fire on ROM solenoid 1 only; the ball rests in a V cradle (Wall216) about 1.6 mm ahead of the tip.
 
 
 5. ENERGY AND COST (AGREED 2026-11-17; Requirements H8, H9; ModelStandards 2h, 4)
