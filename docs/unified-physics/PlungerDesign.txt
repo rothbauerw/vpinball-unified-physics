@@ -112,6 +112,16 @@ Units: mm, N, g, J unless stated. Values: MEASURED (user), DERIVED (lead, from m
     board's report period T_b, the median of the last 15 gaps, 3 ms on the PinOne) the first step is timed over T_b; the tie is never faster than the
     knob's step plus pull_mm_s; the fit restarts after a still spell over 10 ms. Result: a 1 m/s palm from a 2.5 mm pull gives the ball 2.01 m/s (was 2.93);
     the user's releases: 6 of 7 caught (the 2.8 mm one stays tied), none of 4 guided returns or 8 palms.
+    MERGED (TODO 14.3, user 2026-11-18), after the regression set (runs/2026-11-18-regression, the user's recording 231530: brisk and held returns,
+    jiggled holds, free releases 6-54 mm): one rule, release when the fitted acceleration toward rest > release_accel 15 m/s^2 (at a fitted speed over
+    0.15 m/s) or the fitted speed toward rest > 0.5 m/s. MEASURED (21 ms fit, peak per move): held / guided 3-9 m/s^2 and at most 0.39 m/s; free releases
+    10-25 (short, 212416) and 15-83 m/s^2, 0.27-2.6 m/s. The two shortest releases (10, 14) stay tied (user: staying tied is acceptable; a false release is
+    the bad mistake). Removed: the reading-ahead test (it divides the tie's normal lag by one interval: 10 of the pre-2k build's 11 false releases) and the
+    guard (a palm from a short pull is not a real case, user; true releases overshoot past rest by 3-11 mm and were re-tied).
+    Window (user 2026-11-19): W = max(release_window_min_ms 22, sqrt(2 C q / release_window_noise 5 m/s^2)), independent of release_accel (tied to it, the
+    threshold 15 shrank W to 13 ms and guided moves read 15-23 m/s^2: 19 false releases). The floor is the hand's own short-term acceleration (at 13 ms the
+    PinOne's step noise is only about 7 m/s^2); the board's step only lengthens W. Regression (default settings): A 0/16, B 0/15, E 0/3, D 12/12 released.
+    User played it: "feels great". The regression tool: runs/2026-11-18-regression (README.md), rerun on every change to the release logic.
     Tests: the user's two traces replayed (each release detected, no guided return or palm released), e2d's synthetic 2/5/10 mm, a palm from a 2-3 mm pull
     (synthetic), key and full launches unchanged; ball speed on short releases against the rod-mass prediction.
 2j. DROPPED 2026-11-18 (user), after e2h: no grip law works. Lead's arithmetic error: a 10 ms grip on 127 g is k 50 kN/m, c 160 N s/m (not 50, 5).
