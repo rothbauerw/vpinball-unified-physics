@@ -16,7 +16,9 @@ a. One moving body, the face (face + rivet + the blade's share), mass 2.6-4.4 g 
    pushing at the centre the tilt comes out as 1.5 x / L (the old tie, now a result). The face's top edge reaches the plate first (2-11 deg), then pivots flat.
    Face mass and inertias from the drawn mesh outline (piece 1: 1.46 g for Gorgar's round faces, not the 3.5 g of the papers).
 b. Supports on the face (each a potential plus a named loss):
-   blade A          k_A x, k_A = 3 E I / L^3 from blade sizes (165-5100 N/m ESTIMATED); twist G J / L (0.16-2.9 N m/rad ESTIMATED).
+   blade A          k_A x, k_A = 3 E I / L^3 from blade sizes (165-2200 N/m ESTIMATED); twist G J / L (0.16-2.9 N m/rad ESTIMATED, the 2.9 from the old blade).
+                    CHANGED 11-18 (user: the stiff blade was too stiff, its sizes wrong; PartData T8b): stiff blade 0.025 in x 3/8 in steel, 1.5 in to the face
+                    centre, 2200 N/m (was 0.025 x 1/2 in, 1.25 in, 5100 N/m). Paper from tune2 (11-14) on already used these sizes; the values here were stale.
    switch B + C     k_BC (x - x_close) past the switch's closing travel (900 N/m at the face ASSUMED); the helper blade (no plate) is a stiffer C, after closing.
    foam pad         Hunt-Crossley k_f x (1 + alpha x_dot), k_f 600 N/m TUNED, stiffening past 1 mm (K 7.88e7 N/m^2 TUNED: a 3 m/s centre hit travels about 3 mm),
                     alpha 0.373 s/m (80 % return of the foam alone at 1 m/s, TUNED); one-sided (pushes only); resists twist with its stiffness over its width (w^2 / 12).
@@ -28,7 +30,7 @@ b. Supports on the face (each a potential plus a named loss):
                     2.96 mm); 3 m/s centre travels 4.7-5.0 mm, off the plate; 3 m/s side and high hits touch it. Engine values change with the next build.
    blade stack loss one loss tangent on blade A, B + C and twist (the shared law's form: damper c = tanDelta sqrt(k m_f), damping ratio tanDelta / 2): the
                     clamped stack and its fibre insulators (INFERRED source). 0.05 TUNED from the user's "a struck face stops within 1 s at most" (11-14): the
-                    light blade's 31 Hz ring falls to 1 % in 0.94 s, the heavy blade's 223 Hz in 0.13 s, twist 0.18 s. On a hit (ball carried) it is a damping
+                    light blade's 31 Hz ring falls to 1 % in 0.94 s, the stiff blade's 147 Hz in 0.20 s (old blade: 223 Hz, 0.13 s; rescaled 11-18 at the same mass), twist 0.18 s. On a hit (ball carried) it is a damping
                     ratio of about 0.005: under 1 % of the ball's energy (INFERRED, to check on paper).
    back plate       a fixed stop at x = gap (6.35 mm, fat targets 3.2 mm): the face meets it by the BodyStop impact law (bodypart.h).
 c. Stiffest internal contacts and what is done with them (ModelStandards 3a): ball-face plastic contact (about 1 MN/m against a 3.5 g face: 0.34 ms period) and

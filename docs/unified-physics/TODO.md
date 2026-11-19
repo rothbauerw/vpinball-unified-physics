@@ -14,7 +14,7 @@ G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 ## Now
 Next: plunger (PlungerDesign.txt): steps 1-3 in VPX (auto: autoplungerhost.h; tip head and drawing unchecked); open items: section 14; next: user's call. Lead log runs/2026-11-17-lead. GL exe and main_exe stale: pass -Exe. Stress v2 bench bytes moved with the part-placing step (1 ulp, trap 112).
 Judge a change by one exe, its setting on vs off; never by an older exe's md5 (ModelStandards trap 112). Query outliers 0.3-9 ms are the OS (measured). 1.33: cut B kept.
-Stand-up targets: code pulled from the tree 2026-11-15 (crashed VPX; user), backup backups/2026-11-15-standup-pulled; piece 5 in backups/2026-11-14-standup-build6; simpler draft runs/2026-11-15-standup-simple/design.md, unreviewed. Next step is the user's call.
+Stand-up targets: massless-face design decided (runs/2026-11-15-standup-simple/design.md, plan P1-P7); next piece 1 (plumbing, fixed face) in its own worktree.
 N5. One reach rule from physics (speed plus force) for grouping and step length; first built in 1.34 P2. Grouping: Gate001's 81 mm swing as one-cycle travel joins two lanes. Step length: speed only, no force. Check all parts; ball pairs of unequal mass and resting-ball wake (read only).
 N7. Stress v2 bench: ball travel energy +2 % at 57 ms; spin not counted. Check total energy in the saved run (no new run).
 N8. Test driver must refuse a ball placed inside any object, unless the file declares the overlap (rule 10b: then judged on recovery, no energy gained).
