@@ -49,6 +49,9 @@ namespace PhysicsIni
       bool meshOverlapRepair = true;   // mesh_overlap_repair (on while tested, rule 6; to-do N3 piece 5): 1 = at load, in every static collidable mesh (playfield, wall, ramp, primitive), faces of one
                                        // host on one plane (normals parallel either way, plane distance <= 1 um) that overlap cover the surface once: a face wholly covered by smaller ones is dropped,
                                        // one partly covered is clipped by them (meshholes.h RepairOverlaps; logged per host, never on screen); 0 = the faces as the table has them
+      bool partCull = true;       // part_cull (on while tested, rule 6; runs/2026-11-20-part-cull/design.md): 1 = each ball tests only the moving parts and bands it can reach this cycle: its travel
+                                  // bound from all the energy on the table against each part's region over the cycle and each band's outline fixed at load (ContactMovingPart::CullDist); 0 = every ball
+                                  // tests every moving part and band every cycle, as before
       bool aircoreInStep = true;  // aircore_in_step (on while tested, rule 6; runs/2026-11-13-aircore-ff/design.md): 1 = an air-core coil's pull on a ball in the contact system's step is read at the
                                   // step's midpoint in every evaluation (Magnets::AircoreForce, its slope in Newton's Jacobian); 0 = held at the cycle-start place for the whole cycle (Ball::fExt), as today
       bool seatEditorBalls = true; // seat_editor_balls (on while tested, rule 6; runs/2026-11-13-editor-balls): 1 = at play start each ball placed in the table editor is moved out of any surface it overlaps
@@ -171,6 +174,8 @@ namespace PhysicsIni
             f.turntables = on;
          else if (key == "mesh_overlap_repair")
             f.meshOverlapRepair = on;
+         else if (key == "part_cull")
+            f.partCull = on;
          else if (key == "aircore_in_step")
             f.aircoreInStep = on;
          else if (key == "hit_speed")
@@ -193,7 +198,7 @@ namespace PhysicsIni
       if (!ContactSystem::Unified())
       {
          f.flippers = f.flipperRubber = f.rubbers = f.playfieldContact = f.surfaceRubbers = f.hardSurfaces = f.hinges = f.plunger = f.triggers = false;
-         f.bands = f.slings = f.contact = f.magnets = f.turntables = f.meshOverlapRepair = f.hitSpeed = f.aircoreInStep = f.seatEditorBalls = false;
+         f.bands = f.slings = f.contact = f.magnets = f.turntables = f.meshOverlapRepair = f.hitSpeed = f.aircoreInStep = f.seatEditorBalls = f.partCull = false;
          return f;
       }
       if (!file.empty())

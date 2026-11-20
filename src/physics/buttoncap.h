@@ -350,6 +350,11 @@ namespace ButtonCap
       double GroupPathMotion(int, const V3 &, double, const double *const trial) const override { return trial != nullptr ? std::fabs(trial[0]) : 0.0; }
       double RegionDist(const V3 &c) const override { return part.RegionDist(c); }
       double slope = 1.0;
+      // the part cull (design part-cull 2R; P6 section 2's translating parts): every point of the cap within FarR(prof) of its centre at rest, slid along its axis by |q| now plus its
+      // move this cycle (EnergyMove with the table's energy E). Not clamped at the travel: the stops are springs (EnergyMove above)
+      double cullR = INFINITY;
+      void CullCycle(const double E, const double T) override { cullR = BumperGroup::FarR(part.prof) + std::fabs(part.q) + EnergyMove(part.centre, E, T, nullptr); }
+      double CullDist(const V3 &c) const override { return (c - part.centre).Length() - cullR; }
       double GroupPathSlope(int) const override { return slope; }
       const RubberContact::RubberParams *GroupLaw(int, double &layerM) const override
       {

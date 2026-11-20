@@ -185,7 +185,7 @@ namespace BatPart
       // the energy reach (design_reach.md section 1): the bat turns about the vertical axis through its pivot by at most EnergyReach(|omega|, E, I, AlphaBound) (the coil and the
       // spring as the drive, AlphaBound's present state holds for the cycle), at most pi; a point c moves relative to it by the chord at c's distance from that axis, plus the pivot's own
       // slide |vPivotX| T (given, as SurfaceSpeedBound reads it). The turn is bounded by the energy (EnergyMove), not clamped at the stops; work: as EnergyMove
-      double CycleRegionDist(const V3 &c, const double T) const override { return gp.RegionDist(c) - std::fabs(gp.geo.vPivotX) * T; }   // (the energy reach: its bounding radius about the pivot at any angle, the pivot's slide off)
+      double CycleRegionDist(const V3 &c, const double T, double) const override { return gp.RegionDist(c) - std::fabs(gp.geo.vPivotX) * T; }   // (the energy reach: its bounding radius about the pivot at any angle, the pivot's slide off)
       // the energy reach, the coil law (runs/2026-11-14-reach-p1b/brief_coil.md item 2): a winding's current cannot jump: over T, i <= min(i0 + (V / L) T, V / R), as a
       // fraction of V / R: i0 + (R / L) T, L its smallest (the plunger farthest out, at rest). The solenoid changes only between cycles: on, both windings rise from their present
       // currents; off, they only decay from their present currents (just switched off, the hold winding carries the series loop's current, which it already holds: no swap).

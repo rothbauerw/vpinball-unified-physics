@@ -83,7 +83,7 @@ namespace HingeModel
          return sweep >= GroupStep::kPi ? 2.0 * gp.reach : 2.0 * gp.reach * std::sin(0.5 * std::max(sweep, 0.0));
       }
       double EnergyMove(const V3 &c, const double E, const double T, double *const work) const override { return gp.EnergyMove(c, E, T, work); }   // (the energy reach: HingeGroup::Part::TurnRange)
-      double CycleRegionDist(const V3 &c, double) const override { return gp.RegionDist(c); }   // (its bounding radius about its axis point holds at any angle)
+      double CycleRegionDist(const V3 &c, double, double) const override { return gp.RegionDist(c); }   // (its bounding radius about its axis point holds at any angle)
       // Its speed now plus what gravity, the blades and a driven stop can add in a cycle
       double SurfaceSpeedBound(const double cycleS) const override
       {

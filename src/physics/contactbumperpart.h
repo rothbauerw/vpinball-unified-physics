@@ -55,6 +55,10 @@ namespace JetBumper
          ringShape.owner = &gp;
          bodyShape.prof = &gp.cfg.body0;
          bodyShape.edgeMin = edgeMin;
+         skirtSpan = SpanOf(gp.cfg.skirt0);   // (the region, design part-cull 2J)
+         ringSpan = SpanOf(gp.cfg.ring0);
+         bodySpan = SpanOf(gp.cfg.body0);
+         skirtLever = std::sqrt(skirtSpan.rMax * skirtSpan.rMax + std::max(skirtSpan.hLo * skirtSpan.hLo, skirtSpan.hHi * skirtSpan.hHi));
          // the path test: the fixed centre body's profile revolved into facets (world frame, once at load); the ring and skirt move with the part (build 3)
          std::vector<double> r, z, rr;
          for (const Revolve::Vtx &v : gp.cfg.body0.v)
@@ -110,6 +114,88 @@ namespace JetBumper
          const JetBumper::Bumper &b = gp.cfg;
          const double fr = std::max(BumperGroup::FarR(b.body0), std::max(BumperGroup::FarR(b.ring0) + std::max(b.p.ringStrokeMm * JetBumper::MM, std::fabs(gp.dr)), BumperGroup::FarR(b.skirt0) + std::fabs(gp.z)));
          return (c - origin).Length() - fr;
+      }
+      // the region over a cycle (design part-cull 2J; [Features] part_cull): each body's extent from its built profile, once at load (Build): r_max, the largest distance from
+      // the axis (each vertex's r plus its sweep radius rr: r + rr is linear along a segment, so its largest is at a vertex), and h_lo, h_hi, its height range in its own frame
+      // (z -+ rr likewise); the skirt's frame is its pivot (0, 0, z), the ring's is the foot with its drop dr down, the body's the foot
+      struct Span { double rMax = 0.0, hLo = 0.0, hHi = 0.0; };
+      static Span SpanOf(const Revolve &p)
+      {
+         Span s;
+         s.hLo = INFINITY;
+         s.hHi = -INFINITY;
+         for (const Revolve::Vtx &v : p.v)
+         {
+            s.rMax = std::max(s.rMax, v.r + v.rr);
+            s.hLo = std::min(s.hLo, v.z - v.rr);
+            s.hHi = std::max(s.hHi, v.z + v.rr);
+         }
+         return s;
+      }
+      Span skirtSpan, ringSpan, bodySpan;   // (Build)
+      double skirtLever = 0.0;              // the skirt's farthest point from its pivot bound, sqrt(r_max^2 + max(h_lo^2, h_hi^2)) (m; EnergyMove's lever, Build)
+      struct Cyl { double r = 0.0, zLo = 0.0, zHi = 0.0; };   // a vertical cylinder about the axis: radius, heights above the foot (m)
+      // the region with E fed over T: the moves dR (ring slide), dZ (pivot slide), dT (tilt turn) of EnergyMove (DriveCappedReach, not clamped at the stops: they are springs),
+      // the tilt Theta = min(tilt now + dT, pi/2) (tilt now: hypot(thx, thy), at least the axis's angle acos(cos thx cos thy)). A skirt point (r, h) turned by theta <= Theta lies
+      // within r + |h| sin(theta) of the axis and at h cos(theta) +- r sin(theta) above the pivot. 0 the skirt: radius r_max + max|h| sin(Theta), heights
+      // [z - dZ + min(h_lo, 0) - r_max sin(Theta), z + dZ + max(h_hi, 0) + r_max sin(Theta)]; 1 the ring (no tilt): r_max, [h_lo - dr - dR, h_hi - dr + dR]; 2 the body, fixed
+      void RegionAt(const double E, const double T, Cyl (&k)[3]) const
+      {
+         double dR, dZ, dT;
+         Moves(E, T, dR, dZ, dT, nullptr);
+         const double th = std::min(std::hypot(gp.thx, gp.thy) + dT, 0.5 * GroupStep::kPi), s = std::sin(th);
+         const Span &a = skirtSpan;
+         k[0] = { a.rMax + std::max(std::fabs(a.hLo), std::fabs(a.hHi)) * s, gp.z - dZ + std::min(a.hLo, 0.0) - a.rMax * s, gp.z + dZ + std::max(a.hHi, 0.0) + a.rMax * s };
+         k[1] = { ringSpan.rMax, ringSpan.hLo - gp.dr - dR, ringSpan.hHi - gp.dr + dR };
+         k[2] = { bodySpan.rMax, bodySpan.hLo, bodySpan.hHi };
+      }
+      // the distance from P (the foot's frame) to the union: the smallest of the three, each the radial and vertical gaps (hypot; 0 inside)
+      static double CylDist(const Cyl (&k)[3], const V3 &P)
+      {
+         const double rho = std::sqrt(P.x * P.x + P.y * P.y);
+         double d = INFINITY;
+         for (const Cyl &q : k)
+            d = std::min(d, std::hypot(std::max(rho - q.r, 0.0), std::max({ q.zLo - P.z, 0.0, P.z - q.zHi })));
+         return d;
+      }
+      // the grouping (E: the group's feed) and the cull (E: the table's, precomputed once per cycle) read the same region; part_cull 0: none, as before
+      double CycleRegionDist(const V3 &c, const double T, const double E) const override
+      {
+         if (!s_partCull)
+            return -INFINITY;
+         Cyl k[3];
+         RegionAt(E, T, k);
+         return CylDist(k, c - origin);
+      }
+      Cyl cullCyl[3];
+      void CullCycle(const double E, const double T) override
+      {
+         cullE = E;
+         cullT = T;
+         RegionAt(E, T, cullCyl);
+      }
+      double CullDist(const V3 &c) const override { return CylDist(cullCyl, c - origin); }
+      // (the log, once per table start: the spans, the tilt bound and the three cylinders, mm, at the feed E and at no feed)
+      std::string RegionNote(const double E, const double T) const override
+      {
+         std::string o;
+         char buf[400];
+         std::snprintf(buf, sizeof buf, "skirt r_max %.3f h [%.3f, %.3f] lever %.3f; ring r_max %.3f h [%.3f, %.3f]; body r_max %.3f h [%.3f, %.3f]; now z %.4f tilt %.5f deg dr %.4f",
+            skirtSpan.rMax * 1e3, skirtSpan.hLo * 1e3, skirtSpan.hHi * 1e3, skirtLever * 1e3, ringSpan.rMax * 1e3, ringSpan.hLo * 1e3, ringSpan.hHi * 1e3, bodySpan.rMax * 1e3,
+            bodySpan.hLo * 1e3, bodySpan.hHi * 1e3, gp.z * 1e3, std::hypot(gp.thx, gp.thy) / DEG, gp.dr * 1e3);
+         o += buf;
+         for (const double e : { E, 0.0 })
+         {
+            double dR, dZ, dT;
+            Moves(e, T, dR, dZ, dT, nullptr);
+            Cyl k[3];
+            RegionAt(e, T, k);
+            std::snprintf(buf, sizeof buf, "; at E %.4g mJ: dR %.4f dZ %.4f dT %.5f deg Theta %.5f deg, skirt r %.3f z [%.3f, %.3f], ring r %.3f z [%.3f, %.3f], body r %.3f z [%.3f, %.3f]", e * 1e3,
+               dR * 1e3, dZ * 1e3, dT / DEG, std::min(std::hypot(gp.thx, gp.thy) + dT, 0.5 * GroupStep::kPi) / DEG, k[0].r * 1e3, k[0].zLo * 1e3, k[0].zHi * 1e3, k[1].r * 1e3,
+               k[1].zLo * 1e3, k[1].zHi * 1e3, k[2].r * 1e3, k[2].zLo * 1e3, k[2].zHi * 1e3);
+            o += buf;
+         }
+         return o;
       }
 
       // ---- the script ----
@@ -191,7 +277,22 @@ namespace JetBumper
       {
          gp.CycleStart(cycleS);
       }
+      // part_cull 1 (design part-cull 2J d): the skirt's lever is its own farthest point from the pivot (skirtLever): no surface point moves further, so the gap less the move stays a
+      // true bound; part_cull 0: the ball centre's distance from the pivot, as before
       double EnergyMove(const V3 &c, const double E, const double T, double *const work) const override
+      {
+         double dr, dz, dt;
+         Moves(E, T, dr, dz, dt, work);
+         double lever = skirtLever;
+         if (!s_partCull)
+         {
+            const V3 P = c - origin;
+            lever = std::sqrt(P.x * P.x + P.y * P.y + (P.z - gp.z) * (P.z - gp.z));
+         }
+         return std::max(dr, lever * std::min(dt, GroupStep::kPi) + dz);
+      }
+      // EnergyMove's three moves over T with E fed: the ring's slide dr, the skirt pivot's slide dz (m) and its tilt turn dt (rad); work as EnergyMove's
+      void Moves(const double E, const double T, double &dr, double &dz, double &dt, double *const work) const
       {
          const Params &p = gp.cfg.p;
          const double g = partSet.g.Length();
@@ -215,16 +316,13 @@ namespace JetBumper
          const double lMax = (gp.cfg.coilD.a + gp.cfg.coilD.b / (p.plungerClosedFrac + p.coil.x0)) * 1e-3;
          const double dRing = 0.5 * lMax * gp.iCoil * gp.iCoil + V * V / p.coil.rOhm * T + (p.returnPreloadN + p.returnKNPerM * stroke) * stroke;
          const double dSkirt = skirtF * clear;
-         const double dr = DriveCappedReach(std::fabs(gp.vr), E, p.ringMass, ringAccel, dRing, T, 0.5 * g * T * T);
-         const double dz = DriveCappedReach(std::fabs(gp.vz), E, p.skirtMass, skirtAccel, dSkirt, T, 0.5 * g * T * T);
+         dr = DriveCappedReach(std::fabs(gp.vr), E, p.ringMass, ringAccel, dRing, T, 0.5 * g * T * T);
+         dz = DriveCappedReach(std::fabs(gp.vz), E, p.skirtMass, skirtAccel, dSkirt, T, 0.5 * g * T * T);
          const double tiltG = p.skirtMass * g * gp.reach / I;
-         const double dt = DriveCappedReach(wt, E, I, tiltAccel, dSkirt, T, 0.5 * tiltG * T * T);
+         dt = DriveCappedReach(wt, E, I, tiltAccel, dSkirt, T, 0.5 * tiltG * T * T);
          if (work != nullptr)
             *work = 0.5 * p.ringMass * gp.vr * gp.vr + std::min(p.ringMass * ringAccel * dr, dRing + p.ringMass * g * dr) + 0.5 * p.skirtMass * gp.vz * gp.vz + 0.5 * I * wt * wt
                   + std::min(p.skirtMass * skirtAccel * dz + I * tiltAccel * dt, dSkirt + p.skirtMass * g * dz + I * tiltG * dt);
-         const V3 P = c - origin;
-         const double rho = std::sqrt(P.x * P.x + P.y * P.y + (P.z - gp.z) * (P.z - gp.z));
-         return std::max(dr, rho * std::min(dt, GroupStep::kPi) + dz);
       }
 
       // the nearest surface as the engine's probe: dist = the ball centre's distance from the surface, rho 0 (the surface is a sheet, its thickness is in the profile)

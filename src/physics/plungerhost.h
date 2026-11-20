@@ -495,6 +495,21 @@ namespace PlungerHost
       int GroupSurfaces() const override { return 1; }
       void GroupProbe(int, const V3 &c, const double R, const double *const trial, GroupStep::Hit &h) const override { part.ProbeSurface(c, R, trial != nullptr ? trial[0] : 0.0, h); }
       double GroupPathMotion(int, const V3 &, double, const double *const trial) const override { return trial != nullptr ? std::fabs(trial[0]) : 0.0; }   // a slide: |dq|
+      // the part cull (design part-cull 2R): the tip's apex over the whole stroke s in [outerSolidS, travel] (pushed in to pulled out), widened to its place now plus or minus its move
+      // this cycle (EnergyMove with the table's energy E) should it pass a stop (the stops are springs); every point of rod and tip within FarR(prof) of the apex: a capsule
+      double cullLo = 0.0, cullHi = 0.0, cullFar = INFINITY;
+      void CullCycle(const double E, const double T) override
+      {
+         const double m = EnergyMove(part.tipApex, E, T, nullptr);
+         cullLo = std::min(part.outerSolidS, part.q - m);
+         cullHi = std::max(part.travel, part.q + m);
+         cullFar = BumperGroup::FarR(part.prof);
+      }
+      double CullDist(const V3 &c) const override
+      {
+         const double s = std::min(std::max((c - part.tipApex).Dot(part.axis), cullLo), cullHi);
+         return (c - (part.tipApex + part.axis * s)).Length() - cullFar;
+      }
       double RegionDist(const V3 &c) const override { return part.RegionDist(c); }
       double GroupPathSlope(int) const override { return slope; }
       const RubberContact::RubberParams *GroupLaw(int, double &layerM) const override

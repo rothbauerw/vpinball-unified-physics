@@ -161,6 +161,21 @@ namespace AutoPlungerHost
       void GroupProbe(const int i, const V3 &c, const double R, const double *const trial, GroupStep::Hit &h) const override { HeadProbe(i, c, R, trial != nullptr ? trial[0] : 0.0, h); }
       double GroupPathMotion(int, const V3 &, double, const double *const trial) const override { return trial != nullptr ? std::fabs(trial[0]) : 0.0; }   // a slide: |dq|
       double RegionDist(const V3 &c) const override { return (c - HeadNow()).Length() - (headR + part.stroke); }
+      // the part cull (design part-cull 2R, as the rod): the head's reference point over the whole stroke s in [0, stroke], widened to its place now plus or minus its move this cycle
+      // (EnergyMove with the table's energy E) should it pass a stop; every point of the head within headR of it: a capsule
+      double cullLo = 0.0, cullHi = 0.0;
+      void CullCycle(const double E, const double T) override
+      {
+         const double m = EnergyMove(mid, E, T, nullptr);
+         cullLo = std::min(0.0, part.q - m);
+         cullHi = std::max(part.stroke, part.q + m);
+      }
+      double CullDist(const V3 &c) const override
+      {
+         const V3 base = mid - part.axis * (0.5 * part.stroke);   // (s = 0)
+         const double s = std::min(std::max((c - base).Dot(part.axis), cullLo), cullHi);
+         return (c - (base + part.axis * s)).Length() - headR;
+      }
       double GroupPathSlope(int) const override { return part.head == AutoPlunger::Head::Fork ? 1.0 : tipSlope; }   // a sphere's distance moves at most 1:1 with the slide
       const RubberContact::RubberParams *GroupLaw(int, double &layerM) const override
       {

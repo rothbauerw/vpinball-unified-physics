@@ -53,6 +53,7 @@ namespace StandupFace
       double k = 888.0;                              // the blade's spring, N/m (3 E I / L^3)
       double edgeRho = 1e-3;                         // the mesh edges' radius for the contact (the host's hard-surface edge_radius_mm), m
       double meshR = 0.0;                            // the farthest mesh point from origin (m)
+      V3 boxLo, boxHi;                               // the mesh's box at rest (world, m; the part cull)
 
       // the blade's spring from its sizes (PartData T8c, design section 1): a steel cantilever E 200 GPa (ASSUMED), 3/8 in wide, thick and long as set, loaded at the face centre
       static double BladeK(const double thicknessIn, const double leverIn)
@@ -78,6 +79,8 @@ namespace StandupFace
                hi = V3(std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z));
             }
          origin = (lo + hi) * 0.5;
+         boxLo = lo;
+         boxHi = hi;
          meshR = 0.0;
          for (const RubberContact::SurfaceTri &t : tris)
             for (const V3 &p : { t.a, t.b, t.c })
@@ -302,6 +305,38 @@ namespace StandupFace
             *work = 0.5 * gp.k * gp.x * gp.x;
          return std::max(gp.x, xMax - gp.x);
       }
+      // the region over a cycle (design part-cull 2R, 2J; piece 2's massless face): the face moves only along n, x over the cycle in [0, xMax], xMax = sqrt(x^2 + 2 E / k)
+      // (EnergyMove's bound on the blade spring; no plate in this piece, so no clamp): the mesh's box at rest swept along n over [0, xMax], grown by the edges' radius edgeRho
+      void SweptBox(const double E, V3 &lo, V3 &hi) const
+      {
+         const double xMax = std::sqrt(gp.x * gp.x + 2.0 * std::max(E, 0.0) / gp.k);
+         const V3 d = gp.n * xMax, g(gp.edgeRho, gp.edgeRho, gp.edgeRho);
+         lo = V3(std::min(gp.boxLo.x, gp.boxLo.x + d.x), std::min(gp.boxLo.y, gp.boxLo.y + d.y), std::min(gp.boxLo.z, gp.boxLo.z + d.z)) - g;
+         hi = V3(std::max(gp.boxHi.x, gp.boxHi.x + d.x), std::max(gp.boxHi.y, gp.boxHi.y + d.y), std::max(gp.boxHi.z, gp.boxHi.z + d.z)) + g;
+      }
+      static double BoxDist(const V3 &lo, const V3 &hi, const V3 &c)   // the point-to-box distance (0 inside)
+      {
+         const double dx = std::max({ lo.x - c.x, 0.0, c.x - hi.x }), dy = std::max({ lo.y - c.y, 0.0, c.y - hi.y }), dz = std::max({ lo.z - c.z, 0.0, c.z - hi.z });
+         return std::sqrt(dx * dx + dy * dy + dz * dz);
+      }
+      // the grouping (E: the group's feed; it takes the larger of this less R and the gap less EnergyMove, so the swept box rules wherever it is the tighter) and the cull (E: the
+      // table's, precomputed once per cycle) read the same region; part_cull 0: none, as before
+      double CycleRegionDist(const V3 &c, double, const double E) const override
+      {
+         if (!s_partCull)
+            return -INFINITY;
+         V3 lo, hi;
+         SweptBox(E, lo, hi);
+         return BoxDist(lo, hi, c);
+      }
+      V3 cullLo, cullHi;
+      void CullCycle(const double E, const double T) override
+      {
+         cullE = E;
+         cullT = T;
+         SweptBox(E, cullLo, cullHi);
+      }
+      double CullDist(const V3 &c) const override { return BoxDist(cullLo, cullHi, c); }
       std::string StateNote() const override
       {
          char buf[160];
