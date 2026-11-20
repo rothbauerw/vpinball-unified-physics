@@ -44,7 +44,7 @@ namespace
    bool g_partEnergyTold = false;
 }
 
-// the part cull (runs/2026-11-20-part-cull/design.md; [Features] part_cull): the table's moving parts and cord bands in the registry's order, listed at the first cycle of a table start
+// the part cull (runs/2026-11-20-part-cull/design.md): the table's moving parts and cord bands in the registry's order, listed at the first cycle of a table start
 // (ContactSystemImpl::CullLists); each band's outline box (world, m) fixed when its cord is made; each body's travel bound this cycle (m, by its index in the cycle's bodies; set by
 // CullPrepare for g_cullCy only); the misses told (check mode, once per part or band per table start); the work counters (diagnostics, logged every 1000 cycles)
 namespace
@@ -67,8 +67,7 @@ namespace ContactSystem
    static bool s_seatEditorBalls = false;   // [Features] seat_editor_balls of this table (physicsini.h), read likewise; off with the unified engine off
    static std::filesystem::path s_iniFile;   // the table's physics ini (PhysicsIni::FindUnified at SetTable; empty = none): every reader reads this one file
    static std::filesystem::file_time_type s_iniTime{};   // its write time when the readers last read it (SetTable, ReloadChangedIni)
-   static bool s_aircoreInStep = false;
-   static bool s_partCull = false;          // [Features] part_cull of this table (physicsini.h), read likewise: 1 = each ball tests only the moving parts and bands it can reach this cycle (CullPrepare); 0 = all, as before     // [Features] aircore_in_step of this table (physicsini.h), read likewise: 1 = an air-core coil's pull is read at each step's midpoint (AircorePullForce, CordIsland); 0 = held for the cycle as before
+   static bool s_aircoreInStep = false;     // [Features] aircore_in_step of this table (physicsini.h), read likewise: 1 = an air-core coil's pull is read at each step's midpoint (AircorePullForce, CordIsland); 0 = held for the cycle as before
 
    void SetTable(const std::filesystem::path &tableFile)
    {
@@ -89,8 +88,6 @@ namespace ContactSystem
       s_unifiedSet = true;
       s_seatEditorBalls = s_unified && f.seatEditorBalls;
       s_aircoreInStep = s_unified && f.aircoreInStep;
-      s_partCull = s_unified && f.partCull;
-      ContactMovingPart::s_partCull = s_partCull;   // (the parts' side: design 2J)
       g_cullListed = g_cullNamed = false;   // (the part cull: its lists, told misses and counters per table start)
       g_cullParts.clear();
       g_cullBands.clear();
@@ -106,7 +103,6 @@ namespace ContactSystem
       {
          PLOGI << "Contact system: unified engine on (" << file.string() << "; dev fallback: stock hit search still runs for object types not yet converted)";
          PLOGI << "Contact system: [Features] aircore_in_step = " << (s_aircoreInStep ? 1 : 0) << (s_aircoreInStep ? " (an air-core coil's pull read at each step's midpoint)" : " (an air-core coil's pull held for the cycle)");
-         PLOGI << "Contact system: [Features] part_cull = " << (s_partCull ? 1 : 0) << (s_partCull ? " (each ball tests only the moving parts and bands it can reach this cycle)" : " (each ball tests every moving part and band every cycle)");
       }
       else
          PLOGI << "Contact system: stock VPX physics, every new model off (" << (file.empty() ? std::string("no physics ini") : file.string() + " has no [Features] unified = 1") << ")";
@@ -440,7 +436,7 @@ struct ContactSystemImpl
          w.w = V3();   // (spin zero: KickerDesign 1h)
    }
 
-   // ---- the part cull (runs/2026-11-20-part-cull/design.md; [Features] part_cull) ----
+   // ---- the part cull (runs/2026-11-20-part-cull/design.md) ----
    // the table's moving parts and cord bands, in the registry's order, once per table start (and again if the registry grows)
    static void CullLists()
    {
@@ -677,7 +673,7 @@ struct ContactSystemImpl
    // ball's group feed, or its region less R, within the ball's travel); one it takes is a miss (CullMiss)
    static void CullCheck(Cycle &cy)
    {
-      if (!ContactSystem::s_partCull || g_cullCy != &cy || g_cullTravel.empty() || !GroupStep::FinderCheckEnv())
+      if (g_cullCy != &cy || g_cullTravel.empty() || !GroupStep::FinderCheckEnv())
          return;
       for (size_t i = 0; i < cy.bodies.size() && i < g_cullTravel.size(); i++)
       {
@@ -705,10 +701,7 @@ struct ContactSystemImpl
       ContactSurfaceHost::FinderBuild();   // shared_finder: the index over every static mesh, once before the first cycle (P1: only check mode reads it)
       ContactSurfaceHost::FinderTotals(false);   // shared_finder P2a: counts the cycle; the query's totals once a second of table time
       const double dt = cy.dt;
-      const bool cull = ContactSystem::s_partCull;   // the part cull ([Features] part_cull): the moving parts after every body is loaded (CullPrepare)
       const size_t first = cy.bodies.size();
-      if (!cull)
-         g_cullCy = nullptr;
       for (auto eit = g_engaged.begin(); eit != g_engaged.end();)
       {
          BallContact &e = *eit++;   // (a release below erases only this entry)
@@ -736,26 +729,13 @@ struct ContactSystemImpl
             w.e = &e;
             LoadBody(w, pb);
             LoadState(w);
-            if (!cull)
-            {   // (the static mesh query waits for the ball's energy travel: GatherStatic)
-               CPROF(Regather);
-               Regather(e, w.posStart, pb->m_d.m_radius, 1);
-            }
             w.band = e.band;
             Sources::Begin(w, dt);   // (it reads only the ball's floor items, which Regather part 1 keeps as they are)
-            if (!cull)
-            {
-               CPROF(RefreshCycle);
-               for (SurfaceContact &it : e.items)
-                  if (it.r->FinderObjIndex() < 0)   // (the static mesh items: GatherStatic, after the grouping)
-                     it.r->Refresh(it, w.bs.R, 2.0 * w.v.Length() * dt + 0.005, w.c);   // a surface: the faces the ball can reach this cycle
-            }
             cy.bodies.push_back(std::move(w));
          }
       }
-      if (!cull)
-         return;
-      // the part cull: every body's travel bound from all the energy on the table first (it needs every body), then each ball's moving parts and the refresh as above
+      // the part cull (runs/2026-11-20-part-cull/design.md): every body's travel bound from all the energy on the table first (it needs every body), then each ball's moving parts
+      // (Regather part 1; the static mesh query waits for the ball's energy travel: GatherStatic) and the refresh
       CullPrepare(cy, first);
       for (size_t k = first; k < cy.bodies.size(); k++)
       {
@@ -763,13 +743,13 @@ struct ContactSystemImpl
          BallContact &e = *w.e;
          {
             CPROF(Regather);
-            Regather(e, w.posStart, w.pb->m_d.m_radius, 1, g_cullTravel.empty() ? -1.0 : g_cullTravel[k]);
+            Regather(e, w.posStart, w.pb->m_d.m_radius, 1, g_cullTravel.empty() ? -1.0 : g_cullTravel[k]);   // (no bound on the table's energy: every part, as a new ball's first query)
          }
          {
             CPROF(RefreshCycle);
             for (SurfaceContact &it : e.items)
-               if (it.r->FinderObjIndex() < 0)
-                  it.r->Refresh(it, w.bs.R, 2.0 * w.v.Length() * dt + 0.005, w.c);
+               if (it.r->FinderObjIndex() < 0)   // (the static mesh items: GatherStatic, after the grouping)
+                  it.r->Refresh(it, w.bs.R, 2.0 * w.v.Length() * dt + 0.005, w.c);   // a surface: the faces the ball can reach this cycle
          }
       }
    }
@@ -778,8 +758,7 @@ struct ContactSystemImpl
    // to a fixed point by what it can reach and be fed by), each engaged ball's one query of the cycle, out to that travel: its static mesh surfaces come from it, before any solve.
    // Nothing joins later except by the inside check (a ball outside its query: a bound too small, logged as a fault)
    // the energy gather (runs/2026-11-15-finder-P6b3/brief_B2-1.md): after the grouping, a ball's non-mesh surfaces are those its travel this cycle (reachS) can reach.
-   // A moving part (every one a grouping candidate, Regather part 1): kept when grouped with the ball, or when its gap less its own move (EnergyMove at the ball's group feed) or its
-   // region at the cycle's turn less R (CycleRegionDist) is within reachS (<=: the grouping's own test). A fixed analytic surface: its bounding box less R, a
+   // A moving part (a grouping candidate when the part cull leaves it in, Regather part 1): kept when grouped with the ball. A fixed analytic surface: its bounding box less R, a
    // true lower bound of its distance. A band joins only by the band model (kept, never added). No margin, no rescan: every cycle from the grouping.
    static void GatherNonMesh(Body &w, const double T)
    {
@@ -806,20 +785,15 @@ struct ContactSystemImpl
             {
                if (old != e.items.end())
                {
+                  // the part cull (design 3): a part is kept when it is grouped with the ball (not partOut); ReachEnergy's test is not repeated: a part left out failed it in its last
+                  // round at a feed at least the ball's group's (feedE) and the same travel, so it fails here too. Check mode: that test beside it, a difference counted
                   mp->SetBall(w.bs);
-                  if (!ContactSystem::s_partCull)
-                     keep = !old->partOut || std::max(old->reachGap - mp->EnergyMove(w.c, w.feedE, T, nullptr), mp->CycleRegionDist(w.c, T, w.feedE) - w.bs.R) <= reach;
-                  else
+                  keep = !old->partOut;
+                  if (GroupStep::FinderCheckEnv() && keep != (keep || std::max(old->reachGap - mp->EnergyMove(w.c, w.feedE, T, nullptr), mp->CycleRegionDist(w.c, T, w.feedE) - w.bs.R) <= reach))
                   {
-                     // the part cull (design 3): a part is kept when it is grouped with the ball (not partOut). The repeat of ReachEnergy's test is gone: a part left out failed that test in
-                     // its last round at a feed at least the ball's group's (feedE) and the same travel, so it fails here too. Check mode: the old test beside it, a difference counted
-                     keep = !old->partOut;
-                     if (GroupStep::FinderCheckEnv() && keep != (!old->partOut || std::max(old->reachGap - mp->EnergyMove(w.c, w.feedE, T, nullptr), mp->CycleRegionDist(w.c, T, w.feedE) - w.bs.R) <= reach))
-                     {
-                        if (g_cullGatherDiff++ == 0)
-                           PLOGW << "Part cull: the energy gather's repeated part test keeps " << o->Name() << " (left out of the ball's group) at t=" << g_pplayer->m_time_msec
-                                 << " ms: the repeat is not a copy of ReachEnergy's test (check mode; first of this table start)";
-                     }
+                     if (g_cullGatherDiff++ == 0)
+                        PLOGW << "Part cull: the energy gather's repeated part test keeps " << o->Name() << " (left out of the ball's group) at t=" << g_pplayer->m_time_msec
+                              << " ms: the repeat is not a copy of ReachEnergy's test (check mode; first of this table start)";
                   }
                }
             }
@@ -1433,8 +1407,9 @@ struct ContactSystemImpl
       {
          bool changed = false;
          // the part cull (design 2R, bands): the table's cord bands only (CullLists, the registry's order); a band no body holds and whose outline box no body's travel bound
-         // reaches (CullBandDist less R) is skipped this pass (check mode: the full test for each body, a take = a miss)
-         const bool cull = ContactSystem::s_partCull && g_cullCy == &cy && g_cullTravel.size() == cy.bodies.size();
+         // reaches (CullBandDist less R) is skipped this pass (check mode: the full test for each body, a take = a miss). A cycle with no travel bounds (a new ball's own cycle, LoneReach;
+         // no bound on the table's energy, CullPrepare) tests every host in the registry
+         const bool cull = g_cullCy == &cy && g_cullTravel.size() == cy.bodies.size();
          const size_t nHosts = cull ? g_cullBands.size() : ContactHost::Registry().size();
          for (size_t oi = 0; oi < nHosts; oi++)
          {
@@ -4358,8 +4333,8 @@ void ContactSystemImpl::Regather(BallContact &e, const Vertex3Ds &pos, const flo
       for (SurfaceContact &it : e.items)
          if (it.r != nullptr && it.r->FinderObjIndex() < 0)
             next.push_back(std::move(it));
-   if (rescan && part == 1)   // every moving part is a grouping candidate (ReachLinks probes it, ReachEnergy groups it);
-   {                                                               // GatherNonMesh keeps after the grouping those the ball's travel can reach, and the fixed ones by their box
+   if (rescan && part == 1)   // the moving parts below are the grouping candidates (ReachLinks probes them, ReachEnergy groups them);
+   {                          // GatherNonMesh keeps after the grouping those grouped with the ball, and the fixed ones by their box
       for (SurfaceContact &it : e.items)
          if (it.r != nullptr && it.r->FinderObjIndex() < 0 && it.r->MovingPart() == nullptr)
             next.push_back(std::move(it));
@@ -4393,7 +4368,7 @@ void ContactSystemImpl::Regather(BallContact &e, const Vertex3Ds &pos, const flo
             next.push_back(std::move(it));
          }
       }
-      else
+      else   // no travel bound (a new ball's first query, EngageNear; no bound on the table's energy, CullPrepare): every moving part
       for (ContactHost *const o : ContactHost::Registry())
       {
          if (o->FinderObjIndex() >= 0 || o->MovingPart() == nullptr || !o->m_enabled || !o->m_set.contact)

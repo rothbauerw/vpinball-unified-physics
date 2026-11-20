@@ -115,7 +115,7 @@ namespace JetBumper
          const double fr = std::max(BumperGroup::FarR(b.body0), std::max(BumperGroup::FarR(b.ring0) + std::max(b.p.ringStrokeMm * JetBumper::MM, std::fabs(gp.dr)), BumperGroup::FarR(b.skirt0) + std::fabs(gp.z)));
          return (c - origin).Length() - fr;
       }
-      // the region over a cycle (design part-cull 2J; [Features] part_cull): each body's extent from its built profile, once at load (Build): r_max, the largest distance from
+      // the region over a cycle (design part-cull 2J): each body's extent from its built profile, once at load (Build): r_max, the largest distance from
       // the axis (each vertex's r plus its sweep radius rr: r + rr is linear along a segment, so its largest is at a vertex), and h_lo, h_hi, its height range in its own frame
       // (z -+ rr likewise); the skirt's frame is its pivot (0, 0, z), the ring's is the foot with its drop dr down, the body's the foot
       struct Span { double rMax = 0.0, hLo = 0.0, hHi = 0.0; };
@@ -158,11 +158,9 @@ namespace JetBumper
             d = std::min(d, std::hypot(std::max(rho - q.r, 0.0), std::max({ q.zLo - P.z, 0.0, P.z - q.zHi })));
          return d;
       }
-      // the grouping (E: the group's feed) and the cull (E: the table's, precomputed once per cycle) read the same region; part_cull 0: none, as before
+      // the grouping (E: the group's feed) and the cull (E: the table's, precomputed once per cycle) read the same region
       double CycleRegionDist(const V3 &c, const double T, const double E) const override
       {
-         if (!s_partCull)
-            return -INFINITY;
          Cyl k[3];
          RegionAt(E, T, k);
          return CylDist(k, c - origin);
@@ -277,19 +275,12 @@ namespace JetBumper
       {
          gp.CycleStart(cycleS);
       }
-      // part_cull 1 (design part-cull 2J d): the skirt's lever is its own farthest point from the pivot (skirtLever): no surface point moves further, so the gap less the move stays a
-      // true bound; part_cull 0: the ball centre's distance from the pivot, as before
-      double EnergyMove(const V3 &c, const double E, const double T, double *const work) const override
+      // the skirt's lever is its own farthest point from the pivot (skirtLever; design part-cull 2J d): no surface point moves further, so the gap less the move stays a true bound
+      double EnergyMove(const V3 &, const double E, const double T, double *const work) const override
       {
          double dr, dz, dt;
          Moves(E, T, dr, dz, dt, work);
-         double lever = skirtLever;
-         if (!s_partCull)
-         {
-            const V3 P = c - origin;
-            lever = std::sqrt(P.x * P.x + P.y * P.y + (P.z - gp.z) * (P.z - gp.z));
-         }
-         return std::max(dr, lever * std::min(dt, GroupStep::kPi) + dz);
+         return std::max(dr, skirtLever * std::min(dt, GroupStep::kPi) + dz);
       }
       // EnergyMove's three moves over T with E fed: the ring's slide dr, the skirt pivot's slide dz (m) and its tilt turn dt (rad); work as EnergyMove's
       void Moves(const double E, const double T, double &dr, double &dz, double &dt, double *const work) const

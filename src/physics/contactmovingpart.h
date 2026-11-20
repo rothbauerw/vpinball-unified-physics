@@ -108,7 +108,7 @@ public:
    // section 3 in its bounding form; a part whose region does not depend on its feed ignores E); -INFINITY = none (the move above alone). Grouping takes the larger of this less R
    // and the gap now less EnergyMove
    virtual double CycleRegionDist(const V3 &, double /*T*/, double /*E*/) const { return -INFINITY; }
-   // the part cull (runs/2026-11-20-part-cull/design.md 1c, 2R, 2J; [Features] part_cull): CullCycle once per cycle, before the grouping, with E the table's whole energy this cycle (J:
+   // the part cull (runs/2026-11-20-part-cull/design.md 1c, 2R, 2J): CullCycle once per cycle, before the grouping, with E the table's whole energy this cycle (J:
    // every ball's, every stored and every part's work, an upper bound on any group's feed) and the cycle T (s); then CullDist(c) is a lower bound on the distance (m) from c to any
    // touchable point of the part at any pose it can take in the cycle (the ball's radius not included). -INFINITY = no region: a candidate for every ball. Default: the
    // grouping's own region at the table's energy (CycleRegionDist: the bat, the hinge parts, the disc; the jet and the target precompute the same region once per cycle)
@@ -116,8 +116,6 @@ public:
    virtual double CullDist(const V3 &c) const { return CycleRegionDist(c, cullT, cullE); }
    virtual std::string RegionNote(double /*E*/, double /*T*/) const { return std::string(); }   // (the log, once per table start: how its region is built; empty = nothing to tell)
    double cullT = 0.0, cullE = 0.0;   // (the cycle and the table's energy CullCycle was set for, s and J; not part of the state: set every cycle)
-   static inline bool s_partCull = false;   // [Features] part_cull of this table (ContactSystem::SetTable): 1 = the jet's and the target's regions of design part-cull 2J in the grouping and
-                                            // the cull, and the jet's skirt lever from its own profile; 0 = neither (no region, the lever at the ball's centre), as before
    // the part's state as a short text for the log (an engagement of a ball with a part that is moving is the case to look at)
    virtual std::string StateNote() const { return std::string(); }
    // A part on the group step (docs/unified-physics/GroupStepDesign.txt 18): the engine moves it with the balls in one solve and holds its shapes. Null: the part is on the old loop until it moves over. No part implements these yet.

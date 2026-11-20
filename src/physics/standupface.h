@@ -320,11 +320,9 @@ namespace StandupFace
          return std::sqrt(dx * dx + dy * dy + dz * dz);
       }
       // the grouping (E: the group's feed; it takes the larger of this less R and the gap less EnergyMove, so the swept box rules wherever it is the tighter) and the cull (E: the
-      // table's, precomputed once per cycle) read the same region; part_cull 0: none, as before
+      // table's, precomputed once per cycle) read the same region
       double CycleRegionDist(const V3 &c, double, const double E) const override
       {
-         if (!s_partCull)
-            return -INFINITY;
          V3 lo, hi;
          SweptBox(E, lo, hi);
          return BoxDist(lo, hi, c);
