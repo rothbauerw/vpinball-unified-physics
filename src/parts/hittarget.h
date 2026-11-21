@@ -12,6 +12,7 @@
 #include "unordered_dense.h"
 
 class HitObject;
+namespace DropSimple { class Engine; }
 
 class HitTargetData final : public BaseProperty
 {
@@ -158,7 +159,7 @@ public:
    float GetDepth(const Vertex3Ds& viewDir) const final;
 
    bool IsConstCollidable() const final { return false; }
-   bool IsCollidable() const final { return !m_d.m_isDropped; }
+   bool IsCollidable() const final { return m_dropModel != nullptr || !m_d.m_isDropped; }   // (on the drop model the part decides what is solid)
 
    void SetDefaultPhysics(const bool fromMouseClick) final;
    void ExportMesh(ObjLoader& loader) final;
@@ -171,12 +172,16 @@ public:
 
    bool m_hitEvent = false;
 
+   // the unified engine's simple drop model (droptargetsimple.h; [Targets] drop_model = 1): the part moves the surface on the physics clock; null = stock
+   bool OnDropModel() const { return m_dropModel != nullptr; }
+
    // Fills 'edges' with pairs of 2D vertices forming the editor wireframe of the target mesh.
    void GetEditorWireframe(vector<Vertex2D> &edges) const;
 
 private:
    void UpdateTarget();
    void SetupHitObject(class PhysicsEngine* physics, HitObject * obj, const bool setHitObject, const bool isUI);
+   void ApplyPhysicsMaterial(HitObject *obj);   // the target's physics material (or its own values) onto obj (SetupHitObject; the drop model's material)
    void AddHitEdge(class PhysicsEngine *physics, ankerl::unordered_dense::set<std::pair<unsigned, unsigned>> &addedEdges, const unsigned i, const unsigned j, const Vertex3Ds &vi,
       const Vertex3Ds &vj, const bool setHitObject, const bool isUI);
 
@@ -196,4 +201,5 @@ private:
    float m_moveAnimationOffset = 0.0f;
    bool  m_moveAnimation = false;
    bool  m_moveDown = true;
+   std::shared_ptr<DropSimple::Engine> m_dropModel;   // (OnDropModel)
 };

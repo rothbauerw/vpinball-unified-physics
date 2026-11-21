@@ -42,8 +42,8 @@ public:
 
    struct Event
    {
-      enum Kind { Hit, SwitchClosed, SwitchOpened, LimitEOS, LimitBOS, Spin, BandHit, SlingFire } kind;
-      int ball = -1;        // Hit, BandHit: the ball's index as the owner numbers them; a band's SwitchClosed / SwitchOpened: the blade's index
+      enum Kind { Hit, SwitchClosed, SwitchOpened, LimitEOS, LimitBOS, Spin, BandHit, SlingFire, Dropped, Raised } kind;   // (Dropped, Raised: a drop target, droptargetsimple.h)
+      int ball = -1;        // Hit, BandHit: the ball's index as the owner numbers them (a drop target's Hit: the ball's own id, Ball::m_id); a band's SwitchClosed / SwitchOpened: the blade's index
       double value = 0.0;   // Hit: normal approach speed (m/s); Limit: angular speed (deg/s); BandHit: the cord's largest deflection under the ball (m); SlingFire: 1 = the script's trigger
    };
 
@@ -144,7 +144,7 @@ public:
    virtual double GroupPathSlope(int) const { return 1.0; }   // its probe's largest slope (GroupStep::Shape::PathSlope), built at load
    virtual double GroupPathCoverSag(int, int &) const { return -1.0; }   // the cover's largest sagitta and kind (the self-check, VPX_FINDER_CHECK; GroupStep::Shape::PathCoverSag); -1 = none
    virtual void CycleBegin() {}                                                                      // a group holding it is being built this cycle
-   virtual void TouchBegan(int, int, double) {}                                                      // this surface, this ball of the group, closing at vn (m/s): a touch began. A part's Hit is what it decides
+   virtual void TouchBegan(int, int, int, double, const V3 &) {}                                     // this surface, this ball of the group (its index; its own id, Ball::m_id), closing at vn (m/s), the touch's normal (toward the ball): a touch began. A part's Hit is what it decides
    virtual bool Sleeping() const { return false; }                                                   // no ball near and nothing to step: no group this cycle
    virtual bool RestNumbers(double &, double &) const { return false; }                             // pile sleep's log: what AtRest is decided on, the move over the last cycle in a group and the surface speed (m, m/s); false = not given
    virtual bool AtRest() const { return false; }                                                     // nothing driven and nothing moved over the last whole cycle: it stays out of a ball's solve while no ball can reach it (a part that does not say so is always in)

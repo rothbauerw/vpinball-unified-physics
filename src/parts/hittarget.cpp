@@ -28,6 +28,8 @@
 #include "physics/contactsystem.h"
 #include "physics/contactparthost.h"
 #include "physics/contactpartsini.h"
+#include "physics/droptargetsimple.h"
+#include "ui/live/LiveUI.h"
 #include "physics/standupface.h"
 #include "parts/ball.h"
 #include "core/player.h"
@@ -275,6 +277,86 @@ namespace
       std::shared_ptr<StandupFace::Engine> m_model;
       HitObject *m_carrier;
    };
+
+   // Invisible drop targets on the drop model drop when hit (design section 1, DECIDED 2026-11-21; stock never moved them, hittarget.cpp UpdateAnimation): one notice per table
+   // start naming them (rule 8). The adapters of one play share it; it ends with them
+   struct DropHiddenNotice
+   {
+      std::string names;
+      bool shown = false;
+   };
+   std::weak_ptr<DropHiddenNotice> g_dropHidden;
+
+   // The table side of a drop target on the simple interim model (DropSimple::Engine, droptargetsimple.h; runs/2026-11-21-simple-drop/design.md section 3): the part's
+   // Hit, Dropped and Raised as the target's events, after the step (physics clock); VPX's Threshold and HitEvent decide a Hit and the fall, as stock (collideex.cpp:933-949)
+   class DropTargetSimpleAdapter final : public PartAdapter
+   {
+   public:
+      DropTargetSimpleAdapter(HitTarget *target, std::shared_ptr<DropSimple::Engine> model, std::shared_ptr<DropHiddenNotice> hidden)
+         : m_target(target), m_model(std::move(model)), m_hidden(std::move(hidden)) {}
+      void Publish() override
+      {
+         m_model->SetCollidable(m_target->m_d.m_collidable);   // (Collidable and DropSpeed read live: a script change acts on the next cycle)
+         m_model->SetSpeed(m_target->m_d.m_dropSpeed * ContactSystem::kMetresPerUnit * 1000.0);   // VPX units per ms -> m/s
+         if (m_hidden != nullptr && !m_hidden->shown && g_pplayer->m_liveUI != nullptr)
+         {
+            m_hidden->shown = true;
+            const std::string msg = "Invisible drop targets now drop when hit (stock never moved them): " + m_hidden->names + ". If the table uses one as a fixed wall, set [Target:<name>] drop_model = 0";
+            PLOGW << msg;
+            g_pplayer->m_liveUI->PushNotification(msg, 10000);
+         }
+      }
+      void Fire(const std::vector<ContactMovingPart::Event> &events) override
+      {
+         for (const ContactMovingPart::Event &e : events)
+         {
+            switch (e.kind)
+            {
+            case ContactMovingPart::Event::Hit:
+            {
+               // a front touch (the part's test) at or over Threshold, HitEvent on: Hit, and the fall starts if it is up or rising (stock: m_fe = HitEvent, dot >= m_threshold, not dropped)
+               const float speed = (float)(e.value / ContactSystem::kVelocityScale);   // the closing speed, VPX units
+               if (!m_target->m_d.m_hitEvent || speed < m_target->m_d.m_threshold)
+                  break;
+               HitBall *best = nullptr;   // the ball that touched (the event carries its own id; gone: the script destroyed it, no Hit)
+               for (Ball *b : g_pplayer->m_vball)
+               {
+                  int id = -1;
+                  b->get_ID(&id);
+                  if (e.ball >= 0 && id == e.ball)
+                     best = &b->m_hitBall;
+               }
+               PLOGI << "Drop target " << m_target->GetName() << ": Hit, ball " << e.ball << ", " << e.value << " m/s, t=" << g_pplayer->m_time_msec << " ms, z " << m_model->Z() * 1e3 << " mm";
+               m_model->Drop();
+               if (best == nullptr)
+                  break;
+               g_pplayer->m_pactiveball = best->m_pBall;
+               m_target->m_currentHitThreshold = speed;
+               m_target->FireGroupEvent(DISPID_HitEvents_Hit);
+               break;
+            }
+            case ContactMovingPart::Event::Dropped:
+               PLOGI << "Drop target " << m_target->GetName() << ": Dropped, t=" << g_pplayer->m_time_msec << " ms";
+               m_target->m_d.m_isDropped = true;   // (as stock: IsDropped reads true once it is down)
+               if (m_target->m_d.m_hitEvent)
+                  m_target->FireGroupEvent(DISPID_TargetEvents_Dropped);
+               break;
+            case ContactMovingPart::Event::Raised:
+               PLOGI << "Drop target " << m_target->GetName() << ": Raised, t=" << g_pplayer->m_time_msec << " ms";
+               if (m_target->m_d.m_hitEvent)
+                  m_target->FireGroupEvent(DISPID_TargetEvents_Raised);
+               break;
+            default:
+               break;
+            }
+         }
+      }
+
+   private:
+      HitTarget *m_target;
+      std::shared_ptr<DropSimple::Engine> m_model;
+      std::shared_ptr<DropHiddenNotice> m_hidden;
+   };
 }
 
 void HitTarget::PhysicSetup(PhysicsEngine* physics, const bool isUI)
@@ -288,6 +370,73 @@ void HitTarget::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 
    if (m_d.m_targetType == DropTargetBeveled || m_d.m_targetType == DropTargetFlatSimple || m_d.m_targetType == DropTargetSimple)
    {
+      // unified engine (drop targets, STOCK OFF piece 1): the simple interim model (droptargetsimple.h; runs/2026-11-21-simple-drop/design.md): the drawn mesh (hat included) as a
+      // hard surface that falls and rises on the physics clock at DropSpeed; no stock collider. [Targets] / [Target:<name>] drop_model = 0: stock, unchanged. Needs [Features]
+      // hard_surfaces, and not [target:<name>] rubber = 0, as a stand-up. Invisible targets have the same physics as visible ones (design section 1, a departure from stock)
+      const std::filesystem::path dropIni = isUI ? std::filesystem::path() : ContactSurfaceHost::IniPathFor(m_ptable->m_filename);
+      if (!isUI && ContactSystem::Unified() && ContactSurfaceHost::HardSurfaceWanted(dropIni, "target", GetName()) && PartsIni::LoadDropModel(dropIni, GetName()) == 1)
+      {
+         auto faces = std::make_shared<RubberSurface>();
+         for (unsigned i = 0; i < m_numIndices; i += 3)
+         {
+            const unsigned int i0 = m_indices[i], i1 = m_indices[i + 1], i2 = m_indices[i + 2];
+            const Vertex3Ds rgv3D[3] = { // (stock's order: HitTriangle wants CCW vertices)
+               Vertex3Ds(m_hitUIVertices[i0].x, m_hitUIVertices[i0].y, m_hitUIVertices[i0].z), Vertex3Ds(m_hitUIVertices[i2].x, m_hitUIVertices[i2].y, m_hitUIVertices[i2].z),
+               Vertex3Ds(m_hitUIVertices[i1].x, m_hitUIVertices[i1].y, m_hitUIVertices[i1].z)
+            };
+            if (CrossProduct(rgv3D[1] - rgv3D[0], rgv3D[2] - rgv3D[0]).LengthSquared() > 1e-6f)
+               faces->Add(rgv3D[0], rgv3D[1], rgv3D[2]);
+         }
+         if (!faces->tris.empty())
+         {
+            // material: the target's own physics material through the shared hard-surface law (as a stand-up, piece 1); falloff and scatter unused, as every hard surface
+            HitPoint matObj(this, Vertex3Ds(0.f, 0.f, 0.f));
+            ApplyPhysicsMaterial(&matObj);
+            const double E = ContactSurfaceHost::HardSurfaceE(&matObj), mu = matObj.m_friction;
+            RubberObjectSettings dropSettings;
+            ContactSurfaceHost::LoadHardSurfaceSettings(dropSettings, dropIni, "target", GetName(), E, mu);
+            constexpr double U = ContactSystem::kMetresPerUnit;
+            const double rz = ANGTORAD(m_d.m_rotZ);
+            const RubberContact::V3 back(std::sin(rz), -std::cos(rz), 0.0);   // away from the ball's side (the front at rotZ + 90 deg, stock's hit plane; drop-axis's test)
+            // the fall's travel: the mesh's own top height over its base, so the top is flush with the playfield when down (lead 2026-11-21, PartData D4, Requirement I.4);
+            // stock draws it down by 52 U, which left a stub 3.5 - 5.3 U high that turned solid inside a ball resting over the slot when the rise began (runs/2026-11-21-simple-drop R1)
+            float topU = -FLT_MAX;
+            for (const Vertex3Ds &v : m_hitUIVertices)
+               topU = std::max(topU, v.z - m_d.m_vPosition.z);
+            auto model = std::make_shared<DropSimple::Engine>();
+            model->Build(faces->tris, back, topU * U, dropSettings.edgeRadiusMm * 1e-3, m_d.m_isDropped, RubberContact::BallSI());
+            model->SetCollidable(m_d.m_collidable);
+            model->SetSpeed(m_d.m_dropSpeed * U * 1000.0);
+            std::shared_ptr<DropHiddenNotice> hidden;
+            if (!m_d.m_visible)
+            {
+               hidden = g_dropHidden.lock();
+               if (hidden == nullptr)
+               {
+                  hidden = std::make_shared<DropHiddenNotice>();
+                  g_dropHidden = hidden;
+               }
+               hidden->names += (hidden->names.empty() ? "" : ", ") + GetName();
+               PLOGW << "Drop target " << GetName() << " is invisible: on the drop model it drops when hit (stock never moved invisible targets)";
+            }
+            const RubberContact::V3 &o = model->Origin();
+            const double r = model->Reach();
+            const float lo[3] = { (float)((o.x - r) / U), (float)((o.y - r) / U), (float)((o.z - r) / U) };
+            const float hi[3] = { (float)((o.x + r) / U), (float)((o.y + r) / U), (float)((o.z + r) / U) };
+            ContactPartHost *const ph = new ContactPartHost(this, model, std::make_unique<DropTargetSimpleAdapter>(this, model, hidden), dropSettings, dropIni, GetName(), "target", lo, hi);
+            ph->SetHardSurface(E, mu);
+            m_dropModel = model;
+            const eObjType hostType = ph->m_ObjType;
+            SetupHitObject(physics, ph, false, isUI);   // enabled and disabled with the target (Collidable); the part fires Hit, not the host
+            ph->m_ObjType = hostType;   // (stock's skip of a dropped target, collide.cpp DoHitTest, is the stock path only: the part decides what is solid)
+            PLOGI << "Target " << GetName() << ": drop model 1, simple (" << faces->tris.size() << " faces, mu " << mu << ", E " << E << ", drop speed " << m_d.m_dropSpeed << " U/ms, raise delay "
+                  << m_d.m_raiseDelay << " ms, threshold " << m_d.m_threshold << ", hit event " << m_d.m_hitEvent << ", visible " << m_d.m_visible << ", starts " << (m_d.m_isDropped ? "down" : "up")
+                  << "; travel " << topU << " U, top flush with its base when down, fall " << (m_d.m_dropSpeed > 0.f ? topU / m_d.m_dropSpeed : 0.f) << " ms; stock's 52 U would leave "
+                  << (model->gp.boxHi.z / U - m_d.m_vPosition.z - DROP_TARGET_LIMIT) << " U; reach " << r * 1e3 << " mm)";
+            return;
+         }
+      }
+
       ankerl::unordered_dense::set<std::pair<unsigned, unsigned>> addedEdges;
 
       const Matrix3D fullMatrix = Matrix3D::MatrixRotateZ(ANGTORAD(m_d.m_rotZ));
@@ -461,7 +610,10 @@ void HitTarget::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 void HitTarget::PhysicRelease(PhysicsEngine* physics, const bool isUI)
 {
    if (!isUI)
+   {
       m_vhoCollidable.clear();
+      m_dropModel = nullptr;
+   }
 }
 
 void HitTarget::AddHitEdge(PhysicsEngine* physics, ankerl::unordered_dense::set< std::pair<unsigned, unsigned> >& addedEdges, const unsigned i, const unsigned j, const Vertex3Ds &vi, const Vertex3Ds &vj, const bool setHitObject, const bool isUI)
@@ -475,6 +627,21 @@ void HitTarget::AddHitEdge(PhysicsEngine* physics, ankerl::unordered_dense::set<
 // Ported at: VisualPinball.Engine/Physics/HitObject.cs
 
 void HitTarget::SetupHitObject(PhysicsEngine* physics, HitObject *obj, const bool setHitObject, const bool isUI)
+{
+   ApplyPhysicsMaterial(obj);
+   obj->m_threshold = m_d.m_threshold;
+   obj->m_enabled = isUI ? true : m_d.m_collidable;
+   obj->m_ObjType = eHitTarget;
+   obj->m_obj = (IFireEvents*)this;
+   obj->m_fe = setHitObject && m_d.m_hitEvent;
+
+   physics->AddCollider(obj, isUI);
+
+   if (!isUI)
+      m_vhoCollidable.push_back(obj);	//remember hit components of primitive
+}
+
+void HitTarget::ApplyPhysicsMaterial(HitObject *obj)
 {
    const Material * const mat = m_ptable->GetMaterial(m_d.m_szPhysicsMaterial);
    if (!m_d.m_overwritePhysics)
@@ -492,16 +659,6 @@ void HitTarget::SetupHitObject(PhysicsEngine* physics, HitObject *obj, const boo
       obj->SetFriction(m_d.m_friction);
       obj->m_scatter = ANGTORAD(m_d.m_scatter);
    }
-   obj->m_threshold = m_d.m_threshold;
-   obj->m_enabled = isUI ? true : m_d.m_collidable;
-   obj->m_ObjType = eHitTarget;
-   obj->m_obj = (IFireEvents*)this;
-   obj->m_fe = setHitObject && m_d.m_hitEvent;
-
-   physics->AddCollider(obj, isUI);
-
-   if (!isUI)
-      m_vhoCollidable.push_back(obj);	//remember hit components of primitive
 }
 
 //////////////////////////////
@@ -639,6 +796,21 @@ void HitTarget::RenderRelease()
 
 void HitTarget::UpdateAnimation(const float diff_time_msec)
 {
+    // the drop model (droptargetsimple.h): the part moves the surface on the physics clock; drawn here from its z (an invisible target too: it moves, design section 1).
+    // Animate on the frame clock while it moves (stock: every frame of the move)
+    if (m_dropModel != nullptr)
+    {
+       const float off = (float)(m_dropModel->Z() / ContactSystem::kMetresPerUnit);
+       if (off != m_moveAnimationOffset || (off < 0.0f && off > -DROP_TARGET_LIMIT))
+       {
+          m_moveAnimationOffset = off;
+          if (m_meshBuffer != nullptr)
+             UpdateTarget();
+          FireGroupEvent(DISPID_AnimateEvents_Animate);
+       }
+       return;
+    }
+
     // Do not perform animation of invisible targets
     // This is needed for backward compatibility since animation used to be part of rendering and would not be performed, therefore
     // hidden drop targets would never actually drop, and old tables rely on this behavior.
@@ -1233,7 +1405,15 @@ STDMETHODIMP HitTarget::put_IsDropped(VARIANT_BOOL newVal)
    {
       PLOGD << GetName() << " set IsDropped to " << val;
       m_d.m_isDropped = val;
-      if (g_pplayer)
+      if (g_pplayer && m_dropModel != nullptr)
+      {
+         // the drop model (design section 3c): reads as stock at once; the surface falls from where it is, or waits RaiseDelay (physics clock) and rises from where it is
+         if (val)
+            m_dropModel->Drop();
+         else
+            m_dropModel->Raise(m_d.m_raiseDelay * 1e-3);
+      }
+      else if (g_pplayer)
       {
          m_moveAnimation = true;
          if (val)

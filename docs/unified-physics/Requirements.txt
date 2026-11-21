@@ -272,3 +272,35 @@ H. PLUNGERS (all items AGREED with the user 2026-11-17; draft runs/2026-11-17-pl
    with no ball near it sleeps at rest.
 10. What the player sees: the drawn plunger (rod, spring, tip) at its physical position every frame, its travel the physical travel, the spring squeezing as it
    really does; the auto plunger's forks at their physical swing. Drawn = touched.
+
+I. DROP TARGETS (all items AGREED with the user 2026-11-19; draft runs/2026-11-19-drop-requirements/draft.md; hardware data PartData section 12)
+-----------------------------------------------------------------------------------------------------------------------------------------
+1. Scope: the VPX drop-target object only (DropTargetBeveled, DropTargetSimple, DropTargetFlatSimple), on the shared contact path, stock off. Tables that build drop
+   targets from walls, primitives and script (the VPW drop-target script) are not converted. Test table: Gorgar with its six targets made VPX objects (user).
+2. Shape: the collision shape follows the target's real shape, including the "hat" (a lip on the front top edge) some targets have; as the target drops, the hat
+   meets the ball and pushes it back through the shared contact law.
+3. Knocked down: a ball hitting the face pushes the target back; a hit that moves it past its latch drops it, a softer one does not. No speed threshold: the latch
+   travel and the forces holding the target decide.
+4. The fall: on the physics clock, not the frame clock, driven by the drop spring and gravity, so a hit gives the same result at any frame rate and on the bench.
+   While it falls the target is solid where it actually is; a ball touches it until its top is below the ball. No snap, no instant removal.
+5. Brick (low priority, may come later; the design must not rule it out): a very hard head-on hit can hold the target up for a moment (the ball's push and
+   friction at the face and at the slot's back wall, and/or the target flexing), and the ball is thrown back with the target still up. From those forces, not a speed setting.
+6. Rebound: from the parts (target mass and supports, latch, stops, contact law); no restitution number, no edit of the ball's velocity.
+7. Down: the playfield slot is a real hole; only the dropped target's top, about flush, keeps the ball out of it. A ball crosses it as it crosses the edge between
+   a turntable and the playfield. A target not fully down leaves the ball meeting its top and the slot's edges as they are. (Gorgar's slots: cut by the user.)
+8. Reset: the script raises the target and it rises by the reset coil's drive, the only energy in. A ball never stops it rising (the coil is far stronger); a ball
+   over or against it is pushed through the shared contact law, never left inside it. Once the coil lets go, a ball still pressing the target can knock it down again (item 3's latch).
+9. Switch and events: the switch is closed when the target is down and opens when it rises out of that position: SwitchClosed / SwitchOpened events and a
+   SwitchClosed property, as other converted parts. Kept from stock: Hit when the ball strikes the face (HasHitEvent off drops Hit only), Dropped at the bottom,
+   Raised at the top. All on the physics clock, fired after the step.
+10. Rear and side hits bounce off an up target and do not drop it (the push presses the catch onto its ledge or the target onto the slot's walls; from the
+   geometry, not a rule).
+11. Several targets and balls: one ball dropping two neighbours in one pass, two balls on one target, a ball pinched between a target and a post: by the shared
+   ball-ball and ball-part law, no energy gained, no stuck ball.
+12. Resting ball: a ball resting against an up target stays at rest (no creep, no chatter) while the target holds; whether its weight drops the target comes from
+   the latch's friction and ledge size, no rule either way.
+13. Script interface: kept IsDropped (read: the real state; write: drops or raises it), Collidable, Visible, drawing properties, Friction, HasHitEvent. Hidden
+   targets have the same physics as visible ones. No longer used, silently: Elasticity, ElasticityFalloff, Scatter, Threshold, DropSpeed, RaiseDelay, LegacyMode.
+14. Cost: stated with 1, 2 and 6 balls; 30 us per object in the worst cycle with a ball on it. Light sprung parts cost 54-271 us today (to-do 11.1): the model must avoid that.
+15. Values: from part geometry and published material data (PartData section 12), each labelled ESTIMATED with its source; TUNED only where no data exists
+   (the drop spring, from the 15-35 ms fall); replaced when measured.

@@ -136,7 +136,7 @@ namespace BatPart
             return false;
          return idle || rest.Rests(RestPose(), RestSpeed());
       }
-      void TouchBegan(int, const int ballIndex, const double vn) override { events.push_back({ Event::Hit, ballIndex, std::max(0.0, vn) }); }   // (the engine's touch: the release gap is its hysteresis)
+      void TouchBegan(int, const int ballIndex, int, const double vn, const V3 &) override { events.push_back({ Event::Hit, ballIndex, std::max(0.0, vn) }); }   // (the engine's touch: the release gap is its hysteresis)
 
       // A bat no ball is near: the same group with no balls, asleep while nothing changes (a part at rest sleeps, ModelStandards 3c: the coil unchanged, the state the same over a whole cycle)
       int AdvanceAlone(double dt) override

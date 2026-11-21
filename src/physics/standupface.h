@@ -358,7 +358,7 @@ namespace StandupFace
          idle = false;
          gp.unk = true;
       }
-      void TouchBegan(int, const int ballIndex, const double vn) override { events.push_back({ Event::Hit, ballIndex, vn }); }
+      void TouchBegan(int, const int ballIndex, int, const double vn, const V3 &) override { events.push_back({ Event::Hit, ballIndex, vn }); }
       bool Sleeping() const override { return idle; }
       bool RestNumbers(double &moveM, double &speedMS) const override
       {

@@ -418,7 +418,7 @@ namespace JetBumper
          return surface == 0 ? &gp.cfg.skirtMat : surface == 1 ? &gp.cfg.ringMat : &gp.cfg.bodyMat;
       }
       void CycleBegin() override { idle = false; }
-      void TouchBegan(int, int, double) override {}   // (the bumper's Hit is its switch closing, not a touch)
+      void TouchBegan(int, int, int, double, const V3 &) override {}   // (the bumper's Hit is its switch closing, not a touch)
       bool Sleeping() const override { return idle; }
       // The one rest rule (GroupStep::RestWatch) over its last cycle in a group: not driven (the coil's supply or a pulse), the skirt's and ring's move since the cycle's start and their speed now
       // within 1 nm, and the coil's current died away. A part out of the solve still moves alone, so a part caught at the top of a bounce only steps alone

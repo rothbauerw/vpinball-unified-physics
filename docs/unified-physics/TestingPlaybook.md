@@ -45,7 +45,7 @@ No dates, no "learned", no superseded text. What a test is for, its cap and hand
 
 ## 5. Test driver input (VPX_TEST_INPUT)
 - File of actions by physics millisecond, `<t_ms> <action> <args>`, `#` comment, same-time actions in file order, applied at the start of the cycle (same result at any frame rate). Code: src/physics/testdriver.cpp; design TestMatrixDesign section 2.
-- Actions: `ball NAME x y z vx vy vz [radius mass [wx wy wz]]` (x, y in U; z = height of the ball's bottom above the playfield in U; velocity m/s; default radius 25 U, mass 1), `destroy NAME`, `flip FLIPPER 1|0`,
+- Actions: `ball NAME x y z vx vy vz [radius mass [wx wy wz]]` (x, y, z in U, z = the ball's bottom over the playfield; m/s; default radius 25 U, mass 1), `destroy NAME`, `drop TARGET 1|0`, `flip FLIPPER 1|0`,
   `enabled FLIPPER|TRIGGER 1|0`, `kick KICKER angle speed`, `sling RUBBER`, `magnet NAME V`, `turntable NAME V`, `respawn Y`, `respawn_z Z`, `speed_limit V` (default 8 m/s), `floor Z` (default -200 U), `record N`, `timing detail|total`, `end`.
 - Checks every cycle: over the speed limit, below the floor, outside the table, removed by the table, skipped cycles. Unknown actions are a WARN and a notification. It resets the random seed at table start.
 - Writes into VPX_TEST_OUT: balls.csv (t_ms, ball, position U, velocity U/10 ms, angular momentum), events.csv (t_ms, trigger, ball, Hit/Unhit), cycles.csv (cost split, us), frames.csv,

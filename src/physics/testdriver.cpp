@@ -11,6 +11,7 @@
 #include "physics/testdriver.h"
 #include "parts/ball.h"
 #include "parts/flipper.h"
+#include "parts/hittarget.h"
 #include "parts/kicker.h"
 #include "parts/plunger.h"
 #include "parts/rubber.h"
@@ -482,6 +483,14 @@ namespace TestDriver
                Warn(at + "expected a kicker name, an angle, a speed, an optional inclination and an optional x y z offset");
             else
                k->KickXYZ(angle, speed, incl, ox, oy, oz);
+         }
+         else if (a.verb == "drop")
+         {
+            HitTarget *const ht = a.args.size() == 2 ? static_cast<HitTarget *>(FindPart(a.args[0], eItemHitTarget)) : nullptr;
+            if (ht == nullptr || (a.args[1] != "1" && a.args[1] != "0"))
+               Warn(at + "expected a drop target name and 1 or 0");
+            else
+               ht->put_IsDropped(a.args[1] == "1" ? VARIANT_TRUE : VARIANT_FALSE);   // the script's IsDropped
          }
          else if (a.verb == "sling")
          {

@@ -378,7 +378,7 @@ namespace ButtonCap
          idle = false;
          part.CycleBegin();
       }
-      void TouchBegan(int, int, double) override {}   // (the button's Hit is its switch closing, not a touch)
+      void TouchBegan(int, int, int, double, const V3 &) override {}   // (the button's Hit is its switch closing, not a touch)
       bool Sleeping() const override { return idle; }
       bool RestNumbers(double &moveM, double &speedMS) const override
       {

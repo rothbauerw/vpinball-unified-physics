@@ -192,9 +192,21 @@ namespace PartsIni
          if (k == "face_travel") s.faceTravel = v != 0.0;               // 1 = the face travels on its blade; 0 = the fixed face of piece 1
          else if (k == "blade_thickness_in") s.bladeThicknessIn = v;    // the blade's thickness, in (0.020; 0.025 the stiffer blade)
          else if (k == "blade_lever_in") s.bladeLeverIn = v;            // the blade's clamp to the face centre, in (1.625)
+         else if (k == "drop_model") {}   // a drop target's (LoadDropModel)
          else if (k == "rubber") {}   // the opt-out key (ContactHost::HardSurfaceWanted)
          else if (ContactHost::IsSurfaceKey(k)) {}   // the surface material's (ContactHost::LoadHardSurfaceSettings reads it)
       });
+   }
+
+   // Drop target model (runs/2026-11-21-simple-drop/design.md section 3e): [Targets] for all, then [Target:<name>]. Needs [Features] hard_surfaces (and not rubber = 0), as a stand-up.
+   //   drop_model = 1: the simple interim model on the unified path (droptargetsimple.h; the default while it is tested); 0: stock, unchanged
+   inline int LoadDropModel(const std::filesystem::path &file, const std::string &name)
+   {
+      int model = 1;
+      ReadSections(file, "targets", "target:" + name, [&](const std::string &k, double v, const std::string &) {
+         if (k == "drop_model") model = v != 0.0 ? 1 : 0;
+      });
+      return model;
    }
 
    // Wire trigger settings over `s` (runs/2026-11-03-switch-requirements/design-wire.md topic 4): [Triggers] for all, then [Trigger:<name>]. Lengths in mm, forces in N.

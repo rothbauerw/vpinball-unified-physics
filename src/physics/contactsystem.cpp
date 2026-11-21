@@ -2779,7 +2779,10 @@ struct ContactSystemImpl
                   if (!sc.partTouching)
                   {
                      sc.partTouching = true;
-                     sh->mp->TouchBegan(sh->surface, gi.a, -(vStep[gi.a] - g.SurfaceSpeed(*sh, hp)).Dot(hp.n));
+                     int ballId = -1;   // (the ball's own id, Ball::m_id)
+                     if (balls[gi.a]->m_pBall != nullptr)
+                        balls[gi.a]->m_pBall->get_ID(&ballId);
+                     sh->mp->TouchBegan(sh->surface, gi.a, ballId, -(vStep[gi.a] - g.SurfaceSpeed(*sh, hp)).Dot(hp.n), hp.n);
                   }
                   continue;
                }

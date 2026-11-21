@@ -15,6 +15,7 @@
 #include "physics/testdriver.h"
 #include "parts/ball.h"
 #include "parts/trigger.h"
+#include "parts/hittarget.h"
 #include "core/player.h"
 #include "physics/PhysicsEngine.h"
 #include "ui/live/LiveUI.h"
@@ -53,7 +54,7 @@ namespace StockCount
          switch (t)
          {
          case eItemPlunger: return "plunger: not converted (map step 8)";
-         case eItemHitTarget: return "drop target, or a stand-up set back to stock ([target:<name>] rubber = 0): not converted (map step 8)";
+         case eItemHitTarget: return "drop target with [Targets] drop_model = 0, or a target set back to stock ([target:<name>] rubber = 0): not converted (map step 8)";
          case eItemTrigger: return "trigger: a sensor, not converted (map step 8)";
          default: return nullptr;
          }
@@ -103,6 +104,8 @@ namespace StockCount
                if (tr->OnWirePart() || sh == TriggerStar || sh == TriggerButton || sh == TriggerNone)
                   r->allowed = nullptr;
             }
+            if (t == eItemHitTarget && dynamic_cast<const HitTarget *>(obj->m_editable) != nullptr && dynamic_cast<const HitTarget *>(obj->m_editable)->OnDropModel())
+               r->allowed = nullptr;   // converted: a drop target on the simple model (droptargetsimple.h) uses no stock
             if (t == eItemTable)   // the table's own edges (PhysicsEngine): no part of the table to convert yet
             {
                r->name = "table edge";

@@ -160,7 +160,7 @@ namespace HingeModel
          idle = false;
          gp.CycleBegin();
       }
-      void TouchBegan(int, const int ballIndex, const double vn) override
+      void TouchBegan(int, const int ballIndex, int, const double vn, const V3 &) override
       {
          if (gp.NearStart(gp.qAtStepStart))
             events.push_back({ Event::Hit, ballIndex, vn });
