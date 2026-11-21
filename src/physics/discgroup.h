@@ -28,7 +28,6 @@ namespace DiscGroup
       double ratedVolts = 12.0;
       double spinupS = 1.0;      // rest to 95 % of freeRpm at ratedVolts, no load
       double rampDownS = 4.0;    // freeRpm to 5 % with the motor off, no load
-      double stallTorque = 0.0;  // N m at ratedVolts; 0 = from spinupS
       double frictionNm = 0.02;  // Coulomb torque of the bearing and gear train
       double dir = 1.0;          // +1: a positive voltage turns the disc clockwise seen from above
       // derived
@@ -83,16 +82,8 @@ namespace DiscGroup
          floorApplied = I < plate;
          if (floorApplied)
             I = plate;
-         if (stallTorque > 0)
-         {
-            Ts = stallTorque;
-            kTot = std::max(1e-9, (Ts - tSlide) / wRun);
-         }
-         else
-         {
-            kTot = I / (spinupS / 3.0);   // 95 % = 3 time constants
-            Ts = kTot * wRun + tSlide;
-         }
+         kTot = I / (spinupS / 3.0);   // 95 % = 3 time constants
+         Ts = kTot * wRun + tSlide;
          if (floorApplied)
             SolveDrag(tSlide);
          else

@@ -305,6 +305,8 @@ namespace StandupFace
             *work = 0.5 * gp.k * gp.x * gp.x;
          return std::max(gp.x, xMax - gp.x);
       }
+      // the one-pass bound (EnergyCap, AGREED item 4b): its energy in the book now (Face::Energy: the blade's 1/2 k x^2; a massless face: no kinetic energy, no weight, no drive), least 0
+      double EnergyCap(double, double &, double &) const override { return gp.Energy(nullptr, 0); }
       // the region over a cycle (design part-cull 2R, 2J; piece 2's massless face): the face moves only along n, x over the cycle in [0, xMax], xMax = sqrt(x^2 + 2 E / k)
       // (EnergyMove's bound on the blade spring; no plate in this piece, so no clamp): the mesh's box at rest swept along n over [0, xMax], grown by the edges' radius edgeRho
       void SweptBox(const double E, V3 &lo, V3 &hi) const

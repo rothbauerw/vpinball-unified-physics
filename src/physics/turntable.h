@@ -6,7 +6,7 @@
 // Physics (SI inside):
 //  - disc: rotational inertia I (default a solid disc of mass_g), viscous bearing drag b from ramp_down_s (time from max_rpm to 5% with the motor off).
 //  - motor: a DC motor with a linear torque-speed curve. Driven with V (signed, volts) it gives T = Ts V / Vrated - k w, k = Ts / w_run, w_run = max_rpm: the speed the disc settles at
-//    with supply_volts and no load, so the speed is proportional to the voltage. Ts is chosen so the disc reaches 95% of its speed in ramp_up_s (or given as stall_torque_nm).
+//    with supply_volts and no load, so the speed is proportional to the voltage. Ts is chosen so the disc reaches 95% of its speed in ramp_up_s.
 //    V = 0 is an unpowered motor: the disc coasts down through the bearing drag alone. A PWM drive is its average voltage (duty x supply_volts): the motor inductance and the
 //    disc inertia filter the switching, so the mean is what the disc responds to.
 //  - balls: the disc is a moving part of the unified contact model on the group step (DiscModel::Engine, contactdiscpart.h; docs/unified-physics/archive/UnifiedContactDesign.txt 12.1). The disc is a flat surface whose

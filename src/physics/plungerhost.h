@@ -469,6 +469,21 @@ namespace PlungerHost
             *work = 0.5 * part.mass * v0 * v0 + std::min(F * x, D);
          return x;
       }
+      // the one-pass bound (EnergyCap, AGREED items 1, 3, 4b, 5b): its energy in the book now (PlungerRod: Energy = kinetic + StoredEnergy (both springs and the weight) + pin) less
+      // StoredEnergy's least over the stroke between its stops; the hand: no term (item 3). StoredEnergy is convex (two springs, the weight linear): its least is at an end or where
+      // StoredForce is 0 on one of its two branches (the outer spring pressed, s < c0, or free). Its stops are Hertz: aHertz (BodyPart::HertzSquashA)
+      double EnergyCap(double, double &, double &aHertz) const override
+      {
+         const double lo = part.outerSolidS, hi = part.travel, gf = part.GravityForce();
+         const auto at = [&](const double s) { return part.StoredEnergy(std::min(std::max(s, lo), hi)); };
+         double least = std::min(at(lo), at(hi));
+         if (part.km > 0.0)
+            least = std::min(least, at((gf - part.km * part.x0) / part.km));
+         if (part.km + part.ko > 0.0)
+            least = std::min(least, at((gf - part.km * part.x0 + part.ko * part.c0) / (part.km + part.ko)));
+         aHertz = part.HertzSquashA();
+         return part.Energy(nullptr, 0) - least;
+      }
       RubberContact::TubeProbe Probe(const V3 &c) const override
       {
          GroupStep::Hit h;

@@ -79,7 +79,9 @@ namespace BumperGroup
       mutable bool gArriving = true;
       double gLoad = 0.0;   // the balls' load on the ring at this attempt's evaluation (Loads); a step alone has no ball, so none (as a hinge's ClearLoads)
       double gH = 1e-6, gVolts = 0.0, gFCoil = 0.0, gDrive = 0.0, gRingLoss = 0.0;
-      double gD0 = 0.0, gVs0 = 0.0, gLip0 = 0.0, gRim0 = 0.0, gALip0 = 0.0, gCz0 = 1.0, gA20 = 0.0;
+      double gD0 = 0.0, gLip0 = 0.0, gRim0 = 0.0, gALip0 = 0.0, gCz0 = 1.0, gA20 = 0.0;
+      double gCx0 = 1.0, gSx0 = 0.0, gCy0 = 1.0;   // the tilts' cosines and sine at the step's start (MoveOf)
+      double gCtcQ[3] = { 0.0, 0.0, 0.0 };         // diagnostics (VPX_SKIRT_ROW_TRACE): the balls' generalised forces on z, thx, thy at this evaluation (Loads)
       StepLosses gLoss;
    };
 
@@ -187,6 +189,7 @@ namespace BumperGroup
          swLog.clear();
          gTriedFree = false;
          gPendingStopJ = 0.0;
+         restJ = Energy(nullptr, 0);   // (one-pass bound: RestJ)
       }
       // One pulse now, as the table's or a test's solenoid command
       void FirePulse()
@@ -286,6 +289,11 @@ namespace BumperGroup
          q.maxMove = c == kZ ? 2e-3 : 0.05;
          return q;
       }
+      // the one-pass bound (ContactMovingPart::EnergyCap, ContactBumperPart, design.md AGREED item 4b): RestJ: the book's Energy at the rest Reset places it in (on its seat, springs
+      // against the weight, no tilt, the ring up, still), the least of its stored energy (INFERRED: the rest is that least; the table's slope tilts the true least by micro-joules);
+      // SeatK: the skirt seat's linear stiffness (N/m) for the squash term past it
+      double RestJ() const { return restJ; }
+      double SeatK() const { return kSeat; }
       double KineticJ() const override { return 0.5 * m * vz * vz + 0.5 * I * (wx * wx + wy * wy) + 0.5 * mR * vr * vr; }
       double Energy(const Ball *, int) const override
       {
@@ -332,12 +340,14 @@ namespace BumperGroup
          gVolts = CoilVolts();
          const Pose q = PoseAt(nullptr);
          gD0 = D(q);
-         gVs0 = VSmooth(q);
          gLip0 = Seat(ALip(q), rLip * std::sqrt(q.A2)).V;
          gRim0 = Seat(-z, rRim * std::sqrt(q.A2)).V;
          gALip0 = ALip(q);
          gCz0 = q.Cz;
          gA20 = q.A2;
+         gCx0 = q.cx;
+         gSx0 = q.sx;
+         gCy0 = q.cy;
          return true;
       }
       bool Eval(const double *x, const int off, const double h, V3 *, V3 *, double *Res, GroupStep::Jac J) override
@@ -382,7 +392,35 @@ namespace BumperGroup
          }
          return true;
       }
-      void Loads(const double *q, const V3 &) override { gLoad = q[kR]; }
+      void Loads(const double *q, const V3 &) override
+      {
+         gLoad = q[kR];
+         if (SkirtRowTraceOn())
+            for (int a = 0; a < 3; a++)
+               gCtcQ[a] = q[a];
+      }
+      // diagnostics (VPX_SKIRT_ROW_TRACE=1, with VPX_GROUP_ROUND_TRACE): the skirt's three rows term by term at the round's last evaluation, in the round trace's units (m/s: the row x invM x reach),
+      // with the move, the step-start tilt, and each function's chord: its change df (MoveOf) and the mismatch df - g . dq
+      static bool SkirtRowTraceOn() { static const bool on = []() { const char *const e = getenv("VPX_SKIRT_ROW_TRACE"); return e != nullptr && atoi(e) != 0; }(); return on; }
+      std::string RowNote() const override
+      {
+         if (!SkirtRowTraceOn())
+            return std::string();
+         const RowTrace &t = rt;
+         char line[2400];
+         int n = snprintf(line, sizeof line, "skirt dq z %.6g thx %.6g thy %.6g th0 %.9g %.9g |", t.dq[0], t.dq[1], t.dq[2], thx, thy);
+         static const char *const gn[4] = { "Vs", "Cz", "A2", "D" };
+         for (int k = 0; k < 4; k++)
+            n += snprintf(line + n, sizeof line - n, " %s df %.6g mis %.4g;", gn[k], t.df[k], t.mis[k]);
+         static const char *const rn[3] = { "z", "thx", "thy" };
+         for (int a = 0; a < 3; a++)
+         {
+            const double s = invM[a] * (a == kZ ? 1.0 : reach);
+            n += snprintf(line + n, sizeof line - n, " | %s: inert %.15g grav %.15g spring %.15g seat %.15g spoon %.15g damp %.15g ctc %.15g own %.6g own+ctc %.6g", rn[a], t.inert[a] * s, t.grav[a] * s,
+                          t.spring[a] * s, t.seat[a] * s, t.spoon[a] * s, t.damp[a] * s, t.ctc[a] * s, t.own[a] * s, (t.own[a] + t.ctc[a]) * s);
+         }
+         return line;
+      }
       // The ring past a stop over the move. With no move (the group's test of where the step starts): a ring leaving a stop isn't on it, and how far off it counts by its rate, so the search for the next arrival doesn't start at the stop it left
       // stops: bit 0 the ring's rest, bit 1 the end of its stroke
       double StopExcess(const double *x, const int off, const unsigned mask = ~0u) const override
@@ -649,15 +687,17 @@ namespace BumperGroup
       // A seat's force over the move, added into Q: the discrete gradient of its energy times the damper's multiplier. Returns the loss, positive or zero.
       // V is a function of two scalars, the depth a and the tilt's A2 (b = r sqrt(A2)), so its gradient is taken in those: dV = Abar da + Cbar dA2 exactly, the mean of the two orders of moving them (reversing the move gives the same force).
       // Each then goes onto the coordinates by its own chord. A 3-coordinate Gonzalez here spreads V's mismatch by the mass weight, and near the seat's onset, where the move is as large as the overlap, the tilt, 3,700 times lighter, took a steep false force from a z move.
-      double SeatForce(const double am, const double a0, const double a1, const double dadz, const double tiltA, const double r, const double V0, const Pose &qm, const Pose &q1, const double cz[2], const double ca[2], const double h, double *Q) const
+      // a1, A21: the depth and A2 at the move's end; da, dA: their changes over the move (from MoveOf)
+      double SeatForceAt(const double am, const double a0, const double a1, const double da, const double dadz, const double tiltA, const double r, const double V0, const Pose &qm, const double A21, const double dA,
+                       const double cz[2], const double ca[2], const double h, double *Q) const
       {
-         const double b0 = r * std::sqrt(gA20), b1 = r * std::sqrt(q1.A2);
+         const double b0 = r * std::sqrt(gA20), b1 = r * std::sqrt(A21);
          const double V1 = Seat(a1, b1).V, V10 = Seat(a1, b0).V, V01 = Seat(a0, b1).V;
          if (V0 <= 0.0 && V1 <= 0.0 && V10 <= 0.0 && V01 <= 0.0)
             return 0.0;
          const double bm = r * std::sqrt(qm.A2);
          const SeatE em = Seat(am, bm);
-         const double da = a1 - a0, dA = q1.A2 - gA20, dVa = 0.5 * (V10 - V0 + V1 - V01), dVb = 0.5 * (V01 - V0 + V1 - V10);
+         const double dVa = 0.5 * (V10 - V0 + V1 - V01), dVb = 0.5 * (V01 - V0 + V1 - V10);
          const double noise = kEps16 * (std::max(std::max(V0, V1), std::max(V10, V01)) + std::fabs(em.Va) * zBase + em.VbB * bm * bm);   // (the rounding of V is the rounding of the depth a, whose scale is the height, and of b, times their forces; far above V's own)
          const double Abar = std::fabs(dVa) > noise ? dVa / da : em.Va, Cbar = std::fabs(dVb) > noise ? dVb / dA : em.VbB * 0.5 * r * r;
          const double s0 = std::sqrt(2.0 * V0 / kSeat), s1 = std::sqrt(2.0 * V1 / kSeat), sum = s0 + s1;
@@ -668,23 +708,65 @@ namespace BumperGroup
          Q[kThy] -= mu * (Abar * tiltA * cz[1] + Cbar * ca[1]);
          return (mu - 1.0) * (V1 - V0);
       }
+      // The part's own rows over the move dq (RowsTerms), with VPX_SKIRT_ROW_TRACE its terms for the trace
+      void Rows(const double *dq, const double h, double *r, StepLosses &l) const { RowsTerms(dq, h, r, l, SkirtRowTraceOn() && &l == &gLoss); }
+      // the step's change of each function of the tilt the rows take a difference of, from the move by exact identities, so each carries the rounding of its own
+      // size and not of the near-1 value it is the change of (Cz = cos thx cos thy is 1 - 9e-5 at 0.78 deg: one ulp of it is a tilt move of 8e-15 rad; bumper2/results.md W1):
+      // cos a - cos b = -2 sin((a + b) / 2) sin((a - b) / 2), sin a - sin b = 2 cos((a + b) / 2) sin((a - b) / 2) (the mean angle is the mid-step pose's), a1 b1 - a0 b0 =
+      // ((a1 - a0)(b1 + b0) + (b1 - b0)(a1 + a0)) / 2, and A2 = 1 - Cz^2 so dA2 = -dCz (Cz1 + Cz0)
+      struct TiltMove { double dCz = 0.0, dA2 = 0.0, dSy = 0.0, dSxCy = 0.0; };
+      TiltMove MoveOf(const double *dq, const Pose &qm, const Pose &q1) const
+      {
+         const double shx = std::sin(0.5 * dq[kThx]), shy = std::sin(0.5 * dq[kThy]);
+         const double dCx = -2.0 * qm.sx * shx, dSx = 2.0 * qm.cx * shx, dCy = -2.0 * qm.sy * shy;
+         TiltMove t;
+         t.dCz = 0.5 * (dCx * (q1.cy + gCy0) + dCy * (q1.cx + gCx0));
+         t.dA2 = -t.dCz * (q1.Cz + gCz0);
+         t.dSy = 2.0 * qm.cy * shy;
+         t.dSxCy = 0.5 * (dSx * (q1.cy + gCy0) + dCy * (q1.sx + gSx0));
+         return t;
+      }
+      // diagnostics (VPX_SKIRT_ROW_TRACE): the rows' terms at the last evaluation (row units: inertia row, -h x each force), the move, the four chords (Vs, Cz, A2, D)
+      struct RowTrace { double inert[3], grav[3], spring[3], seat[3], spoon[3], damp[3], ctc[3], own[3], dq[3], df[4], mis[4]; };
+      mutable RowTrace rt = {};
       // The part's own rows over the move dq: the shared inertia row (2 M dq / h - 2 M v) - h Q, and the losses
-      void Rows(const double *dq, const double h, double *r, StepLosses &l) const
+      void RowsTerms(const double *dq, const double h, double *r, StepLosses &l, const bool tr) const
       {
          const Pose qm = PoseAt(dq, 0.5), q1 = PoseAt(dq);
          double Q[3] = { 0.0, 0.0, 0.0 };
          const double dCz[2] = { -qm.sx * qm.cy, -qm.cx * qm.sy };
          const double dA2[2] = { 2.0 * qm.sx * qm.cx * qm.cy * qm.cy, 2.0 * qm.cx * qm.cx * qm.sy * qm.cy };
+         const TiltMove tm = MoveOf(dq, qm, q1);
+         const double A21 = gA20 + tm.dA2;   // A2 at the move's end, as the seats take it
+         double Qt[3] = { 0.0, 0.0, 0.0 };   // (trace: Q before a term)
+         const auto mark = [&]() { for (int a = 0; a < 3; a++) Qt[a] = Q[a]; };
+         const auto took = [&](double *o) { for (int a = 0; a < 3; a++) o[a] = -h * (Q[a] - Qt[a]); };
+         const auto chord = [&](const int k, const double *g, const int n0, const double df) {   // (trace: a chord's change df and its mismatch df - g . dq)
+            double gdq = 0.0;
+            for (int a = n0; a < 3; a++)
+               gdq += g[a - n0] * dq[a];
+            rt.df[k] = df;
+            rt.mis[k] = df - gdq;
+         };
+         if (tr)
+            mark();
          // gravity and the spring's tilt
          {
             const V3 g = set->g;
             const double k4 = 0.25 * kSpring * aSpring * aSpring, gm = m * cmZ;
             const double gr[3] = { -m * g.z, k4 * dA2[0] - gm * (-g.y * qm.cx * qm.cy + g.z * dCz[0]), k4 * dA2[1] - gm * (g.x * qm.cy + g.y * qm.sx * qm.sy + g.z * dCz[1]) };
-            const double V1 = VSmooth(q1);
             double gd[3];
-            Discrete(gr, V1 - gVs0, kEps16 * std::max(std::fabs(V1), std::fabs(gVs0)), dq, gd);
+            const double dVs = k4 * tm.dA2 - m * (g.x * cmZ * tm.dSy - g.y * cmZ * tm.dSxCy + g.z * (dq[kZ] + cmZ * tm.dCz));
+            Discrete(gr, dVs, 0.0, dq, gd);
+            if (tr)
+               chord(0, gr, 0, dVs);
             for (int a = 0; a < 3; a++)
                Q[a] -= gd[a];
+         }
+         if (tr)
+         {
+            took(rt.grav);
+            mark();
          }
          // the spring's axial part: exact, along z only; it pushes, with its damper
          {
@@ -692,24 +774,49 @@ namespace BumperGroup
             Q[kZ] += N;
             l.spring = (N - fe) * ds;
          }
+         if (tr)
+         {
+            took(rt.spring);
+            mark();
+         }
          // the seats, on the chords of the tilt's two functions
          {
             double cz[2], ca[2];
-            TiltChord(dCz, q1.Cz - gCz0, kEps16, dq, cz);
-            TiltChord(dA2, q1.A2 - gA20, kEps16 * std::max(q1.A2, gA20), dq, ca);
-            l.lip = SeatForce(ALip(qm), gALip0, ALip(q1), 1.0, tIn, rLip, gLip0, qm, q1, cz, ca, h, Q);
-            l.rim = SeatForce(-qm.z, -z, -q1.z, -1.0, 0.0, rRim, gRim0, qm, q1, cz, ca, h, Q);
+            TiltChord(dCz, tm.dCz, 0.0, dq, cz);
+            TiltChord(dA2, tm.dA2, 0.0, dq, ca);
+            const double daLip = dq[kZ] + tIn * tm.dCz;
+            l.lip = SeatForceAt(ALip(qm), gALip0, gALip0 + daLip, daLip, 1.0, tIn, rLip, gLip0, qm, A21, tm.dA2, cz, ca, h, Q);
+            l.rim = SeatForceAt(-qm.z, -z, -z - dq[kZ], -dq[kZ], -1.0, 0.0, rRim, gRim0, qm, A21, tm.dA2, cz, ca, h, Q);
+            if (tr)
+            {
+               chord(1, dCz, 1, tm.dCz);
+               chord(2, dA2, 1, tm.dA2);
+            }
          }
-         // the spoon: a spring on D with its damper, along D's discrete gradient
+         if (tr)
          {
-            const double D1 = D(q1), dD = D1 - gD0, rho2 = Lt * Lt * qm.A2, root = std::sqrt(rho2 + w * w), wallK = taWall * Lt * Lt * 0.5 / root;
+            took(rt.seat);
+            mark();
+         }
+         // the spoon: a spring on D with its damper, along D's discrete gradient (D = zRest - z - Lt (1 - Cz) + taWall (sqrt(rho2 + w^2) - w), rho2 = Lt^2 A2, so its change is
+         // -dz + Lt dCz + taWall Lt^2 dA2 / (root1 + root0))
+         {
+            const double rho2 = Lt * Lt * qm.A2, root = std::sqrt(rho2 + w * w), wallK = taWall * Lt * Lt * 0.5 / root;
+            const double dD = -dq[kZ] + Lt * tm.dCz + taWall * Lt * Lt * tm.dA2 / (std::sqrt(Lt * Lt * gA20 + w * w) + std::sqrt(Lt * Lt * A21 + w * w));
             const double gr[3] = { -1.0, Lt * dCz[0] + wallK * dA2[0], Lt * dCz[1] + wallK * dA2[1] };
             double gd[3];
-            Discrete(gr, dD, kEps16 * Lt, dq, gd);
+            Discrete(gr, dD, 0.0, dq, gd);
+            if (tr)
+               chord(3, gr, 0, dD);
             const double fe = fSpoon + kSpoon * (gD0 + 0.5 * dD), N = std::max(0.0, fe + cSpoon * dD / h);
             for (int a = 0; a < 3; a++)
                Q[a] -= N * gd[a];
             l.spoon = (N - fe) * dD;
+         }
+         if (tr)
+         {
+            took(rt.spoon);
+            mark();
          }
          // the skirt's viscous loss on its tilts' mid-step rates (the axial one is with the spring)
          Q[kThx] -= cTilt * dq[kThx] / h;
@@ -718,11 +825,23 @@ namespace BumperGroup
          const double v[3] = { vz, wx, wy }, M[3] = { m, I, I };
          for (int a = 0; a < 3; a++)
             r[a] = GroupStep::InertiaRow(dq[a], v[a], M[a], h) - h * Q[a];
+         if (tr)
+         {
+            took(rt.damp);
+            for (int a = 0; a < 3; a++)
+            {
+               rt.inert[a] = GroupStep::InertiaRow(dq[a], v[a], M[a], h);
+               rt.ctc[a] = -h * gCtcQ[a];
+               rt.own[a] = r[a];
+               rt.dq[a] = dq[a];
+            }
+         }
       }
 
       const GroupStep::Settings *set = nullptr;
       double invM[4] = { 0.0, 0.0, 0.0, 0.0 };
       double mR = 0.0, stroke = 0.0, bobbin = 0.0, fReturn = 0.0, kReturn = 0.0, cRing = 0.0;
+      double restJ = 0.0;   // Energy at Reset's rest (one-pass bound: RestJ)
       double m = 0.0, I = 0.0, cmZ = 0.0, tIn = 0.0, zRest = 0.0, zBase = 0.0, rLip = 0.0, rRim = 0.0, Lt = 0.0, kSpring = 0.0, fSpring = 0.0, aSpring = 0.0, kSeat = 0.0, cSeat = 0.0, kSpoon = 0.0, fSpoon = 0.0, cSpoon = 0.0, cZ = 0.0, cTilt = 0.0, taWall = 1.0, w = 0.0, dClose = 0.0, dOpen = 0.0, omLip = 0.0, omRim = 0.0;
    };
 

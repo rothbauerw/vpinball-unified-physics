@@ -2283,16 +2283,22 @@ namespace GroupStep
       HalveDiag halveDiag[kHalveDiag];
       std::string roundBuf, failRoundBuf;   // VPX_GROUP_ROUND_TRACE: this attempt's rounds; the first failed attempt of the step
       mutable std::string probeTrace;       // VPX_GROUP_ROUND_TRACE: the carried surfaces' probes of the last Eval (end and mid, their pieces)
-      // VPX_GROUP_JAC_WINDOW=<t0>-<t1> (ms; with VPX_GROUP_JAC_MODE=1; a diagnostic, read once; unset = off): for solves that converge in that window, each round's
+      // VPX_GROUP_JAC_WINDOW=<t0>-<t1> (ms of game time; with VPX_GROUP_JAC_MODE=1; a diagnostic, read once; unset = off): the difference Jacobian is formed only in
+      // solves inside that window (outside it a solve runs exactly as with VPX_GROUP_JAC_MODE=0); for solves that converge in that window, each round's
       // residual and evaluations, and every Jacobian entry (balls and parts) where the solve's own (a) and central differences (f) differ by more than 10 % and 1e-6
       // (jacWinBuf, written by the owner; 600 lines in all)
-      static bool JacWindow(const uint32_t ms)
+      static const double *JacWindowRange()
       {
          static const double *const w = []() -> const double * {
             static double v[2];
             const char *const e = getenv("VPX_GROUP_JAC_WINDOW");
             return e != nullptr && sscanf(e, "%lf-%lf", &v[0], &v[1]) == 2 ? v : nullptr;
          }();
+         return w;
+      }
+      static bool JacWindow(const uint32_t ms)
+      {
+         const double *const w = JacWindowRange();
          return w != nullptr && ms >= w[0] && ms <= w[1];
       }
       std::string jacWinBuf, jacWinTry;
@@ -2495,6 +2501,7 @@ namespace GroupStep
       Jac JacAna() { return Jac(jacAnaS, jStride); }
       Jac JacFd() { return Jac(jacFdS, jStride); }
       int jacRound = 0;
+      int jacNow = 0;   // this solve's Settings::jacMode (with VPX_GROUP_JAC_WINDOW and mode 1: 1 inside the window, 0 outside)
 
       // Test tooling, off by default (VPX_TEST_IMPULSES=1; read only: no value of a step depends on it): the impulse each force of the group gives each ball over the
       // accepted steps, h x the force and h x the torque about the ball's centre of the Eval the step was accepted on (implicit midpoint: m (v1 - v0) = h x their sum, to the
@@ -5282,6 +5289,7 @@ namespace GroupStep
          jacWinTry.clear();
          jacWinCon.clear();
          jacWinTryEntries = 0;
+         jacNow = set.jacMode == 1 && JacWindowRange() != nullptr ? (JacWindow(phaseMs) ? 1 : 0) : set.jacMode;
          if (!BeginAttempt(h))
             return false;
          const int nU = nUnk;
@@ -5302,10 +5310,10 @@ namespace GroupStep
          double stallMin = 0.0, bestMove = INFINITY;
          for (; round <= set.maxRounds; round++)
          {
-            if (set.jacMode != 0)
+            if (jacNow != 0)
                NumericJacobian(h);   // into jacFd (the Eval calls it makes are undone by the Eval below)
             partEvalFailed = false;
-            if (set.jacMode == 0 && round > 1 && lastCh < set.tolCheckMove && !gripMoved && Eval(h, x, Res, nullptr, trialCached))
+            if (jacNow == 0 && round > 1 && lastCh < set.tolCheckMove && !gripMoved && Eval(h, x, Res, nullptr, trialCached))
             {
                double rc = 0.0;
                for (int i = 0; i < nb; i++)
@@ -5322,7 +5330,7 @@ namespace GroupStep
                   break;
                }
             }
-            jacWinDump = set.jacMode != 0 && jacWinLines < 2000 && JacWindow(phaseMs);
+            jacWinDump = jacNow != 0 && jacWinLines < 2000 && JacWindow(phaseMs);
             if (jacWinDump)   // VPX_GROUP_JAC_WINDOW: the balls at the start and this round's move (read only)
             {
                jacWinCon.clear();
@@ -5345,13 +5353,13 @@ namespace GroupStep
                lastRounds = round;
                return false;
             }
-            if (set.jacMode != 0)
+            if (jacNow != 0)
             {
                for (int r = 0; r < nU; r++)
                   for (int c = 0; c < nU; c++)
                   {
                      JacAna()[r][c] = J[r][c];
-                     if (set.jacMode == 2)
+                     if (jacNow == 2)
                         J[r][c] = JacFd()[r][c];
                   }
                jacRound = round;
@@ -5367,7 +5375,7 @@ namespace GroupStep
             }
             rn += CoordRes2(Res, h);
             rn = std::sqrt(rn);
-            if (set.jacMode != 0 && jacWinLines < 2000 && JacWindow(phaseMs))   // VPX_GROUP_JAC_WINDOW (diagnostics, read only)
+            if (jacNow != 0 && jacWinLines < 2000 && JacWindow(phaseMs))   // VPX_GROUP_JAC_WINDOW (diagnostics, read only)
             {
                char ln[240];
                snprintf(ln, sizeof ln, "JACWIN t %u ms h %.4g us round %d rn %.6g evals %ld%s\n", phaseMs, h * 1e6, round, rn, evalCount - evalCountRound,
@@ -5568,7 +5576,7 @@ namespace GroupStep
                   roundBuf += " || " + part[p]->RowNote();
                roundBuf += "\n";
                roundBuf += probeTrace;
-               if (set.jacMode != 0)   // VPX_GROUP_JAC_MODE: each part coordinate's row and column, the solve's own Jacobian (a) vs central differences (f), against itself and each ball it couples to (move x y z, spin x y z)
+               if (jacNow != 0)   // VPX_GROUP_JAC_MODE: each part coordinate's row and column, the solve's own Jacobian (a) vs central differences (f), against itself and each ball it couples to (move x y z, spin x y z)
                   for (int c = 0; c < nCoord; c++)
                   {
                      const int qi = cUnk[c];

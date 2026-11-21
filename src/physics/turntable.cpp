@@ -47,7 +47,6 @@ namespace Turntables
          double ratedVolts = 12;               // supply_volts
          double spinupS = 1.0;                 // ramp_up_s: time from rest to 95% of max_rpm at supply_volts, no load
          double rampDownS = 4.0;               // ramp_down_s: time from max_rpm to 5% of it with the motor off, no load (bearing drag)
-         double stallTorque = 0;               // N m at rated volts; 0 = from spinup_s
          double frictionNm = 0.02;             // friction_nm: constant (Coulomb) torque of the bearing and gear train: it holds the disc still until a ball's push exceeds it
          double mu = 0.6;                      // friction coefficient of the textured surface against the steel ball
          double rollingResistance = 0.03;      // rolling_resistance: coefficient of a ball rolling on the textured (rubber-like) surface; torque = coefficient * R * N. The playfield's is [Contact] rolling_resistance (0.003); a negative value here = use that one
@@ -117,7 +116,6 @@ namespace Turntables
          m.ratedVolts = t.ratedVolts;
          m.spinupS = t.spinupS;
          m.rampDownS = t.rampDownS;
-         m.stallTorque = t.stallTorque;
          m.frictionNm = t.frictionNm;
          m.dir = t.clockwise ? 1.0 : -1.0;
          m.dynRatio = ContactSettings::Get().muDynamicRatio;
@@ -239,7 +237,6 @@ namespace Turntables
             else if (key == "ramp_up_s" || key == "spinup_s") cur->spinupS = v;
             else if (key == "ramp_down_s") cur->rampDownS = v;
             else if (key == "coast_s") cur->rampDownS = 3.0 * v;   // old key: the time constant of the slow-down
-            else if (key == "stall_torque_nm") cur->stallTorque = v;
             else if (key == "friction_nm") cur->frictionNm = v;
             else if (key == "mu") cur->mu = v;
             else if (key == "rolling_resistance") cur->rollingResistance = v;

@@ -84,6 +84,7 @@ namespace HingeModel
       }
       double EnergyMove(const V3 &c, const double E, const double T, double *const work) const override { return gp.EnergyMove(c, E, T, work); }   // (the energy reach: HingeGroup::Part::TurnRange)
       double CycleRegionDist(const V3 &c, double, double) const override { return gp.RegionDist(c); }   // (its bounding radius about its axis point holds at any angle)
+      double EnergyCap(double, double &, double &) const override { return gp.EnergyCap(); }   // (the one-pass bound: HingeGroup::Part::EnergyCap)
       // Its speed now plus what gravity, the blades and a driven stop can add in a cycle
       double SurfaceSpeedBound(const double cycleS) const override
       {

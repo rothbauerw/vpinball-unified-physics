@@ -11,11 +11,14 @@ namespace ContactProf
    enum Id
    {
       StepBalls, GatherBalls, Regather, RefreshCycle, GatherFree, FindIslands, BatForces, BandForces, WriteBack, ReleaseTest,
-      Finish, EngageNear, EngageImpl, PartWorld, PartSwitch, Count
+      Finish, EngageNear, EngageImpl, PartWorld, PartSwitch, CullPrepare, BoundCaps, BoundLocality, BoundClosed, CullRegions, Count
    };
    inline const char *Name(int i)
    {
-      static const char *const n[Count] = { "StepBalls", "GatherBalls", "  Regather", "  RefreshCycle", "GatherFree", "FindIslands", "  BatForces", "  BandForces", "WriteBack", "  ReleaseTest", "Finish", "EngageNear", "EngageImpl", "    PartWorld (a gate / spinner's geometry update, once per island substep)", "    PartSwitch (a gate / spinner's switch update, once per own substep)" };
+      static const char *const n[Count] = { "StepBalls", "GatherBalls", "  Regather", "  RefreshCycle", "GatherFree", "FindIslands", "  BatForces", "  BandForces", "WriteBack", "  ReleaseTest", "Finish", "EngageNear", "EngageImpl", "    PartWorld (a gate / spinner's geometry update, once per island substep)", "    PartSwitch (a gate / spinner's switch update, once per own substep)",
+                                             "CullPrepare (the part cull's table bound and regions, once per cycle)", "  BoundCaps (one-pass bound: every part's EnergyCap)",
+                                             "  BoundLocality (one-pass bound: each body's travel and each part's region at Efull, the reach tests)", "  BoundClosed (one-pass bound: the closed forms, OnePassE)",
+                                             "  CullRegions (the cull's own travel and regions at E)" };
       return n[i];
    }
    inline bool On()

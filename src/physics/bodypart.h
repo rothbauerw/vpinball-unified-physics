@@ -208,6 +208,17 @@ namespace GroupStep
       bool Stuck() const { return pinHolds; }   // (the pin's spring holds)
       int PinStop() const { return pinStop; }
       double PinSpringJ() const { return 0.5 * pinK * pinS * pinS; }
+      // the one-pass bound's Hertz stops (one-pass bound, design.md AGREED item 5b): past a stop the force that presses the body onto it at its touch, F (its stored force there: weight
+      // and springs' preload, at the lever), squashes it by d <= (5 E / (2 k))^0.4 and gives F d; the body is on one stop at a time, so the largest F (5 / (2 k))^0.4 of its stops (J^0.6)
+      double HertzSquashA() const
+      {
+         double a = 0.0;
+         for (const BodyStop &s : stops)
+            if (s.enabled && s.k > 0.0)
+               if (const double F = s.side * StoredForce(s.at) / s.lever; F > 0.0)
+                  a = std::max(a, F * std::pow(2.5 / s.k, 0.4));
+         return a;
+      }
 
       // ---- the group's interface ----
       int NumDof() const override { return pinStop >= 0 ? 0 : 1; }

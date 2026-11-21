@@ -44,6 +44,19 @@ namespace
    bool g_partEnergyTold = false;
 }
 
+// VPX_RELOOK_TRACE=1 (diagnostics, TestingPlaybook 8; read once): each ball's energy-reach bound terms (ReachEnergy, every cycle), printed by the finder at an energy-reach re-look
+// (ContactSurfaceHost::FinderInsideQ, declared there). Off: no string is built
+bool RelookTraceOn()
+{
+   static const bool on = [] { const char *const e = std::getenv("VPX_RELOOK_TRACE"); return e != nullptr && e[0] == '1'; }();
+   return on;
+}
+std::unordered_map<const HitBall *, std::string> &RelookTerms()
+{
+   static std::unordered_map<const HitBall *, std::string> m;
+   return m;
+}
+
 // the part cull (runs/2026-11-20-part-cull/design.md): the table's moving parts and cord bands in the registry's order, listed at the first cycle of a table start
 // (ContactSystemImpl::CullLists); each band's outline box (world, m) fixed when its cord is made; each body's travel bound this cycle (m, by its index in the cycle's bodies; set by
 // CullPrepare for g_cullCy only); the misses told (check mode, once per part or band per table start); the work counters (diagnostics, logged every 1000 cycles)
@@ -58,7 +71,44 @@ namespace
    std::vector<double> g_cullTravel;
    const void *g_cullCy = nullptr;
    double g_cullE = 0.0;
-   uint64_t g_cullRounds = 0, g_cullCycles = 0, g_cullTests = 0, g_cullSkipped = 0, g_cullBandTests = 0, g_cullBandSkipped = 0, g_cullMisses = 0, g_cullNoBound = 0, g_cullGatherDiff = 0;
+   std::vector<double> g_cullCap, g_cullA, g_cullAH;   // one-pass bound: each cull part's EnergyCap this cycle (J; -1 = off), its aLin (J^0.5) and aHertz (J^0.6); sized once per table start (CullPrepare)
+   uint64_t g_cullLeftOut = 0, g_cullCapTests = 0;   // part caps left out of E (no body reaches the part at Efull) of those tested
+   double g_cullBoundUs = 0.0;   // check mode: the bound's own time (us, summed)
+   uint64_t g_hertzNoBound = 0;   // one-pass bound: closed forms with no bound (the Hertz tangent's slope 0.4 aHertz c^-0.6 >= 1) this table start; the notice is raised at the first (CullPrepare)
+   bool g_hertzNoticed = false;
+   // one-pass bound: E = E0 + aL sqrt(E) closed in one step (the larger root): sqrt(E) = (aL + sqrt(aL^2 + 4 E0)) / 2; aL = 0: E0
+   inline double SqrtClosedE(const double E0, const double aL)
+   {
+      if (!(aL > 0.0))
+         return E0;
+      const double r = 0.5 * (aL + std::sqrt(aL * aL + 4.0 * std::max(E0, 0.0)));
+      return r * r;
+   }
+   // one-pass bound (design.md AGREED items 5, 5b): E <= E0 + aL sqrt(E) + aH E^0.4 (aL: linear stops' squash, aH: Hertz stops'), one pass. E^0.4 is concave, so its tangent at c lies
+   // above it: E^0.4 <= 0.6 c^0.4 + 0.4 c^-0.6 E; with s = 0.4 aH c^-0.6 < 1, (1 - s) E <= E0 + 0.6 aH c^0.4 + aL sqrt(E), closed as above. c = the sqrt form's E (aH = 0: E0, as
+   // item 5b states; it is <= E, so a nearer tangent). s >= 1 (or c 0): no bound (INFINITY: the caller's no-bound path), counted in g_hertzNoBound
+   inline double OnePassE(const double E0, const double aL, const double aH)
+   {
+      const double c = SqrtClosedE(E0, aL);
+      if (!(aH > 0.0))
+         return c;
+      const double s = c > 0.0 ? 0.4 * aH * std::pow(c, -0.6) : INFINITY;
+      if (!(s < 1.0))
+      {
+         g_hertzNoBound++;
+         return INFINITY;
+      }
+      return SqrtClosedE((E0 + 0.6 * aH * std::pow(c, 0.4)) / (1.0 - s), aL / (1.0 - s));
+   }
+   // a ball's travel bound over T (the part cull's, CullPrepare, and the grouping's, ReachEnergy): EnergyReach(0, E, m, a, T) + hv T = sqrt(0*0 + 2E/m) T + 0.5 a T T + hv T, rounded up by
+   // its own arithmetic's worst case. Every term >= 0 (no cancellation); 0*0, 2E, 0.5a and + 0 are exact; the longest chain of rounded operations is 5 (/m, sqrt, *T, +, + hv T; the a term
+   // has 4: *T, *T, +, +; hv T has 2), so the computed value is at least the exact one times (1 - 5u) (u = eps/2, Higham's gamma_5); times (1 + 5 eps) = (1 + 10u), its own rounding
+   // (1 - u) included, it is not below the exact value of this formula for its inputs E, a, hv as given
+   inline double TravelBound(const double E, const double m, const double a, const double hv, const double T)
+   {
+      return (EnergyReach(0.0, E, m, a, T) + hv * T) * (1.0 + 5.0 * DBL_EPSILON);
+   }
+   uint64_t g_cullCycles = 0, g_cullTests = 0, g_cullSkipped = 0, g_cullBandTests = 0, g_cullBandSkipped = 0, g_cullMisses = 0, g_cullNoBound = 0, g_cullGatherDiff = 0;
 }
 
 namespace ContactSystem
@@ -95,7 +145,14 @@ namespace ContactSystem
       g_cullBands.clear();
       g_cullTravel.clear();
       g_cullCy = nullptr;
-      g_cullRounds = g_cullCycles = g_cullTests = g_cullSkipped = g_cullBandTests = g_cullBandSkipped = g_cullMisses = g_cullNoBound = g_cullGatherDiff = 0;
+      g_cullCycles = g_cullTests = g_cullSkipped = g_cullBandTests = g_cullBandSkipped = g_cullMisses = g_cullNoBound = g_cullGatherDiff = 0;
+      g_cullCap.clear();
+      g_cullA.clear();
+      g_cullAH.clear();
+      g_hertzNoBound = 0;
+      g_hertzNoticed = false;
+      g_cullLeftOut = g_cullCapTests = 0;
+      g_cullBoundUs = 0.0;
       GroupStep::partFinderProf = ContactProf::CheckOn() || GroupStep::FinderCheckEnv();   // (its counters: diagnostics only)
       GroupStep::partFinderCount.clear();
       GroupStep::skipOwnTested = GroupStep::skipOwnSkipped = GroupStep::skipEsComputed = GroupStep::skipTripItems = GroupStep::skipDeferred = GroupStep::skipTripAttempts = 0;
@@ -255,6 +312,7 @@ struct ContactSystemImpl
       }
    }
 
+   struct KeptDoubles;   // (below, with g_keptDoubles)
    // A ball in the step: its SI state, the substep's forces, and what the step needs to know about it.
    struct Body
    {
@@ -265,6 +323,7 @@ struct ContactSystemImpl
       V3 c, v, w;
       V3 extBaseVS;             // m/s per physics step: gravity and nudge (the part that does not depend on the position)
       Vertex3Ds posStart;
+      const KeptDoubles *kept = nullptr;   // its kept doubles (g_keptDoubles; null = none): one lookup per ball per cycle (FindKept), read by its query centre (GatherStatic) and its step (CordIsland)
       double lScale = 1.0;
       bool magnetsOn = false;
       bool dragged = false;     // ([Features] ball_gravity_in_step) the debug mouse drags the ball: held against gravity and the nudge (Ball::fExt), no magnets
@@ -458,6 +517,13 @@ struct ContactSystemImpl
          w.w = V3();   // (spin zero: KickerDesign 1h)
    }
 
+   // a cycle's ball: its kept doubles, looked up once (the map's elements stay put while others are added; none is erased within a cycle)
+   static void FindKept(Body &w)
+   {
+      const auto kd = g_keptDoubles.find(w.pb);
+      w.kept = kd != g_keptDoubles.end() ? &kd->second : nullptr;
+   }
+
    // ---- the part cull (runs/2026-11-20-part-cull/design.md) ----
    // the table's moving parts and cord bands, in the registry's order, once per table start (and again if the registry grows)
    static void CullLists()
@@ -564,13 +630,13 @@ struct ContactSystemImpl
          g_pplayer->m_liveUI->PushNotification(o.str(), 6000);
    }
    // once per cycle before the grouping (design 1b): an upper bound on any group's feed in ReachEnergy, E = every body's kinetic energy and spin and what its contacts held (endStored),
-   // every live ball pair's stored energy (PairHolds), every cord's (heldJ) and its sling coil's work bound (CoilWorkBound), every part's squash (squashJ) and every part's work W(E)
-   // (EnergyMove's work at the feed E): the fixed point E = Eb + W(E). Each part's work is concave and rising in its feed (a square root, or capped at its drives' bound), so the
-   // iteration from below, E0 = Eb + W(0) (W(0): the parts' own work, eOwnJ less squash), rises, and once a secant slope s of W is below 1 the rest is at most s / (1 - s) times the
-   // last step: added, so E is an upper bound, not a converged guess (as ReachEnergy's full feed). No group can be fed more (energy conservation). Each body's travel bound:
-   // EnergyReach(0, E, its mass, every body's forces (gravity, nudge, magnets) summed, T) plus every held ball's given speed x T. No bound within 64 rounds: no cull this cycle (logged)
+   // every live ball pair's stored energy (PairHolds), every cord's (heldJ) and its sling coil's work bound (CoilWorkBound), every part's squash (squashJ) and the caps of the parts some
+   // ball can reach (EnergyCap) with their stops' squash closed in one pass (OnePassE; runs/2026-11-20-energy-bound/design.md, AGREED 2026-11-20). No group can be fed more (energy
+   // conservation). Each body's travel bound: EnergyReach(0, E, its mass, every body's forces (gravity, nudge, magnets) summed, T) plus every held ball's given speed x T. No bound (a
+   // closed form with none): no cull this cycle (logged)
    static void CullPrepare(Cycle &cy, const size_t first)
    {
+      CPROF(CullPrepare);
       CullLists();
       g_cullCycles++;
       g_cullCy = &cy;
@@ -610,66 +676,117 @@ struct ContactSystemImpl
       for (ContactHost *const o : g_cullParts)
          if (o->m_enabled && o->m_set.contact)
             Eb += o->MovingPart()->squashJ;
-      const auto work = [T](const double E) {
-         double W = 0.0;
-         for (ContactHost *const o : g_cullParts)
-            if (o->m_enabled && o->m_set.contact)
-            {
-               ContactMovingPart *const mp = o->MovingPart();
-               double w = 0.0;
-               mp->EnergyMove(mp->Origin(), E, T, &w);
-               W += w;
-            }
-         return W;
-      };
-      // (a step: Ek1 = Eb + W(Ek); stopped once the remaining rise s / (1 - s) (Ek1 - Ek) is within kStop of Ek1, as ReachEnergy's full feed, with that rest added; or at round 64
-      // with it added while s < 1)
-      constexpr double kStop = 1e-3;
-      const double W0 = work(0.0);
-      double Wp = W0, Ep = 0.0, Ek = Eb + Wp, E = -1.0;
-      int rounds = 0;
-      for (; rounds < 64 && E < 0.0; rounds++)
+      const bool check = GroupStep::FinderCheckEnv();
+      const auto t0 = check ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point();
+      double E = -1.0;
       {
-         const double Wk = work(Ek), Ek1 = Eb + Wk;
-         if (Wk <= Wp)
-            E = std::max(Ek, Ek1);   // (no rise since the last point: W is flat from there, Ek is the fixed point)
-         else if (const double s = (Wk - Wp) / (Ek - Ep); s < 1.0 && ((Ek1 - Ek) * s / (1.0 - s) <= kStop * Ek1 || rounds == 63))
-            E = Ek1 + (Ek1 - Ek) * s / (1.0 - s);
-         else
+         // E = Eb + the caps of the parts some ball can reach (EnergyCap: each from its state now, no move)
+         // + the squash of stops past their touch, aLin sqrt(E) (linear) + aHertz E^0.4 (Hertz), closed in one pass (OnePassE). Locality (item 2) with no circle:
+         // first Efull with EVERY part's cap (an upper bound on any E below), each body's travel and each part's region at Efull (the cull's own test, Regather part 1); a part no body
+         // reaches at Efull is reached by none at any smaller E (travel and region only grow with E), so its cap is left out of E. E <= Efull, so the cull at E is inside the test at Efull
+         const size_t np = g_cullParts.size();
+         g_cullCap.resize(np);
+         g_cullA.resize(np);
+         g_cullAH.resize(np);
+         double capAll = 0.0, aAll = 0.0, hAll = 0.0;
          {
-            Ep = Ek;
-            Wp = Wk;
-            Ek = Ek1;
+            CPROF(BoundCaps);
+            for (size_t k = 0; k < np; k++)
+            {
+               ContactHost *const o = g_cullParts[k];
+               g_cullCap[k] = -1.0;
+               g_cullA[k] = g_cullAH[k] = 0.0;
+               if (o->m_enabled && o->m_set.contact)
+               {
+                  g_cullCap[k] = o->MovingPart()->EnergyCap(T, g_cullA[k], g_cullAH[k]);
+                  capAll += g_cullCap[k];
+                  aAll += g_cullA[k];
+                  hAll += g_cullAH[k];
+               }
+            }
          }
+         double Efull;
+         {
+            CPROF(BoundClosed);
+            Efull = OnePassE(Eb + capAll, aAll, hAll);
+         }
+         E = Efull;
+         if (std::isfinite(Efull))
+         {
+            CPROF(BoundLocality);
+            for (ContactHost *const o : g_cullParts)
+               o->MovingPart()->CullCycle(Efull, T);
+            g_cullTravel.assign(nw, -1.0);
+            for (size_t i = 0; i < nw; i++)
+               g_cullTravel[i] = TravelBound(Efull, cy.bodies[i].bs.m, af, hv, T);
+            double E0 = Eb, a = 0.0, h = 0.0;
+            for (size_t k = 0; k < np; k++)
+            {
+               if (g_cullCap[k] < 0.0)
+                  continue;
+               ContactHost *const o = g_cullParts[k];
+               bool reached = o->m_set.band;   // (a band's host: the band's own rule, BandQuery; always counted)
+               for (size_t i = 0; i < nw && !reached; i++)
+               {
+                  const Body &w = cy.bodies[i];
+                  const RubberContact::V3 c((double)w.posStart.x * U, (double)w.posStart.y * U, (double)w.posStart.z * U);   // (as Regather part 1)
+                  reached = o->MovingPart()->CullDist(c) - (double)w.pb->m_d.m_radius * U <= g_cullTravel[i];
+               }
+               if (reached)
+               {
+                  E0 += g_cullCap[k];
+                  a += g_cullA[k];
+                  h += g_cullAH[k];
+               }
+               else
+                  g_cullLeftOut++;
+               g_cullCapTests++;
+            }
+            CPROF(BoundClosed);
+            E = OnePassE(E0, a, h);
+         }
+         if (check)
+            g_cullBoundUs += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
       }
-      g_cullRounds += (uint64_t)rounds;
       if (!g_cullNamed && E >= 0.0)   // (once per table start: the bound's terms)
       {
          std::ostringstream o;
-         o << "Part cull: the table's energy bound at t=" << g_pplayer->m_time_msec << " ms: " << E * 1e3 << " mJ after " << rounds << " rounds; balls, stored, cords and squash "
-           << Eb * 1e3 << " mJ, the parts' own work " << W0 * 1e3 << " mJ; each part's work at the bound (mJ):";
+         o << "Part cull: the table's energy bound at t=" << g_pplayer->m_time_msec << " ms: " << E * 1e3 << " mJ; balls, stored, cords and squash " << Eb * 1e3
+           << " mJ; each part's cap (mJ), aLin and aHertz (EnergyCap):";
          for (ContactHost *const o2 : g_cullParts)
             if (o2->m_enabled && o2->m_set.contact)
             {
-               double w = 0.0;
-               o2->MovingPart()->EnergyMove(o2->MovingPart()->Origin(), E, T, &w);
-               o << " " << o2->Name() << " " << w * 1e3;
+               double a = 0.0, ah = 0.0;
+               const double cap = o2->MovingPart()->EnergyCap(T, a, ah);
+               o << " " << o2->Name() << " " << cap * 1e3 << " (aLin " << a << ", aHertz " << ah << ")";
             }
          PLOGI << o.str();
       }
       g_cullTravel.clear();
+      if (g_hertzNoBound > 0 && !g_hertzNoticed)   // (one-pass bound: the first closed form with no bound this table start, here or in last cycle's grouping; rule 8, once)
+      {
+         g_hertzNoticed = true;
+         std::ostringstream o;
+         o << "Energy bound: a Hertz stop's squash term (plunger, auto plunger or button cap pressed on its stop) has no one-pass bound at t=" << g_pplayer->m_time_msec
+           << " ms (0.4 aHertz E0^-0.6 >= 1): every moving part is a candidate that cycle. Report the table and vpinball.log";
+         PLOGW << o.str();
+         g_pplayer->m_liveUI->PushNotification(o.str(), 6000);
+      }
       if (!(E >= 0.0) || !std::isfinite(E))
       {
          if (g_cullNoBound++ == 0)
-            PLOGW << "Part cull: no bound on the table's energy within 64 rounds at t=" << g_pplayer->m_time_msec << " ms: every moving part and band is a candidate this cycle (first of this table start)";
+            PLOGW << "Part cull: no bound on the table's energy (a closed form with none) at t=" << g_pplayer->m_time_msec << " ms: every moving part and band is a candidate this cycle (first of this table start)";
          return;
       }
       g_cullE = E;
-      g_cullTravel.assign(nw, -1.0);
-      for (size_t i = first; i < nw; i++)
-         g_cullTravel[i] = EnergyReach(0.0, E, cy.bodies[i].bs.m, af, T) + hv * T;
-      for (ContactHost *const o : g_cullParts)
-         o->MovingPart()->CullCycle(E, T);
+      {
+         CPROF(CullRegions);
+         g_cullTravel.assign(nw, -1.0);
+         for (size_t i = first; i < nw; i++)
+            g_cullTravel[i] = TravelBound(E, cy.bodies[i].bs.m, af, hv, T);
+         for (ContactHost *const o : g_cullParts)
+            o->MovingPart()->CullCycle(E, T);
+      }
       if (!g_cullNamed)   // (once per table start: what the cull covers; a part with no region is a candidate for every ball)
       {
          g_cullNamed = true;
@@ -689,7 +806,8 @@ struct ContactSystemImpl
       if (g_cullCycles % 1000 == 0)   // (diagnostics: the running totals)
          PLOGI << "Part cull totals: " << g_cullCycles << " cycles; ball-part tests " << g_cullTests << ", culled " << g_cullSkipped << "; ball-band tests " << g_cullBandTests << ", bands skipped "
                << g_cullBandSkipped << "; misses (check mode) " << g_cullMisses << ", gather test differences (check mode) " << g_cullGatherDiff << ", cycles with no bound " << g_cullNoBound
-               << "; E now " << g_cullE * 1e3 << " mJ, its rounds per cycle " << (double)g_cullRounds / (double)g_cullCycles;
+               << "; E now " << g_cullE * 1e3 << " mJ; part caps left out (no ball reaches the part) " << g_cullLeftOut << " of " << g_cullCapTests << "; check mode: the bound's time " << g_cullBoundUs / (double)g_cullCycles
+               << " us per cycle";
    }
    // check mode (VPX_FINDER_CHECK=1), after the grouping: every moving part the cull left out of a ball's list gets the full test (ReachEnergy's: its gap now less its move at the
    // ball's group feed, or its region less R, within the ball's travel); one it takes is a miss (CullMiss)
@@ -751,6 +869,7 @@ struct ContactSystemImpl
             w.e = &e;
             LoadBody(w, pb);
             LoadState(w);
+            FindKept(w);
             w.band = e.band;
             Sources::Begin(w, dt);   // (it reads only the ball's floor items, which Regather part 1 keeps as they are)
             cy.bodies.push_back(std::move(w));
@@ -868,7 +987,9 @@ struct ContactSystemImpl
             continue;
          HitBall *const pb = w.pb;
          BallContact &e = *w.e;
-         ContactSurfaceHost::FinderQuery(pb, w.c, w.v, w.bs.R, cy.dt, std::max(w.reachS, 0.0));
+         // the query's centre is where the step starts the ball: its kept double while its floats are those (CordIsland's rule for every island but a cord's), else its floats
+         const V3 c0 = w.kept != nullptr && w.kept->pos == w.posStart ? w.kept->c : w.c;
+         ContactSurfaceHost::FinderQuery(pb, c0, w.v, w.bs.R, cy.dt, std::max(w.reachS, 0.0));
          e.reachS = w.reachS;   // (the stock net's log reads it)
          e.reachMs = g_pplayer->m_time_msec;
          {
@@ -1080,11 +1201,23 @@ struct ContactSystemImpl
             pairHeld[k] = std::max(PairHolds(cy, A, B, *ps), 0.0);
       }
       const size_t nPairs0 = cy.pairs.size();
-      std::vector<double> eb(nw), af(nw), hv(nw), ef(nw), sb(nw), wp(np), gw(nw);
+      std::vector<double> eb(nw), af(nw), hv(nw), ef(nw), sb(nw), wp(np), gw(nw), gh(nw);
       std::vector<int> np2(nw);   // the full feed: the grouped parts of each group (by its root ball); gw: their work and squash
-      constexpr double kFeedStop = 1e-3;  // the full feed: the fixed point stops once no part's work grows by more than this fraction of itself and the remaining growth is bounded (below); the bound is then added, so the stop is not a tolerance
-      std::vector<double> fp(np), sp(np);   // the full feed: the feed each part's work was last found at, and its last measured slope d(work)/d(feed) (-1 = none yet)
-      int rounds = 0, feedRounds = 0;
+      int rounds = 0;
+      // the one-pass energy bound (runs/2026-11-20-energy-bound/design.md; the cull's law, CullPrepare): each part's work is its EnergyCap, from its state now with no feed, so a group's feed
+      // is its balls' energy + its parts' caps and squash, with its stops' squash closed in one pass (OnePassE: its parts' aLin and aHertz): no sweeps. Caps once per call
+      static std::vector<double> s_cap, s_capA, s_capH;   // (each part's cap, aLin and aHertz this call; grown only, no allocation once sized)
+      if (s_cap.size() < (size_t)np)
+      {
+         s_cap.resize(np);
+         s_capA.resize(np);
+         s_capH.resize(np);
+      }
+      for (int p = 0; p < np; p++)
+      {
+         s_capA[p] = s_capH[p] = 0.0;
+         s_cap[p] = parts[p]->EnergyCap(T, s_capA[p], s_capH[p]);
+      }
       for (bool grew = true; grew;)
       {
          grew = false;
@@ -1124,79 +1257,7 @@ struct ContactSystemImpl
             eb[find(cy.pairs[k].first)] += pairHeld[k];
          ef = eb;
          for (int p = 0; p < np; p++)
-         {
-            wp[p] = 0.0;
-            fp[p] = 0.0;
-            sp[p] = -1.0;
-            if (partBall[p] >= 0)
-            {
-               parts[p]->EnergyMove(parts[p]->Origin(), eb[find(partBall[p])], T, &wp[p]);
-               fp[p] = eb[find(partBall[p])];
-            }
-         }
-         // a part's move takes its group's full feed: the balls' energy and the OTHER parts' work and squash (its own work
-         {                                     // is its own energy, already in its move: fed back it would count twice). In a group with one part this is the move above
-            std::fill(np2.begin(), np2.end(), 0);
-            for (int p = 0; p < np; p++)
-               if (partBall[p] >= 0)
-                  np2[find(partBall[p])]++;
-            // the parts of a group with two or more feed each other: grown to their own fixed point (each move only grows with its feed; each part's work grows less than its feed,
-            // the drive's work over a move that grows as the square root of the feed, or a stroke's end). A true stop: each part's work is concave in its feed (the square root, or flat at a stroke's
-            // end), so its slope from here on is at most its last measured slope s = dw / dF; a part's feed grows by at most the others' growth, so one more sweep grows no part's work by more
-            // than r = (n - 1) s_max times the last sweep's largest growth (n the most parts in a group), and the whole remaining growth by at most that growth x r / (1 - r) when r < 1.
-            // Stopped when no part grows by more than kFeedStop of itself and r < 1, with that bound added to each part's work: an upper bound, not a converged guess. The only other exits:
-            // no part's work grew at all (the fixed point itself), or the 1000-sweep fault (logged). No tolerance stop: a sweep that grows but has no bound sweeps again
-            for (bool more = true; more;)
-            {
-               more = false;
-               double dMax = 0.0, sMax = 0.0;
-               int nMax = 0;
-               bool slopes = true, grownLittle = true;
-               std::fill(gw.begin(), gw.end(), 0.0);
-               for (int p = 0; p < np; p++)
-                  if (partBall[p] >= 0 && np2[find(partBall[p])] >= 2)
-                     gw[find(partBall[p])] += wp[p] + parts[p]->squashJ;
-               for (int p = 0; p < np; p++)
-               {
-                  if (partBall[p] < 0 || np2[find(partBall[p])] < 2)
-                     continue;
-                  const int g = find(partBall[p]);
-                  double w = 0.0;
-                  const double F = eb[g] + gw[g] - wp[p] - parts[p]->squashJ;
-                  parts[p]->EnergyMove(parts[p]->Origin(), F, T, &w);
-                  const double dw = std::max(w - wp[p], 0.0);
-                  if (F > fp[p])
-                     sp[p] = dw / (F - fp[p]);
-                  else if (dw > 0.0)
-                     sp[p] = -1.0;   // (work grew with no feed growth: no slope to bound by)
-                  fp[p] = std::max(F, fp[p]);
-                  if (sp[p] < 0.0)
-                     slopes = false;
-                  sMax = std::max(sMax, sp[p]);
-                  dMax = std::max(dMax, dw);
-                  nMax = std::max(nMax, np2[g]);
-                  if (dw > wp[p] * kFeedStop)
-                     grownLittle = false;
-                  if (w > wp[p])
-                     more = true;
-                  wp[p] = std::max(w, wp[p]);
-               }
-               const double r = (double)std::max(nMax - 1, 0) * sMax;
-               if (more && slopes && grownLittle && r < 1.0)   // the remaining growth is bounded: added to each grouped part's work in groups of two or more, and the sweeps stop
-               {
-                  const double rest = dMax * r / (1.0 - r);
-                  for (int p = 0; p < np; p++)
-                     if (partBall[p] >= 0 && np2[find(partBall[p])] >= 2)
-                        wp[p] += rest;
-                  more = false;
-               }
-               if (++feedRounds == 1000)   // (a fixed point that does not end is a fault: logged, and stopped here so the run reports it)
-               {
-                  PLOGW << "Energy reach: the full feed parts' fixed point not converged after 1000 sweeps";
-                  more = false;
-               }
-            }
-         }
+            wp[p] = partBall[p] >= 0 ? s_cap[p] : 0.0;
          for (int p = 0; p < np; p++)
             if (partBall[p] >= 0)
             {
@@ -1207,10 +1268,23 @@ struct ContactSystemImpl
          for (int p = 0; p < np; p++)
             if (partBall[p] >= 0)
                ef[find(partBall[p])] += wp[p] + parts[p]->squashJ;   // (its kinetic energy is in its work; what its contacts held at the last cycle's end, MovingPartState::squashJ)
+         {   // (each group's stops' squash past their touch: E = E0 + aLin sqrt(E) + aHertz E^0.4 over its grouped parts, closed in one pass; no bound: INFINITY)
+            std::fill(gw.begin(), gw.end(), 0.0);
+            std::fill(gh.begin(), gh.end(), 0.0);
+            for (int p = 0; p < np; p++)
+               if (partBall[p] >= 0)
+               {
+                  gw[find(partBall[p])] += s_capA[p];
+                  gh[find(partBall[p])] += s_capH[p];
+               }
+            for (int i = 0; i < nw; i++)
+               if (find(i) == i && (gw[i] > 0.0 || gh[i] > 0.0))
+                  ef[i] = OnePassE(ef[i], gw[i], gh[i]);
+         }
          for (int i = 0; i < nw; i++)
          {
             const int g = find(i);
-            sb[i] = EnergyReach(0.0, ef[g], cy.bodies[i].bs.m, af[g], T) + hv[g] * T;
+            sb[i] = TravelBound(ef[g], cy.bodies[i].bs.m, af[g], hv[g], T);
          }
          for (Edge &ed : edges)
          {
@@ -1219,7 +1293,7 @@ struct ContactSystemImpl
             const int gi = find(ed.i), pb = partBall[ed.p];
             const double E = ef[gi] + (pb >= 0 && find(pb) != gi ? ef[find(pb)] : 0.0);
             const Body &w = cy.bodies[ed.i];
-            if (std::max(ed.gap - parts[ed.p]->EnergyMove(w.c, E, T, nullptr), parts[ed.p]->CycleRegionDist(w.c, T, E) - w.bs.R) <= sb[ed.i])
+            if (!std::isfinite(E) || std::max(ed.gap - parts[ed.p]->EnergyMove(w.c, E, T, nullptr), parts[ed.p]->CycleRegionDist(w.c, T, E) - w.bs.R) <= sb[ed.i])   // (no bound: joined)
             {
                ed.on = grew = true;
                if (pb < 0)
@@ -1286,15 +1360,54 @@ struct ContactSystemImpl
          w.eTop = 0.5 * w.bs.m * vm * vm;
          w.eGroup = find(i);
       }
-      for (int p = 0; p < np; p++)   // energy skip test: what each part can hold before any ball touches it: its own kinetic energy and drive work (EnergyMove with no feed) and its contacts' squash
+      if (RelookTraceOn())   // VPX_RELOOK_TRACE: each ball's bound term by term, from this call's last round (the finder prints it at a re-look)
       {
-         double w0 = 0.0;
-         parts[p]->EnergyMove(parts[p]->Origin(), 0.0, T, &w0);
-         parts[p]->eOwnJ = w0 + parts[p]->squashJ;
+         const auto pname = [&](const int p) {   // (its kind, origin in mm and state note)
+            const V3 a = parts[p]->Origin();
+            std::ostringstream n;
+            n << typeid(*parts[p]).name() << " at (" << a.x * 1e3 << ", " << a.y * 1e3 << ", " << a.z * 1e3 << ") mm " << parts[p]->StateNote();
+            return n.str(); };
+         for (int i = 0; i < nw; i++)
+         {
+            const Body &w = cy.bodies[i];
+            if (w.pb == nullptr)
+               continue;
+            const int g = find(i);
+            int nb = 0;
+            for (int j = 0; j < nw; j++)
+               nb += find(j) == g ? 1 : 0;
+            std::ostringstream o;
+            o << "T " << T * 1e3 << " ms, m " << w.bs.m << " kg, |v| " << w.v.Length() << " m/s, own KE " << 0.5 * w.bs.m * w.v.Dot(w.v) * 1e3 << " mJ, spin " << 0.5 * w.bs.Inertia() * w.w.Dot(w.w) * 1e3
+              << " mJ, endStored " << (w.e != nullptr ? w.e->endStored * 1e3 : 0.0) << " mJ, held " << w.held << "; group balls " << nb << ", E0 (balls, stored, pairs, bands) " << eb[g] * 1e3 << " mJ; parts in E1:";
+            for (int p = 0; p < np; p++)
+               if (partBall[p] >= 0 && find(partBall[p]) == g)
+                  o << " [" << pname(p) << " work " << wp[p] * 1e3 << " mJ, squash " << parts[p]->squashJ * 1e3 << " mJ, aLin " << s_capA[p] << ", aHertz " << s_capH[p] << "]";
+            o << "; aLin sum " << gw[g] << " J^0.5, aHertz sum " << gh[g] << " J^0.6; E1 " << ef[g] * 1e3 << " mJ; travel inputs: v from E1 " << std::sqrt(2.0 * std::max(ef[g], 0.0) / w.bs.m)
+              << " m/s, acceleration " << af[g] << " m/s2 (own gravity " << w.gravAcc << ", magnets " << w.magReach << "), hv " << hv[g] << " m/s; travel " << sb[i] * 1e3 << " mm; parts left out:";
+            for (int p = 0; p < np; p++)
+               if (partBall[p] < 0 || find(partBall[p]) != g)
+               {
+                  o << " [" << pname(p) << (partBall[p] < 0 ? " (no ball)" : " (other group)");
+                  o << " cap " << s_cap[p] * 1e3 << " mJ";
+                  for (const Edge &ed : edges)
+                     if (ed.i == i && ed.p == p)
+                     {
+                        const int pb = partBall[p];
+                        const double E = ef[g] + (pb >= 0 && find(pb) != g ? ef[find(pb)] : 0.0);
+                        o << ", in list: gap " << ed.gap * 1e3 << " mm, part move at E " << parts[p]->EnergyMove(w.c, E, T, nullptr) * 1e3 << " mm, region dist " << (parts[p]->CycleRegionDist(w.c, T, E) - w.bs.R) * 1e3 << " mm";
+                     }
+                  o << "]";
+               }
+            RelookTerms()[w.pb] = o.str();
+         }
+      }
+      for (int p = 0; p < np; p++)   // energy skip test: what each part can hold before any ball touches it: its cap (EnergyCap: its own kinetic energy and drive work) and its contacts' squash, its stops' squash closed in one pass
+      {
+         parts[p]->eOwnJ = OnePassE(s_cap[p] + parts[p]->squashJ, s_capA[p], s_capH[p]);
       }
       static uint64_t nCyc = 0, nRounds = 0;   // the fixed point's rounds per cycle (diagnostics: logged every 10000 cycles)
       static int worst = 0;
-      static uint64_t nMulti = 0, nGrown = 0, nSweeps = 0;   // the full feed diagnostics: groups with two or more grouped parts, part moves fed by another part's work or squash, the parts' sweeps
+      static uint64_t nMulti = 0, nGrown = 0;   // the full feed diagnostics: groups with two or more grouped parts, part moves fed by another part's work or squash
       std::fill(np2.begin(), np2.end(), 0);
       std::fill(gw.begin(), gw.end(), 0.0);
       for (int p = 0; p < np; p++)
@@ -1308,12 +1421,11 @@ struct ContactSystemImpl
       for (int p = 0; p < np; p++)
          if (partBall[p] >= 0 && np2[find(partBall[p])] >= 2 && gw[find(partBall[p])] - wp[p] - parts[p]->squashJ > 0.0)
             nGrown++;
-      nSweeps += (uint64_t)feedRounds;
       nCyc++;
       nRounds += (uint64_t)rounds;
       worst = std::max(worst, rounds);
       if (nCyc % 10000 == 0)
-         PLOGI << "Energy reach rounds: " << nCyc << " cycles, rounds per cycle mean " << (double)nRounds / (double)nCyc << ", worst " << worst << "; groups with two or more parts " << nMulti << ", part moves fed by another part " << nGrown << ", parts' sweeps " << nSweeps << "; parts in solve " << s_solveParts << " over " << s_solveIslands << " island solves (at rest " << s_solveRest << "), PartsInSolve misses " << s_solveMiss << ", releases clear " << s_relClear << ", timeout " << s_relTimeout << ", kept within the surface.s bound " << s_relHeld;
+         PLOGI << "Energy reach rounds: " << nCyc << " cycles, rounds per cycle mean " << (double)nRounds / (double)nCyc << ", worst " << worst << "; groups with two or more parts " << nMulti << ", part moves fed by another part " << nGrown << "; parts in solve " << s_solveParts << " over " << s_solveIslands << " island solves (at rest " << s_solveRest << "), PartsInSolve misses " << s_solveMiss << ", releases clear " << s_relClear << ", timeout " << s_relTimeout << ", kept within the surface.s bound " << s_relHeld;
    }
 
    static void ReachLinks(Cycle &cy)
@@ -1375,6 +1487,7 @@ struct ContactSystemImpl
       w.e = &e;
       LoadBody(w, pb);
       LoadState(w);
+      FindKept(w);
       w.band = e.band;
       Sources::ReachAcc(w);
       cy.bodies.push_back(std::move(w));
@@ -2314,10 +2427,9 @@ struct ContactSystemImpl
          b.w = w.w;
          if (ring)
          {
-            const auto kd = g_keptDoubles.find(w.pb);
-            if (kd != g_keptDoubles.end() && kd->second.pos == w.pb->m_d.m_pos)
+            if (w.kept != nullptr && w.kept->pos == w.pb->m_d.m_pos)
             {
-               const KeptDoubles &k = kd->second;
+               const KeptDoubles &k = *w.kept;
                b.c = k.c;
                b.v = w.v + (k.v - V3((double)k.vel.x * VS, (double)k.vel.y * VS, (double)k.vel.z * VS));
                b.w = w.w + (k.w - V3((double)k.am.x / w.lScale, (double)k.am.y / w.lScale, (double)k.am.z / w.lScale));
@@ -2326,14 +2438,14 @@ struct ContactSystemImpl
          else
          {
             HitBall *const pb = w.pb;
-            const auto kd = g_keptDoubles.find(pb);
-            if (kd != g_keptDoubles.end() && kd->second.pos == pb->m_d.m_pos && kd->second.vel == pb->m_d.m_vel && kd->second.am == pb->m_angularmomentum
+            const KeptDoubles *const kd = w.kept;
+            if (kd != nullptr && kd->pos == pb->m_d.m_pos && kd->vel == pb->m_d.m_vel && kd->am == pb->m_angularmomentum
                && w.c.x == (double)pb->m_d.m_pos.x * U && w.c.y == (double)pb->m_d.m_pos.y * U && w.c.z == (double)pb->m_d.m_pos.z * U   // (nothing has moved it this cycle before here)
                && w.v.x == (double)pb->m_d.m_vel.x * VS && w.v.y == (double)pb->m_d.m_vel.y * VS && w.v.z == (double)pb->m_d.m_vel.z * VS)
             {
-               b.c = kd->second.c;
-               b.v = kd->second.v;
-               b.w = kd->second.w;
+               b.c = kd->c;
+               b.v = kd->v;
+               b.w = kd->w;
             }
          }
          b.fExt = w.dragged ? (w.extBaseVS * (1.0 / PHYSICS_STEPTIME_S)) * (-b.m) : V3();   // (a dragged ball: the hand holds it against gravity and the nudge, every ball's g.set.g)
@@ -2376,8 +2488,7 @@ struct ContactSystemImpl
                   cords.push_back(b);
          if (ring)
          {
-            const auto kd = g_keptDoubles.find(w.pb);
-            const bool same = kd != g_keptDoubles.end() && kd->second.pos == w.pb->m_d.m_pos;
+            const bool same = w.kept != nullptr && w.kept->pos == w.pb->m_d.m_pos;
             cause[ib] = std::find(g_placed.begin(), g_placed.end(), w.pb) != g_placed.end() ? DepthCause::Placed
                : w.e != nullptr && !w.e->groupLoop && w.e->endStored >= 0.0 ? DepthCause::HandedOver
                : same ? DepthCause::Faces : DepthCause::StockMoved;
@@ -2921,7 +3032,7 @@ struct ContactSystemImpl
             // the start passed the last check, so the end covers the move. A ball with no BallContact entry has no cycle query (FinderQuery runs per entry): nothing to check.
             for (int ib = 0; ib < g.nb; ib++)
                if (bodyOf[ib] != nullptr && bodyOf[ib]->e != nullptr)
-                  ContactSurfaceHost::FinderInsideBall(balls[ib], g.ball[ib].c + g.MoveOf(ib));
+                  ContactSurfaceHost::FinderInsideBall(balls[ib], g.ball[ib].c, g.MoveOf(ib));
             if (!ContactSurfaceHost::FinderPendAny())
                return 0;
             if (!allow)

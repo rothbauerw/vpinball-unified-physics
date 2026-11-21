@@ -102,6 +102,13 @@ public:
    // seconds (m), its turn or travel bounded by energy: its own motion, its drives (gravity, springs, blades, cams, coil) and E, the kinetic energy (J) of the balls that can reach it
    // this cycle. work (if not null): what the part can hand to the balls in the cycle beyond E, its kinetic energy now plus its drives' work over that move (J). Each part its own law
    virtual double EnergyMove(const V3 &c, double E, double T, double *work) const = 0;
+   // the one-pass energy bound (runs/2026-11-20-energy-bound/design.md, AGREED 2026-11-20 items 1-6, 4b, 5b): the most the part can hand to the balls over
+   // a cycle of T seconds whatever they feed it (J), from its state now and its built data, no move: its energy in the group's book now (GroupStep::Part::Energy: its kinetic energy,
+   // its springs, blades, cams and weight) less the least that book's stored energy takes over the poses it can reach between its stops (item 4b: one source, no per-spring formula),
+   // + its drives over T (a coil's field energy now + V^2 T / R, a motor's largest power x T). Past its stops under the force that presses it there (weight, preload): a linear stop
+   // adds aLin = F sqrt(2 / k) (J^0.5, item 5: E = E0 + aLin sqrt(E)), a Hertz stop (k d^1.5) aHertz = F (5 / (2 k))^0.4 (J^0.6, item 5b: E = E0 + aHertz E^0.4); the caller closes
+   // them in one step (ContactSystem OnePassE). The squash its contacts and compliant stops hold now is squashJ, not here
+   virtual double EnergyCap(double T, double &aLin, double &aHertz) const = 0;
    // between cycles (the host's advance, after the cycle): what starts at the next cycle's start (a jet's pending pulse: a jet's pulse at a cycle's start); cycleS: that cycle's length
    virtual void NextCycleStart(double /*cycleS*/) {}
    // the energy reach: a lower bound on the distance from c to the part at any pose it can take in the cycle of T seconds with E (J) fed to it (m; its region, design_reach.md

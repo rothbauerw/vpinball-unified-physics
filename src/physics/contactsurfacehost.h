@@ -205,7 +205,8 @@ public:
    static void FinderBind(const HitBall *ball, std::vector<SurfaceContact> &items, bool cycleItems);   // cycleItems: the engaged ball's own set (kept for the re-query's count)
    static void FinderBindOne(const HitBall *ball, SurfaceContact &it);
    // the ball's inside check: the inside check of the ball's own cycle query at c (the same rule as FinderInside, which calls it), for a ball whatever its items; a ball with no query does nothing
-   static void FinderInsideBall(const HitBall *ball, const RubberContact::V3 &c);
+   // c: the attempt's start, move: its move (the end is c + move; the stray is formed as (c - c0) + move, FinderInsideQ)
+   static void FinderInsideBall(const HitBall *ball, const RubberContact::V3 &c, const RubberContact::V3 &move);
    static void FinderHosts(const HitBall *ball, std::vector<ContactHost *> &out);
    // shared_finder re-engage (runs/2026-11-13-finder-reengage/design.md): an object the inside check's re-query found that is not among the ball's surfaces is recorded for engagement;
    // the group step takes it (FinderTakeReachable: the recorded hosts the step's path can reach) and joins it mid-step. FinderPendAny: some ball has one recorded. One not taken by the ball's next query is
@@ -305,8 +306,9 @@ private:
    void FinderCheck(const SurfaceContact &it, const RubberContact::V3 &c, double ballR, int evalKind) const;
    // shared_finder P2a (design.md section 4): the inside check of one evaluation at ball centre c: outside the ball's query volume, the query runs again around its centre
    // with radius R + 2 x the stray (counted; nothing reads the result in P2a)
-   void FinderInside(const SurfaceContact &it, const RubberContact::V3 &c) const;
-   static void FinderInsideQ(void *q, const RubberContact::V3 &c);   // the inside check itself (q: a FinderBallQ), one rule for FinderInside and FinderInsideBall
+   // (move: a point given as start c plus a move, as FinderInsideBall; zero for a point)
+   void FinderInside(const SurfaceContact &it, const RubberContact::V3 &c, const RubberContact::V3 &move = RubberContact::V3()) const;
+   static void FinderInsideQ(void *q, const RubberContact::V3 &c, const RubberContact::V3 &move);   // the inside check itself (q: a FinderBallQ), one rule for FinderInside and FinderInsideBall
    static void FinderRun(void *q, double r);   // the query itself (q: a FinderBallQ), radius r around its centre
    std::shared_ptr<RubberSurface> m_surface;   // a wall / primitive host: its faces (m_pts is then empty)
    int m_linkOver = 0;                         // multi_contact: edges on more than two faces, counted when the faces' shared edges are built at load (Link)

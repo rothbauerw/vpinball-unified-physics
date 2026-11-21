@@ -120,6 +120,19 @@ namespace AutoPlungerHost
             *work = 0.5 * part.mass * v0 * v0 + std::min(F * x, D);
          return x;
       }
+      // the one-pass bound (EnergyCap, AGREED items 1, 4b, 5b): its energy in the book now (AutoPlunger: Energy = kinetic + StoredEnergy (return spring and weight) + pin) less
+      // StoredEnergy's least over the stroke [0, stroke] (a convex quadratic: an end or where StoredForce is 0), + the coil: this model's coil is the stand-in drive F over the stroke
+      // (autoplunger.h 4d, no current or resistance), so what it can still give is F (stroke - q) while it fires, 0 when off. Its stops are Hertz: aHertz (BodyPart::HertzSquashA)
+      double EnergyCap(double, double &, double &aHertz) const override
+      {
+         const double hi = part.stroke;
+         const auto at = [&](const double s) { return part.StoredEnergy(std::min(std::max(s, 0.0), hi)); };
+         double least = std::min(at(0.0), at(hi));
+         if (part.kRet > 0.0)
+            least = std::min(least, at((part.GravityForce() - part.pRet) / part.kRet));
+         aHertz = part.HertzSquashA();
+         return part.Energy(nullptr, 0) - least + (part.firing ? part.force * std::max(hi - part.q, 0.0) : 0.0);
+      }
       void HeadProbe(const int i, const V3 &c, const double R, const double dq, GroupStep::Hit &h) const
       {
          if (part.head == AutoPlunger::Head::Fork)

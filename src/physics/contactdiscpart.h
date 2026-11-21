@@ -61,6 +61,14 @@ namespace DiscModel
             *work = 0.0;
          return 0.0;
       }
+      // the one-pass bound (EnergyCap, AGREED items 4b, 6): its energy in the book now (BodyPart::Energy: kinetic + the shaft's pin spring; nothing else stored) + the motor's largest
+      // power x T. The motor is the line T(w) = Ts V / Vrated - kTot w (discgroup.h; kTot > 0, from ramp_up_s), so the power it puts in, T(w) w, is at most (Ts V / Vrated)^2 / (4 kTot)
+      // at any speed; the bearing only takes
+      double EnergyCap(const double T, double &, double &) const override
+      {
+         const double ts = gp.motor.Ts * std::fabs(gp.volts) / gp.motor.ratedVolts;
+         return gp.Energy(nullptr, 0) + ts * ts / (4.0 * gp.motor.kTot) * T;
+      }
       RubberContact::TubeProbe Probe(const V3 &c) const override
       {
          GroupStep::Hit h;

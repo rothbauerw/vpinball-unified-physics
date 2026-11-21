@@ -30,6 +30,11 @@
 #include "parts/rubber.h"
 #include "parts/primitive.h"
 
+bool RelookTraceOn();   // VPX_RELOOK_TRACE=1 (contactsystem.cpp): the energy-reach re-look's full log
+std::unordered_map<const HitBall *, std::string> &RelookTerms();   // its per-ball bound terms (ContactSystem ReachEnergy)
+class ContactSurfaceHost;
+static const ContactSurfaceHost *g_relookHost = nullptr;   // VPX_RELOOK_TRACE: the surface whose path test made the inside check (null: the group step's attempt end)
+
 bool ContactTraceDetail()   // VPX_CONTACT_TRACE=2: also the per-cycle lines (ContactTrace, ContactPair): huge logs, the log file rotates; 1 = engage / release / part hit lines only
 {
    static const bool on = []() { const char *const e = ContactSystem::EnvVar("VPX_CONTACT_TRACE", "VPX_RING_TRACE"); return e != nullptr && atoi(e) >= 2; }();
@@ -157,6 +162,8 @@ namespace
       std::vector<RubberContact::FaceTable> tab;   // P3a: per finder object, the ball's measurement table of its faces in per[k] (one per ball position)
       const HitBall *ball = nullptr;   // P3a: the ball (check mode's log)
       std::vector<TubeSegQ> tq;     // P5: per static tube the ball reads, its segments found by the query (made at the tube's first read after each query, around c0 within the volume)
+      std::string terms;            // VPX_RELOOK_TRACE: the bound's terms at this query (ReachEnergy); relooked: a re-look this cycle (its actual move is logged at the next query)
+      bool relooked = false;
    };
 
    // the timing counters' histogram: 10 ns bins up to 200 us
@@ -1995,7 +2002,7 @@ int ContactSurfaceHost::PathReach(const SurfaceContact &it, const RubberContact:
    {
       if (it.qFaces == nullptr || !g_finder.on)
          return -1;   // no query: the lists of the start position only
-      FinderInside(it, e);   // both ends inside the query's volume (a re-query otherwise, as the end probe made it)
+      FinderInside(it, s, d);   // both ends inside the query's volume (a re-query otherwise, as the end probe made it); the end as s + d (FinderInsideQ)
       FinderInside(it, s);
       const RubberSurface &sf = *m_surface;
       if (!sf.fnodes.empty() && RubberContact::PathBoxApart(sf.fnodes[0].lo, sf.fnodes[0].hi, plo, phi, R))
@@ -2985,6 +2992,13 @@ void ContactSurfaceHost::FinderQuery(const HitBall *const ball, const RubberCont
    }
    // a: the ball's acceleration from its net force in the previous cycle, taken as its velocity change over that cycle (the engine keeps no net force per ball);
    // none known (the ball was not engaged last cycle): 0, and the inside check covers it
+   if (q.relooked)   // VPX_RELOOK_TRACE: where the re-looked ball ended the cycle
+   {
+      q.relooked = false;
+      const RubberContact::V3 d = c - q.c0;
+      PLOGW << "Energy reach re-look (trace): the cycle's actual move " << d.Length() * 1e3 << " mm (" << d.x * 1e3 << ", " << d.y * 1e3 << ", " << d.z * 1e3 << ") mm, bound " << q.reach * 1e3
+            << " mm; velocity at its end (" << v.x << ", " << v.y << ", " << v.z << ") m/s, |v| " << v.Length() << ", at its start (" << q.vPrev.x << ", " << q.vPrev.y << ", " << q.vPrev.z << ")";
+   }
    double accel = 0.0;
    if (q.queried && q.vPrevCycle + 1 == g.cycle)
       accel = (v - q.vPrev).Length() / dt;
@@ -2998,6 +3012,11 @@ void ContactSurfaceHost::FinderQuery(const HitBall *const ball, const RubberCont
    q.reach = travelM >= 0.0 ? travelM : ContactReachM(v.Length(), accel, dt);   // the energy reach: the ball's travel from its energy (ContactSystem ReachEnergy)
    q.ext = q.reach;
    q.energy = travelM >= 0.0;
+   if (RelookTraceOn())
+   {
+      const auto f = RelookTerms().find(ball);
+      q.terms = f != RelookTerms().end() ? f->second : std::string("(no ReachEnergy terms for this ball)");
+   }
    q.reqThis = 0;
    q.items = nullptr;
    FinderRun(&q, ballR + q.reach);
@@ -3010,33 +3029,52 @@ void ContactSurfaceHost::FinderQuery(const HitBall *const ball, const RubberCont
       g.qObjNs.Add(ns / (double)q.objs.size());
 }
 
-void ContactSurfaceHost::FinderInside(const SurfaceContact &it, const RubberContact::V3 &c) const
+void ContactSurfaceHost::FinderInside(const SurfaceContact &it, const RubberContact::V3 &c, const RubberContact::V3 &move) const
 {
    const ContactProf::Ticks profInside(ContactProf::CD().inside);   // P3a profile (diagnostics only)
-   FinderInsideQ(it.finderQ, c);
+   g_relookHost = this;
+   FinderInsideQ(it.finderQ, c, move);
 }
 
-void ContactSurfaceHost::FinderInsideBall(const HitBall *const ball, const RubberContact::V3 &c)
+void ContactSurfaceHost::FinderInsideBall(const HitBall *const ball, const RubberContact::V3 &c, const RubberContact::V3 &move)
 {
    if (!g_finder.on)
       return;
+   g_relookHost = nullptr;
    const auto f = g_finder.balls.find(ball);   // (a lookup: no allocation in the step loop)
    if (f != g_finder.balls.end())
-      FinderInsideQ(&f->second, c);
+      FinderInsideQ(&f->second, c, move);
 }
 
-void ContactSurfaceHost::FinderInsideQ(void *const qv, const RubberContact::V3 &c)
+void ContactSurfaceHost::FinderInsideQ(void *const qv, const RubberContact::V3 &c, const RubberContact::V3 &move)
 {
    FinderBallQ *const q = static_cast<FinderBallQ *>(qv);
    if (q == nullptr || !g_finder.on)
       return;
-   const double stray = (c - q->c0).Length();
+   // the stray of the point c + move from the query's centre, formed as (c - c0) + move: c - c0 is exact for nearby doubles (Sterbenz), so the point's own rounding to a
+   // position-sized double (c + move) does not enter; + 0 (a point) is exact
+   const double stray = ((c - q->c0) + move).Length();
    if (stray <= q->ext)
       return;
    if (q->energy)   // the energy reach: the query reached the ball's energy travel, a true bound: a ball outside it is a bound too small (a fault, logged with its numbers)
    {
       static int warned = 0;
-      if (warned++ < 30)
+      if (RelookTraceOn())   // VPX_RELOOK_TRACE: every term, the stray's split (the checked point c + move: c the step's or attempt's start, move its path), the ball's surfaces; no line limit
+      {
+         const RubberContact::V3 d = c - q->c0;
+         std::ostringstream o;
+         o << "Energy reach re-look (trace): t " << (g_pplayer != nullptr ? g_pplayer->m_time_msec : 0u) << " ms, stage " << ContactProf::StageCur() << ", checked by "
+           << (g_relookHost != nullptr ? "the path test of " + g_relookHost->Name() : std::string("the group step's attempt end (c + MoveOf)")) << "; stray " << stray * 1e3 << " mm = |(c - c0) + move|, c - c0 ("
+           << d.x * 1e3 << ", " << d.y * 1e3 << ", " << d.z * 1e3 << ") mm |" << d.Length() * 1e3 << "|, move (" << move.x * 1e3 << ", " << move.y * 1e3 << ", " << move.z * 1e3 << ") mm |" << move.Length() * 1e3
+           << "|; bound " << q->reach * 1e3 << " mm, query " << q->ext * 1e3 << " mm; v at query (" << q->vPrev.x << ", " << q->vPrev.y << ", " << q->vPrev.z << ") m/s; surfaces:";
+         if (q->items != nullptr)
+            for (const SurfaceContact &s : *q->items)
+               o << " " << (s.r != nullptr ? s.r->Name() : std::string("?"));
+         o << "; terms: " << q->terms;
+         PLOGW << o.str();
+         q->relooked = true;
+      }
+      if (RelookTraceOn() || warned++ < 30)
          PLOGW << "Energy reach re-look: ball query at (" << q->c0.x * 1e3 << ", " << q->c0.y * 1e3 << ", " << q->c0.z * 1e3 << ") mm, t " << (g_pplayer != nullptr ? g_pplayer->m_time_msec : 0u)
                << " ms: the ball is " << stray * 1e3 << " mm from where it started, its travel bound " << q->reach * 1e3 << " mm (query " << q->ext * 1e3 << " mm)";
    }

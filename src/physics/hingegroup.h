@@ -264,6 +264,17 @@ namespace HingeGroup
          const double dth = std::min(GroupStep::kPi, std::max(q - lo, hi - q));
          return 2.0 * ax.Length() * std::sin(0.5 * std::max(dth, 0.0));
       }
+      // the one-pass bound (ContactMovingPart::EnergyCap, AGREED items 4b, 5): its energy in the book now (BodyPart::Energy: kinetic + StoredEnergy (weight, blade, cams) + pin), its
+      // kinetic energy taken at |w| + s (a driven stop moving at s carries it at up to that, as TurnRange), less StoredEnergy's least over every angle: the blade and cams store >= 0 and
+      // GravV's least is -m sqrt(A^2 + B^2) (the pendulum's lowest; no stop is needed below it, so no squash term)
+      double EnergyCap() const
+      {
+         double drive = 0.0;
+         for (const GroupStep::BodyStop &s : stops)
+            drive = std::max(drive, std::fabs(s.SpeedNow()));
+         const double w0 = std::fabs(rate) + drive;
+         return Energy(nullptr, 0) - KineticJ() + 0.5 * mass * w0 * w0 + mp.m * std::hypot(GravA(), GravB());
+      }
       void CycleTurn(const double En, const double T) override
       {
          TurnRange(En, T, cycLo, cycHi, nullptr);

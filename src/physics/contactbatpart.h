@@ -212,17 +212,18 @@ namespace BatPart
       // the energy its drives can supply over T (the law: a part's work over a cycle is at most its kinetic energy plus this), J: the coil's field energy now
       // 1/2 (L_P i_P^2 + L_H i_H^2) (amperes, L at its largest: the plunger closed) plus, the coil on, the supply's V^2 (1/R_P + 1/R_H) T, plus the return spring's stored energy
       // (its largest torque x the larger of the stroke and the turn from rest). Parked (coil on at its stop): the stop takes the coil, the spring only
-      double DriveEnergy(const double T) const
+      double DriveEnergy(const double T) const { return CoilEnergy(T) + springMax * std::max(gp.PhiStop(), std::fabs(gp.phi)); }
+      // the coils' part of it: the field energy now and the supply's over T (0 parked: the stop takes the coil)
+      double CoilEnergy(const double T) const
       {
+         if (Parked())
+            return 0.0;
          const FlipperSettings &s = bat.set;
          const FlipperDerived &p = bat.der;
-         const double spring = springMax * std::max(gp.PhiStop(), std::fabs(gp.phi));
-         if (Parked())
-            return spring;
          const double lP = (p.aP + p.bP / s.x0P) * 1e-3, lH = s.single ? 0.0 : (p.aH + p.bH / s.x0H) * 1e-3;
          const double aP = gp.iHigh * s.vSupply / s.rP, aH = s.single ? 0.0 : gp.iLow * s.vSupply / s.rH;
          const double supply = gp.solenoid ? s.vSupply * s.vSupply * (1.0 / s.rP + (s.single ? 0.0 : 1.0 / s.rH)) * T : 0.0;
-         return 0.5 * (lP * aP * aP + lH * aH * aH) + supply + spring;
+         return 0.5 * (lP * aP * aP + lH * aH * aH) + supply;
       }
       // the energy reach (design_reach.md section 1): the turn EnergyReach(|omega|, E, I, CoilAlphaBound), and at most the turn a bat with all its energy (its kinetic energy, the feed and
       // DriveEnergy) as speed makes in T: sqrt(w0^2 + 2 (E + D) / I) T (not clamped at the stops: past them the stops' own law only shortens it). work: 1/2 I w0^2 + the drives' work
@@ -238,6 +239,10 @@ namespace BatPart
          return 2.0 * rho * std::sin(0.5 * std::min(dphi, GroupStep::kPi)) + std::fabs(gp.geo.vPivotX) * T;
       }
 
+      // the one-pass bound (EnergyCap, AGREED items 4b, 6): its energy in the book now (BatGroup::Part::Energy: kinetic + the return spring + the rest stop + the link) less the rest
+      // stop's squash now (squashJ holds it, StopSquashJ) and less the least of the return spring and rest stop together (RestFloorJ: on the stop, where preload and squash balance),
+      // + the coils (CoilEnergy). With squashJ added by the caller: kinetic + stored now above its least. At rest it is -squash now (the caller's squashJ makes it 0)
+      double EnergyCap(const double T, double &, double &) const override { return gp.Energy(nullptr, 0) - gp.StopSquashJ() - gp.RestFloorJ() + CoilEnergy(T); }
       std::string StateNote() const override { return "phi " + std::to_string(gp.phi) + " rad, omega " + std::to_string(gp.omega) + " rad/s, coil " + (gp.solenoid ? "on" : "off"); }
 
    private:

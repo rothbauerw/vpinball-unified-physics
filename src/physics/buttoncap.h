@@ -321,6 +321,18 @@ namespace ButtonCap
             *work = 0.5 * part.mass * part.rate * part.rate + std::min(F * x, D);
          return x;
       }
+      // the one-pass bound (EnergyCap, AGREED items 4b, 5b): its energy in the book now (ButtonCap: Energy = kinetic + StoredEnergy (leaf spring and weight) + pin) less StoredEnergy's
+      // least over the sink [0, travel] (a convex quadratic: an end or where StoredForce is 0). Its stops are Hertz: aHertz (BodyPart::HertzSquashA)
+      double EnergyCap(double, double &, double &aHertz) const override
+      {
+         const double hi = part.travel;
+         const auto at = [&](const double s) { return part.StoredEnergy(std::min(std::max(s, 0.0), hi)); };
+         double least = std::min(at(0.0), at(hi));
+         if (part.k > 0.0)
+            least = std::min(least, at((part.Weight() - part.f0) / part.k));
+         aHertz = part.HertzSquashA();
+         return part.Energy(nullptr, 0) - least;
+      }
       RubberContact::TubeProbe Probe(const V3 &c) const override
       {
          Hit h;

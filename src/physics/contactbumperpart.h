@@ -282,6 +282,21 @@ namespace JetBumper
          Moves(E, T, dr, dz, dt, work);
          return std::max(dr, skirtLever * std::min(dt, GroupStep::kPi) + dz);
       }
+      // the one-pass bound (EnergyCap, AGREED items 4b, 5, 6): its energy in the book now (BumperGroup::Part::Energy: the three bodies' kinetic energy, the skirt's springs, spoon, seats
+      // and weight, the ring's return spring and weight) less its value at rest (RestJ) + the coil's field energy now 1/2 L i^2 (L at its largest) + the supply's V^2 / R T (V as
+      // Moves). Its seat is linear (kSeat): the squash past it under the skirt's weight and springs' force adds (m g + skirtF) sqrt(2 / kSeat) to aLin (item 5)
+      double EnergyCap(const double T, double &aLin, double &) const override
+      {
+         const Params &p = gp.cfg.p;
+         const double g = partSet.g.Length();
+         const bool offStays = p.mode != DriveMode::Held;
+         const double V = gp.CoilOn() ? gp.CoilVolts() : offStays ? 0.0 : p.coil.vSupply;
+         const double lMax = (gp.cfg.coilD.a + gp.cfg.coilD.b / (p.plungerClosedFrac + p.coil.x0)) * 1e-3;
+         const double clear = p.skirtClearanceMm * MM, skirtF = p.skirtPreloadN + p.skirtKNPerM * clear;
+         if (gp.SeatK() > 0.0)
+            aLin += (p.skirtMass * g + skirtF) * std::sqrt(2.0 / gp.SeatK());
+         return gp.Energy(nullptr, 0) - gp.RestJ() + 0.5 * lMax * gp.iCoil * gp.iCoil + V * V / p.coil.rOhm * T;
+      }
       // EnergyMove's three moves over T with E fed: the ring's slide dr, the skirt pivot's slide dz (m) and its tilt turn dt (rad); work as EnergyMove's
       void Moves(const double E, const double T, double &dr, double &dz, double &dt, double *const work) const
       {

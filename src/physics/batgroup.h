@@ -111,6 +111,29 @@ namespace BatGroup
          mp = s.plungerKg;
          If = p.iFlipper;
          reach = geo.ol.Lc + geo.ol.re;
+         // the least of the bat's stored energy Vbat (return spring + rest stop) over its turn: on the rest stop, where the spring's preload and the stop's squash balance (Vbat grows
+         // above phi 0): a scan over [-0.1 rad, 0] (4 x the stop's reference squash) and a golden-section refinement about its lowest point, once here (one-pass bound: RestFloorJ)
+         {
+            constexpr int kN = 200;
+            constexpr double kLo = -0.1, kG = 0.6180339887498949;
+            double bestPh = 0.0, bestV = Vbat(0.0);
+            for (int i = 0; i < kN; i++)
+               if (const double ph = kLo * (kN - i) / kN, v = Vbat(ph); std::isfinite(v) && v < bestV)
+               {
+                  bestV = v;
+                  bestPh = ph;
+               }
+            double a = std::max(bestPh + kLo / kN, kLo), b = std::min(bestPh - kLo / kN, 0.0);
+            for (int it = 0; it < 60; it++)
+            {
+               const double c = b - kG * (b - a), d = a + kG * (b - a);
+               if (Vbat(c) < Vbat(d))
+                  b = d;
+               else
+                  a = c;
+            }
+            restFloorJ = std::min(bestV, Vbat(0.5 * (a + b)));
+         }
       }
       // The bat at angle phi0 (rad from rest), still, plunger slaved: one rigid body with the coil off (as ContactBat::Reset)
       void Reset(const double phi0, const bool sol)
@@ -620,6 +643,7 @@ namespace BatGroup
       double Inertia(const double ph) const { return If + mp * Sq(Kin(ph).lever * 1e-3); }
       double X(const double ph) const { return FM::SliderX(s, p, p.theta0 + ph) * 1e-3; }
       double PhiStop() const { return phiStop; }
+      double RestFloorJ() const { return restFloorJ; }   // the least of Vbat (return spring + rest stop) over the bat's turn, J (one-pass bound: ContactBatPart::EnergyCap)
 
    private:
       static double Sq(const double a) { return a * a; }
@@ -825,6 +849,7 @@ namespace BatGroup
       }
 
       double kLink = 0.0, cStiff = 0.0, cFree = 0.0, slop = 0.0, kSpring = 0.0, xRest = 0.0, xMin = 0.0, xMax = 0.0, bobbin = 0.0, phiStop = 0.0, mp = 0.0, If = 0.0;
+      double restFloorJ = 0.0;   // the least of Vbat, J (set with the constants above)
       CoilSettings coilP, coilH;   // the windings as the coil's one energy law takes them
       CoilDerived derP, derH;
       // the last evaluation, for the failure notes: the link's mismatch at the move's end (m), its state (r rigid, h plunger pinned, s slack, p pushing,
