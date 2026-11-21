@@ -941,7 +941,6 @@ void Player::InitTableSession(const bool isInitial)
       {
          m_vball.push_back(static_cast<Ball *>(editable));
          ContactSystem::PushOutAtStart(&static_cast<Ball *>(editable)->m_hitBall, editable->GetName());   // out of any surface it was placed inside, by the shortest move, before the zones judge it
-         ContactSystem::NotePlaced(&static_cast<Ball *>(editable)->m_hitBall);   // a ball present at play start is a placement, as CreateBall's: the zones (a virtual kicker) judge it where it is
       }
 
       editable->TimerSetup(m_vht);
@@ -1642,7 +1641,6 @@ Ball *Player::CreateBall(const float x, const float y, const float z, const floa
    pBall->m_hitBall.m_d.m_mass = mass;
    pBall->m_hitBall.m_d.m_radius = radius;
    pBall->m_hitBall.m_d.m_vel = { vx, vy, vz };
-   ContactSystem::NotePlaced(&pBall->m_hitBall);
    pBall->m_d.m_useTableRenderSettings = true;
    pBall->TimerSetup(m_vht);
    pBall->RenderSetup(m_renderer.get());

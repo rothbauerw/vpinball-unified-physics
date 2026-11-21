@@ -275,7 +275,14 @@ static void QueryEngageLog(const char *const when)   // the one entry per ball c
    PLOGI << w.str();
 }
 static double g_cycleS = 0.0;       // the cycle in seconds, as ContactSystem::Step was given it (the parts and cords advanced alone after it read it)
-static std::vector<const HitBall *> g_placed;   // the balls a script or the driver put where they are since the last cycle (NotePlaced)
+static std::vector<const HitBall *> g_placed;   // the balls placed since the last cycle: the load saw their position changed outside the engine, or loaded them first (NotePlaced)
+// a placement (GroupStepDesign 17.4): a position move no step did, and no fault; the None triggers judge the ball where it is. Called by the load only (OwnLoad).
+static void NotePlaced(const HitBall *const ball)
+{
+   g_placed.push_back(ball);
+   if (g_pplayer != nullptr && g_pplayer->m_physics != nullptr)
+      g_pplayer->m_physics->m_noneZones.Placed(ball);   // the None triggers judge it where it is (placement rule)
+}
 static ContactSystem::CycleStats g_last;
 static std::vector<std::function<void()>> g_deferred;      // events raised inside the step, fired after it (Finish)
 // The test driver's cost split of this cycle (docs/unified-physics/TestMatrixDesign.txt section 3 point 10 b-d): null unless the driver times the cycle in detail. Per island: what set each
@@ -316,7 +323,6 @@ struct ContactSystemImpl
       }
    }
 
-   struct KeptDoubles;   // (below, with g_keptDoubles)
    // A ball in the step: its SI state, the substep's forces, and what the step needs to know about it.
    struct Body
    {
@@ -327,7 +333,6 @@ struct ContactSystemImpl
       V3 c, v, w;
       V3 extBaseVS;             // m/s per physics step: gravity and nudge (the part that does not depend on the position)
       Vertex3Ds posStart;
-      const KeptDoubles *kept = nullptr;   // its kept doubles (g_keptDoubles; null = none): one lookup per ball per cycle (FindKept), read by its query centre (GatherStatic) and its step (CordIsland)
       double lScale = 1.0;
       bool magnetsOn = false;
       bool dragged = false;     // the debug mouse drags the ball: held against gravity and the nudge (Ball::fExt), no magnets
@@ -491,23 +496,65 @@ struct ContactSystemImpl
       w.heldA = V3((double)aU.x, (double)aU.y, (double)aU.z) * (U / (DEFAULT_STEPTIME_S * DEFAULT_STEPTIME_S));   // U/VPT^2 -> m/s2
    }
 
-   // SI state of a ball
+   // ---- the ball's owned state (to-do 1.51, runs/2026-11-21-ball-state/design.md; HitBall::m_own) ----
+   // The load's change test, part by part (design 3.1-3.4): position, velocity and spin each keep the exact double while their floats are what the engine last wrote for them
+   // (a script writing back the very float it read changes nothing); a part whose floats differ was changed outside the engine and takes the float, which replaces the owned
+   // value (a script that sets only the velocity leaves the exact position). A changed position, or a ball's first load (no state yet), is a placement (NotePlaced).
+   // Idempotent: the floats it takes become the recorded ones, so every later load in the cycle sees no change. A change smaller than the float's step is not seen (design 5.2: no work).
+   static void OwnLoad(HitBall *const pb)
+   {
+      HitBall::OwnState &s = pb->m_own;
+      const bool first = !s.set;
+      if (first || !(pb->m_d.m_pos == s.pos))
+      {
+         s.pos = pb->m_d.m_pos;
+         s.c[0] = (double)s.pos.x * U; s.c[1] = (double)s.pos.y * U; s.c[2] = (double)s.pos.z * U;
+         NotePlaced(pb);
+      }
+      if (first || !(pb->m_d.m_vel == s.vel))
+      {
+         s.vel = pb->m_d.m_vel;
+         s.v[0] = (double)s.vel.x * VS; s.v[1] = (double)s.vel.y * VS; s.v[2] = (double)s.vel.z * VS;
+      }
+      if (first || !(pb->m_angularmomentum == s.am))
+      {
+         s.am = pb->m_angularmomentum;
+         const double wScale = 1.0 / ((double)pb->Inertia() * DEFAULT_STEPTIME_S);
+         s.w[0] = (double)s.am.x * wScale; s.w[1] = (double)s.am.y * wScale; s.w[2] = (double)s.am.z * wScale;
+      }
+      s.set = true;
+   }
+   static V3 OwnC(const HitBall *const pb) { return V3(pb->m_own.c[0], pb->m_own.c[1], pb->m_own.c[2]); }   // (after the load: every ball has a state)
+   static V3 OwnV(const HitBall *const pb) { return V3(pb->m_own.v[0], pb->m_own.v[1], pb->m_own.v[2]); }
+   static V3 OwnW(const HitBall *const pb) { return V3(pb->m_own.w[0], pb->m_own.w[1], pb->m_own.w[2]); }
+   // The engine's one write of a ball's state (design 4.1: the step's write-back, the sleep's zero, an engagement's seat): the owned doubles and the floats together, the floats
+   // recorded as written, so the next load sees no outside change. Writing the floats does no work (17.5): the ball goes on from the doubles.
+   static void WriteBall(HitBall *const pb, const V3 &c, const V3 &v, const V3 &w)
+   {
+      HitBall::OwnState &s = pb->m_own;
+      const double lScale = (double)pb->Inertia() * DEFAULT_STEPTIME_S;
+      s.c[0] = c.x; s.c[1] = c.y; s.c[2] = c.z;
+      s.v[0] = v.x; s.v[1] = v.y; s.v[2] = v.z;
+      s.w[0] = w.x; s.w[1] = w.y; s.w[2] = w.z;
+      pb->m_d.m_pos = Vertex3Ds((float)(c.x / U), (float)(c.y / U), (float)(c.z / U));
+      pb->m_d.m_vel = Vertex3Ds((float)(v.x / VS), (float)(v.y / VS), (float)(v.z / VS));
+      pb->m_angularmomentum = Vertex3Ds((float)(w.x * lScale), (float)(w.y * lScale), (float)(w.z * lScale));
+      s.pos = pb->m_d.m_pos;
+      s.vel = pb->m_d.m_vel;
+      s.am = pb->m_angularmomentum;
+      s.set = true;
+   }
+
+   // SI state of a ball: its owned state, after the change test (the floats only where something outside the engine changed them)
    static void LoadState(Body &w)
    {
       HitBall *const pb = w.pb;
-      const double wScale = 1.0 / w.lScale;
-      w.c = V3((double)w.posStart.x * U, (double)w.posStart.y * U, (double)w.posStart.z * U);
-      w.v = V3((double)pb->m_d.m_vel.x * VS, (double)pb->m_d.m_vel.y * VS, (double)pb->m_d.m_vel.z * VS);
-      w.w = V3((double)pb->m_angularmomentum.x * wScale, (double)pb->m_angularmomentum.y * wScale, (double)pb->m_angularmomentum.z * wScale);
+      OwnLoad(pb);
+      w.c = OwnC(pb);
+      w.v = OwnV(pb);
+      w.w = OwnW(pb);
       if (w.held)
          w.w = V3();   // (spin zero: KickerDesign 1h)
-   }
-
-   // a cycle's ball: its kept doubles, looked up once (the map's elements stay put while others are added; none is erased within a cycle)
-   static void FindKept(Body &w)
-   {
-      const auto kd = g_keptDoubles.find(w.pb);
-      w.kept = kd != g_keptDoubles.end() ? &kd->second : nullptr;
    }
 
    // ---- the part cull (runs/2026-11-20-part-cull/design.md) ----
@@ -855,7 +902,6 @@ struct ContactSystemImpl
             w.e = &e;
             LoadBody(w, pb);
             LoadState(w);
-            FindKept(w);
             w.band = e.band;
             Sources::Begin(w, dt);   // (it reads only the ball's floor items, which Regather part 1 keeps as they are)
             cy.bodies.push_back(std::move(w));
@@ -973,9 +1019,8 @@ struct ContactSystemImpl
             continue;
          HitBall *const pb = w.pb;
          BallContact &e = *w.e;
-         // the query's centre is where the step starts the ball: its kept double while its floats are those (CordIsland's rule for every island but a cord's), else its floats
-         const V3 c0 = w.kept != nullptr && w.kept->pos == w.posStart ? w.kept->c : w.c;
-         ContactSurfaceHost::FinderQuery(pb, c0, w.v, w.bs.R, cy.dt, std::max(w.reachS, 0.0));
+         // the query's centre is where the step starts the ball: its owned state
+         ContactSurfaceHost::FinderQuery(pb, w.c, w.v, w.bs.R, cy.dt, std::max(w.reachS, 0.0));
          e.reachS = w.reachS;   // (the stock net's log reads it)
          e.reachMs = g_pplayer->m_time_msec;
          {
@@ -1473,7 +1518,6 @@ struct ContactSystemImpl
       w.e = &e;
       LoadBody(w, pb);
       LoadState(w);
-      FindKept(w);
       w.band = e.band;
       Sources::ReachAcc(w);
       cy.bodies.push_back(std::move(w));
@@ -1606,7 +1650,7 @@ struct ContactSystemImpl
                      band->CordEnsure();
                      BandBall bb;
                      bb.ball = w.pb;
-                     bb.vin = RubberContact::V3((double)w.pb->m_d.m_vel.x * VS, (double)w.pb->m_d.m_vel.y * VS, (double)w.pb->m_d.m_vel.z * VS);
+                     bb.vin = w.v;
                      band->m_engaged.push_back(bb);
                      w.e->bandsMore.push_back(band);
                      if (++s_bandSecond % 100 == 1)   // (counted: how often a ball is held by two bands at once)
@@ -1723,9 +1767,7 @@ struct ContactSystemImpl
             PLOGI << "ContactTrace t=" << g_pplayer->m_time_msec << " pos " << w.c.x / U << ' ' << w.c.y / U << ' ' << w.c.z / U << " v " << w.v.x << ' ' << w.v.y << ' ' << w.v.z << " w " << w.w.x << ' ' << w.w.y << ' ' << w.w.z
                   << " depth" << o.str() << " cluster " << isl.members.size();
          }
-         pb->m_d.m_pos = Vertex3Ds((float)(w.c.x / U), (float)(w.c.y / U), (float)(w.c.z / U));
-         pb->m_d.m_vel = Vertex3Ds((float)(w.v.x / VS), (float)(w.v.y / VS), (float)(w.v.z / VS));
-         pb->m_angularmomentum = Vertex3Ds((float)(w.w.x * w.lScale), (float)(w.w.y * w.lScale), (float)(w.w.z * w.lScale));
+         WriteBall(pb, w.c, w.v, w.w);
          const Vertex3Ds ds = pb->m_d.m_pos - w.posStart;
          pb->m_lastEventSqrDist += ds.LengthSquared();
 #ifdef C_DYNAMIC
@@ -2216,10 +2258,6 @@ struct ContactSystemImpl
    }
 
    // the group's balls change between cycles: each cord's own per-ball state follows them
-   // What a ball's state was to double precision when it left a group step, with the floats that state was written as (the rest of the engine keeps floats). While its floats are still those, the doubles go on: a rounded place
-   // would make the cord re-solve its path, and a pulley could change with nothing paying. Keyed by the ball; a ball gone leaves an entry no other ball's floats match.
-   struct KeptDoubles { Vertex3Ds pos, vel, am; V3 c, v, w; };
-   inline static std::unordered_map<const HitBall *, KeptDoubles> g_keptDoubles;
    inline static std::unordered_map<const HitBall *, long long> g_coilBooked;   // a coil's current change: the physics step its work was last booked for each ball (once per ball per step); cleared at play end (EndTable)
 
    static void CordFollow(CordBand &cb, const GroupStep::Ball *const groupBalls, HitBall *const *balls, const int n)
@@ -2410,30 +2448,7 @@ struct ContactSystemImpl
          b.c = w.c;
          b.adds = ContactSurfaceHost::FinderAddsBind(w.pb, &b.adds);   // the inside check's rounding room: the additions to the ball's position since its query (0 unless stepped before in the cycle)
          b.v = w.v;
-         b.w = w.w;
-         if (ring)
-         {
-            if (w.kept != nullptr && w.kept->pos == w.pb->m_d.m_pos)
-            {
-               const KeptDoubles &k = *w.kept;
-               b.c = k.c;
-               b.v = w.v + (k.v - V3((double)k.vel.x * VS, (double)k.vel.y * VS, (double)k.vel.z * VS));
-               b.w = w.w + (k.w - V3((double)k.am.x / w.lScale, (double)k.am.y / w.lScale, (double)k.am.z / w.lScale));
-            }
-         }
-         else
-         {
-            HitBall *const pb = w.pb;
-            const KeptDoubles *const kd = w.kept;
-            if (kd != nullptr && kd->pos == pb->m_d.m_pos && kd->vel == pb->m_d.m_vel && kd->am == pb->m_angularmomentum
-               && w.c.x == (double)pb->m_d.m_pos.x * U && w.c.y == (double)pb->m_d.m_pos.y * U && w.c.z == (double)pb->m_d.m_pos.z * U   // (nothing has moved it this cycle before here)
-               && w.v.x == (double)pb->m_d.m_vel.x * VS && w.v.y == (double)pb->m_d.m_vel.y * VS && w.v.z == (double)pb->m_d.m_vel.z * VS)
-            {
-               b.c = kd->c;
-               b.v = kd->v;
-               b.w = kd->w;
-            }
-         }
+         b.w = w.w;   // (c, v, w: the ball's owned state, as loaded: one state, nothing to pick)
          b.fExt = w.dragged ? (w.extBaseVS * (1.0 / PHYSICS_STEPTIME_S)) * (-b.m) : V3();   // (a dragged ball: the hand holds it against gravity and the nudge, every ball's g.set.g)
          b.held = w.held;
          b.heldA = w.heldA;
@@ -2459,7 +2474,7 @@ struct ContactSystemImpl
          b.forceScale = g.nbf > 0 && w.magnetsOn && !w.held ? b.m / (7800.0 * 4.0 / 3.0 * M_PI * b.R * b.R * b.R * std::max(0.001f, w.pb->m_d.m_mass)) : 0.0;
          if (w.magAcc > 0.0)   // what stays held for the cycle: the other balls' part, the magnets not on a field (nor, with aircore_in_step, the air-core coils): a drive
          {
-            const float mp[3] = { w.pb->m_d.m_pos.x, w.pb->m_d.m_pos.y, w.pb->m_d.m_pos.z };
+            const float mp[3] = { (float)(w.c.x / U), (float)(w.c.y / U), (float)(w.c.z / U) };   // (the magnets' float interface, from the owned centre)
             // the other balls' part: a stored energy of place when the solve gave a form (pairform.h, 2026-11-03, added below), else held as before (the dipoles)
             const bool form = Magnets::HasPairForm(w.pb);
             float mdv[3] = { form ? 0.f : w.pb->m_magPair[0], form ? 0.f : w.pb->m_magPair[1], form ? 0.f : w.pb->m_magPair[2] };
@@ -2474,10 +2489,10 @@ struct ContactSystemImpl
                   cords.push_back(b);
          if (ring)
          {
-            const bool same = w.kept != nullptr && w.kept->pos == w.pb->m_d.m_pos;
+            // (a ball the load did not see moved outside the engine is where the engine left it: a depth found there is the faces in reach changing)
             cause[ib] = std::find(g_placed.begin(), g_placed.end(), w.pb) != g_placed.end() ? DepthCause::Placed
                : w.e != nullptr && !w.e->groupLoop && w.e->endStored >= 0.0 ? DepthCause::HandedOver
-               : same ? DepthCause::Faces : DepthCause::StockMoved;
+               : DepthCause::Faces;
          }
          if (ring && w.e != nullptr)
             RingHandIn(*w.e, w.bs, w.c);
@@ -2566,7 +2581,7 @@ struct ContactSystemImpl
          t.b = ib;
          if (out != nullptr)
          {
-            V3 c((double)out->m_d.m_pos.x * U, (double)out->m_d.m_pos.y * U, (double)out->m_d.m_pos.z * U);
+            V3 c = OwnC(out);   // (a partner outside the group: its owned centre)
             for (const Body &w : cy.bodies)
                if (w.pb == out) { c = w.c; break; }
             t.o[0] = c.x; t.o[1] = c.y; t.o[2] = c.z;
@@ -3216,15 +3231,6 @@ struct ContactSystemImpl
          ContactSurfaceHost::FinderAddsBind(w.pb, nullptr);   // (the count kept for the cycle's rest; the group's slot is the next island's)
          w.v = g.ball[ib].v;
          w.w = g.ball[ib].w;   // (a step that could not be solved: what is left of the cycle is not stepped, so nothing is gained: below)
-         {
-            KeptDoubles &kd = g_keptDoubles[w.pb];
-            kd.pos = Vertex3Ds((float)(w.c.x / U), (float)(w.c.y / U), (float)(w.c.z / U));   // (as the cycle's end writes them)
-            kd.vel = Vertex3Ds((float)(w.v.x / VS), (float)(w.v.y / VS), (float)(w.v.z / VS));
-            kd.am = Vertex3Ds((float)(w.w.x * w.lScale), (float)(w.w.y * w.lScale), (float)(w.w.z * w.lScale));
-            kd.c = w.c;
-            kd.v = w.v;
-            kd.w = w.w;
-         }
          ib++;
       }
       if (GroupStep::Group::ImpOn())   // test tooling (VPX_TEST_IMPULSES=1): the cycle's impulses by ball and source to the test driver, now that its result is kept
@@ -3581,8 +3587,7 @@ struct ContactSystemImpl
    static bool SameV(const Vertex3Ds &a, const Vertex3Ds &b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
    static bool PartQuiet(const ContactMovingPart *mp) { return mp->Sleeping() || mp->AtRest(); }
 
-   // owe: woken after this cycle's velocity update (which gave a sleeping ball no gravity): the contact steps of the rest of the cycle give the share back first (SleepInStep)
-   static void SleepWakeGroup(const size_t gi, const char *cause, const bool owe)
+   static void SleepWakeGroup(const size_t gi, const char *cause)
    {
       SleepGroup &g = g_sleep[gi];
       for (ContactMovingPart *const mp : g.parts)
@@ -3594,18 +3599,17 @@ struct ContactSystemImpl
          pb->m_sleepGroup = 0;
          pb->m_sleepHoldS = 0.0;
          pb->m_sleepCreepS = 0.0;
-         pb->m_sleepOwe = owe;
       }
       g_sleep.erase(g_sleep.begin() + (long)gi);
    }
-   static void SleepWakeBall(const HitBall *pb, const char *cause, const bool owe)
+   static void SleepWakeBall(const HitBall *pb, const char *cause)
    {
       if (pb == nullptr || pb->m_sleepGroup == 0)
          return;
       for (size_t gi = 0; gi < g_sleep.size(); gi++)
          if (g_sleep[gi].id == pb->m_sleepGroup)
          {
-            SleepWakeGroup(gi, cause, owe);
+            SleepWakeGroup(gi, cause);
             return;
          }
    }
@@ -3677,7 +3681,7 @@ struct ContactSystemImpl
             {
                const HitBall &h = ball->m_hitBall;
                held = true;
-               band->Cord()->fixed->SpanPush(V3((double)h.m_d.m_pos.x * U, (double)h.m_d.m_pos.y * U, (double)h.m_d.m_pos.z * U), (double)h.m_d.m_radius * U, h.m_contact != nullptr ? h.m_contact->reachS : 0.0, dNow, push);
+               band->Cord()->fixed->SpanPush(OwnC(&h), (double)h.m_d.m_radius * U, h.m_contact != nullptr ? h.m_contact->reachS : 0.0, dNow, push);
             }
          if (!held && band->Cord()->fixed->PlateMoveM(dt) <= 0.0)
             continue;   // a cord at rest with nothing to move it: the sleeping balls are where they were when they slept
@@ -3706,8 +3710,6 @@ struct ContactSystemImpl
          return;
       SleepTable();
       g_sleepCycleDt = 0.0;
-      for (auto *const ball : g_pplayer->m_vball)
-         ball->m_hitBall.m_sleepOwe = false;
       if (g_pplayer->m_vball.empty())
          return;
       const Vertex3Ds base = g_pplayer->m_vball[0]->m_hitBall.ExternalVelocityIncrement(false);
@@ -3732,13 +3734,13 @@ struct ContactSystemImpl
          if (cause == nullptr)
             cause = SleepParts(g, PHYSICS_STEPTIME_S);
          if (cause != nullptr)
-            SleepWakeGroup(gi, cause, false);
+            SleepWakeGroup(gi, cause);
          else
             gi++;
       }
    }
-   // At each contact step, before the gather: moves outside the step since the last one, an awake ball within reach (the islands' own test), then the gravity share a ball woken
-   // within this cycle is owed; the pairs of sleeping balls are kept
+   // At each contact step, before the gather: moves outside the step since the last one, an awake ball within reach (the islands' own test); the pairs of sleeping
+   // balls are kept
    static void SleepInStep(Cycle &cy)
    {
       SleepTable();
@@ -3746,7 +3748,7 @@ struct ContactSystemImpl
          g_sleepCycleDt += cy.dt;
       for (size_t gi = 0; gi < g_sleep.size();)
          if (const char *const cause = SleepMoved(g_sleep[gi]))
-            SleepWakeGroup(gi, cause, true);
+            SleepWakeGroup(gi, cause);
          else
             gi++;
       for (bool woke = !g_sleep.empty(); woke;)
@@ -3760,7 +3762,8 @@ struct ContactSystemImpl
             const HitBall &h = a->m_hitBall;
             if (h.m_sleepGroup == 0 && !KickerHold::Held(&h))
             {
-               eAwake += 0.5 * (h.m_d.m_mass * ContactSystem::kMassUnitKg * h.m_d.m_vel.Dot(h.m_d.m_vel) * VS * VS + h.m_angularmomentum.Dot(h.m_angularmomentum) / h.Inertia() * ContactSystem::kMassUnitKg * VS * VS);
+               const V3 v = OwnV(&h), am = OwnW(&h) * ((double)h.Inertia() * DEFAULT_STEPTIME_S);   // (the owned state; am: the spin as angular momentum, VPX units)
+               eAwake += 0.5 * (h.m_d.m_mass * ContactSystem::kMassUnitKg * v.Dot(v) + am.Dot(am) / h.Inertia() * ContactSystem::kMassUnitKg * VS * VS);
                const Vertex3Ds g = h.ExternalVelocityIncrement(false);
                aAwake += V3(g.x * VS, g.y * VS, g.z * VS).Length() / PHYSICS_STEPTIME_S;
                if (h.m_magnetic && Magnets::Active())
@@ -3782,11 +3785,10 @@ struct ContactSystemImpl
                const HitBall *const pb = &b->m_hitBall;
                if (pb->m_sleepGroup == 0)
                   continue;
-               const Vertex3Ds d = pa->m_d.m_pos - pb->m_d.m_pos;
-               const double gap = std::sqrt((double)d.Dot(d)) * U - ra - (double)pb->m_d.m_radius * U;
+               const double gap = (OwnC(pa) - OwnC(pb)).Length() - ra - (double)pb->m_d.m_radius * U;
                if (gap <= reach)   // the islands' energy pairing (a gap equal to the reach can meet)
                {
-                  SleepWakeBall(pb, "an awake ball within reach", true);
+                  SleepWakeBall(pb, "an awake ball within reach");
                   woke = true;
                }
             }
@@ -3923,11 +3925,9 @@ struct ContactSystemImpl
             for (const SurfaceContact &it : pb->m_contact->items)
                if (ContactMovingPart *const mp = it.r->MovingPart(); mp != nullptr && std::find(g.parts.begin(), g.parts.end(), mp) == g.parts.end())
                   g.parts.push_back(mp);
-         pb->m_d.m_vel = Vertex3Ds(0.f, 0.f, 0.f);
-         pb->m_angularmomentum = Vertex3Ds(0.f, 0.f, 0.f);
+         WriteBall(pb, OwnC(pb), V3(), V3());   // (the engine's write: the owned state stops with its floats)
          pb->m_sleepPos = pb->m_d.m_pos;
          pb->m_sleepGroup = g.id;
-         pb->m_sleepOwe = false;
          pb->m_sleepCreepS = 0.0;
       }
       g.partIdle.assign(g.parts.size(), 0);
@@ -4250,8 +4250,9 @@ bool ContactSystemImpl::EngageImpl(ContactHost *const host, HitBall *const pb, c
    BallSI bs;
    bs.R = (double)pb->m_d.m_radius * U;
    const Vertex3Ds posStart = pb->m_d.m_pos;
-   V3 c((double)posStart.x * U, (double)posStart.y * U, (double)posStart.z * U);
-   const V3 v((double)pb->m_d.m_vel.x * VS, (double)pb->m_d.m_vel.y * VS, (double)pb->m_d.m_vel.z * VS);
+   OwnLoad(pb);   // (the owned state: its floats only for a ball with no state yet)
+   V3 c = OwnC(pb);
+   const V3 v = OwnV(pb);
    GatherItems(host, pb, bs, c, how, rb.items);
    // The ball starts the engagement touching or a little inside the rubber (the hit was found within a step). Go back to the instant it first touched: along its
    // own velocity, by depth / closing speed, at most one physics step; if it is not closing (pushed in by something else), seat it at touching distance along the normal.
@@ -4304,11 +4305,9 @@ bool ContactSystemImpl::EngageImpl(ContactHost *const host, HitBall *const pb, c
    if (!zeroNotSeat && !ContactSystem::s_unified)
       SeatAtTouch(rb.items, bs, c, v, rb.delta0, rb.rewound);
    }
-   pb->m_d.m_pos = Vertex3Ds((float)(c.x / U), (float)(c.y / U), (float)(c.z / U));
+   WriteBall(pb, c, v, OwnW(pb));   // (the seat: the engine's write)
    rb.vin = v;
-   const double inertiaU = (double)pb->Inertia();
-   const double wScale = 1.0 / (inertiaU * DEFAULT_STEPTIME_S);
-   rb.win = V3((double)pb->m_angularmomentum.x * wScale, (double)pb->m_angularmomentum.y * wScale, (double)pb->m_angularmomentum.z * wScale);
+   rb.win = OwnW(pb);
    rb.posStart = posStart;
    if (ContactTraceOn())
       PLOGI << "ContactEngage " << (host != nullptr ? host->m_name : std::string("band")) << " t=" << g_pplayer->m_time_msec << " how " << how << " speed " << v.Length() << " vn_in " << rb.vin.Length() << " pos " << posStart.x << ' ' << posStart.y << ' ' << posStart.z << " delta0_um " << rb.delta0 * 1e6
@@ -4743,16 +4742,19 @@ void ContactSystem::NoteDriveWork(const HitBall *const ball, const double joules
          << total * 1e6 << " uJ), t=" << (g_pplayer != nullptr ? g_pplayer->m_time_msec : 0);
 }
 
-void ContactSystem::DropKeptDoubles(const HitBall *const ball)
+void ContactSystem::LoadBalls()
 {
-   ContactSystemImpl::g_keptDoubles.erase(ball);   // (the copy is of a state the ball no longer has: contactsystem.h)
+   if (g_pplayer == nullptr)
+      return;
+   for (Ball *const b : g_pplayer->m_vball)
+      ContactSystemImpl::OwnLoad(&b->m_hitBall);
 }
 
-void ContactSystem::NotePlaced(const HitBall *const ball)
+void ContactSystem::BallCentreU(const HitBall *const ball, double p[3])
 {
-   g_placed.push_back(ball);
-   if (g_pplayer != nullptr && g_pplayer->m_physics != nullptr)
-      g_pplayer->m_physics->m_noneZones.Placed(ball);   // the None triggers judge it where it is (placement rule)
+   using namespace RubberContact;
+   for (int i = 0; i < 3; i++)
+      p[i] = ball->m_own.set ? ball->m_own.c[i] / U : (double)(&ball->m_d.m_pos.x)[i];
 }
 
 void ContactSystem::PushOutAtStart(HitBall *const ball, const std::string &name)
@@ -4788,12 +4790,7 @@ void ContactSystem::SleepCycleStart()
 
 void ContactSystem::SleepWake(const HitBall *const ball, const char *const cause)
 {
-   ContactSystemImpl::SleepWakeBall(ball, cause, true);
-}
-
-void ContactSystem::SleepWakeAtStart(const HitBall *const ball, const char *const cause)
-{
-   ContactSystemImpl::SleepWakeBall(ball, cause, false);
+   ContactSystemImpl::SleepWakeBall(ball, cause);
 }
 
 // A step of dt seconds: the engine's whole cycle (Step), or a piece of it in an overlap replay (CheckOverlaps)
@@ -4838,10 +4835,8 @@ namespace
       Vertex3Ds pos, vel, angm;
       float lastEventSqrDist = 0.f;
       bool advanced = false;
-      bool hasKept = false;
-      ContactSystemImpl::KeptDoubles kept;
+      HitBall::OwnState own;   // the engine's owned state, with the floats it wrote (to-do 1.51): the pair goes back together
       int sleepGroup = 0;   // pile sleep
-      bool sleepOwe = false;
       double sleepHoldS = 0.0, sleepCreepS = 0.0;
       Vertex3Ds sleepPos;
    };
@@ -4873,12 +4868,8 @@ void ContactSystem::SaveStart()
    {
       HitBall &hb = vb[i]->m_hitBall;
       s.balls[i] = { &hb, hb.m_d.m_pos, hb.m_d.m_vel, hb.m_angularmomentum, hb.m_lastEventSqrDist, hb.m_rubberAdvanced };
-      const auto kd = ContactSystemImpl::g_keptDoubles.find(&hb);
-      s.balls[i].hasKept = kd != ContactSystemImpl::g_keptDoubles.end();
-      if (s.balls[i].hasKept)
-         s.balls[i].kept = kd->second;
+      s.balls[i].own = hb.m_own;
       s.balls[i].sleepGroup = hb.m_sleepGroup;
-      s.balls[i].sleepOwe = hb.m_sleepOwe;
       s.balls[i].sleepHoldS = hb.m_sleepHoldS;
       s.balls[i].sleepCreepS = hb.m_sleepCreepS;
       s.balls[i].sleepPos = hb.m_sleepPos;
@@ -4926,7 +4917,6 @@ static void RestoreSnap()
    for (const BallSnap &b : s.balls)
    {
       b.pb->m_sleepGroup = b.sleepGroup;
-      b.pb->m_sleepOwe = b.sleepOwe;
       b.pb->m_sleepHoldS = b.sleepHoldS;
       b.pb->m_sleepCreepS = b.sleepCreepS;
       b.pb->m_sleepPos = b.sleepPos;
@@ -4935,10 +4925,7 @@ static void RestoreSnap()
       b.pb->m_angularmomentum = b.angm;
       b.pb->m_lastEventSqrDist = b.lastEventSqrDist;
       b.pb->m_rubberAdvanced = b.advanced;
-      if (b.hasKept)
-         ContactSystemImpl::g_keptDoubles[b.pb] = b.kept;
-      else
-         ContactSystemImpl::g_keptDoubles.erase(b.pb);
+      b.pb->m_own = b.own;   // (with the floats above: as the engine left them, or as changed outside since; the next load tells which)
    }
    if (g_engaged.size() == s.contacts.size())
    {
@@ -4977,19 +4964,18 @@ void ContactSystem::EndTable()
       if (g_pplayer == nullptr || std::none_of(g_pplayer->m_vball.begin(), g_pplayer->m_vball.end(), [&e](const Ball *b) { return &b->m_hitBall == e.ball; }))
          notInPlay++;
    PLOGI << "Contact system: play end: " << g_engaged.size() << " ball entries (" << notInPlay << " of balls not in play), " << g_ballPairs.size() << " ball pairs, "
-         << ContactSystemImpl::g_keptDoubles.size() << " kept doubles, " << ContactSystemImpl::g_sleep.size() << " sleep groups: cleared";
+         << ContactSystemImpl::g_sleep.size() << " sleep groups: cleared";
    if (g_pplayer != nullptr)
       for (Ball *const b : g_pplayer->m_vball)   // a ball that outlives the play (an editor ball): no pointer into the stores, no sleep group
       {
          b->m_hitBall.m_contact = nullptr;
          b->m_hitBall.m_sleepGroup = 0;
-         b->m_hitBall.m_sleepOwe = false;
+         b->m_hitBall.m_own.set = false;   // (an editor ball: the next play loads it from its floats)
       }
    g_engaged.clear();
    g_ballPairs.clear();
    g_placed.clear();
    g_deferred.clear();   // (events of the last step: their parts are gone)
-   ContactSystemImpl::g_keptDoubles.clear();
    ContactSystemImpl::g_coilBooked.clear();
    ContactSystemImpl::s_ballOrderLast.clear();
    ContactSystemImpl::s_ballGroupLast.clear();
@@ -5041,6 +5027,9 @@ namespace
          f.balls = FnvV(f.balls, hb.m_d.m_vel);
          f.balls = FnvV(f.balls, hb.m_angularmomentum);
          f.balls = FnvV(f.balls, hb.m_lastEventSqrDist);
+         f.balls = FnvV(f.balls, hb.m_own.c);   // the owned state (to-do 1.51): what the next cycle steps from
+         f.balls = FnvV(f.balls, hb.m_own.v);
+         f.balls = FnvV(f.balls, hb.m_own.w);
       }
       for (const BallContact &e : g_engaged)
       {
@@ -5173,7 +5162,7 @@ void ContactSystemImpl::CheckOverlaps(const float hittime, const double hS)
             continue;
          BallSI bs;
          bs.R = (double)pb->m_d.m_radius * U;
-         const V3 c((double)pb->m_d.m_pos.x * U, (double)pb->m_d.m_pos.y * U, (double)pb->m_d.m_pos.z * U);
+         const V3 c = ContactSystemImpl::OwnC(pb);
          for (ContactHost *const o : parts)
          {
             ContactMovingPart *const mp = o->MovingPart();
@@ -5270,8 +5259,7 @@ void ContactSystemImpl::CheckOverlaps(const float hittime, const double hS)
    auto gapAt = [&](HitBall *pb, const double t) {
       BallSI bs;
       bs.R = (double)pb->m_d.m_radius * U;
-      const Vertex3Ds p = pb->m_d.m_pos;
-      const V3 c((double)p.x * U, (double)p.y * U, (double)p.z * U);
+      const V3 c = ContactSystemImpl::OwnC(pb);
       double gmin = 1e9;
       for (ContactHost *const o : parts)
       {

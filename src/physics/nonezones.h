@@ -22,7 +22,7 @@ namespace ContactSystem
       void SubStart(double startS);           // after SaveStart: every ball's centre at the start of the cycle (startS: its start in the cycle, s); a placed ball or a rechecked zone is judged here
       void SubTest(double startS, double hS); // after CheckOverlaps: each ball's chord from its start to its end of the cycle against every enabled zone
       void CycleEnd(double cycleS);           // after SubTest: the cycle's events, in crossing order
-      void Placed(const HitBall *ball);       // NotePlaced: a ball created or moved by the script or the driver
+      void Placed(const HitBall *ball);       // a ball created or moved outside the engine (the cycle's load saw its position changed: ContactSystemImpl::OwnLoad)
       void BallGone(const HitBall *ball);     // Player::DestroyBall: no Unhit, a zone it was in loses its state link when no other ball is listed in it, its queued events go
       void Add(Trigger *trigger, std::vector<Vertex2D> &&poly, float zlow); // Trigger::PhysicSetup: a None trigger's zone (polygon in VPX units, surface height)
       void Remove(const Trigger *trigger);    // Trigger::PhysicRelease

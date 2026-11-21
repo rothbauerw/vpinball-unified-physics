@@ -807,7 +807,8 @@ namespace Magnets
                   const HitBall &hb = ball->m_hitBall;
                   if (hb.m_sleepGroup != 0 || !hb.m_magnetic || KickerHold::Held(&hb) || awakeGated)
                      continue;
-                  const double p[3] = { hb.m_d.m_pos.x, hb.m_d.m_pos.y, hb.m_d.m_pos.z };
+                  double p[3];
+                  ContactSystem::BallCentreU(&hb, p);   // (the owned state: to-do 1.51)
                   double B[3];
                   ExternalField(p, hb.m_d.m_radius, B);
                   awakeGated = std::sqrt(B[0] * B[0] + B[1] * B[1] + B[2] * B[2]) >= B_GATE;
@@ -849,7 +850,7 @@ namespace Magnets
                continue;
             BallM b = {};
             b.hb = &hb;
-            b.p[0] = hb.m_d.m_pos.x; b.p[1] = hb.m_d.m_pos.y; b.p[2] = hb.m_d.m_pos.z;
+            ContactSystem::BallCentreU(&hb, b.p);   // (the owned state: to-do 1.51)
             b.r = VPUTOM(hb.m_d.m_radius);
             b.vol = 4.0 / 3.0 * PI * b.r * b.r * b.r;
             b.mass = 7800.0 * b.vol * std::max(0.001f, hb.m_d.m_mass);
@@ -899,7 +900,7 @@ namespace Magnets
          }
          for (const BallM &b : bs)   // pile sleep: the solve runs, so a sleeping ball it gates has new forces: its group wakes, before the balls' velocities of this cycle
             if (b.gated && b.hb->m_sleepGroup != 0)
-               ContactSystem::SleepWakeAtStart(b.hb, "magnet solve runs");
+               ContactSystem::SleepWake(b.hb, "magnet solve runs");
          if (ngated < 2)
          {
             g_optASolver.ClearLast();

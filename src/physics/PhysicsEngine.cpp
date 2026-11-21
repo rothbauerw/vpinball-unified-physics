@@ -916,7 +916,10 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
       }
 
       if (ContactSystem::Unified())   // (the stock engine has no contact system)
+      {
+         ContactSystem::LoadBalls();   // the load: every ball's owned state brought up to what changed outside the engine since the last cycle (to-do 1.51), before anything reads it
          ContactSystem::SleepCycleStart();   // pile sleep: the wakes known at the cycle's start, before the magnets and the balls' velocities (nothing unless [Contact] sleep = 1)
+      }
 
       {
          const TestDriver::Timed tdMag(TestDriver::kMagnets);

@@ -92,9 +92,15 @@ public:
    bool m_rubberAdvanced = false;               // the rubber model already moved this ball for the current cycle (UpdateDisplacements skips the straight-line move)
    class ContactSurfaceHost *m_bandOwner = nullptr;      // band rubber whose engine-stepped contact currently drives this ball (null = none)
    struct BallContact *m_contact = nullptr;             // the contact system's engagement that holds this ball (a post, a wall rubber, the playfield, a disc); null = none
+   // The unified engine's own state of the ball (to-do 1.51, runs/2026-11-21-ball-state/design.md, GroupStepDesign 17.5): its exact centre c (m), velocity v (m/s) and spin w (rad/s)
+   // in doubles, carried from cycle to cycle, with the three floats the engine last wrote for it (pos, vel, am: what m_d.m_pos, m_d.m_vel and m_angularmomentum were set to; those
+   // floats are rounded copies for scripts and drawing, never an input while unchanged). The load at the cycle's start (ContactSystemImpl::OwnLoad) keeps each part whose floats are
+   // still those and takes the float of a part something outside the engine changed (a script, a kicker, the drag, the driver, the editor); a changed position is a placement.
+   // Written only by the engine's one write (ContactSystemImpl::WriteBall) and the snapshot. set = false: no state yet (a new ball): its first load takes its floats.
+   struct OwnState { double c[3] = {}, v[3] = {}, w[3] = {}; Vertex3Ds pos, vel, am; bool set = false; };
+   OwnState m_own;
    bool m_magnetic = true;                      // Ball.Magnetic: false = non-magnetic (ceramic): no pull from the magnets, no field of its own
    int m_sleepGroup = 0;                        // pile sleep: the group this ball sleeps in, 0 = awake (contactsystem.cpp, Pile sleep)
-   bool m_sleepOwe = false;                     // pile sleep: woken within this cycle, after its velocity update: the substeps take back a gravity share it was not given
    double m_sleepHoldS = 0.0;                   // pile sleep: how long the ball has stayed under the sleep speed, s
    double m_sleepCreepS = 0.0;                  // pile sleep: how long its group has crept between the sleep speed and 1 mm/s, s (the slow-creep notice)
    Vertex3Ds m_sleepPos;                        // pile sleep: where it went to sleep

@@ -266,7 +266,7 @@ namespace
 
 // The capture (design 1i): at the end of the step in which its centre entered the zone, the ball is placed at the kicker's centre at stock's hold height (as stock: script offsets and
 // trough layouts assume it), its speed and spin to 0, once. The change of its energy (kinetic, spin and height) is booked between cycles as the capture's drive work
-// (ContactSystem::NoteDriveWork). The move is a placement (NotePlaced: the first-sight rule, so an overlap it makes stores nothing). Its surface contact ends (a held ball has none).
+// (ContactSystem::NoteDriveWork). The move is a placement (the next cycle's load sees the floats changed: the first-sight rule, so an overlap it makes stores nothing). Its surface contact ends (a held ball has none).
 // From then on nothing moves it: it is a held ball (KickerHold, design 1h). The Hit keeps the chord's crossing time (NoneZones::Chord).
 void Kicker::Capture(HitBall *const b)
 {
@@ -277,10 +277,8 @@ void Kicker::Capture(HitBall *const b)
          << " m/s and spin " << b->m_angularmomentum.Length() / b->Inertia() / 0.01 << " rad/s set to 0, t=" << (g_pplayer != nullptr ? g_pplayer->m_time_msec : 0u);
    ContactSystem::Release(b, "kicker (held ball)");
    b->m_d.m_pos = m_parkPlace;
-   ContactSystem::NotePlaced(b);
    b->m_d.m_vel.SetZero();
    b->m_angularmomentum.SetZero();
-   ContactSystem::DropKeptDoubles(b);   // the kicker wrote its state: the group's kept copy of the moving ball no longer describes it
    ContactSystem::NoteDriveWork(b, -e, "capture (virtual kicker, placed at its centre, speed and spin to 0)");
 }
 
@@ -366,7 +364,6 @@ namespace
       ball->m_d.m_pos = pos;
       ball->m_d.m_vel = vel;
       ball->m_angularmomentum.SetZero();
-      ContactSystem::DropKeptDoubles(ball);   // the arm wrote its state (on the path, or let go): the group's kept copy no longer describes it
       return letGo;
    }
 }
@@ -1031,7 +1028,6 @@ STDMETHODIMP Kicker::CreateSizedBallWithMass(/*[in]*/ float radius, /*[in]*/ flo
          m_heldBall = m_lastHeldBall = hb;
          m_parkPlace = hb->m_d.m_pos;
          m_parkMovedNoted = false;
-         ContactSystem::DropKeptDoubles(hb);   // a new ball: a copy kept under its address belongs to a ball gone before
          PLOGI << "Kicker " << GetName() << ": CreateBall parks a new ball at (" << m_parkPlace.x << ", " << m_parkPlace.y << ", " << m_parkPlace.z << "), t=" << g_pplayer->m_time_msec;
       }
       pball->AddRef();
@@ -1162,7 +1158,6 @@ STDMETHODIMP Kicker::KickXYZ(float angle, float speed, float inclination, float 
       hb->m_coll.m_isContact = false;
       hb->m_coll.m_hitmoment_bit = true;
       hb->m_d.m_vel = Vertex3Ds(0.f, 0.f, speed);   // the path's start: straight up at the kick's speed (with 90 deg: let go here)
-      ContactSystem::DropKeptDoubles(hb);   // the kick wrote its state: the group's kept copy of the resting ball no longer describes it
 #ifdef C_DYNAMIC
       hb->m_dynamic = C_DYNAMIC;
 #endif
@@ -1182,7 +1177,6 @@ STDMETHODIMP Kicker::KickXYZ(float angle, float speed, float inclination, float 
          KickerArm::Start(this, hb, dirX, dirY, L, phiEnd, (double)speed);
          ContactSystem::Release(hb, "kicker arm (held ball)");   // a carried ball is held (design 1h): no surface contacts while the arm carries it
       }
-      ContactSystem::NotePlaced(hb);
       return S_OK;
    }
    if (m_virtual)
@@ -1227,7 +1221,6 @@ STDMETHODIMP Kicker::KickXYZ(float angle, float speed, float inclination, float 
       hb->m_d.m_pos.y += y;
       hb->m_d.m_pos.z += z;
       hb->m_d.m_vel = Vertex3Ds(sinf(anglerad) * speedxy, -cosf(anglerad) * speedxy, speedz);
-      ContactSystem::DropKeptDoubles(hb);   // the kick wrote its state: the group's kept copy of the parked ball no longer describes it
 #ifdef C_DYNAMIC
       hb->m_dynamic = C_DYNAMIC;
 #endif
@@ -1238,7 +1231,6 @@ STDMETHODIMP Kicker::KickXYZ(float angle, float speed, float inclination, float 
             << z << "), heading " << RADTOANG(anglerad) << " deg, inclination " << inclination << " deg: velocity (" << hb->m_d.m_vel.x << ", " << hb->m_d.m_vel.y << ", " << hb->m_d.m_vel.z << ") U/VPT = "
             << hb->m_d.m_vel.Length() * ContactSystem::kVelocityScale << " m/s; t=" << g_pplayer->m_time_msec;
       ContactSystem::NoteDriveWork(hb, work, "kick (virtual kicker)");
-      ContactSystem::NotePlaced(hb);
       return S_OK;
    }
    if (g_pplayer && m_phitkickercircle && m_phitkickercircle->m_pHitBall)

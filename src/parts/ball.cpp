@@ -608,7 +608,6 @@ STDMETHODIMP Ball::get_X(float *pVal)
 STDMETHODIMP Ball::put_X(float newVal)
 {
    m_hitBall.m_d.m_pos.x = newVal;
-   ContactSystem::NotePlaced(&m_hitBall);
    HitRubberContactRelease(&m_hitBall, "script moved the ball"); // a force-model contact holds a state of the old position
    return S_OK;
 }
@@ -622,7 +621,6 @@ STDMETHODIMP Ball::get_Y(float *pVal)
 STDMETHODIMP Ball::put_Y(float newVal)
 {
    m_hitBall.m_d.m_pos.y = newVal;
-   ContactSystem::NotePlaced(&m_hitBall);
    HitRubberContactRelease(&m_hitBall, "script moved the ball"); // a force-model contact holds a state of the old position
    return S_OK;
 }
@@ -636,7 +634,6 @@ STDMETHODIMP Ball::get_Z(float *pVal)
 STDMETHODIMP Ball::put_Z(float newVal)
 {
    m_hitBall.m_d.m_pos.z = newVal;
-   ContactSystem::NotePlaced(&m_hitBall);
    HitRubberContactRelease(&m_hitBall, "script moved the ball"); // a force-model contact holds a state of the old position
    return S_OK;
 }
@@ -668,7 +665,6 @@ STDMETHODIMP Ball::get_VelX(float *pVal)
 STDMETHODIMP Ball::put_VelX(float newVal)
 {
    m_hitBall.m_d.m_vel.x = newVal;
-   ContactSystem::DropKeptDoubles(&m_hitBall);   // the script wrote the ball's state: the group step's kept copy no longer describes it
    return S_OK;
 }
 
@@ -681,7 +677,6 @@ STDMETHODIMP Ball::get_VelY(float *pVal)
 STDMETHODIMP Ball::put_VelY(float newVal)
 {
    m_hitBall.m_d.m_vel.y = newVal;
-   ContactSystem::DropKeptDoubles(&m_hitBall);   // the script wrote the ball's state: the group step's kept copy no longer describes it
    return S_OK;
 }
 
@@ -694,7 +689,6 @@ STDMETHODIMP Ball::get_VelZ(float *pVal)
 STDMETHODIMP Ball::put_VelZ(float newVal)
 {
    m_hitBall.m_d.m_vel.z = newVal;
-   ContactSystem::DropKeptDoubles(&m_hitBall);   // the script wrote the ball's state: the group step's kept copy no longer describes it
    return S_OK;
 }
 
@@ -725,7 +719,6 @@ STDMETHODIMP Ball::get_AngMomX(float *pVal)
 STDMETHODIMP Ball::put_AngMomX(float newVal)
 {
    m_hitBall.m_angularmomentum.x = newVal;
-   ContactSystem::DropKeptDoubles(&m_hitBall);   // the script wrote the ball's state: the group step's kept copy no longer describes it
    return S_OK;
 }
 
@@ -738,7 +731,6 @@ STDMETHODIMP Ball::get_AngMomY(float *pVal)
 STDMETHODIMP Ball::put_AngMomY(float newVal)
 {
    m_hitBall.m_angularmomentum.y = newVal;
-   ContactSystem::DropKeptDoubles(&m_hitBall);   // the script wrote the ball's state: the group step's kept copy no longer describes it
    return S_OK;
 }
 
@@ -751,7 +743,6 @@ STDMETHODIMP Ball::get_AngMomZ(float *pVal)
 STDMETHODIMP Ball::put_AngMomZ(float newVal)
 {
    m_hitBall.m_angularmomentum.z = newVal;
-   ContactSystem::DropKeptDoubles(&m_hitBall);   // the script wrote the ball's state: the group step's kept copy no longer describes it
    return S_OK;
 }
 

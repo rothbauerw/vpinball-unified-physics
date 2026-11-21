@@ -2021,7 +2021,7 @@ bool ContactSurfaceHost::BandEngage(HitBall *const pb)
       return false;
    BandBall e;
    e.ball = pb;
-   e.vin = RubberContact::V3((double)pb->m_d.m_vel.x * VS, (double)pb->m_d.m_vel.y * VS, (double)pb->m_d.m_vel.z * VS);
+   e.vin = pb->m_own.set ? RubberContact::V3(pb->m_own.v[0], pb->m_own.v[1], pb->m_own.v[2]) : RubberContact::V3((double)pb->m_d.m_vel.x * VS, (double)pb->m_d.m_vel.y * VS, (double)pb->m_d.m_vel.z * VS);   // (the owned velocity: to-do 1.51)
    m_engaged.push_back(e);
    pb->m_bandOwner = this;
    return true;
