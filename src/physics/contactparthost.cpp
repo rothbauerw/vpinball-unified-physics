@@ -49,8 +49,8 @@ void ContactPartHost::PartAdvance()
    }
    m_part->SetGravity(g);   // (a nudge wakes a sleeping part)
    {
-      // the contact system stepped it with its balls for steppedS; the rest of the sub-interval it moves alone
-      const double rest = ContactSystem::SubIntervalS() - m_part->steppedS;
+      // the contact system stepped it with its balls for steppedS; the rest of the cycle it moves alone
+      const double rest = ContactSystem::CycleS() - m_part->steppedS;
       if (rest > 1e-9)
       {
          m_part->AdvanceAlone(rest);
@@ -59,7 +59,7 @@ void ContactPartHost::PartAdvance()
       }
       m_part->steppedS = 0.0;
       m_part->steppedThisCycle = false;
-      m_part->NextCycleStart(ContactSystem::SubIntervalS());   // (what starts at the next cycle's start: a jet's pending pulse)
+      m_part->NextCycleStart(ContactSystem::CycleS());   // (what starts at the next cycle's start: a jet's pending pulse)
    }
    m_adapter->Publish();
    // the part's events, in the order they happened: queued, the engine fires them after the free balls have moved (ContactSystem::Dispatch)

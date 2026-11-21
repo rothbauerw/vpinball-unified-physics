@@ -599,9 +599,6 @@ void HitTarget::PhysicSetup(PhysicsEngine* physics, const bool isUI)
             host = sh;
             PLOGI << "Target " << GetName() << ": hard surface on (" << rubberFaces->tris.size() << " faces, mu " << rubberSettings.mu << ")";
          }
-         for (size_t i = collidersBefore; i < m_vhoCollidable.size(); i++)
-            m_vhoCollidable[i]->m_surfaceHost = host;   // the target's own colliders hand a hit to the host
-         physics->KeepHostedCopiesOutOfTrees(m_vhoCollidable, collidersBefore);   // stock's copies out of its trees (PhysicsEngine.cpp)
          SetupHitObject(physics, host, false, isUI);    // enabled and disabled with the target (Collidable); the carrier fires Hit, not the host
       }
    }

@@ -134,7 +134,7 @@ namespace
    struct SegStats
    {
       uint64_t calls[3] = {}, inTube[3] = {}, tested[3] = {}, ticks[3] = {}, checks[3] = {}, mismatch[3] = {}, miss[3] = {};
-      uint64_t queries = 0, requery = 0, hitTestLoop = 0;
+      uint64_t queries = 0, requery = 0;
    };
    SegStats g_segStats;
 
@@ -1430,134 +1430,6 @@ void ContactSurfaceHost::CalcHitBBox()
       PLOGI << "RubberGeom " << m_name << " ring x " << x0 << " " << x1 << " y " << y0 << " " << y1 << " z " << z0 << " " << z1 << " radius " << m_radius << " points " << m_pts.size();
 }
 
-float ContactSurfaceHost::HitTest(const BallS &ball, const float dtime, CollisionEvent &coll) const
-{
-   if (!m_enabled || m_pts.size() < 2)
-      return -1.0f;
-   if (CordModel())
-      return -1.0f;   // the cord never meets the stock collision: the contact system takes the ball before it touches (BandQuery; GroupStepDesign 15)
-   if (ContactOwns(ball))
-      return -1.0f;   // the contact model owns this ball until it is released
-   g_segStats.hitTestLoop++;   // P5 counter (diagnostics only): the stock swept test's segment loop below reached
-
-   using RubberContact::V3;
-   const size_t np = m_pts.size();
-   auto pt = [&](size_t k) -> V3 { return V3(m_pts[k].x, m_pts[k].y, m_pts[k].z); };
-   const double rt = (double)ball.m_radius + (double)m_radius;      // ball centre to centreline at touch, VPX units
-   const V3 c(ball.m_pos.x, ball.m_pos.y, ball.m_pos.z);
-   const V3 v(ball.m_vel.x, ball.m_vel.y, ball.m_vel.z);
-
-   double bestT = -1.0;
-   bool bestContact = false;
-   double bestBnv = 0.0, bestBnd = 0.0;
-
-   for (size_t i = 0; i + 1 < np; i++)
-   {
-      const V3 A = pt(i), B = pt(i + 1);
-      const V3 seg = B - A;
-      const double L2 = seg.Dot(seg);
-      if (L2 <= 1e-12)
-         continue;
-      const double L = std::sqrt(L2);
-      const V3 u = seg / L;
-
-      // distance now, to the nearest point of this segment
-      const double s0 = std::min(std::max((c - A).Dot(seg) / L2, 0.0), 1.0);
-      const V3 P0 = A + seg * s0;
-      const double d0 = (c - P0).Length();
-      if (d0 <= 1.0e-6)
-         continue;
-      const double bnv = (c - P0).Dot(v) / d0;                    // ball normal velocity
-      if (bnv > (double)C_CONTACTVEL)
-         continue;                                                // clearly receding
-      const double bnd = d0 - rt;                                 // ball distance to the rubber surface
-
-      double t;
-      bool isContact = false;
-      if (bnd < (double)PHYS_TOUCH)                               // already touching
-      {
-         if (std::fabs(bnv) <= (double)C_CONTACTVEL)
-         {
-            isContact = true;
-            t = 0.0;
-         }
-         else
-            t = std::max(0.0, -bnd / bnv);
-      }
-      else
-      {
-         // swept test of the ball centre against the capsule of radius rt around the segment: side of the cylinder, then both end caps
-         t = -1.0;
-         const V3 w = c - A;
-         const V3 wp = w - u * w.Dot(u), vp = v - u * v.Dot(u);
-         const double a = vp.Dot(vp);
-         if (a > 1e-18)
-         {
-            const double b = wp.Dot(vp), cc = wp.Dot(wp) - rt * rt, disc = b * b - a * cc;
-            if (disc >= 0.0)
-            {
-               const double tc = (-b - std::sqrt(disc)) / a;
-               if (tc >= 0.0)
-               {
-                  const double s = ((w + v * tc).Dot(u)) / L;
-                  if (s >= 0.0 && s <= 1.0)
-                     t = tc;
-               }
-            }
-         }
-         for (const V3 *q : { &A, &B })
-         {
-            const double te = SphereTime(c, v, *q, rt);
-            if (te >= 0.0 && (t < 0.0 || te < t))
-               t = te;
-         }
-         if (t < 0.0)
-            continue;
-      }
-      if (!std::isfinite(t) || t > (double)dtime)
-         continue;
-      if (bestT < 0.0 || t < bestT)
-      {
-         bestT = t;
-         bestContact = isContact;
-         bestBnv = bnv;
-         bestBnd = bnd;
-      }
-   }
-   if (bestT < 0.0)
-      return -1.0f;
-
-   // normal at the hit position: from the nearest centreline point
-   const V3 hp = c + v * bestT;
-   double bd = 1e30;
-   V3 bp;
-   for (size_t i = 0; i + 1 < np; i++)
-   {
-      const V3 A = pt(i), B = pt(i + 1);
-      const V3 seg = B - A;
-      const double L2 = seg.Dot(seg);
-      if (L2 <= 1e-12)
-         continue;
-      const double s = std::min(std::max((hp - A).Dot(seg) / L2, 0.0), 1.0);
-      const V3 P = A + seg * s;
-      const double d = (hp - P).Length();
-      if (d < bd)
-      {
-         bd = d;
-         bp = P;
-      }
-   }
-   if (bd <= 1e-9)
-      return -1.0f;
-   const V3 n = (hp - bp) / bd;
-   coll.m_hitnormal = Vertex3Ds((float)n.x, (float)n.y, (float)n.z);
-   coll.m_isContact = bestContact;
-   if (bestContact)
-      coll.m_hit_org_normalvelocity = (float)bestBnv;
-   coll.m_hitdistance = (float)bestBnd;
-   return (float)bestT;
-}
-
 // What the cord reads from the rubber's settings that can change while it plays, at load and at a reload. Its geometry (section, ring, stops, e_mpa, the sling) waits for the next play
 static void FixedCordValues(CordFixed::Part &p, const RubberObjectSettings &s)
 {
@@ -1613,36 +1485,11 @@ void ContactSurfaceHost::Reload() const
 
 static constexpr float kFlipperHorizonVpt = 1.0f;   // trace only: VPX time units (1 VPT = 10 ms) a bat is looked ahead for in the flip_clear numbers
 
-void ContactSurfaceHost::Collide(const CollisionEvent &coll)
-{
-   HitBall *const pball = coll.m_ball;
-   const Vertex3Ds &n = coll.m_hitnormal;
-   const float dot = -(n.Dot(pball->m_d.m_vel));
-   if (dot < C_LOWNORMVEL)
-      return;   // receding or sliding: nothing to solve (a resting ball is handled by Contact)
-
-   if (ContactEngage(pball))
-      g_pplayer->m_physics->OnBallWallHit(*pball, n, dot);   // the force-model contact is stepped by the engine from here on (no impulse here)
-   else
-   {
-      // A post or ring never gets here (a band never gets to Collide: HitTest)
-      if (ContactTraceOn())
-         PLOGI << "StockImpulse " << m_name << " t=" << g_pplayer->m_time_msec << " held " << (pball->m_contact != nullptr ? 1 : 0) << " owns " << (ContactOwns(pball->m_d) ? 1 : 0) << " dot " << dot;
-      pball->Collide3DWall(n, m_elasticity, m_elasticityFalloff, m_friction, m_scatter);
-   }
-
-   if (m_obj && m_fe && dot >= m_threshold)
-   {
-      m_obj->m_currentHitThreshold = dot;
-      FireHitEvent(pball);
-   }
-}
-
 HitObject *ContactSurfaceHost::HitEventObject() const
 {
    if (m_surface != nullptr)
       return m_eventCarrier;
-   return m_set.band ? nullptr : const_cast<ContactSurfaceHost *>(this);   // a rubber post / ring fires its own hit event (Collide above)
+   return m_set.band ? nullptr : const_cast<ContactSurfaceHost *>(this);   // a rubber post / ring fires its own hit event (ContactSystem::Dispatch)
 }
 
 double ContactSurfaceHost::LayerM() const
@@ -2609,13 +2456,6 @@ bool ContactSurfaceHost::BandDeformAt(const Vertex3Ds &c, Vertex3Ds &shift, floa
    return true;
 }
 
-void ContactSurfaceHost::Contact(CollisionEvent &coll, const float dtime)
-{
-   if (SlowContact(coll.m_ball))
-      return;   // a post rubber: the force model carries the resting or slow touch
-   HitObject::Contact(coll, dtime);
-}
-
 void ContactSurfaceHost::DrawUI(std::function<Vertex2D(Vertex3Ds)> project, ImDrawList *drawList, bool fill) const
 {
    if (!m_enabled)
@@ -2970,7 +2810,7 @@ static void FinderP5Log(const uint64_t cycles)
       o << "; " << names[k] << " calls " << t.calls[k] << ", segs in tube " << (double)t.inTube[k] / nc << ", read " << (double)t.tested[k] / nc << ", us per cycle " << (double)t.ticks[k] * nsPerTick * 1e-3 / cyc
         << ", checks " << t.checks[k] << " mismatches " << t.mismatch[k] << " misses " << t.miss[k];
    }
-   o << "; segment queries " << t.queries << ", re-queries " << t.requery << "; stock HitTest segment loop " << t.hitTestLoop;
+   o << "; segment queries " << t.queries << ", re-queries " << t.requery;
    PLOGI << o.str();
 }
 

@@ -113,15 +113,6 @@ public:
    void SetFriction(const float friction)  { m_friction = friction; }
    void FireHitEvent(HitBall* const pball);
 
-   // A wall / primitive flagged as rubber (vpx_physics.ini): its stock colliders keep detecting the ball, but the contact is handed to this host, which steps the
-   // rubber force model instead of the instant impulse. Null for every other object.
-   class ContactHost *m_surfaceHost = nullptr;
-   // True if the force model took (or already holds) the ball and the stock impulse must be skipped. n: the stock hit normal.
-   bool SurfaceRubberHit(HitBall *pball, const Vertex3Ds &n);
-   // True while the force model holds this ball on the host: the stock colliders of the object must not also act on it.
-   bool SurfaceOwns(const BallS &ball) const { return m_surfaceHost != nullptr && SurfaceOwnsSlow(ball); }
-   bool SurfaceOwnsSlow(const BallS &ball) const;
-
    virtual void DrawUI(std::function<Vertex2D(Vertex3Ds)> project, ImDrawList* drawList, bool fill) const = 0;
 
    // Editable that created this hitobject, used for by UI for selecting editables.

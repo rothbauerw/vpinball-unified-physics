@@ -7,7 +7,6 @@
 #include <optional>
 
 #include "PhysicsEngine.h"
-#include "physics/stockcount.h"
 
 #include "hitflipper.h"
 #include "hitplunger.h"
@@ -39,24 +38,6 @@ void ContactTraceBall(const char *stage, const HitBall *pb, bool items, int isla
 #include <fstream>
 static unsigned s_ctReplays = 0, s_ctReplayUs = 0;   // VPX_CONTACT_TIMING: overlap replays and their time since the last cost-log row
 static uint64_t s_ctMagUs = 0;   // VPX_CONTACT_TIMING: time of Magnets::Step since the last cost-log row, us
-// VPX_TRACE_BALL: a stock Collide or Contact on the traced ball: the object, whether the contact system owns it (a surface host) and owns it for this ball, and what it did to the ball
-static bool TraceStockOn(const HitBall *const pb)
-{
-   static const std::string want = []() { const char *const e = getenv("VPX_TRACE_BALL"); return std::string(e != nullptr ? e : ""); }();
-   if (want.empty() || pb == nullptr)
-      return false;
-   const char *const name = TestDriver::BallName(pb);
-   return name != nullptr && want == name;
-}
-static void TraceStock(const char *const kind, const HitObject *const pho, const HitBall *const pb, const CollisionEvent &coll, const bool owns, const Vertex3Ds &pos0, const Vertex3Ds &vel0, const float hittime)
-{
-   const Vertex3Ds dp = pb->m_d.m_pos - pos0, dv = pb->m_d.m_vel - vel0;
-   PLOGI << "TraceStock " << std::string(TestDriver::BallName(pb)) << " t=" << g_pplayer->m_time_msec << ' ' << kind << " obj " << (pho->m_editable != nullptr ? pho->m_editable->GetName() : std::string("-"))
-         << " class " << typeid(*pho).name() << " objtype " << (int)pho->m_ObjType << " surfaceHost " << (pho->m_surfaceHost != nullptr ? 1 : 0) << " ownsForBall " << (owns ? 1 : 0)
-         << " held " << (pb->m_contact != nullptr ? 1 : 0) << " band " << (pb->m_bandOwner != nullptr ? 1 : 0) << " hittime " << hittime << " hitdist " << coll.m_hitdistance << " contact " << (coll.m_isContact ? 1 : 0)
-         << " dpos " << dp.x << ' ' << dp.y << ' ' << dp.z << " dvel " << dv.x << ' ' << dv.y << ' ' << dv.z;
-}
-
 PhysicsEngine::PhysicsEngine(PinTable *const table)
    : m_plumbHandler(table->GetSettings())
    , m_table(table)
@@ -65,7 +46,6 @@ PhysicsEngine::PhysicsEngine(PinTable *const table)
    , m_hitoctree(this)
    , m_hitoctree_dynamic(this)
 {
-   StockCount::SetPlanes(&m_hitPlayfield, &m_hitTopGlass);
    ContactSystem::SetTable(table->m_filename);   // unified or stock for this table: from its physics ini, before any part's PhysicSetup asks
    PLOGI << "Contact system: ball entries at table start: " << ContactSystem::Count() << " (0: nothing left from an earlier play, ContactSystem::EndTable)";
    m_physicsMaxLoops = table->m_PhysicsMaxLoops == 0xFFFFFFFFu ? 0 : table->m_PhysicsMaxLoops * (10000 / PHYSICS_STEPTIME) /*2*/;
@@ -93,9 +73,14 @@ PhysicsEngine::PhysicsEngine(PinTable *const table)
    for (HitObject *const pho : *m_pendingHitObjects)
       RegisterHitObject(pho);
 
-   PLOGI << "Initializing octree"; // For profiling
-   m_hitoctree.EndReset();
-   m_hitoctree.Finalize();
+   // The unified engine searches no stock tree (UnifiedCycle): its hit objects are built and registered above (the list owns them; they fill the mover and flipper lists
+   // and carry the Hit-event settings of their hosts), but no tree is built over them. The stock engine builds its tree.
+   if (!ContactSystem::Unified())
+   {
+      PLOGI << "Initializing octree"; // For profiling
+      m_hitoctree.EndReset();
+      m_hitoctree.Finalize();
+   }
    m_pendingHitObjects = nullptr;
    ContactSurfaceHost::FinderBuild(true);   // shared_finder: the index over every static mesh host, at load (every host, the implicit playfield's included, exists here)
    #if !defined(NDEBUG) && defined(PRINT_DEBUG_COLLISION_TREE)
@@ -130,9 +115,6 @@ PhysicsEngine::~PhysicsEngine()
    if (m_pendingHitObjects)
       ReleaseVHO(*m_pendingHitObjects, false);
    ReleaseVHO(m_hitoctree.GetHitObjects(), false);
-   for (HitObject *const ho : m_outOfTree)   // shared_finder P9: after the parts' PhysicRelease (the hosts, which point at them, are tree objects deleted above)
-      delete ho;
-   m_outOfTree.clear();
 
    if (g_pplayer)
       g_pplayer->m_pluginAPI.ReleaseMsgID(m_onUpdatePhysicsMsgId);
@@ -232,7 +214,6 @@ void PhysicsEngine::AddStaticColliders(IEditable *editable)
 void PhysicsEngine::ReleaseStaticColliders(IEditable *editable)
 {
    editable->GetIHitable()->PhysicRelease(this, false); // Balls remove their HitBall from the dynamic quadtree through RemoveCollider
-   std::erase_if(m_outOfTree, [editable](HitObject *ho) { if (ho->m_editable != editable) return false; delete ho; return true; });   // shared_finder P9
    vector<HitObject *> &vho = m_hitoctree.BeginReset();
    std::erase_if(vho,
       [this, editable](HitObject *ho)
@@ -245,24 +226,6 @@ void PhysicsEngine::ReleaseStaticColliders(IEditable *editable)
          }
          return false;
       });
-}
-
-// shared finder P9 (unified engine): the stock copies (triangles, lines, points) of a wall, ramp or primitive whose faces the contact
-// system holds (m_surfaceHost set) stay out of stock's trees: the finder's query finds every contact with them, and stock's search could only find a hit it hands to the
-// host (with the ball already held, a hit that does nothing but split the cycle). They stay in the part's m_vhoCollidable (the Collidable switch, the Hit event carrier)
-// and the engine frees them (m_outOfTree). A slingshot segment does its own kick (it ignores the host), so it stays in the tree. The playfield primitive's copies leave too (P9b); stock's HitPlane is outside the trees and stays.
-void PhysicsEngine::KeepHostedCopiesOutOfTrees(const vector<HitObject *> &copies, size_t from)
-{
-   if (m_pendingHitObjects == nullptr || from >= copies.size() || !ContactSystem::Unified())
-      return;
-   std::unordered_set<HitObject *> out;
-   for (size_t i = from; i < copies.size(); i++)
-      if (copies[i]->m_surfaceHost != nullptr && copies[i]->GetType() != eLineSegSlingshot)
-         out.insert(copies[i]);
-   std::erase_if(*m_pendingHitObjects, [&out](HitObject *ho) { return out.count(ho) != 0; });
-   for (size_t i = from; i < copies.size(); i++)   // in the part's order (deterministic)
-      if (out.count(copies[i]) != 0)
-         m_outOfTree.push_back(copies[i]);
 }
 
 void PhysicsEngine::RegisterHitObject(HitObject *hitObject)
@@ -290,7 +253,8 @@ void PhysicsEngine::FlushStaticQuadTree()
    if (m_staticQuadTreeDirty)
    {
       m_staticQuadTreeDirty = false;
-      m_hitoctree.EndReset();
+      if (!ContactSystem::Unified())   // (the unified engine builds and searches no stock tree)
+         m_hitoctree.EndReset();
    }
 }
 
@@ -306,7 +270,8 @@ void PhysicsEngine::AddCollider(HitObject *collider, const bool isUI)
       HitBall *const hitBall = static_cast<HitBall *>(collider);
       m_vmover.push_back(&hitBall->m_mover); // balls are always added separately to this list!
       m_vballs.push_back(hitBall);
-      m_hitoctree_dynamic.Insert(collider);
+      if (!ContactSystem::Unified())   // (the unified engine searches no stock tree: the contact system finds the ball)
+         m_hitoctree_dynamic.Insert(collider);
    }
    else
    {
@@ -324,8 +289,9 @@ void PhysicsEngine::RemoveCollider(HitObject * collider, const bool isUI)
       HitBall *const ball = static_cast<HitBall *>(collider);
       RemoveFromVectorSingle<MoverObject *>(m_vmover, &ball->m_mover);
       RemoveFromVectorSingle(m_vballs, ball);
-      m_hitoctree_dynamic.Remove(collider);
-      if (ContactSystem::Unified())   // (the stock engine has no contact system)
+      if (!ContactSystem::Unified())
+         m_hitoctree_dynamic.Remove(collider);
+      else   // (the stock engine has no contact system; the unified one put the ball in no stock tree)
          ContactSystem::SleepWake(ball, "a ball of the group removed");   // pile sleep: its group lost a ball (no-op for a ball awake)
       // the ball object may outlive its removal (a destroyed ball is freed later, it may still be rendered): a band must let go of it now, not when it is freed
       if (ball->m_bandOwner != nullptr || ball->m_contact != nullptr)
@@ -348,7 +314,6 @@ void PhysicsEngine::AddCabinetBoundingHitShapes(PinTable *const table)
 
    // unified engine: the outline walls and the glass are hosts of the contact model (BuildTableBounds, after the playfield host); stock engine: stock's
    m_tableBounds = ContactSystem::Unified() && g_pplayer != nullptr;
-   StockCount::SetTableBounds(m_tableBounds);
    if (!m_tableBounds)
    {
       // simple outer borders:
@@ -404,14 +369,12 @@ void PhysicsEngine::AddCabinetBoundingHitShapes(PinTable *const table)
          m_playfieldHost = new ContactSurfaceHost(table, faces, ps, ini, "playfield", "playfield");
          m_playfieldHost->m_tableMu = (double)m_hitPlayfield.m_friction;
          m_playfieldHost->CalcHitBBox();
-         m_hitPlayfield.m_surfaceHost = m_playfieldHost;
          // the engine steps a ball the host holds through the host's mover (a primitive's host gets it from its hit objects; this one has none, so add it here)
          if (MoverObject *const pmo = m_playfieldHost->GetMoverObject(); pmo != nullptr && pmo->AddToList())
             m_vmover.push_back(pmo);
          PLOGI << "Playfield: force model on (e_mpa " << ps.eMpa << ", alpha " << ps.alphaSPerM << ", tan_delta " << ps.tanDelta << ", mu " << ps.mu << "; UNVERIFIED material)";
       }
    }
-   m_hitPlayfield.m_surfaceHost = m_playfieldHost;
    if (m_tableBounds)
       BuildTableBounds(table);
    // the magnets read the table's physics ini here, before the finder's index (FinderBuild at the end of the load), so the air-core coil bodies are in it; a script's
@@ -974,7 +937,10 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
       const uint64_t ptSim0 = pt.On() ? usec() : 0;
       {
          const TestDriver::Timed tdStep(TestDriver::kStep);
-         PhysicsSimulateCycle(physics_diff_time); // main simulator call
+         if (ContactSystem::Unified())   // [Features] unified chooses the engine: the unified cycle bypasses stock entirely (no stock search, Collide or Contact)
+            UnifiedCycle(physics_diff_time);
+         else
+            PhysicsSimulateCycle(physics_diff_time); // main simulator call
       }
       const uint64_t ptSim1 = pt.On() ? usec() : 0;
       {
@@ -1067,28 +1033,20 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
       g_pplayer->m_logicProfiler.ExitProfileSection();
 }
 
-void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to this time
+// The unified engine's cycle ([Features] unified = 1, runs/2026-11-21-stock-search/design.md 3): stock is bypassed entirely (no stock tree, hit search, Collide, Contact or
+// spin hack). Each stage runs once per 1 ms cycle: the contact system steps every ball through the whole cycle in one Step (to-do goal G4), the parts and bands then
+// advance the rest of the cycle they were not stepped with balls, the overlap check replays the cycle if a free ball ended inside a moving part, and the cycle's events
+// come out at its end. dtime: the cycle in stock time units, for the movers (the ball's orientation).
+void PhysicsEngine::UnifiedCycle(const float dtime)
 {
-   // PLOGD << "Cycle " << dtime;
-
    for (const HitBall *const pb : m_vballs)
       ContactTraceBall("SimulateStart", pb, false, -1);   // VPX_TRACE_BALL (off by default)
-   int StaticCnts = STATICCNTS; // maximum number of static counts
-   // it's okay to have this code outside of the inner loop, as the ball hitrects already include the maximum distance they can travel in that timespan
-   {
-      const TestDriver::Timed tdSearch(TestDriver::kStockSearch);
-      m_hitoctree_dynamic.Update();
-   }
 
-   // The contact system works in seconds, made here only: the cycle is the engine's integer microseconds. Each stock sub-interval gets the share of it that its hittime is of the
-   // cycle's dtime; the last gets what is left, so the sub-intervals sum to exactly the cycle. The stock objects still move by their float time.
+   // The contact system works in seconds, made here only: the cycle is the engine's integer microseconds
    const double cycleS = (double)(m_nextPhysicsFrameTime - m_curPhysicsFrameTime) / 1000000.0;
-   const double sPerDtime = cycleS / (double)dtime;
-   double doneS = 0.0;
 
-   static FILE *const ctLog = []() -> FILE * { const char *const p = getenv("VPX_CONTACT_TIMING"); FILE *const f = (p != nullptr && *p) ? fopen(p, "w") : nullptr; if (f != nullptr) fputs("t_ms,step_us,pre_us,near_us,bodies,islands,substeps,bats,max_steps,gather_us,substep_us,write_us,mag_us,snap_us,replays,replay_us,fchecks,ffills,freads,bars_n,bars_ticks\n", f); return f; }();   // cost log: one row per call that did work
+   static FILE *const ctLog = []() -> FILE * { const char *const p = getenv("VPX_CONTACT_TIMING"); FILE *const f = (p != nullptr && *p) ? fopen(p, "w") : nullptr; if (f != nullptr) fputs("t_ms,step_us,pre_us,near_us,bodies,islands,substeps,bats,max_steps,gather_us,substep_us,write_us,mag_us,snap_us,replays,replay_us,fchecks,ffills,freads,bars_n,bars_ticks\n", f); return f; }();   // cost log: one row per cycle that did work
    uint64_t ctNear = 0;
-   if (ContactSystem::Unified())
    {
       const TestDriver::Timed tdContact(TestDriver::kContact);
       const uint64_t n0 = ctLog != nullptr ? usec() : 0;
@@ -1096,18 +1054,81 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
       ctNear = ctLog != nullptr ? usec() - n0 : 0;
    }
 
+   std::optional<TestDriver::Timed> tdContact(std::in_place, TestDriver::kContact);   // the contact system's step, to the snapshot test below
+   ContactSystem::SaveStart();   // the state of the cycle's start, for a replay (docs/unified-physics/archive/UnifiedContactDesign.txt 11, point 2)
+   m_noneZones.SubStart(0.0);   // None triggers: every ball's centre at the start of the cycle
+   const uint64_t ctT0 = ctLog != nullptr ? usec() : 0;
+   ContactSystem::Step(cycleS); // every ball: surface contacts, parts and, for touching balls, ball-to-ball contact, stepped together through the whole cycle
+   if (ContactSystem::SnapshotTestOn())
+      ContactSystem::SnapshotTest(cycleS);   // test mode: the same step again from the snapshot must give the same result
+   tdContact.reset();
+   const uint64_t ctT1 = ctLog != nullptr ? usec() : 0;
+   {
+      const TestDriver::Timed tdMove(TestDriver::kMoveParts);
+      for (size_t i = 0; i < m_vmover.size(); i++)
+         m_vmover[i]->PreUpdateDisplacements(dtime); // the contact system's parts and the bands: the rest of the cycle they were not stepped with balls
+   }
+   if (ctLog != nullptr)
+   {
+      const uint64_t ctT2 = usec();
+      const ContactSystem::CycleStats &cs = ContactSystem::LastCycle();
+      if (cs.bodies > 0 || ctT2 - ctT1 >= 3 || ctNear >= 3 || ContactSystem::LastSaveUs() >= 3)
+      {
+         static int rows = 0;
+         uint64_t fChecks = 0, fFills = 0, fReads = 0;   // shared_finder P3a: contact checks with a measurement table, faces measured, table reads since the last row
+         ContactSurfaceHost::FinderTabTake(fChecks, fFills, fReads);
+         fprintf(ctLog, "%u,%llu,%llu,%llu,%d,%d,%d,%d,%d,%d,%d,%d,%llu,%u,%u,%u,%llu,%llu,%llu,%llu,%llu\n", g_pplayer->m_time_msec, (unsigned long long)(ctT1 - ctT0), (unsigned long long)(ctT2 - ctT1), (unsigned long long)ctNear, cs.bodies, cs.islands, cs.substeps, cs.bats, cs.maxSteps, cs.gatherUs, cs.substepUs, cs.writeUs, (unsigned long long)s_ctMagUs, ContactSystem::LastSaveUs(), s_ctReplays, s_ctReplayUs, (unsigned long long)fChecks, (unsigned long long)fFills, (unsigned long long)fReads, (unsigned long long)ContactProf::CD().rowBarsN, (unsigned long long)ContactProf::CD().rowBars);   // bars_n, bars_ticks: mc-cost profile (VPX_CHECK_PROFILE only, else 0)
+            ContactProf::CD().rowBarsN = ContactProf::CD().rowBars = 0;
+         s_ctReplays = s_ctReplayUs = 0;
+         s_ctMagUs = 0;
+         if ((++rows & 255) == 0)
+            fflush(ctLog);
+      }
+   }
+   {
+      const TestDriver::Timed tdMove(TestDriver::kMoveParts);
+      for (size_t i = 0; i < m_vmover.size(); i++)
+         m_vmover[i]->UpdateDisplacements(dtime); // the ball's orientation (its move is the contact system's)
+   }
+
+   {
+      const TestDriver::Timed tdContactOverlaps(TestDriver::kContact);
+      ContactSystem::CheckOverlaps(dtime, cycleS);   // a free ball found inside a moving part: the cycle is replayed with the ball engaged at its first contact (docs/unified-physics/archive/UnifiedContactDesign.txt 11, point 2)
+      unsigned nRep = 0, usRep = 0;
+      ContactSystem::TakeReplayStats(nRep, usRep);
+      s_ctReplays += nRep;
+      s_ctReplayUs += usRep;
+      m_noneZones.SubTest(0.0, cycleS);   // None triggers: each ball's chord of this cycle, final after any replay (design.md 3)
+   }
+
+   // the events the contact step and the parts queued in this cycle: after every ball has moved
+   {
+      const TestDriver::Timed tdDispatch(TestDriver::kContact);
+      ContactSystem::Dispatch();
+   }
+
+   KickerHold::CycleEnd(cycleS);   // the kickers' held balls (KickerDesign 1h): carried balls on the arm's path, parked balls checked, before the cycle's events
+   m_noneZones.CycleEnd(cycleS);   // None triggers: the cycle's Hit / Unhit events, in crossing order (design.md 1)
+}
+
+void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to this time
+{
+   // PLOGD << "Cycle " << dtime;
+
+   int StaticCnts = STATICCNTS; // maximum number of static counts
+   // it's okay to have this code outside of the inner loop, as the ball hitrects already include the maximum distance they can travel in that timespan
+   {
+      const TestDriver::Timed tdSearch(TestDriver::kStockSearch);
+      m_hitoctree_dynamic.Update();
+   }
+
    while (dtime > 0.f)
    {
-      // first find hits, if any +++++++++++++++++++++ 
+      // first find hits, if any +++++++++++++++++++++
       #ifdef DEBUGPHYSICS
          c_timesearch++;
       #endif
       float hittime = dtime; // begin time search from now ...  until delta ends
-      const float hittimeStart = hittime;
-      int splitCause = -1;
-      const HitObject *splitObj = nullptr;
-      const HitBall *splitBall = nullptr;
-      bool splitStatic = false;
       std::optional<TestDriver::Timed> tdSearch(std::in_place, TestDriver::kStockSearch);   // the stock hit search, to m_recordContacts = false below
 
       // find earliest time where a flipper collides with its stop
@@ -1117,8 +1138,6 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
          //if ((fliphit >= 0.f) && !sign(fliphit) && (fliphit <= hittime))
          if ((fliphit > 0.f) && (fliphit <= hittime)) //!! >= 0.f causes infinite loop
             hittime = fliphit;
-            splitCause = 100;
-            splitObj = nullptr;
       }
 
       m_recordContacts = true;
@@ -1159,7 +1178,7 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
             #endif
 
             // always check for playfield and top glass
-            if (m_implicitPlayfieldMesh && !m_hitPlayfield.SurfaceOwns(pball->m_d)) // a ball the playfield force model holds is not tested
+            if (m_implicitPlayfieldMesh)
                DoHitTest(pball, &m_hitPlayfield, pball->m_coll);
             if (!m_tableBounds)   // (unified engine: the glass is a host of the contact model, found by the static finder)
                DoHitTest(pball, &m_hitTopGlass, pball->m_coll);
@@ -1191,9 +1210,6 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
                if (htz <= hittime)                     // smaller hit time??
                {
                   hittime = htz;                       // record actual event time
-                  splitCause = (int)pball->m_coll.m_obj->m_ObjType;
-                  splitObj = pball->m_coll.m_obj;
-                  splitBall = pball;
 
                   if (hittime < STATICTIME)            // less than static time interval
                   {
@@ -1202,7 +1218,6 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
                      {
                         StaticCnts = 0;                // keep from wrapping
                         hittime = STATICTIME;
-                        splitStatic = true;
                      }
                   }
                }
@@ -1219,80 +1234,12 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
 
       if (hittime > STATICTIME) StaticCnts = STATICCNTS; // allow more zeros next round
 
-      const double hS = dtime - hittime > 0.f ? (double)hittime * sPerDtime : cycleS - doneS;   // this sub-interval in seconds (the last one, as the loop condition finds it: the rest of the cycle)
-      doneS += hS;
-
-      std::optional<TestDriver::Timed> tdContact(std::in_place, TestDriver::kContact);   // the contact system's step, to the snapshot test below
-      if (ContactSystem::Unified())
-      {
-         ContactSystem::SaveStart();   // the state of the start of this sub-interval, for a replay (docs/unified-physics/archive/UnifiedContactDesign.txt 11, point 2)
-         m_noneZones.SubStart(doneS - hS);   // None triggers: every ball's centre at the start of the sub-interval
-      }
-      const uint64_t ctT0 = ctLog != nullptr ? usec() : 0;
-      if (hittime < hittimeStart && ContactProf::On())
-      {
-         std::string what = splitObj != nullptr ? typeid(*splitObj).name() : "flipper stop";
-         if (splitObj != nullptr && splitObj->m_editable != nullptr)
-            what += std::string(" part ") + splitObj->m_editable->GetName();
-         if (splitBall != nullptr)
-            what += splitBall->m_contact != nullptr ? " ballheld" : " ballfree";
-         if (splitBall != nullptr && splitBall->m_contact == nullptr)
-            what += " at " + std::to_string((int)(splitBall->m_d.m_pos.x / 100) * 100) + "," + std::to_string((int)(splitBall->m_d.m_pos.y / 100) * 100) + " z" + std::to_string((int)(splitBall->m_d.m_pos.z / 20) * 20)
-                    + (splitBall->m_d.m_lockedInKicker ? " kickerlocked" : "") + (splitBall->m_bandOwner != nullptr ? " band" : "");
-         ContactProf::Split(splitCause, splitStatic, what.c_str());
-      }
-      if (ContactSystem::Unified())   // the stock engine has no contact system: its balls are stock VPX's alone
-      {
-         ContactSystem::Step(hS); // contact-held balls: surface contacts and, for touching balls, ball-to-ball contact, stepped together
-         if (ContactSystem::SnapshotTestOn())
-            ContactSystem::SnapshotTest(hS);   // test mode: the same step again from the snapshot must give the same result
-      }
-      tdContact.reset();
-      const uint64_t ctT1 = ctLog != nullptr ? usec() : 0;
       {
          const TestDriver::Timed tdMove(TestDriver::kMoveParts);
          for (size_t i = 0; i < m_vmover.size(); i++)
-            m_vmover[i]->PreUpdateDisplacements(hittime); // (the contact system's parts and the bands advance here)
-      }
-      if (ctLog != nullptr)
-      {
-         const uint64_t ctT2 = usec();
-         const ContactSystem::CycleStats &cs = ContactSystem::LastCycle();
-         if (cs.bodies > 0 || ctT2 - ctT1 >= 3 || ctNear >= 3 || ContactSystem::LastSaveUs() >= 3)
-         {
-            static int rows = 0;
-            uint64_t fChecks = 0, fFills = 0, fReads = 0;   // shared_finder P3a: contact checks with a measurement table, faces measured, table reads since the last row
-            ContactSurfaceHost::FinderTabTake(fChecks, fFills, fReads);
-            fprintf(ctLog, "%u,%llu,%llu,%llu,%d,%d,%d,%d,%d,%d,%d,%d,%llu,%u,%u,%u,%llu,%llu,%llu,%llu,%llu\n", g_pplayer->m_time_msec, (unsigned long long)(ctT1 - ctT0), (unsigned long long)(ctT2 - ctT1), (unsigned long long)ctNear, cs.bodies, cs.islands, cs.substeps, cs.bats, cs.maxSteps, cs.gatherUs, cs.substepUs, cs.writeUs, (unsigned long long)s_ctMagUs, ContactSystem::LastSaveUs(), s_ctReplays, s_ctReplayUs, (unsigned long long)fChecks, (unsigned long long)fFills, (unsigned long long)fReads, (unsigned long long)ContactProf::CD().rowBarsN, (unsigned long long)ContactProf::CD().rowBars);   // bars_n, bars_ticks: mc-cost profile (VPX_CHECK_PROFILE only, else 0)
-               ContactProf::CD().rowBarsN = ContactProf::CD().rowBars = 0;
-            s_ctReplays = s_ctReplayUs = 0;
-            s_ctMagUs = 0;
-            if ((++rows & 255) == 0)
-               fflush(ctLog);
-         }
-      }
-      {
-         const TestDriver::Timed tdMove(TestDriver::kMoveParts);
+            m_vmover[i]->PreUpdateDisplacements(hittime);
          for (size_t i = 0; i < m_vmover.size(); i++)
             m_vmover[i]->UpdateDisplacements(hittime); // step 2: move the objects about according to velocities (spinner, gate, flipper, plunger, ball)
-      }
-
-      if (ContactSystem::Unified())
-      {
-         const TestDriver::Timed tdContactOverlaps(TestDriver::kContact);
-         ContactSystem::CheckOverlaps(hittime, hS);   // a free ball found inside a moving part: the sub-interval is replayed with the ball engaged at its first contact (docs/unified-physics/archive/UnifiedContactDesign.txt 11, point 2)
-         unsigned nRep = 0, usRep = 0;
-         ContactSystem::TakeReplayStats(nRep, usRep);
-         s_ctReplays += nRep;
-         s_ctReplayUs += usRep;
-         m_noneZones.SubTest(doneS - hS, hS);   // None triggers: each ball's chord of this sub-interval, final after any replay (design.md 3)
-      }
-
-      // the events the contact step and the parts queued in this sub-interval: after the free balls have moved, as stock fires its collision events (docs/unified-physics/archive/UnifiedContactDesign.txt 11, point 2)
-      {
-         const TestDriver::Timed tdDispatch(TestDriver::kContact);
-         if (ContactSystem::Unified())   // (the stock engine has no contact system)
-            ContactSystem::Dispatch();
       }
 
       // find balls that need to be collided and script'ed (generally there will be one, but more are possible)
@@ -1317,15 +1264,7 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
             LogBallContact('C', pball->m_coll);
             if (m_hitSpeedEvents)
                pball->m_hitSpeed = std::max(0.f, -pball->m_coll.m_hitnormal.Dot(pball->m_d.m_vel)); // normal speed at the instant before the impact, whichever model resolves it
-            StockCount::Begin(pho, pball, false);
-            const bool trc = TraceStockOn(pball);   // VPX_TRACE_BALL (off by default)
-            const CollisionEvent trcColl = pball->m_coll;
-            const bool trcOwns = trc && pho->SurfaceOwns(pball->m_d);
-            const Vertex3Ds trcPos = pball->m_d.m_pos, trcVel = pball->m_d.m_vel;
             pho->Collide(pball->m_coll);                 //!!!!! 3) collision on active ball
-            if (trc && i < m_vballs.size() && m_vballs[i] == pball)
-               TraceStock("Collide", pho, pball, trcColl, trcOwns, trcPos, trcVel, hittime);
-            StockCount::End(i < m_vballs.size() && m_vballs[i] == pball);
             // The playfield (the plane, the implicit mesh or an explicit playfield primitive) has no hit event of its own: the table gets one, for impacts only (not resting or rolling contact)
             if (m_hitSpeedEvents && g_pplayer != nullptr && pball->m_hitSpeed >= m_hitSpeedMin && i < g_pplayer->m_vball.size() && g_pplayer->m_vball[i] == pball->m_pBall
                 && (pho == &m_hitPlayfield || (pho->m_ObjType == ePrimitive && pho->m_obj != nullptr && static_cast<Primitive *>(pho->m_obj)->IsPlayfield())))
@@ -1391,14 +1330,7 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
             CollisionEvent& contact = m_contacts[forward ? i : m_contacts.size() - 1 - i];
             if ((contact.m_obj->GetType() == eBall) == (pass == 0))
             {
-               StockCount::Begin(contact.m_obj, contact.m_ball, true);
-               const bool trc = TraceStockOn(contact.m_ball);   // VPX_TRACE_BALL (off by default)
-               const bool trcOwns = trc && contact.m_obj->SurfaceOwns(contact.m_ball->m_d);
-               const Vertex3Ds trcPos = contact.m_ball->m_d.m_pos, trcVel = contact.m_ball->m_d.m_vel;
                contact.m_obj->Contact(contact, hittime);
-               if (trc)
-                  TraceStock("Contact", contact.m_obj, contact.m_ball, contact, trcOwns, trcPos, trcVel, hittime);
-               StockCount::End(true);
             }
          }
 #else
@@ -1406,25 +1338,20 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
          for (size_t i = 0; i < m_contacts.size(); ++i)
             //if (m_contacts[i].m_hittime <= hittime) // does not happen often, and values then look sane, so do this check //!! why does this break some collisions (MM NZ&TT Reloaded Skitso, also CCC (Saloon))? maybe due to ball colliding with multiple things and then some sideeffect?
             {
-               StockCount::Begin(m_contacts[i].m_obj, m_contacts[i].m_ball, true);
                m_contacts[i].m_obj->Contact(m_contacts[i], hittime);
-               StockCount::End(true);
             }
       else
          for (int i = (int)m_contacts.size() - 1; i != -1; --i)
             //if (m_contacts[i].m_hittime <= hittime) // does not happen often, and values then look sane, so do this check //!! why does this break some collisions (MM NZ&TT Reloaded Skitso, also CCC (Saloon))? maybe due to ball colliding with multiple things and then some sideeffect?
             {
-               StockCount::Begin(m_contacts[i].m_obj, m_contacts[i].m_ball, true);
                m_contacts[i].m_obj->Contact(m_contacts[i], hittime);
-               StockCount::End(true);
             }
 #endif
 
       m_contacts.clear();
 
       #ifdef C_BALL_SPIN_HACK
-         // hacky killing of ball spin on resting balls (very low and very high spinning); stock engine only ([Features] unified = 0), see physconst.h
-         if (!ContactSystem::Unified())
+         // hacky killing of ball spin on resting balls (very low and very high spinning); the stock engine's cycle only, see physconst.h
          for (HitBall *const hitBall : m_vballs)
          {
             if (hitBall->m_coll.m_hitdistance >= (float)PHYS_TOUCH)
@@ -1470,12 +1397,6 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
       m_swap_ball_collision_handling = !m_swap_ball_collision_handling; // swap order of ball-ball collisions
 
    } // end physics loop
-
-   if (ContactSystem::Unified())
-   {
-      KickerHold::CycleEnd(cycleS);   // the kickers' held balls (KickerDesign 1h): carried balls on the arm's path, parked balls checked, before the cycle's events
-      m_noneZones.CycleEnd(cycleS);   // None triggers: the cycle's Hit / Unhit events, in crossing order (design.md 1)
-   }
 }
 
 string PhysicsEngine::GetPerfInfo(bool resetMax)

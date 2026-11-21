@@ -86,9 +86,8 @@ VPX_BENCH_PREROLL=<ms>     bench physics time before the driver's time 0 (defaul
 **Diagnostics** (log or file only; a ball's bytes do not change)
 ```
 VPX_SPEED_WATCH=<m/s>      fast-ball warning with the ball's last 8 cycles and every other ball (default 8, 0 = off; at most once a second per ball).
-VPX_CHECKS=0               stock counter off (it is on with the unified engine and fails a driver run when a converted object uses stock; AllowedStock in stockcount.cpp).
 VPX_CONTACT_TRACE=1|2      contact engage / release / hit lines (1); also per-cycle lines (2, huge). Old name VPX_RING_TRACE.
-VPX_CONTACT_LOG=<csv>      every collision and resting contact of the first ball: object type and name.
+VPX_CONTACT_LOG=<csv>      every stock collision and resting contact of the first ball: object type and name (stock engine, unified = 0, only).
 VPX_CONTACT_NEAR=x,y,r     rubber faces within r of (x, y), U, when the surface is built. Old name VPX_RING_NEAR.
 VPX_CONTACT_TIMING=<csv>   per-cycle cost of the contact system by stage. One file per process (every Play of an editor session).
 VPX_CONTACT_PROFILE=<n>    scoped timers, a log table every n step calls (default 5000).     VPX_CHECK_PROFILE=1   one check's time split ("Check profile"), cut, tube counters ("Finder P4b/P5 totals").

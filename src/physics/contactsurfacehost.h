@@ -173,7 +173,7 @@ class ContactSurfaceHost final : public ContactHost
 public:
    // pts: closed centreline (first vertex NOT repeated), VPX units, world frame; radius: tube radius in VPX units
    ContactSurfaceHost(IEditable *editable, const std::vector<Vertex3Ds> &pts, float radius, const RubberObjectSettings &settings, const std::filesystem::path &iniPath, const std::string &name);
-   // The host of a wall or primitive flagged as rubber: no collider of its own (the object's stock colliders detect the ball and call SurfaceCollide);
+   // The host of a wall or primitive flagged as rubber: no collider of its own (the contact system's query finds the ball near its faces);
    // it holds the faces, the settings and steps the contact. kind: "wall" or "primitive".
    ContactSurfaceHost(IEditable *editable, std::shared_ptr<RubberSurface> surface, const RubberObjectSettings &settings, const std::filesystem::path &iniPath, const std::string &name, const char *kind);
    ~ContactSurfaceHost() override;
@@ -235,7 +235,6 @@ public:
    double m_tableMu = 0.3;   // a playfield host: the table's friction (the default mu of its material)
    static bool ContactPairModel(const HitBall *a, const BallS &b);   // both balls are contact-held and ball contact is on: the force model handles the pair, not the stock collision
 
-   float HitTest(const BallS &ball, const float dtime, CollisionEvent &coll) const override;
    BandInfo GetBandInfo() const { return m_info; }
    SlingInfo GetSlingInfo() const { return m_slingInfo; }
    int PtCount() const { return (int)m_ptsSI.size(); }
@@ -256,8 +255,7 @@ public:
    void BandFixedDrawPrepare() const;
    bool BandDeformAt(const Vertex3Ds &c, Vertex3Ds &shift, float rot[9]) const;
    int GetType() const override { return e3DLine; }
-   void Collide(const CollisionEvent &coll) override;
-   void Contact(CollisionEvent &coll, const float dtime) override;
+   void Collide(const CollisionEvent &) override {}   // (no stock search finds it: the contact system engages the balls near it)
    MoverObject *GetMoverObject() override { return &m_mover; }
    // Sling: the table's primitives for the plate and the switch blades (found by name by the Rubber). Turns their collision off and places the plate.
    void SlingAttach(Primitive *plate, const std::vector<Primitive *> &switches);

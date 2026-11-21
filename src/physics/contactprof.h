@@ -54,7 +54,6 @@ namespace ContactProf
    bool ProbeTime(const void *surface, uint64_t ticks);   // add the time of one probe of a surface; true the first time a surface is seen
    void ProbeName(const void *surface, const std::string &name);
    void Cycle();                             // one physics cycle began
-   void Split(int cause, bool staticTime, const char *what);   // a cycle was cut short at a hit: the type of the object that ended the sub-step (100 = a flipper stop, 200 = the static-time clamp)
 }
 // P3a profile (diagnostics only, VPX_CHECK_PROFILE=1; runs/2026-11-12-finder-P3a-profile): where one contact check's time goes. A check is the outermost of ContactSurfaceHost's Probe / ProbePatch / ArrivalS;
 // its time splits into the inside check (FinderInside), the table lookup and Begin (FinderTable), the face loops (each loop timed whole: reads and fills together) and the rest. Per-check sums

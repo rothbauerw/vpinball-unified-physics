@@ -21,7 +21,6 @@
 #include "ui/live/LiveUI.h"
 #include "physics/magnet.h"
 #include "physics/turntable.h"
-#include "physics/stockcount.h"
 #include "physics/contactsystem.h"
 #include "physics/PhysicsEngine.h"
 #include "input/PlungerHandler.h"
@@ -768,8 +767,7 @@ namespace TestDriver
          std::ostringstream cost;
          const bool costPass = Cost(cost);   // (sets the tick rate the csv uses)
          WriteTimes();
-         const bool stockPass = !ContactSystem::Unified() || !StockCount::ConvertedUsed();
-         const bool pass = s.skips == 0 && s.fast.n == 0 && s.below.n == 0 && s.outside.n == 0 && s.gone.n == 0 && s.errors.empty() && costPass && stockPass;
+         const bool pass = s.skips == 0 && s.fast.n == 0 && s.below.n == 0 && s.outside.n == 0 && s.gone.n == 0 && s.errors.empty() && costPass;
          std::ofstream o(OutPath("report.txt"));
          o << "Test driver report (docs/unified-physics/TestMatrixDesign.txt)\n" << (Player::BenchMode() ? "BENCH RUN: every cost below is bench cost (no frames, no GPU, virtual frames of 7 ms); limit 6 is judged on a focused VPX run\n" : "") << "input: " << s.input << "\ncycles: " << s.cycles << " (t 0 to " << t << " ms; time 0 = engine time " << s.t0
            << " ms, after start-up), balls: " << s.balls.size() << ", respawns: " << s.respawns;
@@ -787,8 +785,6 @@ namespace TestDriver
          for (const string &e : s.errors)
             o << "   " << e << '\n';
          o << cost.str();
-         if (ContactSystem::Unified())
-            StockCount::Report(o, OutPath("stock.csv"));
          o << "\nNOT CHECKED by the driver: limit 1 energy (check not built, to-do 1.6), limit 2 overlap depth, limit 4 ball inside a solid, limit 5 safety nets\n"
               "(look for WARN lines in vpinball.log), limit 6 per object (the report gives the time per kind of object, not per object).\n";
          o << "\nRESULT of the checks above: " << (pass ? "PASS" : "FAIL") << '\n';

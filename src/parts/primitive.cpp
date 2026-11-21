@@ -352,9 +352,6 @@ void Primitive::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          host->m_tableMu = m_ptable->m_overridePhysics ? m_ptable->m_fOverrideContactFriction : m_ptable->m_friction;
       if (collidersBefore < m_vhoCollidable.size())
          host->SetEventCarrier(m_vhoCollidable[collidersBefore]);
-      for (size_t i = collidersBefore; i < m_vhoCollidable.size(); i++)
-         m_vhoCollidable[i]->m_surfaceHost = host;   // the object's own colliders hand a hit to the host
-      physics->KeepHostedCopiesOutOfTrees(m_vhoCollidable, collidersBefore);   // shared finder P9: the copies out of stock's trees (PhysicsEngine.cpp), the playfield's too (P9b; over a kicker's hole stock's plane stays)
       SetupHitObject(physics, host, isUI);           // the host is enabled and disabled with them (Collidable)
       PLOGI << "Primitive " << GetName() << ": rubber force model on (" << rubberFaces->tris.size() << " faces, layer "
             << (rubberSettings.layerMm > 0.0 ? rubberSettings.layerMm : rubberSettings.surfaceLayerMm) << " mm, edge radius " << rubberSettings.edgeRadiusMm << " mm, box x " << rubberFaces->lo[0] << ".." << rubberFaces->hi[0] << " y " << rubberFaces->lo[1] << ".." << rubberFaces->hi[1] << " z " << rubberFaces->lo[2] << ".." << rubberFaces->hi[2] << ")";

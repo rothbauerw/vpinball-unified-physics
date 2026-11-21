@@ -188,7 +188,7 @@ private:
                break;
             }
       const double pos = !present ? 0.0 : r.sensorFiltered ? ph->GetRawPosition() : ph->GetReportPosition();
-      const int ev = r.SensorStep(present, pos, vel, velOwn, ContactSystem::SubIntervalS());
+      const int ev = r.SensorStep(present, pos, vel, velOwn, ContactSystem::CycleS());
       if (ev != PlungerHost::Rod::kSensorNone && m_sensorLines++ < 200)
       {
          static const char *const names[] = { "", "takes the knob", "release (speed)", "lets go at rest", "re-armed", "sensor gone: lets go", "resync: ties the rod at rest and moves it to the reading",

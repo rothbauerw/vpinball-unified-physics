@@ -353,40 +353,9 @@ RubberObjectSettings ContactHost::TurntableSettings(const double mu, const doubl
    return s;
 }
 
-// A stock collider of a flagged wall / primitive found the ball: take it into the force model, as Collide() does for a rubber post. Every ball on this object's law: the only false
-// is the object not converted (a setting) and the playfield over a kicker's hole (Engage).
-bool ContactHost::SurfaceCollide(HitBall *const pball, const Vertex3Ds &n)
-{
-   if (!m_set.contact)
-      return false;
-   if (ContactOwns(pball->m_d))
-      return true;   // already held: another collider of the same hit
-   const float dot = -(n.Dot(pball->m_d.m_vel));
-   if (dot < C_LOWNORMVEL)
-      return true;   // receding or sliding: no closing speed, nothing to solve (the slow pass takes a ball resting or rolling here)
-   if (!ContactEngage(pball))
-      return false;
-   g_pplayer->m_physics->OnBallWallHit(*pball, n, dot);   // the force-model contact is stepped by the engine from here on (no impulse here)
-   return true;
-}
-
-bool ContactHost::SlowContact(HitBall *const pball)
-{
-   if (!m_set.contact)
-      return false;
-   if (ContactOwns(pball->m_d))
-      return true;   // already held (by this or another collider of the same touch)
-   return ContactEngage(pball, "slow");
-}
-
 bool ContactHost::ContactOwns(const BallS &ball) const
 {
    return ContactSystem::Owns(ball, this);
-}
-
-bool ContactHost::ContactEngage(HitBall *const pb, const char *how)
-{
-   return ContactSystem::Engage(this, pb, how);
 }
 
 void ContactHost::ContactReleaseAll(const char *)

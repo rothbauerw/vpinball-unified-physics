@@ -31,7 +31,7 @@ b. One path. Balls touching the model are stepped by the group step, the one sha
       failed solve     the step halves; past the floor, the energy step (to be removed: goal 2). Never a hand-back to stock; WARN and an on-screen notice (rule 8)
       stops            the stop search ends a step where a body reaches a hard stop (StopExcess / CrossingStops)
       energy check     ball energy plus every stored energy, each cycle (EnergyCheckStart / End); energy enters only through drives (2h)
-      stock counter    a converted part that uses stock fails the driver run (stockcount.cpp); the part leaves AllowedStock the day it is converted
+      no stock         the unified engine runs no stock search, Collide or Contact (PhysicsEngine::UnifiedCycle); a part with no path of its own has no stock to fall back on
    A part that cannot go this way is not done: the missing piece is proposed to the user for the to-do.
 c. One step rule. A part states facts about itself through StepFactList (a stiffness, an approach, a turn, a time left, a time constant, a field); the step
    length comes from the shared rule and its factors live in GroupStep::Settings. A private omega-h, share or step constant in a part is a fault.

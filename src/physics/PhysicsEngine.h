@@ -38,7 +38,6 @@ public:
    // Add or remove a collider, as a consequence of PhysicSetup/Release
    // Colliders are given to the physics engine which owns them, except for balls which always owns their HitBall (therefore, being the only one using RemoveCollider)
    void AddCollider(HitObject * collider, const bool isUI);
-   void KeepHostedCopiesOutOfTrees(const vector<HitObject *> &copies, size_t from); // shared finder P9: see PhysicsEngine.cpp
    void RemoveCollider(HitObject * collider, const bool isUI);
    void CollectColliders(IEditable *editable, vector<HitObject *> *hitObjects, bool isUI);
 
@@ -106,6 +105,7 @@ private:
    void BuildTableBounds(PinTable *const table);   // unified engine: the outline walls and the top glass as engine-owned hosts, and their load notices
    void BuildCoilBodies(PinTable *const table);    // every air-core coil's body (winding block and stop) as an engine-owned static hard surface (kind "coil")
    void PhysicsSimulateCycle(float dtime); // Perform continuous collision detection for the given amount of delta time
+   void UnifiedCycle(float dtime); // [Features] unified = 1: the contact system's cycle, each stage once per 1 ms, no stock search (PhysicsEngine.cpp)
 
    void ReleaseVHO(const vector<HitObject *> &vho, bool isUI);
 
@@ -161,7 +161,6 @@ private:
    class ContactSurfaceHost *m_playfieldHost = nullptr; // the playfield on the force model (null = the stock plane contact)
    std::string m_leftoverHosts;                 // see LeftoverHosts()
    vector<class ContactHost *> m_ownedHosts;      // surface hosts the engine creates itself (turntable discs, table edge, glass, coil bodies); deleted with the engine
-   vector<HitObject *> m_outOfTree;               // shared_finder P9: stock copies of converted walls, ramps and primitives kept out of the trees (KeepHostedCopiesOutOfTrees); the engine frees them
    HitPlane m_hitTopGlass;                        // stock's glass plane: not built or tested on the unified engine
    bool m_tableBounds = false;                    // unified engine (with a player): the table edge and glass are engine-owned hosts in m_ownedHosts (AddCabinetBoundingHitShapes)
 

@@ -3,8 +3,7 @@
 #pragma once
 // A host of the contact system: the VPX-facing object that every surface or part the balls touch is registered under (docs/unified-physics/archive/UnifiedContactDesign.txt 12.5).
 // It holds what every host needs and nothing about a kind of object: the collision box and the Collidable switch (HitObject), the name and kind, the contact
-// settings and their reload from the table's physics ini, the list the contact system walks (Registry), and the entry points through which a stock collider or
-// the engine's contact pass hands a ball to the contact system (SurfaceCollide, SlowContact).
+// settings and their reload from the table's physics ini, and the list the contact system walks (Registry).
 // Two kinds derive from it: ContactSurfaceHost (contactsurfacehost.h: rubber posts and walls, the faces of walls, primitives, ramps and the playfield, bands and slings) and
 // ContactPartHost (contactparthost.h: a moving part of the contact system, with the table part's own adapter for its pose and events).
 
@@ -113,15 +112,9 @@ public:
    // settings again (Reload: what a host reloads depends on its kind). No physics path looks at the file.
    static void ReloadAll();
 
-   // ---- the ball found by a stock collider ----
-   // A stock collider of the object found the ball. True if the force model holds it from now on (the stock impulse is skipped). False only for an object not converted (a setting) and the
-   // playfield over a kicker's hole.
-   bool SurfaceCollide(HitBall *ball, const Vertex3Ds &n);
-   // A resting or slow touch (the engine's contact pass). True if the force model holds the ball from now on (the stock contact is skipped).
-   bool SlowContact(HitBall *ball);
    bool ContactOwns(const BallS &ball) const;   // this host is one of the surfaces of a force-model contact that holds the ball
-   // Once per physics interval (the host's mover): a moving part advances alone for what the contact system did not step of the interval (ContactPartHost); nothing for a surface.
-   // The interval is the engine's current sub-interval in seconds, as ContactSystem::Step stored it (ContactSystem::SubIntervalS).
+   // Once per physics cycle (the host's mover): a moving part advances alone for what the contact system did not step of the cycle (ContactPartHost); nothing for a surface.
+   // The cycle in seconds, as ContactSystem::Step stored it (ContactSystem::CycleS).
    virtual void PartAdvance() {}
 
    // ---- ContactSurface ----
@@ -136,7 +129,6 @@ public:
    virtual double LayerM() const;   // thickness of the compressible layer, m
 
 protected:
-   bool ContactEngage(HitBall *ball, const char *how = "hit");
    void ContactReleaseAll(const char *why);
    virtual void Reload() const = 0;
 

@@ -160,7 +160,7 @@ namespace ContactSystem
       ContactSettings::StartPlay(tableFile);   // (after the switch above: the settings ask it)
       if (s_unified)
       {
-         PLOGI << "Contact system: unified engine on (" << file.string() << "; dev fallback: stock hit search still runs for object types not yet converted)";
+         PLOGI << "Contact system: unified engine on (" << file.string() << "; the unified cycle: no stock search, Collide or Contact)";
          for (const std::string &key : f.retiredOff)   // a setting whose 0 once sent an object or a law to stock (PhysicsIni::RETIRED)
             NoticeRetired(key + " = 0 is ignored: no stock path on the unified engine");
          PLOGI << "Contact system: [Features] aircore_in_step = " << (s_aircoreInStep ? 1 : 0) << (s_aircoreInStep ? " (an air-core coil's pull read at each step's midpoint)" : " (an air-core coil's pull held for the cycle)");
@@ -255,7 +255,7 @@ static std::list<BallContact> g_engaged;
 // items joined / left between cycles, and the tightness: per kind, the ball-surface pairs kept in a ball's solve at a cycle's end and those that touched in that cycle
 struct QueryEngageCounts
 {
-   uint64_t made = 0, cleared = 0, stock = 0, noPast = 0, overlap = 0, snap = 0, joined = 0, left = 0, cycles = 0, firstSightZero = 0;   // firstSightZero: items new in the query found inside (zero = start depth)
+   uint64_t made = 0, cleared = 0, noPast = 0, overlap = 0, snap = 0, joined = 0, left = 0, cycles = 0, firstSightZero = 0;   // firstSightZero: items new in the query found inside (zero = start depth)
    std::map<std::string, std::pair<uint64_t, uint64_t>> kept;   // kind -> (kept, touched)
 };
 static QueryEngageCounts g_qe;
@@ -263,7 +263,7 @@ static std::map<std::string, std::pair<double, int>> g_partWorkMax;   // the ene
 static void QueryEngageLog(const char *const when)   // the one entry per ball counters' line (running totals; diagnostics only)
 {
    std::ostringstream o;
-   o << "Query engage (" << when << "): cycles " << g_qe.cycles << ", entries made " << g_qe.made << ", items cleared " << g_qe.cleared << "; nets: stock " << g_qe.stock << ", no past " << g_qe.noPast << ", overlap " << g_qe.overlap
+   o << "Query engage (" << when << "): cycles " << g_qe.cycles << ", entries made " << g_qe.made << ", items cleared " << g_qe.cleared << "; nets: no past " << g_qe.noPast << ", overlap " << g_qe.overlap
      << ", snapshot " << g_qe.snap << "; items joined " << g_qe.joined << ", left " << g_qe.left << ", found inside at first sight (zero = depth) " << g_qe.firstSightZero << "; tightness (kept in solve at cycle end / touched in the cycle):";
    for (const auto &k : g_qe.kept)
       o << " [" << k.first << " " << k.second.first << " / " << k.second.second << "]";
@@ -274,8 +274,7 @@ static void QueryEngageLog(const char *const when)   // the one entry per ball c
       w << " [" << k.first << " " << k.second.first << " (" << k.second.second << ")]";
    PLOGI << w.str();
 }
-static double g_frameUsedS = 0.0;   // how much of this physics step (1 ms) the sub-intervals before this one took (the engine splits a step at a hit)
-static double g_subS = 0.0;         // the engine's current sub-interval in seconds, as ContactSystem::Step was given it (the parts and cords advanced alone after it read it)
+static double g_cycleS = 0.0;       // the cycle in seconds, as ContactSystem::Step was given it (the parts and cords advanced alone after it read it)
 static std::vector<const HitBall *> g_placed;   // the balls a script or the driver put where they are since the last cycle (NotePlaced)
 static ContactSystem::CycleStats g_last;
 static std::vector<std::function<void()>> g_deferred;      // events raised inside the step, fired after it (Finish)
@@ -333,7 +332,6 @@ struct ContactSystemImpl
       bool magnetsOn = false;
       bool dragged = false;     // the debug mouse drags the ball: held against gravity and the nudge (Ball::fExt), no magnets
       bool extTaken = false;    // Sources::Begin took this cycle's gravity and nudge out of the velocity (they act in the substeps)
-      V3 extOwe;                // the step's gravity and nudge for the sub-intervals after this one: out of the velocity while this one is stepped, back at the write-back
       double endPair = 0.0;     // the energy check: its half of what its ball pairs hold at the island's end
       double magAcc = 0.0;      // m/s2: the magnets' acceleration of this ball at the start of the step (the substep bound)
       double eddyRate = -1.0;   // eddy-current braking of the spin across the coil field, 1/s: evaluated once per cycle (negative = not yet); eddyDir = the field direction
@@ -414,7 +412,7 @@ struct ContactSystemImpl
             w.extTaken = true;
             w.magnetsOn = false;
             w.magAcc = 0.0;
-            w.extBaseVS = w.extOwe = V3();
+            w.extBaseVS = V3();
             return;
          }
          ReachAcc(w);
@@ -424,7 +422,6 @@ struct ContactSystemImpl
          const Vertex3Ds extInc = pb->ExternalVelocityIncrement();   // gravity, nudge, magnets at the start position
          const Vertex3Ds extBase = pb->ExternalVelocityIncrement(false);   // the part that does not depend on the position
          w.extTaken = true;
-         w.extOwe = V3();
          w.extBaseVS = V3(extBase.x * VS, extBase.y * VS, extBase.z * VS);
          w.magnetsOn = !w.dragged && pb->m_magnetic && Magnets::Active();
          w.magAcc = w.magnetsOn ? V3((extInc.x - extBase.x) * VS, (extInc.y - extBase.y) * VS, (extInc.z - extBase.z) * VS).Length() / PHYSICS_STEPTIME_S : 0.0;
@@ -1727,8 +1724,7 @@ struct ContactSystemImpl
                   << " depth" << o.str() << " cluster " << isl.members.size();
          }
          pb->m_d.m_pos = Vertex3Ds((float)(w.c.x / U), (float)(w.c.y / U), (float)(w.c.z / U));
-         pb->m_d.m_vel = Vertex3Ds((float)((w.v.x + w.extOwe.x) / VS), (float)((w.v.y + w.extOwe.y) / VS), (float)((w.v.z + w.extOwe.z) / VS));
-         w.extOwe = V3();
+         pb->m_d.m_vel = Vertex3Ds((float)(w.v.x / VS), (float)(w.v.y / VS), (float)(w.v.z / VS));
          pb->m_angularmomentum = Vertex3Ds((float)(w.w.x * w.lScale), (float)(w.w.y * w.lScale), (float)(w.w.z * w.lScale));
          const Vertex3Ds ds = pb->m_d.m_pos - w.posStart;
          pb->m_lastEventSqrDist += ds.LengthSquared();
@@ -3804,7 +3800,7 @@ struct ContactSystemImpl
    static void SleepConsider(Cycle &cy, const ContactSystem::Islands::Island &isl)
    {
       const ContactSettings &cs = *cy.cs;
-      if (!cs.sleep || s_append || g_sleepCycleDt < PHYSICS_STEPTIME_S * (1.0 - 1e-6))   // (between the sub-intervals of a split cycle a ball still carries the rest of the cycle's gravity)
+      if (!cs.sleep || s_append || g_sleepCycleDt < PHYSICS_STEPTIME_S * (1.0 - 1e-6))   // (the pieces of a replayed cycle: a ball still carries the rest of the cycle's gravity)
          return;
       const double vs = cs.sleepSpeedMmS * 1e-3, hold = cs.sleepHoldMs * 1e-3;
       bool ok = true, bandKick = false, partBlock = false;
@@ -3941,7 +3937,7 @@ struct ContactSystemImpl
       g_sleep.push_back(std::move(g));
    }
 
-   static bool s_append;   // StepBalls: do not flush or clear the queued events: the steps of one replayed sub-interval chain
+   static bool s_append;   // StepBalls: do not flush or clear the queued events: the steps of one replayed cycle chain
    static bool PreventOn()   // point 1 of the overlap standard; VPX_PREVENT=0 switches it off (test only)
    {
       static const bool on = []() { const char *const e = getenv("VPX_PREVENT"); return !(e != nullptr && atoi(e) == 0); }();
@@ -3989,7 +3985,7 @@ void ContactSystemImpl::StepBalls(const double dt)
    cy.dt = dt;
    cy.cs = &ContactSettings::Get();
    cy.bodies.clear();
-   if (!s_append)   // (the steps of a replayed sub-interval add to the queue)
+   if (!s_append)   // (the steps of a replayed cycle add to the queue)
    {
       cy.releases.clear();
       cy.hitEvents.clear();
@@ -4066,7 +4062,7 @@ void ContactSystemImpl::StepBalls(const double dt)
 
 
 // ---- Proximity engagement ---------------------------------------------------------------------------------------------------------------------------------------------
-// A free ball that can touch a surface this cycle is taken into the contact before the stock hit search runs: the surface is engaged when the ball is within its release gap, or
+// A free ball that can touch a surface this cycle is taken into the contact before the cycle's Step: the surface is engaged when the ball is within its release gap, or
 // closing on it faster than it can cross the gap in two cycles (reach 2 vn dt + the release gap; a ball released at the gap, receding, is not taken back). The first touch is
 // then found by the substeps, and the part's hit event is queued from there (PartHit).
 // A band takes its balls by their energy query (BandQuery). dt: the cycle in seconds.
@@ -4077,8 +4073,7 @@ void ContactSystemImpl::EngageNear(const double dt)
    ContactProf::Cycle();
    {
       // one entry per ball: a ball that entered play since the last step (made or moved in by the driver, the script or a kicker) has its entry and its first query here, before
-      // the stock hit search of its first cycle: one contact path for every surface that touches a ball, from its first instant. Without it the stock search tests every
-      // converted collider of a new ball (no items: SurfaceOwns false) and a ball made touching a surface is caught by stock's net. Its reach is the cycle's own energy reach
+      // the Step of its first cycle: one contact path for every surface that touches a ball, from its first instant. Its reach is the cycle's own energy reach
       // (ReachLinks / ReachEnergy on a cycle of this one ball: its own kinetic energy and spin, gravity + nudge + magnets (ReachAcc), the drive work of every moving part in reach
       // (Regather part 1: each one a candidate); a new ball holds no stored energy and is in no ball pair yet), then the cycle's own query and gather (GatherStatic).
       // Only this ball's entry is written; the cycle's Step groups it with the others and regathers it as every ball.
@@ -4261,7 +4256,7 @@ bool ContactSystemImpl::EngageImpl(ContactHost *const host, HitBall *const pb, c
    // The ball starts the engagement touching or a little inside the rubber (the hit was found within a step). Go back to the instant it first touched: along its
    // own velocity, by depth / closing speed, at most one physics step; if it is not closing (pushed in by something else), seat it at touching distance along the normal.
    // Nothing is stored as compression.
-   // Found inside a part with no earlier clean state (docs/unified-physics/archive/UnifiedContactDesign.txt 11, point 6): CheckOverlaps found no clean start of the sub-interval, or the engagement by proximity finds the ball already inside a
+   // Found inside a part with no earlier clean state (docs/unified-physics/archive/UnifiedContactDesign.txt 11, point 6): CheckOverlaps found no clean start of the cycle, or the engagement by proximity finds the ball already inside a
    // moving part (point 1 engages a ball that has a past before it touches, so a ball inside at that point was created or moved there)
    bool noPast = std::strcmp(how, "no past") == 0 && !(host != nullptr && host->MovingPart() != nullptr && host->MovingPart()->GroupPart() != nullptr);   // (a part on the group step: its zero, below)
    if (ContactSystem::s_unified)   // one entry per ball nets (0 expected): a ball the overlap replay found, a ball with no past
@@ -4392,7 +4387,7 @@ void ContactSystemImpl::Release(HitBall *const ball, const char *why, const bool
 
 void ContactSystem::StepCordAlone(ContactSurfaceHost *const band)
 {
-   ContactSystemImpl::CordAlone(band, g_subS);
+   ContactSystemImpl::CordAlone(band, g_cycleS);
 }
 
 bool ContactSystem::EngageBand(ContactSurfaceHost *const band, HitBall *const pb)
@@ -4550,77 +4545,6 @@ void ContactSystem::EngageNear(const double cycleS)
    ContactSystemImpl::EngageNear(cycleS);
 }
 
-// A surface's collider, or the slow pass, found the ball: the ball is on this surface's law from now on, whatever holds it. False when EngageImpl turns it down.
-bool ContactSystem::Engage(ContactHost *const host, HitBall *const pb, const char *how)
-{
-   if (KickerHold::Held(pb))
-      return true;   // the kicker holds it: no surface acts on it, nothing to solve
-   if (ContactSystem::s_unified)
-   {
-      g_qe.stock++;   // one entry per ball: a stock collider found the ball on a converted surface (a net: the query missed it); the surface joins, no seat
-      ContactSystemImpl::EnsureOne(pb);
-   }
-   if (pb->m_contact == nullptr)
-      return ContactSystemImpl::EngageImpl(host, pb, how);
-   // Already held, and this surface is not in its set (made collidable, or the ball was moved, since the last gather): it joins the set, as Regather would add it
-   std::vector<SurfaceContact> &items = pb->m_contact->items;
-   const bool inItems = std::any_of(items.begin(), items.end(), [host](const SurfaceContact &it) { return it.r == host; });
-   if (!inItems)
-   {
-      SurfaceContact it;
-      it.r = host;
-      it.rp = host->ContactSettings().ToParams();
-      it.hLayer = host->LayerM();
-      it.st.Reset();
-      it.touching = true;   // the collider that found the ball fires its own hit event
-      ContactSurfaceHost::FinderBindOne(pb, it);   // shared finder: its faces from the ball's query of this cycle (the inside check re-queries if the ball is outside it)
-      items.push_back(std::move(it));
-   }
-   if (ContactSystem::s_unified)
-   {
-      // rule 8: the stock net caught the ball (the query missed this surface). Every catch is one INFO line with why the query did not keep it: was the surface in the ball's
-      // items, its gap by its own probe (faces from this cycle's query) and the ball's energy reach of the cycle; on screen and WARN once per surface per table start
-      using namespace RubberContact;
-      const BallContact &e = *pb->m_contact;
-      const auto at = std::find_if(e.items.begin(), e.items.end(), [host](const SurfaceContact &it) { return it.r == host; });
-      BallSI bs;
-      bs.R = (double)pb->m_d.m_radius * U;
-      const V3 c((double)pb->m_d.m_pos.x * U, (double)pb->m_d.m_pos.y * U, (double)pb->m_d.m_pos.z * U);
-      const bool noFaces = at == e.items.end() || at->NoFaces(c);
-      const TubeProbe pr = noFaces ? TubeProbe() : at->r->Probe(bs, *at, c);
-      const char *const name = TestDriver::BallName(pb);
-      const Vertex3Ds &p = pb->m_d.m_pos;
-      const Vertex3Ds &vel = pb->m_d.m_vel;
-      std::ostringstream o;
-      o << "Stock net: ball " << (name != nullptr ? name : "") << " caught by " << host->Name() << " (" << typeid(*host).name() << (host->FinderObjIndex() >= 0 ? ", mesh" : "") << (host->MovingPart() != nullptr ? ", moving part" : "")
-        << ", how " << (how != nullptr ? how : "?") << ") at (" << p.x << ", " << p.y << ", " << p.z << ") v (" << vel.x * VS << ", " << vel.y * VS << ", " << vel.z * VS << ") m/s, t=" << g_pplayer->m_time_msec;
-      const std::string head = o.str();
-      o << "; in the ball's items this cycle " << (inItems ? "yes" : "no") << ", gap by its probe ";
-      if (noFaces)
-         o << "none (no faces in the ball's query)";
-      else
-         o << -pr.delta * 1e3 << " mm";
-      o << ", energy reach " << (e.reachS < 0.0 ? std::string("not set") : std::to_string(e.reachS * 1e3) + " mm") << " (set t=" << e.reachMs << ")";
-      PLOGI << o.str();
-      static const void *owner = nullptr;
-      static std::vector<std::string> seen;
-      if (owner != g_pplayer)
-      {
-         owner = g_pplayer;
-         seen.clear();
-      }
-      if (std::find(seen.begin(), seen.end(), host->Name()) == seen.end())
-      {
-         seen.push_back(host->Name());
-         const std::string msg = head + ": the contact system missed this surface and stock's collider caught the ball (a net, not the model; see vpinball.log 'Stock net')";
-         PLOGW << msg;
-         if (g_pplayer->m_liveUI != nullptr)
-            g_pplayer->m_liveUI->PushNotification(msg, 6000);
-      }
-   }
-   return true;
-}
-
 void ContactSystem::Release(HitBall *const ball, const char *why)
 {
    ContactSystemImpl::Release(ball, why);
@@ -4721,9 +4645,7 @@ namespace
    };
    std::unordered_map<const ContactSurface *, Census> g_census;
    std::map<std::string, uint64_t> g_notes;
-   std::map<int, uint64_t> g_splits;      // cause -> count
-   std::map<std::string, uint64_t> g_splitWhat;   // class of the object that ended the sub-step -> count
-   uint64_t g_cyclesSeen = 0, g_stepCalls = 0, g_staticSplits = 0, g_bodyCycles = 0;
+   uint64_t g_cyclesSeen = 0, g_stepCalls = 0, g_bodyCycles = 0;
    uint64_t g_t0Us = 0, g_tsc0 = 0;
 }
 
@@ -4751,13 +4673,6 @@ void ContactProf::Cycle()
       g_tsc0 = __rdtsc();
    }
    g_cyclesSeen++;
-}
-
-void ContactProf::Split(int cause, bool staticTime, const char *what)
-{
-   g_splits[cause]++;
-   g_splitWhat[std::string(what) + (staticTime ? " [static clamp]" : "")]++;
-   g_staticSplits += staticTime ? 1 : 0;
 }
 
 namespace
@@ -4791,22 +4706,6 @@ void ContactProf::Dump(const char *why)
          PLOGI << "PROF " << Name(i) << " total_us " << (uint64_t)(d.t[i] * usPerTick) << " calls " << d.n[i] << " us_per_call " << (d.t[i] * usPerTick) / (double)d.n[i] << " us_per_cycle " << (d.t[i] * usPerTick) / std::max<uint64_t>(1, g_cyclesSeen);
    for (const auto &kv : g_notes)
       PLOGI << "PROF note " << kv.first << " " << kv.second;
-   std::ostringstream o;
-   uint64_t tot = 0;
-   for (const auto &kv : g_splits)
-      tot += kv.second;
-   o << "PROF splits total " << tot << " static_clamp " << g_staticSplits << " by_cause(objtype:count)";
-   for (const auto &kv : g_splits)
-      o << ' ' << kv.first << ':' << kv.second;
-   PLOGI << o.str();
-   {
-      std::vector<std::pair<uint64_t, std::string>> sw;
-      for (const auto &kv : g_splitWhat)
-         sw.emplace_back(kv.second, kv.first);
-      std::sort(sw.rbegin(), sw.rend());
-      for (size_t i = 0; i < sw.size() && i < 25; i++)
-         PLOGI << "PROF split by " << sw[i].second << " " << sw[i].first;
-   }
    {
       std::vector<const ProbeCost *> v;
       for (const auto &kv : ProbeCosts())
@@ -4884,7 +4783,6 @@ void ContactSystem::PushOutAtStart(HitBall *const ball, const std::string &name)
 
 void ContactSystem::SleepCycleStart()
 {
-   g_frameUsedS = 0.0;   // (a new physics step: called before the balls' velocities)
    ContactSystemImpl::SleepStart();
 }
 
@@ -4898,26 +4796,23 @@ void ContactSystem::SleepWakeAtStart(const HitBall *const ball, const char *cons
    ContactSystemImpl::SleepWakeBall(ball, cause, false);
 }
 
-// A step of dt seconds: the engine's whole sub-interval (Step), or a piece of it in an overlap replay (CheckOverlaps)
+// A step of dt seconds: the engine's whole cycle (Step), or a piece of it in an overlap replay (CheckOverlaps)
 static void StepSeconds(const double dt)
 {
    ContactSystemImpl::StepBalls(dt);
    if (dt > 0.0)
-   {
       g_placed.clear();
-      g_frameUsedS += dt;
-   }
 }
 
-void ContactSystem::Step(const double hS)
+void ContactSystem::Step(const double cycleS)
 {
-   g_subS = hS;
-   StepSeconds(hS);
+   g_cycleS = cycleS;
+   StepSeconds(cycleS);
 }
 
-double ContactSystem::SubIntervalS()
+double ContactSystem::CycleS()
 {
-   return g_subS;
+   return g_cycleS;
 }
 
 const ContactSystem::CycleStats &ContactSystem::LastCycle()
@@ -4926,7 +4821,7 @@ const ContactSystem::CycleStats &ContactSystem::LastCycle()
 }
 
 
-// ---- The snapshot of the start of a sub-interval (docs/unified-physics/archive/UnifiedContactDesign.txt section 11, point 2) ---------------------------------------------------------------------------------
+// ---- The snapshot of the start of a cycle (docs/unified-physics/archive/UnifiedContactDesign.txt section 11, point 2) ---------------------------------------------------------------------------------
 // Everything a replay of the step would have to put back: every ball's position, velocity and spin, the engaged balls' contacts (the whole entry, copy-assigned in place so the list and the
 // pointers to its entries stay as they are; the vectors inside keep their capacity), the ball pairs, the saved state of every moving part, the size of the event queue. The engaged list and the pair
 // list only change in ApplyReleases, after the overlap check, so a snapshot of their contents is enough. Bats and bands are not saved yet: islands with them are not replayed.
@@ -4960,7 +4855,6 @@ namespace
       int sleepNextId = 1;                                 // (the next pile's number: a pile formed in the step taken again gets the same one)
       std::vector<const HitBall *> placed;                 // g_placed: the balls a script or the driver put since the last cycle (the step reads it; Step clears it after)
       double sleepCycleDt = 0.0;
-      double frameUsedS = 0.0;   // g_frameUsedS: how much of the physics step the sub-intervals before this one took (Body::Begin's share of gravity and nudge owed to the later ones reads it, and Step advances it)
       size_t deferred = 0;
       bool valid = false;
       unsigned us = 0;
@@ -4993,7 +4887,6 @@ void ContactSystem::SaveStart()
    s.sleepNextId = ContactSystemImpl::g_sleepNextId;
    s.placed = g_placed;
    s.sleepCycleDt = ContactSystemImpl::g_sleepCycleDt;
-   s.frameUsedS = g_frameUsedS;
    s.contacts.resize(g_engaged.size());
    size_t k = 0;
    for (const BallContact &e : g_engaged)
@@ -5030,7 +4923,6 @@ static void RestoreSnap()
    ContactSystemImpl::g_sleepNextId = s.sleepNextId;
    g_placed = s.placed;
    ContactSystemImpl::g_sleepCycleDt = s.sleepCycleDt;
-   g_frameUsedS = s.frameUsedS;   // (the step being taken again starts where this sub-interval started in the physics step)
    for (const BallSnap &b : s.balls)
    {
       b.pb->m_sleepGroup = b.sleepGroup;
@@ -5227,9 +5119,9 @@ void ContactSystem::SnapshotTest(const double hS)
 }
 
 
-// ---- The overlap check and the replay of the sub-interval (docs/unified-physics/archive/UnifiedContactDesign.txt section 11, point 2) ------------------------------------------------------------------------
-// Run after UpdateDisplacements, before the events are dispatched. A free ball found overlapping a moving part was born inside this sub-interval: it moved as a body with no contacts
-// while the part moved by its own motion. Find the time t* in the sub-interval at which the gap was zero with BOTH of them where they really were, put the snapshot of the start back, step the
+// ---- The overlap check and the replay of the cycle (docs/unified-physics/archive/UnifiedContactDesign.txt section 11, point 2) ------------------------------------------------------------------------
+// Run after UpdateDisplacements, before the events are dispatched. A free ball found overlapping a moving part was born inside this cycle: it moved as a body with no contacts
+// while the part moved by its own motion. Find the time t* in the cycle at which the gap was zero with BOTH of them where they really were, put the snapshot of the start back, step the
 // system to t* (the engaged balls and the parts), engage the ball there with its true position and velocity, and step on to the end. The contact starts at zero depth with the real velocities.
 // Several balls: the earliest first contact first, the others are found again on the new end state (chained, at most the free balls and parts near + 1 times).
 namespace
@@ -5249,7 +5141,7 @@ void ContactSystem::CheckOverlaps(const float hittime, const double hS)
    ContactSystemImpl::CheckOverlaps(hittime, hS);
 }
 
-// hittime: the sub-interval in the engine's time units (only to skip an empty one); hS: the same sub-interval in seconds
+// hittime: the cycle in the engine's time units (only to skip an empty one); hS: the same cycle in seconds
 void ContactSystemImpl::CheckOverlaps(const float hittime, const double hS)
 {
    using namespace RubberContact;
@@ -5268,7 +5160,7 @@ void ContactSystemImpl::CheckOverlaps(const float hittime, const double hS)
    {
       HitBall *pb;
       ContactHost *host;
-      double delta;   // the overlap at the end of the sub-interval, m
+      double delta;   // the overlap at the end of the cycle, m
    };
    std::vector<HitBall *> noPast;   // balls found overlapping with no earlier clean state (point 6): seated by minimum translation and engaged once the parts have advanced
    std::vector<std::pair<HitBall *, ContactHost *>> noPastHost;
@@ -5330,10 +5222,10 @@ void ContactSystemImpl::CheckOverlaps(const float hittime, const double hS)
    {
       HitBall *pb;
       ContactHost *host;
-      double t;   // the share of the sub-interval at which the ball is engaged
+      double t;   // the share of the cycle at which the ball is engaged
    };
    std::vector<Rp> list;
-   // The system at share tEnd of the sub-interval: the snapshot put back, the engaged balls and the parts stepped to each engagement, the balls of `list` engaged there, then on to tEnd
+   // The system at share tEnd of the cycle: the snapshot put back, the engaged balls and the parts stepped to each engagement, the balls of `list` engaged there, then on to tEnd
    auto simulate = [&](const double tEnd) {
       for (const Rp &e : list)
          if (e.pb->m_contact != nullptr)
@@ -5353,14 +5245,14 @@ void ContactSystemImpl::CheckOverlaps(const float hittime, const double hS)
             first = false;
             t = e.t;
          }
-         for (ContactHost *const o : Hosts())   // a part no engaged ball held has not moved yet: it is at the start of the sub-interval. It moves on to the engagement, as it would have alone (gapAt measures it so)
+         for (ContactHost *const o : Hosts())   // a part no engaged ball held has not moved yet: it is at the start of the cycle. It moves on to the engagement, as it would have alone (gapAt measures it so)
             if (ContactMovingPart *const mp = o->MovingPart())
             {
                const double idle = hS * e.t - mp->steppedS;
                if (idle > 1e-9)
                {
                   mp->AdvanceAlone(idle);
-                  mp->steppedS += idle;   // (PartAdvance advances it for the rest of the sub-interval only)
+                  mp->steppedS += idle;   // (PartAdvance advances it for the rest of the cycle only)
                }
             }
          // (the step above has already flown the ball to the engagement)
@@ -5401,13 +5293,13 @@ void ContactSystemImpl::CheckOverlaps(const float hittime, const double hS)
       return gmin;
    };
    int evaluations = 0;
-   // The share of the sub-interval at which the ball first touched: regula falsi on the gap with the system simulated at each trial time (the contact never starts deeper than the arrival depth)
+   // The share of the cycle at which the ball first touched: regula falsi on the gap with the system simulated at each trial time (the contact never starts deeper than the arrival depth)
    auto findT = [&](const Cand &cd, double &tOut) {
       simulate(0.0);
       evaluations++;
       const double g0 = gapAt(cd.pb, 0.0);
       if (g0 < -tol)
-         return false;   // overlapping at the start of the sub-interval: no past
+         return false;   // overlapping at the start of the cycle: no past
       double lo = 0.0, glo = g0, hi = 1.0, ghi = -cd.delta;
       for (int it = 0; it < 8; it++)
       {
@@ -5453,7 +5345,7 @@ void ContactSystemImpl::CheckOverlaps(const float hittime, const double hS)
             if (g_pplayer->m_time_msec - lastMs > 500)
             {
                lastMs = g_pplayer->m_time_msec;
-               PLOGW << "Overlap with " << cd.host->m_name << " at the START of the sub-interval (" << cd.delta * 1e6 << " um at its end): no past to rewind to; the ball is seated by minimum translation (point 6)";
+               PLOGW << "Overlap with " << cd.host->m_name << " at the START of the cycle (" << cd.delta * 1e6 << " um at its end): no past to rewind to; the ball is seated by minimum translation (point 6)";
             }
             continue;
          }
@@ -5481,7 +5373,7 @@ void ContactSystemImpl::CheckOverlaps(const float hittime, const double hS)
       if (o->MovingPart() != nullptr)
          o->PartAdvance();
    for (Ball *const b : g_pplayer->m_vball)
-      b->m_hitBall.m_rubberAdvanced = false;   // every ball has been moved for this sub-interval
+      b->m_hitBall.m_rubberAdvanced = false;   // every ball has been moved for this cycle
    for (const auto &nh : noPastHost)
       if (nh.first->m_contact == nullptr)
          EngageImpl(nh.second, nh.first, "no past");
@@ -5500,7 +5392,7 @@ void ContactSystemImpl::CheckOverlaps(const float hittime, const double hS)
          if (!shown)
          {
             shown = true;
-            g_pplayer->m_liveUI->PushNotification("Several balls overlapped moving parts in one sub-interval and were replayed (see vpinball.log, 'Overlap replay')", 8000);
+            g_pplayer->m_liveUI->PushNotification("Several balls overlapped moving parts in one cycle and were replayed (see vpinball.log, 'Overlap replay')", 8000);
          }
       }
    }
