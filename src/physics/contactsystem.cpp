@@ -2423,6 +2423,7 @@ struct ContactSystemImpl
          b.m = w.bs.m;
          b.R = w.bs.R;
          b.c = w.c;
+         b.adds = ContactSurfaceHost::FinderAddsBind(w.pb, &b.adds);   // the inside check's rounding room: the additions to the ball's position since its query (0 unless stepped before in the cycle)
          b.v = w.v;
          b.w = w.w;
          if (ring)
@@ -3224,6 +3225,7 @@ struct ContactSystemImpl
          if (ring && w.e != nullptr)
             w.e->seatPending = false;   // (a surface it was found inside counted from zero)
          w.c = g.ball[ib].c;
+         ContactSurfaceHost::FinderAddsBind(w.pb, nullptr);   // (the count kept for the cycle's rest; the group's slot is the next island's)
          w.v = g.ball[ib].v;
          w.w = g.ball[ib].w;   // (a step that could not be solved: what is left of the cycle is not stepped, so nothing is gained: below)
          {

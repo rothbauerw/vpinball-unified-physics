@@ -341,6 +341,7 @@ namespace GroupStep
    struct Ball
    {
       V3 c, v, w;            // centre, velocity, spin (m, m/s, rad/s)
+      int adds = 0;          // the additions to c since the finder's query centre c0 (each stored c = fl(c + dc) rounds: the inside check allows it, FinderInsideQ); saved and put back with c
       double m = 0.080, R = 25.0 * 0.53975e-3;
       V3 fExt;               // a held outside force (a magnet not on a field, the magnets' ball-pair force, a part not yet moved over): a drive, its work counted
       double fieldScale = 0.0;   // how much of the group's fields it feels (Group::field); 0 = none
@@ -5011,6 +5012,7 @@ namespace GroupStep
          // no move can be formed at any length (a force that cannot be formed at all): the balls go on by their speeds alone, the path follows them, and the same closure applies; what cannot be paid turns back
          Restore();
          for (int i = 0; i < nb; i++)
+         {
             if (ball[i].held)   // (its given move)
             {
                ball[i].c = ball[i].c + ball[i].Given(hTry);
@@ -5018,6 +5020,8 @@ namespace GroupStep
             }
             else
                ball[i].c = ball[i].c + ball[i].v * hTry;
+            ball[i].adds++;
+         }
          for (int p = 0; p < np; p++)
             part[p]->BallsMoved(ball, nb);
          stamp++;
@@ -5809,6 +5813,7 @@ namespace GroupStep
                books.spinBrakeJ += b.brakeRate * b.I() * wa.Dot(wa) * h;
             }
             b.c = b.c + dc;
+            b.adds++;
             b.v = EndRate(dc, b.v, h);
             b.w = b.w + dw;
             aLast[i] = evF[i] * b.InvM();            // the next step's first guess: the force and torque of the move taken (Eval's at it), not (v1 - v0) / h, which is

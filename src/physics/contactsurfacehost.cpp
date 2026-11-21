@@ -164,6 +164,10 @@ namespace
       std::vector<TubeSegQ> tq;     // P5: per static tube the ball reads, its segments found by the query (made at the tube's first read after each query, around c0 within the volume)
       std::string terms;            // VPX_RELOOK_TRACE: the bound's terms at this query (ReachEnergy); relooked: a re-look this cycle (its actual move is logged at the next query)
       bool relooked = false;
+      // the additions to the ball's kept position since c0 (FinderInsideQ's rounding room): 0 at each query; addsLive: the group step's own count while it steps the ball
+      // (GroupStep::Ball::adds, saved and put back with the position: FinderAddsBind), else adds
+      int adds = 0;
+      const int *addsLive = nullptr;
    };
 
    // the timing counters' histogram: 10 ns bins up to 200 us
@@ -3008,6 +3012,8 @@ void ContactSurfaceHost::FinderQuery(const HitBall *const ball, const RubberCont
    q.vPrevCycle = g.cycle;
    q.queried = true;
    q.c0 = c;
+   q.adds = 0;
+   q.addsLive = nullptr;
    q.R = ballR;
    q.reach = travelM >= 0.0 ? travelM : ContactReachM(v.Length(), accel, dt);   // the energy reach: the ball's travel from its energy (ContactSystem ReachEnergy)
    q.ext = q.reach;
@@ -3046,6 +3052,20 @@ void ContactSurfaceHost::FinderInsideBall(const HitBall *const ball, const Rubbe
       FinderInsideQ(&f->second, c, move);
 }
 
+int ContactSurfaceHost::FinderAddsBind(const HitBall *const ball, const int *const live)
+{
+   if (!g_finder.on)
+      return 0;
+   const auto f = g_finder.balls.find(ball);   // (a lookup: no allocation)
+   if (f == g_finder.balls.end())
+      return 0;
+   FinderBallQ &q = f->second;
+   if (q.addsLive != nullptr)   // (the count the group step reached, kept)
+      q.adds = *q.addsLive;
+   q.addsLive = live;
+   return q.adds;
+}
+
 void ContactSurfaceHost::FinderInsideQ(void *const qv, const RubberContact::V3 &c, const RubberContact::V3 &move)
 {
    FinderBallQ *const q = static_cast<FinderBallQ *>(qv);
@@ -3054,7 +3074,16 @@ void ContactSurfaceHost::FinderInsideQ(void *const qv, const RubberContact::V3 &
    // the stray of the point c + move from the query's centre, formed as (c - c0) + move: c - c0 is exact for nearby doubles (Sterbenz), so the point's own rounding to a
    // position-sized double (c + move) does not enter; + 0 (a point) is exact
    const double stray = ((c - q->c0) + move).Length();
-   if (stray <= q->ext)
+   // the rounding room (runs/2026-11-21-rounding/design.md): contacts are computed from the STORED position, and each addition that made it (c_k+1 = fl(c_k + dq_k), the group step's
+   // accepted steps) rounds each component by up to half an ulp of the position, so after k additions since c0 the stored point is up to k half-ulps per component from the exact
+   // path: |error| <= sqrt(3) k ulp(P) / 2 (IEEE round to nearest), P = max |c0_i| + ext, the largest a component can be while inside. k: the ball's additions since the query
+   // (GroupStep::Ball::adds, put back with the position when a step is taken again; 0 at a query) + 1 for the checked point's own (a trial c + dc). ulp(P) = 2^(e - 53), P = m 2^e,
+   // m in [0.5, 1): an ulp of every |x| <= P or larger. Derived, not tuned: about 4e-15 m at k = 20, 1 m, against bounds of 10-500 um. stray - ext is exact here (Sterbenz)
+   const int k = (q->addsLive != nullptr ? *q->addsLive : q->adds) + 1;
+   int e = 0;
+   (void)std::frexp(std::max({ std::fabs(q->c0.x), std::fabs(q->c0.y), std::fabs(q->c0.z) }) + q->ext, &e);
+   const double room = 0.8660254037844388 * (double)k * std::ldexp(1.0, e - 53);   // (sqrt(3) / 2 rounded up)
+   if (stray - q->ext <= room)
       return;
    if (q->energy)   // the energy reach: the query reached the ball's energy travel, a true bound: a ball outside it is a bound too small (a fault, logged with its numbers)
    {
@@ -3066,7 +3095,8 @@ void ContactSurfaceHost::FinderInsideQ(void *const qv, const RubberContact::V3 &
          o << "Energy reach re-look (trace): t " << (g_pplayer != nullptr ? g_pplayer->m_time_msec : 0u) << " ms, stage " << ContactProf::StageCur() << ", checked by "
            << (g_relookHost != nullptr ? "the path test of " + g_relookHost->Name() : std::string("the group step's attempt end (c + MoveOf)")) << "; stray " << stray * 1e3 << " mm = |(c - c0) + move|, c - c0 ("
            << d.x * 1e3 << ", " << d.y * 1e3 << ", " << d.z * 1e3 << ") mm |" << d.Length() * 1e3 << "|, move (" << move.x * 1e3 << ", " << move.y * 1e3 << ", " << move.z * 1e3 << ") mm |" << move.Length() * 1e3
-           << "|; bound " << q->reach * 1e3 << " mm, query " << q->ext * 1e3 << " mm; v at query (" << q->vPrev.x << ", " << q->vPrev.y << ", " << q->vPrev.z << ") m/s; surfaces:";
+           << "|; bound " << q->reach * 1e3 << " mm, query " << q->ext * 1e3 << " mm, over by " << (stray - q->ext) * 1e3 << " mm, rounding room " << room * 1e3 << " mm (k " << k << ")"
+           << "; v at query ("<< q->vPrev.x << ", " << q->vPrev.y << ", " << q->vPrev.z << ") m/s; surfaces:";
          if (q->items != nullptr)
             for (const SurfaceContact &s : *q->items)
                o << " " << (s.r != nullptr ? s.r->Name() : std::string("?"));
@@ -3267,6 +3297,8 @@ void ContactSurfaceHost::FinderQueryAt(const HitBall *const ball, const RubberCo
    FinderBallQ &q = g.balls[ball];
    JoinLeftover(q);   // re-engage: an object recorded and never joined
    q.c0 = c;
+   q.adds = 0;   // (re-centred: the seat's moves of a local c are not counted, the room is the check's end point's own rounding)
+   q.addsLive = nullptr;
    q.R = ballR;
    q.reach = q.ext = extM;
    q.items = nullptr;

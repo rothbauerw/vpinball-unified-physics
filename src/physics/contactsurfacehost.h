@@ -207,6 +207,9 @@ public:
    // the ball's inside check: the inside check of the ball's own cycle query at c (the same rule as FinderInside, which calls it), for a ball whatever its items; a ball with no query does nothing
    // c: the attempt's start, move: its move (the end is c + move; the stray is formed as (c - c0) + move, FinderInsideQ)
    static void FinderInsideBall(const HitBall *ball, const RubberContact::V3 &c, const RubberContact::V3 &move);
+   // the inside check's rounding room: the group step's count of additions to the ball's kept position (live: GroupStep::Ball::adds while it steps the ball; nullptr at its end,
+   // the count kept for the rest of the cycle); returns the count so far since the query's centre (0 for a ball with no query)
+   static int FinderAddsBind(const HitBall *ball, const int *live);
    static void FinderHosts(const HitBall *ball, std::vector<ContactHost *> &out);
    // shared_finder re-engage (runs/2026-11-13-finder-reengage/design.md): an object the inside check's re-query found that is not among the ball's surfaces is recorded for engagement;
    // the group step takes it (FinderTakeReachable: the recorded hosts the step's path can reach) and joins it mid-step. FinderPendAny: some ball has one recorded. One not taken by the ball's next query is
