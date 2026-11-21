@@ -68,6 +68,7 @@ namespace ContactSystem
    static std::filesystem::path s_iniFile;   // the table's physics ini (PhysicsIni::FindUnified at SetTable; empty = none): every reader reads this one file
    static std::filesystem::file_time_type s_iniTime{};   // its write time when the readers last read it (SetTable, ReloadChangedIni)
    static bool s_aircoreInStep = false;     // [Features] aircore_in_step of this table (physicsini.h), read likewise: 1 = an air-core coil's pull is read at each step's midpoint (AircorePullForce, CordIsland); 0 = held for the cycle as before
+   static bool s_ballGravityInStep = false; // [Features] ball_gravity_in_step of this table (physicsini.h), read likewise: 1 = gravity, nudge and magnets only in the step (Sources::Begin); 0 = stock adds them, Begin takes them back
 
    void SetTable(const std::filesystem::path &tableFile)
    {
@@ -88,6 +89,7 @@ namespace ContactSystem
       s_unifiedSet = true;
       s_seatEditorBalls = s_unified && f.seatEditorBalls;
       s_aircoreInStep = s_unified && f.aircoreInStep;
+      s_ballGravityInStep = s_unified && f.ballGravityInStep;
       g_cullListed = g_cullNamed = false;   // (the part cull: its lists, told misses and counters per table start)
       g_cullParts.clear();
       g_cullBands.clear();
@@ -103,6 +105,7 @@ namespace ContactSystem
       {
          PLOGI << "Contact system: unified engine on (" << file.string() << "; dev fallback: stock hit search still runs for object types not yet converted)";
          PLOGI << "Contact system: [Features] aircore_in_step = " << (s_aircoreInStep ? 1 : 0) << (s_aircoreInStep ? " (an air-core coil's pull read at each step's midpoint)" : " (an air-core coil's pull held for the cycle)");
+         PLOGI << "Contact system: [Features] ball_gravity_in_step = " << (s_ballGravityInStep ? 1 : 0) << (s_ballGravityInStep ? " (gravity, nudge and magnets only in the step)" : " (stock adds them, the step takes them back)");
       }
       else
          PLOGI << "Contact system: stock VPX physics, every new model off (" << (file.empty() ? std::string("no physics ini") : file.string() + " has no [Features] unified = 1") << ")";
@@ -128,6 +131,11 @@ namespace ContactSystem
       if (!s_unifiedSet)
          PLOGE << "Contact system: Unified() asked before the table's physics ini was read (SetTable); answering stock";
       return s_unified;
+   }
+
+   bool BallGravityInStep()
+   {
+      return s_ballGravityInStep;
    }
 
    int Islands::Root(int i)
@@ -259,6 +267,7 @@ struct ContactSystemImpl
       Vertex3Ds posStart;
       double lScale = 1.0;
       bool magnetsOn = false;
+      bool dragged = false;     // ([Features] ball_gravity_in_step) the debug mouse drags the ball: held against gravity and the nudge (Ball::fExt), no magnets
       bool extTaken = false;    // Sources::Begin took this cycle's gravity and nudge out of the velocity (they act in the substeps)
       V3 extOwe;                // the step's gravity and nudge for the sub-intervals after this one: out of the velocity while this one is stepped, back at the write-back
       double endPair = 0.0;     // the energy check: its half of what its ball pairs hold at the island's end
@@ -345,6 +354,19 @@ struct ContactSystemImpl
             return;
          }
          ReachAcc(w);
+         if (ContactSystem::s_ballGravityInStep)   // the engine added nothing (HitBall::UpdateVelocities): every ball's gravity, nudge and magnets act in the substeps; the velocity is the true one, left as it is
+         {
+            BallControl *const ballControl = g_pplayer->m_physics->GetBallControl();
+            w.dragged = ballControl != nullptr && pb->m_pBall == ballControl->GetDraggedBall();
+            const Vertex3Ds extInc = pb->ExternalVelocityIncrement();   // gravity, nudge, magnets at the start position
+            const Vertex3Ds extBase = pb->ExternalVelocityIncrement(false);   // the part that does not depend on the position
+            w.extTaken = true;
+            w.extOwe = V3();
+            w.extBaseVS = V3(extBase.x * VS, extBase.y * VS, extBase.z * VS);
+            w.magnetsOn = !w.dragged && pb->m_magnetic && Magnets::Active();
+            w.magAcc = w.magnetsOn ? V3((extInc.x - extBase.x) * VS, (extInc.y - extBase.y) * VS, (extInc.z - extBase.z) * VS).Length() / PHYSICS_STEPTIME_S : 0.0;
+            return;
+         }
          // A free ball (no contact of its own, in an island only through a ball pair) has nothing of the stock engine under it: its gravity, nudge and magnet pull act in the substeps like an engaged ball's.
          const bool onPlayfieldModel = always || w.e == nullptr || std::any_of(w.e->items.begin(), w.e->items.end(), [](const SurfaceContact &it) { return it.r->IsFloor(); });
          w.extTaken = onPlayfieldModel;
@@ -2314,7 +2336,7 @@ struct ContactSystemImpl
                b.w = kd->second.w;
             }
          }
-         b.fExt = V3();
+         b.fExt = w.dragged ? (w.extBaseVS * (1.0 / PHYSICS_STEPTIME_S)) * (-b.m) : V3();   // (a dragged ball: the hand holds it against gravity and the nudge, every ball's g.set.g)
          b.held = w.held;
          b.heldA = w.heldA;
          b.feedE = w.feedE;   // (the energy reach: -1 when not set)
@@ -2334,7 +2356,7 @@ struct ContactSystemImpl
          b.brakeRate = w.eddyRate;
          b.brakeAxis = w.eddyDir;
          // a cells magnet's pull: a stored energy of the ball's place; on the body it is the same acceleration as AddVelocityIncrement's (m / the steel mass it uses)
-         b.fieldScale = g.nf > 0 && w.pb->m_magnetic && !w.held ? b.m / (7800.0 * 4.0 / 3.0 * M_PI * b.R * b.R * b.R * std::max(0.001f, w.pb->m_d.m_mass)) : 0.0;   // (a held ball: no fields)
+         b.fieldScale = g.nf > 0 && w.pb->m_magnetic && !w.held && !w.dragged ? b.m / (7800.0 * 4.0 / 3.0 * M_PI * b.R * b.R * b.R * std::max(0.001f, w.pb->m_d.m_mass)) : 0.0;   // (a held ball: no fields)
          // [Features] aircore_in_step: an air-core coil's pull read at the step's midpoint (AircorePullForce), the same scale (a held ball: none; a ball whose magnets are off this cycle: none)
          b.forceScale = g.nbf > 0 && w.magnetsOn && !w.held ? b.m / (7800.0 * 4.0 / 3.0 * M_PI * b.R * b.R * b.R * std::max(0.001f, w.pb->m_d.m_mass)) : 0.0;
          if (w.magAcc > 0.0)   // what stays held for the cycle: the other balls' part, the magnets not on a field (nor, with aircore_in_step, the air-core coils): a drive
@@ -3673,7 +3695,7 @@ struct ContactSystemImpl
       for (auto *const ball : g_pplayer->m_vball)
       {
          HitBall &hb = ball->m_hitBall;
-         if (hb.m_sleepOwe && !s_append)
+         if (hb.m_sleepOwe && !s_append && !ContactSystem::s_ballGravityInStep)   // ([Features] ball_gravity_in_step: nothing was added, nothing is taken back, nothing owed)
             hb.m_d.m_vel += hb.ExternalVelocityIncrement() * (float)share;
       }
       for (BallPairState &p : g_ballPairs)

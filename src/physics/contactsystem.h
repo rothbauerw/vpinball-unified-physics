@@ -39,6 +39,8 @@ namespace ContactSystem
 
    // The table runs on the unified engine: only with  unified = 1  in the table's physics ini; no ini or no key = stock VPX physics.
    bool Unified();
+   // [Features] ball_gravity_in_step on the unified engine (physicsini.h): gravity, nudge and magnets act on a ball only in the contact system's step; false on the stock engine.
+   bool BallGravityInStep();
 
    // One sub-interval's step of every ball the contact system holds: hS, the engine's sub-interval of the cycle in seconds (PhysicsEngine::PhysicsSimulateCycle makes it; the only
    // place seconds are made). Step stores it for the parts and cords advanced alone after it (SubIntervalS). Its events (ball-ball callbacks, part hits, the parts' own events) are only queued here.
