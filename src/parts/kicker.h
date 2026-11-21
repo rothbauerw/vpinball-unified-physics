@@ -111,7 +111,6 @@ private:
    Vertex3Ds m_parkPlace;                // virtual: where the parked ball is held (its centre where it crossed into the zone, or where CreateBall made it), VPX units
    bool m_parkMovedNoted = false;        // virtual: CheckParked said once that something moved the parked ball
    bool m_physical = false;              // this kicker is a physical kicker (no KickerHitCircle; its cup host, mesh hole and held test instead)
-   bool m_physicalRefused = false;       // a physical kicker that could not be built (playfield_contact = 0): it does nothing (no stock path, design 6a)
    bool m_visible = true;                // physical: visible key of [Kicker:<name>] (PhysicalSetup): the Sys7 kicker drawn (1) whatever the VPX kicker type, or not (0)
    float m_placedZ = 0.f;                // physical: its height, VPU: its host's top (host key) or its Surface's, set by PhysicalSetup's placing step (MeshHoles::PlaceParts); drawn and CreateBall there
    HitBall *m_heldBall = nullptr;        // physical: the ball the held test holds; virtual: the parked ball (DestroyBall, Kick; null = empty)

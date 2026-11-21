@@ -103,7 +103,7 @@ public:
 
 private:
    void AddCabinetBoundingHitShapes(PinTable *const table);
-   void BuildTableBounds(PinTable *const table);   // [Features] table_bounds = 1: the outline walls and the top glass as engine-owned hosts, and their load notices
+   void BuildTableBounds(PinTable *const table);   // unified engine: the outline walls and the top glass as engine-owned hosts, and their load notices
    void BuildCoilBodies(PinTable *const table);    // every air-core coil's body (winding block and stop) as an engine-owned static hard surface (kind "coil")
    void PhysicsSimulateCycle(float dtime); // Perform continuous collision detection for the given amount of delta time
 
@@ -162,8 +162,8 @@ private:
    std::string m_leftoverHosts;                 // see LeftoverHosts()
    vector<class ContactHost *> m_ownedHosts;      // surface hosts the engine creates itself (turntable discs, table edge, glass, coil bodies); deleted with the engine
    vector<HitObject *> m_outOfTree;               // shared_finder P9: stock copies of converted walls, ramps and primitives kept out of the trees (KeepHostedCopiesOutOfTrees); the engine frees them
-   HitPlane m_hitTopGlass;                        // stock's glass plane: not built or tested with [Features] table_bounds = 1
-   bool m_tableBounds = false;                    // [Features] table_bounds = 1: the table edge and glass are engine-owned hosts in m_ownedHosts (AddCabinetBoundingHitShapes)
+   HitPlane m_hitTopGlass;                        // stock's glass plane: not built or tested on the unified engine
+   bool m_tableBounds = false;                    // unified engine (with a player): the table edge and glass are engine-owned hosts in m_ownedHosts (AddCabinetBoundingHitShapes)
 
    vector<MoverObject *> m_vmover; // moving objects for physics simulation
 

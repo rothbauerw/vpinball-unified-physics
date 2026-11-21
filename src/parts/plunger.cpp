@@ -278,7 +278,7 @@ void Plunger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       // Unified engine, an Auto Plunger (design 4, engine step 3): the auto plunger of the contact system, same switch. Placement (drawn = touched): the ball that touches the
       // head at rest is centred one ball radius ahead of where stock draws its tip at rest, on the plunger's x, Width above the surface plus ZAdjust (the rod's axis: the tip
       // head's axis; the fork's contact height is measured from a ball centred there); the carriage slides along the plunger's axis, +s = toward the ball = -y
-      if (ContactSystem::Unified() && m_d.m_autoPlunger && ContactHost::PlungerWanted(ini, GetName()))
+      if (ContactSystem::Unified() && m_d.m_autoPlunger)
       {
          constexpr double U = ContactSystem::kMetresPerUnit;
          AutoPlunger::Settings s;
@@ -324,7 +324,7 @@ void Plunger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
                   << p.tine[1].y / U << ", " << p.tine[1].z / U << ") VPU, corner radius " << p.rTine * 1e3 << " mm";
          return;
       }
-      if (ContactSystem::Unified() && !m_d.m_autoPlunger && ContactHost::PlungerWanted(ini, GetName()))
+      if (ContactSystem::Unified() && !m_d.m_autoPlunger)
       {
          constexpr double U = ContactSystem::kMetresPerUnit;
          PlungerRod::Settings s;

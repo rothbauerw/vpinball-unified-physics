@@ -14,7 +14,7 @@
 //    act on the disc in the same substep (a ball dropped on the rim slows it, a heavy load stalls it). Throw-off, slip and spin-up of the ball come from the contact law: nothing
 //    about them is set. The motor and the disc are advanced by the contact system with the balls, and alone (ContactPartHost::PartAdvance) when no ball is near.
 //  - hole: the playfield (plane or mesh) has a round hole of radius + gap_mm (1/16 in) at the disc; a ball over the gap rests on the two rims.
-// Needs [Features] playfield_contact = 1 (the disc is a surface of the playfield's force model); without it the sections are ignored with a warning.
+// The disc is a surface of the playfield's force model (always on the unified engine).
 // The disc never changes shape, so its collision geometry is fixed for the session; the motor and surface keys are read when the table loads.
 // Direction: the sign of the voltage's effect is the ini key direction (cw / ccw, as seen from above). Speed and angle are read in one fixed frame whatever the key:
 // TurntableSpeed is positive clockwise and negative counter-clockwise, TurntableAngle (0 .. 360) is measured clockwise from screen right (plus ref_angle_deg).

@@ -124,7 +124,6 @@ VPX_GROUP_HFIX=<us>        every group step this long; 1 = the accuracy bench's 
 VPX_GROUP_JAC_MODE=2       solves with the difference Jacobian instead of the analytic one.
 VPX_SNAPSHOT_TEST=2        negative control of the snapshot test: the parts are not put back, so a difference must show wherever a part moved.
 VPX_STEP_SCALE=<k>         every accuracy step limit times k (epsRest k^2); bench convergence k 0.5 / 0.25. k >= 0.25; HFIX wins.
-VPX_HINGES=0               gates and spinners back to the stock kick.        VPX_VISCOELASTIC=0   hard-surface damping by the old alpha law.
+VPX_VISCOELASTIC=0         hard-surface damping by the old alpha law.
 VPX_OVERLAP_REPLAY=0       no overlap replay.        VPX_PREVENT=0   no overlap prevention (overlap standard point 1).
-VPX_BUMPERS=0              does nothing but name itself in the bumper's "ignored" warning.
 ```

@@ -773,14 +773,13 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    if (!isUI && ContactSystem::Unified())
    {
       const std::filesystem::path ini = ContactHost::IniPathFor(m_ptable->m_filename);
-      const bool on = PhysicsIni::Active(ini).triggers;
       static const void *s_noted = nullptr;   // once per play
       if (s_noted != g_pplayer)
       {
          s_noted = g_pplayer;
-         PLOGI << "Triggers: [Features] triggers = " << (on ? 1 : 0) << (on ? ": WireA-E are rollover switches of the contact system (group step); None is a sensing zone of the unified engine; Button and Star are rollover caps of the group step; Inder stays a stock sensor (not converted)" : ": None is a sensing zone of the unified engine; Button and Star are rollover caps of the group step; every other trigger is a stock sensor");
+         PLOGI << "Triggers: WireA-E are rollover switches of the contact system (group step); None is a sensing zone of the unified engine; Button and Star are rollover caps of the group step; Inder stays a stock sensor (not converted)";
       }
-      if (on && wire)
+      if (wire)
       {
          // the real wire (PartData S7): a steel wire on a micro switch lever, the switch on a bracket under the playfield (GroupStepDesign 23.4); no stock sensor, mover or volume
          constexpr double U = ContactSystem::kMetresPerUnit;

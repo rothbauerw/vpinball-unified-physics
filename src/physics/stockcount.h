@@ -16,7 +16,7 @@ class HitBall;
 namespace StockCount
 {
    void SetPlanes(const HitObject *playfield, const HitObject *topGlass);
-   void SetTableBounds(bool on);   // [Features] table_bounds: the table edge and top glass are converted (no stock allowed for them)
+   void SetTableBounds(bool on);   // unified engine: the table edge and top glass are converted (no stock allowed for them)
    void Begin(HitObject *obj, HitBall *ball, bool contact);
    void End(bool ballAlive);   // ballAlive false: a script run by the collision removed the ball
    void Wall();                // HitBall::Collide3DWall reached

@@ -93,20 +93,17 @@ public:
    // A wall or primitive: [Rubbers] as the defaults, then [<kind>:<name>] (kind = "wall" or "primitive"). True if the object is flagged rubber = 1 and
    // [Features] surface_rubbers allows it; s.contact is then set. Only a unified vpx_physics.ini can flag surfaces.
    static bool LoadSurfaceSettings(RubberObjectSettings &s, const std::filesystem::path &file, const char *kind, const std::string &name);
-   // Unified engine: any other wall or primitive is a hard surface of the contact model. HardSurfaceWanted: the feature is on and the object does not opt out ([Wall:<name>] rubber = 0).
+   // Unified engine: any other wall, primitive, ramp or target is a hard surface of the contact model (rubber = 0 or absent in its section; no stock path).
    // LoadHardSurfaceSettings: the playfield's material (steel ball on lacquered wood) with the part's own friction mu and its restitution e turned into the normal damping
    // (rebound ratio ~ 1 - alpha v at 1 m/s), then [Surfaces] and the object's own section on top. PROVISIONAL, unverified: the mapping from the stock elasticity.
-   static bool HardSurfaceWanted(const std::filesystem::path &file, const char *kind, const std::string &name);
    // eMpa: the default E* before the sections (7875 = the playfield's); section: the object's own section in place of [Surfaces] and [<kind>:<name>] (the table edge's [TableEdge], the glass's [Glass],
    // an air-core coil's [Magnet:<name>]); tanDelta: the default loss tangent before the sections (0.05; a coil's nylon body 0.03)
    static bool LoadHardSurfaceSettings(RubberObjectSettings &s, const std::filesystem::path &file, const char *kind, const std::string &name, double elasticity, double friction,
                                        double eMpa = 7875.0, const std::string &section = std::string(), double tanDelta = 0.05);
    static bool IsSurfaceKey(const std::string &key);   // a key of the surface material (LoadHardSurfaceSettings): a part's own loader does not call it unknown
    static double HardSurfaceE(const HitObject *first);   // the part's restitution at 1 m/s: its elasticity with the stock falloff (0.3 without a collider)
-   static bool PlungerWanted(const std::filesystem::path &file, const std::string &name);   // like HingeWanted, for [Features] plunger: a mechanical plunger's rod ([Plunger:<name>] rubber = 0 opts out)
-   static bool HingeWanted(const std::filesystem::path &file, const char *kind, const std::string &name);   // like HardSurfaceWanted, for [Features] hinges (gates and spinners)
    // The playfield as a surface on the force model. s gets the material of the [Playfield] section (defaults: a steel ball on lacquered wood, all UNVERIFIED), tableMu the
-   // table's friction. False if [Features] playfield_contact is off.
+   // table's friction. False on the stock engine.
    static bool LoadPlayfieldSettings(RubberObjectSettings &s, const std::filesystem::path &file, double tableMu);
    // A turntable's disc: a hard textured surface (the playfield's material with the given friction). Never off.
    static RubberObjectSettings TurntableSettings(double mu, double rollingResistance);

@@ -30,6 +30,7 @@ namespace AutoPlungerHost
          else if (k == "auto_stroke_mm") s.strokeMm = v;                       // the carriage's travel, rest stop to end stop, mm (ESTIMATED 27)
          else if (k == "auto_return_preload_n") s.returnPreloadN = v;          // the return spring's force at rest, N (ESTIMATED 1.0)
          else if (k == "auto_return_rate_nmm") s.returnRateNmm = v;            // the return spring's rate, N/mm (ESTIMATED 0.1)
+         else if (k == "rubber") { if (v == 0.0) ContactSystem::NoticeRetired("rubber = 0 ([Plungers] / [Plunger:<name>]) is ignored: no stock path on the unified engine"); }   // (once the opt-out to stock)
       });
       {
          std::vector<std::string> rodBad;   // the tip head's own keys (the rod's other keys are not used here)

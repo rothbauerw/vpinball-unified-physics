@@ -21,7 +21,7 @@ namespace PlungerHost
    using V3 = RubberContact::V3;
 
    // [Plungers] for all, then [Plunger:<name>]: every PlungerRod::Settings field by its name in snake case (the comment beside each field in plungerrod.h says what it is and its source).
-   // A value that cannot build a working rod is refused: the key named in `bad` (empty = all good). rubber = 0 (the opt-out) is read by ContactHost::PlungerWanted
+   // A value that cannot build a working rod is refused: the key named in `bad` (empty = all good). rubber = 0 (once the opt-out to stock) is told and ignored: a mechanical plunger on the unified engine is always the rod
    inline void Load(PlungerRod::Settings &s, const std::filesystem::path &file, const std::string &name, std::vector<std::string> &bad)
    {
       PartsIni::ReadSections(file, "plungers", "plunger:" + name, [&](const std::string &k, double v, const std::string &) {
@@ -63,7 +63,8 @@ namespace PlungerHost
          else if (k == "release_window_noise") s.releaseWindowNoise = v; // the fit window's noise allowance, m/s^2, independent of release_accel (2k a, 14.3)
          else if (k == "release_window_min_ms") s.releaseWindowMinMs = v; // the fit window's floor, ms: a hand's own short-term acceleration (2k a, 14.3)
          else if (k == "sensor_filtered") s.sensorFiltered = v != 0.0;   // the cabinet sensor: 0 = its own reports (default), 1 = VPX's filtered position and speed (2i a)
-         else if (ContactHost::IsSurfaceKey(k)) {}                       // (rubber = 0: the opt-out, ContactHost::PlungerWanted)
+         else if (k == "rubber") { if (v == 0.0) ContactSystem::NoticeRetired("rubber = 0 ([Plungers] / [Plunger:<name>]) is ignored: no stock path on the unified engine"); }   // (once the opt-out to stock)
+         else if (ContactHost::IsSurfaceKey(k)) {}
       });
       const auto need = [&](const bool ok, const char *key) {
          if (!ok)

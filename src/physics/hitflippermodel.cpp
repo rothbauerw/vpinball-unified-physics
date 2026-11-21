@@ -204,9 +204,9 @@ ContactPartHost *FlipperMoverObject::MakePart(HitFlipper *const owner, const flo
    part->bat.LoadSettings(m_pflipper->GetName(), m_pflipper->m_ptable != nullptr ? m_pflipper->m_ptable->m_filename : std::filesystem::path());
    // A bat has one path. A table that asks for another is told it is ignored (rule 8).
    const std::filesystem::path iniU = m_pflipper->m_ptable != nullptr ? PhysicsIni::FindUnified(m_pflipper->m_ptable->m_filename) : std::filesystem::path();
-   if (!part->bat.set.rubberContact || !PhysicsIni::Active(iniU).flippers)
+   if (!part->bat.set.rubberContact)   // ([Features] flippers / flipper_rubber = 0: PhysicsIni::RETIRED, told once per table start)
    {
-      const std::string msg = std::string("Flipper ") + m_pflipper->GetName() + ": rubber_contact = 0, flipper_rubber = 0 or flippers = 0 is ignored: a bat has no impulse path and no stock path on the unified engine";
+      const std::string msg = std::string("Flipper ") + m_pflipper->GetName() + ": rubber_contact = 0 is ignored: a bat has no impulse path and no stock path on the unified engine";
       PLOGW << msg;
       if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
          g_pplayer->m_liveUI->PushNotification(msg, 6000);

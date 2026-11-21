@@ -344,8 +344,8 @@ void PhysicsEngine::AddCabinetBoundingHitShapes(PinTable *const table)
 {
    // TODO these are the only colliders that are added without an associated editable. We could enforce one here to guarantee m_editable != nullptr and simplify the code
 
-   // [Features] table_bounds = 1 (unified engine): the outline walls and the glass are hosts of the contact model (BuildTableBounds, after the playfield host); 0: stock's
-   m_tableBounds = PhysicsIni::Active(ContactSurfaceHost::IniPathFor(table->m_filename)).tableBounds && g_pplayer != nullptr;
+   // unified engine: the outline walls and the glass are hosts of the contact model (BuildTableBounds, after the playfield host); stock engine: stock's
+   m_tableBounds = ContactSystem::Unified() && g_pplayer != nullptr;
    StockCount::SetTableBounds(m_tableBounds);
    if (!m_tableBounds)
    {
@@ -387,7 +387,7 @@ void PhysicsEngine::AddCabinetBoundingHitShapes(PinTable *const table)
    m_hitPlayfield.m_elasticityFalloff = table->m_overridePhysics ? table->m_fOverrideElasticityFalloff : table->m_elasticityFalloff;
    m_hitPlayfield.m_scatter = ANGTORAD(table->m_overridePhysics ? table->m_fOverrideScatterAngle : table->m_scatter);
 
-   // the playfield on the force model (vpx_physics.ini, [Features] playfield_contact = 1, material in [Playfield]): a surface host the plane's collide and contact hand the ball to
+   // the playfield on the force model (unified engine, material in [Playfield]): a surface host the plane's collide and contact hand the ball to
    if (m_playfieldHost == nullptr && g_pplayer != nullptr && g_pplayer->m_implicitPlayfieldMesh != nullptr) // (the engine can run without a player) an explicit playfield primitive is its own host (Primitive::PhysicSetup)
    {
       const std::filesystem::path ini = ContactSurfaceHost::IniPathFor(table->m_filename);
@@ -441,7 +441,7 @@ void PhysicsEngine::AddCabinetBoundingHitShapes(PinTable *const table)
    }
 }
 
-// [Features] table_bounds = 1 (runs/2026-11-21-edge-glass/design.md): the table's outline walls and its top glass as two static hard surfaces of the contact model, engine-owned
+// unified engine (runs/2026-11-21-edge-glass/design.md): the table's outline walls and its top glass as two static hard surfaces of the contact model, engine-owned
 // (m_ownedHosts, deleted with the engine), found by the static finder (kinds "tableedge" and "glass"), no Hit events (as stock). Glass plane: glass top height at the table's top
 // edge (y = m_top), bottom height at its bottom edge (y = m_bottom). Walls: vertical on the outline, from kEdgeBelowU under the playfield up to the glass plane at each end.
 // Faces wound so their normals point into the table (walls) and down (glass); the probe is two-sided, so a ball outside is held outside.
@@ -1159,7 +1159,7 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
             // always check for playfield and top glass
             if (m_implicitPlayfieldMesh && !m_hitPlayfield.SurfaceOwns(pball->m_d)) // a ball the playfield force model holds is not tested
                DoHitTest(pball, &m_hitPlayfield, pball->m_coll);
-            if (!m_tableBounds)   // (table_bounds 1: the glass is a host of the contact model, found by the static finder)
+            if (!m_tableBounds)   // (unified engine: the glass is a host of the contact model, found by the static finder)
                DoHitTest(pball, &m_hitTopGlass, pball->m_coll);
 
             #ifndef USE_EMBREE

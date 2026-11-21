@@ -6,23 +6,26 @@
 //   [Flippers]        every flipper;            [Flipper:<name>]  one flipper
 //   [Rubbers]         rings and bands;          [Rubber:<name>]   one rubber
 //   [Wall:<name>], [Primitive:<name>]   a wall / primitive flagged  rubber = 1  uses the rubber force model; other keys override [Rubbers] for it
-//   [Surfaces]       unified engine: defaults for every wall and primitive that is not a rubber (hard surfaces: the same keys as [Rubbers]); [Wall:<name>] / [Primitive:<name>] override, rubber = 0 opts out; [Features] hard_surfaces = 0 switches it off
+//   [Surfaces]       unified engine: defaults for every wall and primitive that is not a rubber (hard surfaces: the same keys as [Rubbers]); [Wall:<name>] / [Primitive:<name>] override, rubber = 1 makes one a rubber surface
 //   [Turntable:<name>]   a motor-driven disc set into the playfield; the script drives it with Turntable "<name>", volts   (see turntable.h)
 //   [Magnet:<name>]   an electromagnet (position, coil, core); the script drives it with Magnet "<name>", volts   (see magnet.h)
 //   [Slings]         every sling (keys without the sling_ prefix);  [Sling:<rubber name>]  one sling (plate, switches, overrides)
-// With unified = 1 every model is on by default (the file may name no other key); a feature is switched off with  <key> = 0  in [Features]. On the stock engine (no unified = 1)
+// With unified = 1 every model is on by default (the file may name no other key); a feature is switched off with  <key> = 0  in [Features] (a retired key = 0 is ignored and told: RETIRED below). On the stock engine (no unified = 1)
 // every model is off, whatever the file says (Active below): no mixing of the new models with the stock engine.
 // vpx_physics.ini is the only settings file (the old flippers.ini, rubbers.ini, contact.ini and their VPX_*_INI variables were removed 2026-10-20).
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace ContactSystem
 {
    bool Unified();   // contactsystem.cpp
+   void NoticeRetired(const std::string &msg);   // contactsystem.cpp
 }
 
 namespace PhysicsIni
@@ -30,17 +33,7 @@ namespace PhysicsIni
    struct Features
    {
       bool unified = false;       // master switch: the table runs on the unified engine (off = stock VPX physics); read by ContactSystem::SetTable
-      bool flippers = true;       // read so a table that sets it to 0 is told it is ignored (a bat has no stock path, FlipperMoverObject::MakePart)
-      bool flipperRubber = true;  // the same: the bat has no impulse path
-      bool rubbers = true;        // force model for ring rubbers (posts, wall rubbers); off = stock collisions
-      bool playfieldContact = true; // the playfield (plane) on the force model: one material ([Playfield]); off = the stock plane contact
-      bool surfaceRubbers = true; // walls and primitives flagged rubber = 1 in [Wall:<name>] / [Primitive:<name>]; off = stock collisions
-      bool hardSurfaces = true;   // unified engine: every other wall and primitive is a hard surface of the contact model (material from the part's elasticity and friction, [Surfaces] and [Wall:<name>] / [Primitive:<name>] override); off = stock collisions
-      bool triggers = true;       // unified engine: wire triggers (WireA-D) are rollover wire switches of the contact system (design-wire.md); off = stock sensors. On by default (user 2026-11-04)
-      bool hinges = true;         // unified engine: gates and spinners are hinged plates of the contact model (mass, torque from the balls touching them); off = the stock kick of the plate by the ball
-      bool plunger = true;        // unified engine: a mechanical plunger (Auto Plunger off) is the physical rod of the contact model (plungerrod.h, PlungerDesign.txt; [Plunger:<name>] rubber = 0 opts one out); off = the stock plunger. On while tested
-      bool bumpers = true;        // read only so bumpers = 0 can be told as ignored (bumper.cpp): a unified table has no other bumper
-      bool bands = true;          // band model (rubber stretched between posts); off = stock collisions
+      bool surfaceRubbers = true; // walls and primitives flagged rubber = 1 in [Wall:<name>] / [Primitive:<name>]; off = they are hard surfaces of the contact model like the rest
       bool slings = true;         // slings (plate, coil, switches) on bands; off = a plain band
       bool contact = true;        // resting-contact friction; off = plain Coulomb friction with the object's friction
       float hitSpeedMin = 0.5f;   // [Features] hit_speed_min: impacts slower than this (ball velocity units, 18.53 = 1 m/s) do not fire the playfield Hit event
@@ -53,12 +46,7 @@ namespace PhysicsIni
                                   // step's midpoint in every evaluation (Magnets::AircoreForce, its slope in Newton's Jacobian); 0 = held at the cycle-start place for the whole cycle (Ball::fExt), as today
       bool seatEditorBalls = true; // seat_editor_balls (on while tested, rule 6; runs/2026-11-13-editor-balls): 1 = at play start each ball placed in the table editor is moved out of any surface it overlaps
                                   // (playfield, walls, ramps, primitives, rubbers, moving parts at rest; not other balls) by the shortest move, the no-past seating (ContactSystem::PushOutAtStart); 0 = left where it was placed, as today
-      bool ballGravityInStep = true;   // ball_gravity_in_step (on while tested, rule 6; runs/2026-11-20-stock-gravity/design.md): 1 = gravity, the nudge and the magnets act on a ball only in the
-                                       // contact system's step (stock's HitBall::UpdateVelocities adds none; m_vel is the true velocity between and within cycles; a ball the debug mouse drags is
-                                       // held against them); 0 = stock adds the cycle's increment and the step takes it back and owes it, as before
-      bool tableBounds = true;    // table_bounds (on while tested, rule 6; runs/2026-11-21-edge-glass/design.md): 1 = the table's outline walls and its top glass are static hard surfaces of the
-                                  // contact model (engine-owned hosts, kinds "tableedge" and "glass", material [TableEdge] / [Glass]); stock's four edge LineSegs, glass quad and glass plane
-                                  // are not built; 0 = the stock edge and glass, unchanged
+      std::vector<std::string> retiredOff;   // the retired keys (RETIRED) this file sets to 0, in file order: told once per table start by ContactSystem::SetTable (WARN and a notice), never acted on
       bool hitSpeed = true;       // PROTOTYPE: Ball.HitSpeed (normal speed before an impact) and the table's Hit event for the playfield; off = neither
       float holeRoundMm = 0.2f;   // hole_round_mm: a round hole cut in the mesh (Button, kicker, turntable, [PlayfieldCut] circle) is a polygon whose edges touch the true circle at their midpoints;
                                   // each vertex stands at most this far outside it, mm (MeshHoles::Round: N = max(24, smallest N with r (1 / cos(pi / N) - 1) <= this); smaller = more edges, a rounder
@@ -113,6 +101,11 @@ namespace PhysicsIni
          PLOGW << "Physics settings: section [" << lowerName << "] is not a known kind (features, contact, flippers, rubbers, slings, playfield, surfaces, gates, spinners, bumpers, triggers, plungers, targets, tableedge, glass, or a part's kind: flipper, rubber, sling, wall, primitive, magnet, turntable, playfieldcut, gate, spinner, ramp, bumper, kicker, trigger, plunger, target); it is ignored";
    }
 
+   // [Features] keys whose 0 once sent an object or a law to stock, or asked for a path a part does not have (flippers, flipper_rubber, bumpers). On the unified engine each object
+   // always takes its unified branch (DevelopmentRules 6: unified = 0 runs stock only, 1 bypasses stock entirely). Kept only so a file that still says  <key> = 0  is told it is ignored (rule 8); = 1 is silent
+   inline constexpr const char *RETIRED[] = { "hard_surfaces", "playfield_contact", "table_bounds", "triggers", "hinges", "plunger", "rubbers", "bands", "ball_gravity_in_step",
+                                              "flippers", "flipper_rubber", "bumpers" };
+
    // true if the file has a [Features] section (it is a unified file); `f` gets its switches (a missing key = on)
    inline bool ReadFeatures(const std::filesystem::path &file, Features &f)
    {
@@ -145,28 +138,13 @@ namespace PhysicsIni
          const bool on = (v == "1" || v == "true" || v == "yes" || v == "on");
          if (key == "unified")
             f.unified = on;
-         else if (key == "flippers")
-            f.flippers = on;
-         else if (key == "flipper_rubber")
-            f.flipperRubber = on;
-         else if (key == "rubbers")
-            f.rubbers = on;
-         else if (key == "playfield_contact")
-            f.playfieldContact = on;
+         else if (std::find(std::begin(RETIRED), std::end(RETIRED), key) != std::end(RETIRED))
+         {
+            if (!on && std::find(f.retiredOff.begin(), f.retiredOff.end(), key) == f.retiredOff.end())
+               f.retiredOff.push_back(key);   // (= 1 is silent: it is what runs)
+         }
          else if (key == "surface_rubbers")
             f.surfaceRubbers = on;
-         else if (key == "hard_surfaces")
-            f.hardSurfaces = on;
-         else if (key == "hinges")
-            f.hinges = on;
-         else if (key == "plunger")
-            f.plunger = on;
-         else if (key == "triggers")
-            f.triggers = on;
-         else if (key == "bumpers")
-            f.bumpers = on;
-         else if (key == "bands")
-            f.bands = on;
          else if (key == "slings")
             f.slings = on;
          else if (key == "contact")
@@ -179,12 +157,8 @@ namespace PhysicsIni
             f.meshOverlapRepair = on;
          else if (key == "aircore_in_step")
             f.aircoreInStep = on;
-         else if (key == "ball_gravity_in_step")
-            f.ballGravityInStep = on;
          else if (key == "hit_speed")
             f.hitSpeed = on;
-         else if (key == "table_bounds")
-            f.tableBounds = on;
          else if (key == "seat_editor_balls")
             f.seatEditorBalls = on;
          else if (key == "hit_speed_min")
@@ -202,8 +176,7 @@ namespace PhysicsIni
       Features f;
       if (!ContactSystem::Unified())
       {
-         f.flippers = f.flipperRubber = f.rubbers = f.playfieldContact = f.surfaceRubbers = f.hardSurfaces = f.hinges = f.plunger = f.triggers = false;
-         f.bands = f.slings = f.contact = f.magnets = f.turntables = f.meshOverlapRepair = f.hitSpeed = f.aircoreInStep = f.seatEditorBalls = f.ballGravityInStep = f.tableBounds = false;
+         f.surfaceRubbers = f.slings = f.contact = f.magnets = f.turntables = f.meshOverlapRepair = f.hitSpeed = f.aircoreInStep = f.seatEditorBalls = false;
          return f;
       }
       if (!file.empty())

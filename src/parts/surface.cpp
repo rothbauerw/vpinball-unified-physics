@@ -195,7 +195,7 @@ void Surface::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    bool hardSurface = false;   // unified engine: a wall without the rubber flag is a hard surface of the contact model
    if (!isUI && ContactSurfaceHost::LoadSurfaceSettings(rubberSettings, rubberIni, "wall", GetName()))
       rubberFaces = std::make_shared<RubberSurface>();
-   else if (!isUI && ContactSystem::Unified() && ContactSurfaceHost::HardSurfaceWanted(rubberIni, "wall", GetName()))
+   else if (!isUI && ContactSystem::Unified())
    {
       rubberFaces = std::make_shared<RubberSurface>();
       hardSurface = true;

@@ -741,7 +741,7 @@ void HitBall::UpdateVelocities()
       }
       else
       {
-         if (m_sleepGroup == 0 && !ContactSystem::BallGravityInStep())   // (a sleeping ball is held where it is: no gravity is given that the contact would have to take back; [Features] ball_gravity_in_step: the contact system's step gives them)
+         if (m_sleepGroup == 0 && !ContactSystem::Unified())   // (a sleeping ball is held where it is; on the unified engine the contact system's step gives gravity, nudge and magnets)
             m_d.m_vel += ExternalVelocityIncrement(); // gravity, nudge (stock) and the magnets (hitballcontact.cpp)
       }
    }

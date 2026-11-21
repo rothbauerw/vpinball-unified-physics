@@ -273,13 +273,6 @@ namespace Turntables
          g_tt.clear();
          return;
       }
-      if (!feat.playfieldContact)
-      {
-         // the disc is a surface of the playfield's force model and the playfield is cut round it: with the stock playfield contact the plane would still carry the ball
-         PLOGW << "Turntables: " << g_tt.size() << " [Turntable:<name>] section(s) ignored: turntables need [Features] playfield_contact = 1";
-         g_tt.clear();
-         return;
-      }
       for (size_t i = 0; i < g_tt.size(); i++)
       {
          Turntable &t = g_tt[i];

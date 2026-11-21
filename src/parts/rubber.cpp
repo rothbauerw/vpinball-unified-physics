@@ -451,7 +451,7 @@ void Rubber::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       RubberObjectSettings rs;
       const std::string name = GetName();
       const std::filesystem::path ini = ContactSurfaceHost::IniPathFor(m_ptable->m_filename);
-      if (ContactSurfaceHost::LoadSettings(rs, ini, name) && rs.contact)
+      if (ContactSurfaceHost::LoadSettings(rs, ini, name))
       {
          constexpr int segmentsPerRing = 6;
          std::vector<Vertex3Ds> centre;
@@ -463,9 +463,7 @@ void Rubber::PhysicSetup(PhysicsEngine* physics, const bool isUI)
             centre.push_back(sum / (float)segmentsPerRing);
          }
          ContactSurfaceHost *const hr = centre.size() >= 3 ? new ContactSurfaceHost(this, centre, (float)m_d.m_thickness * 0.5f, rs, ini, name) : nullptr;
-         if (hr != nullptr && hr->FeatureOff())
-            delete hr;
-         else if (hr != nullptr)
+         if (hr != nullptr)
          {
             m_pBand = hr;
             // band_stops may name a table object instead of giving x,y,r, so a moved post or band cannot leave the ini stale: a rubber (its footprint), a

@@ -240,7 +240,6 @@ public:
    SlingInfo GetSlingInfo() const { return m_slingInfo; }
    int PtCount() const { return (int)m_ptsSI.size(); }
    bool IsBand() const { return m_set.band; }   // found from its shape at load (DetectBand)
-   bool FeatureOff() const;                     // [Features] rubbers / bands is off for what this rubber turned out to be: stock collisions (a development switch)
    float BandSectionU() const;                  // band_section_mm in VPX units for the drawn band, 0 = the rubber's Thickness
    int BandSwitchCount() const { return (int)m_switches.size(); }
    bool BandSwitchClosedAt(int i) const { return i >= 0 && i < (int)m_switches.size() && m_switches[i].closed; }

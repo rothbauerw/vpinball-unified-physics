@@ -190,8 +190,6 @@ void ContactBat::LoadSettings(const std::string &who, const std::filesystem::pat
    FlipperSettings s;
    ApplySection(s, iniPath, "flippers", who);
    ApplySection(s, iniPath, "flipper:" + who, who);
-   if (!PhysicsIni::Active(iniPath).flipperRubber)
-      s.rubberContact = false;
    ClampRubberSettings(s, [&who](const char *key, double was, double now) { PLOGW << "Flipper settings (" << who << "): " << key << " = " << was << " is out of range, using " << now; });
    set = s;
    Derive(set, der);

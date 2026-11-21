@@ -14,7 +14,7 @@ void Ramp::AddHardSurface(PhysicsEngine* physics, const bool isUI, const Vertex2
    std::shared_ptr<RubberSurface> rubberFaces;
    RubberObjectSettings rubberSettings;
    const std::filesystem::path rubberIni = ContactSurfaceHost::IniPathFor(m_ptable->m_filename);
-   if (!isUI && ContactSystem::Unified() && ContactSurfaceHost::HardSurfaceWanted(rubberIni, "ramp", GetName()))
+   if (!isUI && ContactSystem::Unified())
       rubberFaces = std::make_shared<RubberSurface>();
    if (rubberFaces)
    {

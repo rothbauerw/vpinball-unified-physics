@@ -690,12 +690,6 @@ ContactSurfaceHost::ContactSurfaceHost(IEditable *editable, const std::vector<Ve
    }
 }
 
-bool ContactSurfaceHost::FeatureOff() const
-{
-   const PhysicsIni::Features feat = PhysicsIni::Active(m_ini);
-   return m_set.band ? !feat.bands : !feat.rubbers;
-}
-
 float ContactSurfaceHost::BandSectionU() const
 {
    return m_set.band && m_set.bandSectionMm > 0.0 ? (float)(m_set.bandSectionMm * 1e-3 / U) : 0.f;

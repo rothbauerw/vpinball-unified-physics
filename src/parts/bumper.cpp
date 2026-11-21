@@ -223,10 +223,6 @@ void Bumper::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       JetBumper::Params prm;
       std::string ignored;
       PartsIni::LoadBumper(prm, ini, GetName(), &ignored);
-      if (!PhysicsIni::Active(ini).bumpers)
-         ignored += " [Features] bumpers = 0";
-      if (const char *const e = getenv("VPX_BUMPERS"); e != nullptr && atoi(e) == 0)
-         ignored += " VPX_BUMPERS=0";
       if (!ignored.empty())
       {
          ignored = "Bumper " + GetName() + ": ignored on a unified table:" + ignored;

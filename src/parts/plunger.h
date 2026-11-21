@@ -176,7 +176,7 @@ private:
 
    HitPlunger *m_phitplunger = nullptr;
 
-   // unified engine, [Features] plunger: the mechanical rod of the contact system (physics/plungerhost.h). m_phitplunger is then built but not in the physics: it carries
+   // unified engine: the mechanical rod of the contact system (physics/plungerhost.h). m_phitplunger is then built but not in the physics: it carries
    // m_pos for the renderer and the script, its geometry for CreateBall. m_rodRefused: a bad [Plunger:<name>] value; the plunger stays at rest and pushes nothing
    std::shared_ptr<PlungerHost::Rod> m_rod;
    ContactPartHost *m_partHost = nullptr;
@@ -184,7 +184,7 @@ private:
    float m_rodDrawRest = 0.f;   // m_pos (VPU) where stock draws its tip at rest: the rod's s = 0
    void RodPublish();           // m_pos from the rod's pull, every physics interval (drawn = touched)
    friend class PlungerRodAdapter;
-   // unified engine, an Auto Plunger: the auto plunger of the contact system (physics/autoplungerhost.h, design 4), same switch (PlungerWanted). Drawn: its head only
+   // unified engine, an Auto Plunger: the auto plunger of the contact system (physics/autoplungerhost.h, design 4), on every unified table. Drawn: its head only
    // (m_autoMesh: the fork's two strips or the tip, one frame per VPU of travel); the stock rod is not drawn
    std::shared_ptr<AutoPlungerHost::Auto> m_auto;
    std::shared_ptr<MeshBuffer> m_autoMesh;

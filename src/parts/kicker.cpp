@@ -121,7 +121,7 @@ void Kicker::PhysicalSetup(PhysicsEngine *const physics)
 {
    KickerArm::Remove(this);   // (a stroke left from the last table start)
    KickerHold::Remove(this);
-   m_physical = m_physicalRefused = m_virtual = m_parkMovedNoted = false;
+   m_physical = m_virtual = m_parkMovedNoted = false;
    m_heldBall = m_lastHeldBall = nullptr;
    m_offsetNoted = m_enabledNoted = m_createNoted = m_inclNoted = false;
    const std::filesystem::path ini = ContactHost::IniPathFor(m_ptable->m_filename);
@@ -171,14 +171,6 @@ void Kicker::PhysicalSetup(PhysicsEngine *const physics)
       KickerNotice("Kicker " + name + ": cup '" + cup + "' is not a known cup; the System 7 cup (sys7) is used. Set cup = sys7");
    m_physical = true;
    const float height = m_ptable->GetSurfaceHeight(m_d.m_szSurface, m_d.m_vCenter.x, m_d.m_vCenter.y);
-   if (!feat.playfieldContact)
-   {
-      // design 6a: the hole is cut in a static mesh of the force model (MeshHoles); with the stock playfield contact the plane would still carry the ball. Nothing is built: no stock path
-      m_physical = false;
-      m_physicalRefused = true;
-      KickerNotice("Kicker " + name + ": a physical kicker needs the playfield on the force model ([Features] playfield_contact = 0); it does nothing. Set type = virtual in [Kicker:" + name + "]");
-      return;
-   }
    // the rest needs the kicker's height: placed once every host exists (MeshHoles::PlaceParts, after the item loop and the playfield host), with or without a host key (one path)
    MeshHoles::Defer([this, physics, ini, name, cup, holeKeys, fromIni = seen.count("type") != 0, height = height]() mutable {
    double z = 0.0;   // the kicker's height: host, Surface or playfield top (MeshHoles::PartHeight); false: the named host refused, PartOnHost said why, it keeps its Surface's height, no hole
@@ -525,7 +517,7 @@ void Kicker::PhysicRelease(PhysicsEngine* physics, const bool isUI)
          physics->m_noneZones.Remove(this);   // (the cup host is a hit object of the engine, deleted with the others)
       KickerArm::Remove(this);
       KickerHold::Remove(this);
-      m_physical = m_physicalRefused = m_virtual = m_parkMovedNoted = false;
+      m_physical = m_virtual = m_parkMovedNoted = false;
       m_heldBall = m_lastHeldBall = nullptr;
    }
 }
@@ -1114,8 +1106,6 @@ STDMETHODIMP Kicker::DestroyBall(int *pVal)
 
 STDMETHODIMP Kicker::KickXYZ(float angle, float speed, float inclination, float x, float y, float z)
 {
-   if (m_physicalRefused)
-      return S_OK;   // a physical kicker that could not be built does nothing (design 6a)
    if (m_physical)
    {
       // Design 4c, 3c (approved by the user 2026-11-13; replaces 4a's velocity set): the arm stroke. The held ball is handed to an idealised kicker arm (KickerArm, below): its centre is
@@ -1370,7 +1360,7 @@ STDMETHODIMP Kicker::put_Enabled(VARIANT_BOOL newVal)
    m_d.m_enabled = VBTOb(newVal);   // (kept for the script to read back, e.g. a saucer class's HasBall)
    if (m_phitkickercircle)
       m_phitkickercircle->m_enabled = m_d.m_enabled;
-   if ((m_physical || m_physicalRefused) && !m_enabledNoted)
+   if (m_physical && !m_enabledNoted)
    {
       // a physical kicker has no Enabled (Requirements F 9): the cup and its switch stay; said once per table start
       m_enabledNoted = true;

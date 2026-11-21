@@ -225,8 +225,8 @@ bool ContactHost::LoadSettings(RubberObjectSettings &s, const std::filesystem::p
 {
    if (!ContactSystem::Unified())
       return false;   // stock engine: stock rubbers
-   // the rubber model is on for every rubber the [Features] allow (no file: every model on with its defaults; a rubber says contact = 0 to opt out).
-   // Whether it is a band or a ring is found from its shape (ContactSurfaceHost::DetectBand), which also takes the [Features] rubbers / bands switch for that kind
+   // the rubber model is on for every rubber (no file: on with its defaults); whether it is a band or a ring is found from its shape (ContactSurfaceHost::DetectBand).
+   // contact = 0 in [Rubbers] / [Rubber:<name>] once sent a rubber to stock: retired, told and ignored (DevelopmentRules 6: no stock path on the unified engine)
    const PhysicsIni::Features feat = PhysicsIni::Active(file);
    s.contact = true;
    ApplySection(s, file, "rubbers");
@@ -234,8 +234,11 @@ bool ContactHost::LoadSettings(RubberObjectSettings &s, const std::filesystem::p
    ApplySection(s, file, "rubber:" + name);
    ApplySection(s, file, "sling:" + name, "sling_");
    Clamp(s, name);
-   if (!feat.rubbers && !feat.bands)
-      s.contact = false;
+   if (!s.contact)
+   {
+      ContactSystem::NoticeRetired("contact = 0 ([Rubbers] / [Rubber:<name>]) is ignored: no stock path on the unified engine");   // (one text: told once per table start)
+      s.contact = true;
+   }
    if (!feat.slings)
       s.slingPlate.clear();
    return true;
@@ -259,43 +262,10 @@ double ContactHost::HardSurfaceE(const HitObject *first)
    return first != nullptr ? (double)ElasticityWithFalloff(first->m_elasticity, first->m_elasticityFalloff, (float)ContactSystem::kVelocityScale > 0.f ? (float)(1.0 / ContactSystem::kVelocityScale) : 18.53f) : 0.3;
 }
 
-bool ContactHost::HingeWanted(const std::filesystem::path &file, const char *kind, const std::string &name)
-{
-   static const bool envOn = []() { const char *const e = getenv("VPX_HINGES"); return !(e != nullptr && atoi(e) == 0); }();
-   if (!envOn)
-      return false;
-   if (!PhysicsIni::Active(file).hinges)   // no file: on with the defaults
-      return false;
-   RubberObjectSettings probe;
-   probe.surfaceRubber = true;
-   ApplySection(probe, file, std::string(kind) + ":" + name);
-   return probe.surfaceRubber;
-}
-
-bool ContactHost::PlungerWanted(const std::filesystem::path &file, const std::string &name)
-{
-   if (!PhysicsIni::Active(file).plunger)   // no file: on with the defaults
-      return false;
-   RubberObjectSettings probe;
-   probe.surfaceRubber = true;
-   ApplySection(probe, file, "plunger:" + name);
-   return probe.surfaceRubber;
-}
-
 bool ContactHost::IsSurfaceKey(const std::string &key)
 {
    RubberObjectSettings scratch;
    return ApplyKey(scratch, key, "0");
-}
-
-bool ContactHost::HardSurfaceWanted(const std::filesystem::path &file, const char *kind, const std::string &name)
-{
-   if (!PhysicsIni::Active(file).hardSurfaces)   // no file: on with the defaults
-      return false;
-   RubberObjectSettings probe;
-   probe.surfaceRubber = true;   // a hard surface unless the object's own section says rubber = 0
-   ApplySection(probe, file, std::string(kind) + ":" + name);
-   return probe.surfaceRubber;
 }
 
 bool ContactHost::LoadHardSurfaceSettings(RubberObjectSettings &s, const std::filesystem::path &file, const char *kind, const std::string &name, const double elasticity, const double friction,
@@ -347,7 +317,7 @@ bool ContactHost::LoadHardSurfaceSettings(RubberObjectSettings &s, const std::fi
 //   mu            the table's friction (it is the static mu of every surface)
 bool ContactHost::LoadPlayfieldSettings(RubberObjectSettings &s, const std::filesystem::path &file, const double tableMu)
 {
-   if (!PhysicsIni::Active(file).playfieldContact)   // no file: on with the defaults
+   if (!ContactSystem::Unified())   // stock engine: the stock plane
       return false;
    s = RubberObjectSettings();
    s.eMpa = 7875.0;

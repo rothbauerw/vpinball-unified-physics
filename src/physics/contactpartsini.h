@@ -86,7 +86,7 @@ namespace PartsIni
          else if (k == "hold_speed_dps") s.holdSpeedDps = v;
          else if (k == "steel_e_gpa") s.steelEGpa = v;
          else if (k == "hit_window_deg") s.hitWindowDeg = v;
-         else if (k == "rubber") {}   // the opt-out key (ContactSurfaceHost::HingeWanted)
+         else if (k == "rubber") { if (v == 0.0) ContactSystem::NoticeRetired("rubber = 0 ([Gates] / [Gate:<name>]) is ignored: no stock path on the unified engine"); }   // (once the opt-out to stock: a gate on the unified engine is always the hinged plate)
          else if (ContactHost::IsSurfaceKey(k)) {}   // the surface material's (ContactHost::LoadHardSurfaceSettings reads it)
       });
    }
@@ -179,13 +179,13 @@ namespace PartsIni
          else if (k == "bracket_edge_mm") s.bracketEdgeMm = v;
          else if (k == "steel_e_gpa") s.steelEGpa = v;
          else if (k == "hit_window_deg") s.hitWindowDeg = v;
-         else if (k == "rubber") {}
+         else if (k == "rubber") { if (v == 0.0) ContactSystem::NoticeRetired("rubber = 0 ([Spinners] / [Spinner:<name>]) is ignored: no stock path on the unified engine"); }   // (once the opt-out to stock: a spinner on the unified engine is always the hinged plate)
          else if (ContactHost::IsSurfaceKey(k)) {}   // the surface material's (ContactHost::LoadHardSurfaceSettings reads it)
       });
    }
 
    // Stand-up target settings over `s` (runs/2026-11-19-standup-p2/design.md section 1; the comment beside each in StandupFace::Settings): [Targets] for all, then [Target:<name>].
-   // The surface material's keys and rubber (the opt-out, ContactHost::HardSurfaceWanted) are read by the host's loader. Unknown keys are ignored
+   // The surface material's keys and rubber (1 = a rubber surface) are read by the host's loader. Unknown keys are ignored
    inline void LoadTarget(StandupFace::Settings &s, const std::filesystem::path &file, const std::string &name)
    {
       ReadSections(file, "targets", "target:" + name, [&](const std::string &k, double v, const std::string &) {
@@ -193,20 +193,23 @@ namespace PartsIni
          else if (k == "blade_thickness_in") s.bladeThicknessIn = v;    // the blade's thickness, in (0.020; 0.025 the stiffer blade)
          else if (k == "blade_lever_in") s.bladeLeverIn = v;            // the blade's clamp to the face centre, in (1.625)
          else if (k == "drop_model") {}   // a drop target's (LoadDropModel)
-         else if (k == "rubber") {}   // the opt-out key (ContactHost::HardSurfaceWanted)
+         else if (k == "rubber") {}   // (rubber = 1 makes a target a rubber surface, 0 or absent a hard surface: ContactHost::LoadHardSurfaceSettings)
          else if (ContactHost::IsSurfaceKey(k)) {}   // the surface material's (ContactHost::LoadHardSurfaceSettings reads it)
       });
    }
 
-   // Drop target model (runs/2026-11-21-simple-drop/design.md section 3e): [Targets] for all, then [Target:<name>]. Needs [Features] hard_surfaces (and not rubber = 0), as a stand-up.
-   //   drop_model = 1: the simple interim model on the unified path (droptargetsimple.h; the default while it is tested); 0: stock, unchanged
+   // Drop target model (runs/2026-11-21-simple-drop/design.md section 3e): [Targets] for all, then [Target:<name>].
+   //   drop_model = 1: the simple interim model on the unified path (droptargetsimple.h; the default while it is tested; the key stays for the enhanced model).
+   //   0 once meant stock: retired, told once per table start and ignored (DevelopmentRules 6: no stock path on the unified engine)
    inline int LoadDropModel(const std::filesystem::path &file, const std::string &name)
    {
       int model = 1;
       ReadSections(file, "targets", "target:" + name, [&](const std::string &k, double v, const std::string &) {
          if (k == "drop_model") model = v != 0.0 ? 1 : 0;
       });
-      return model;
+      if (model == 0)
+         ContactSystem::NoticeRetired("drop_model = 0 is ignored: no stock path on the unified engine");
+      return 1;
    }
 
    // Wire trigger settings over `s` (runs/2026-11-03-switch-requirements/design-wire.md topic 4): [Triggers] for all, then [Trigger:<name>]. Lengths in mm, forces in N.

@@ -41,7 +41,7 @@ namespace StockCount
 
       const void *s_owner = nullptr;
       const HitObject *s_playfield = nullptr, *s_glass = nullptr;
-      bool s_tableBounds = false;   // [Features] table_bounds on: the table edge and top glass are hosts of the contact model
+      bool s_tableBounds = false;   // unified engine: the table edge and top glass are hosts of the contact model
       std::vector<Row *> s_rows;
       std::unordered_map<const void *, Row *> s_byObject;
       Row *s_cur = nullptr, s_outside;
@@ -99,7 +99,7 @@ namespace StockCount
             if (t == eItemTrigger && dynamic_cast<const Trigger *>(obj->m_editable) != nullptr)
             {
                // converted, no stock allowed: a wire trigger on the wire switch part, a Star or Button (rollover caps of the group step) and a None (the engine's sensing zone, trigger.cpp:812-906).
-               // Stock stays only for an Inder, and for a wire trigger with [Features] triggers = 0
+               // Stock stays only for an Inder
                const Trigger *const tr = dynamic_cast<const Trigger *>(obj->m_editable);
                const TriggerShape sh = tr->m_d.m_shape;
                if (tr->OnWirePart() || sh == TriggerStar || sh == TriggerButton || sh == TriggerNone)
@@ -107,7 +107,7 @@ namespace StockCount
             }
             if (t == eItemHitTarget && dynamic_cast<const HitTarget *>(obj->m_editable) != nullptr && dynamic_cast<const HitTarget *>(obj->m_editable)->OnDropModel())
                r->allowed = nullptr;   // converted: a drop target on the simple model (droptargetsimple.h) uses no stock
-            if (t == eItemTable)   // the table's own edges and glass quad (PhysicsEngine): converted with [Features] table_bounds = 1
+            if (t == eItemTable)   // the table's own edges and glass quad (PhysicsEngine): converted on the unified engine
             {
                r->name = "table edge";
                r->allowed = s_tableBounds ? nullptr : "table edge: [Features] table_bounds = 0";

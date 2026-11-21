@@ -372,9 +372,9 @@ void HitTarget::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    {
       // unified engine (drop targets, STOCK OFF piece 1): the simple interim model (droptargetsimple.h; runs/2026-11-21-simple-drop/design.md): the drawn mesh (hat included) as a
       // hard surface that falls and rises on the physics clock at DropSpeed; no stock collider. [Targets] / [Target:<name>] drop_model = 0: stock, unchanged. Needs [Features]
-      // hard_surfaces, and not [target:<name>] rubber = 0, as a stand-up. Invisible targets have the same physics as visible ones (design section 1, a departure from stock)
+      // the unified engine, as a stand-up. Invisible targets have the same physics as visible ones (design section 1, a departure from stock)
       const std::filesystem::path dropIni = isUI ? std::filesystem::path() : ContactSurfaceHost::IniPathFor(m_ptable->m_filename);
-      if (!isUI && ContactSystem::Unified() && ContactSurfaceHost::HardSurfaceWanted(dropIni, "target", GetName()) && PartsIni::LoadDropModel(dropIni, GetName()) == 1)
+      if (!isUI && ContactSystem::Unified() && PartsIni::LoadDropModel(dropIni, GetName()) == 1)
       {
          auto faces = std::make_shared<RubberSurface>();
          for (unsigned i = 0; i < m_numIndices; i += 3)
@@ -521,10 +521,10 @@ void HitTarget::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    {
       // unified engine (stand-up targets): the target's drawn mesh is a hard surface of the contact model. Piece 2 (default): the face travels on its blade, a massless
       // coordinate (standupface.h); [Targets] / [Target:<name>] face_travel = 0: piece 1's fixed surface, as a wall or ramp (ramphardsurface.cpp).
-      // Setting: [Features] hard_surfaces (on by default); one target back to stock with [target:<name>] rubber = 0.
+      // Every target on the unified engine (no stock path; [target:<name>] rubber = 0 or absent = a hard surface).
       std::shared_ptr<RubberSurface> rubberFaces;
       const std::filesystem::path rubberIni = isUI ? std::filesystem::path() : ContactSurfaceHost::IniPathFor(m_ptable->m_filename);
-      if (!isUI && ContactSystem::Unified() && ContactSurfaceHost::HardSurfaceWanted(rubberIni, "target", GetName()))
+      if (!isUI && ContactSystem::Unified())
          rubberFaces = std::make_shared<RubberSurface>();
       const size_t collidersBefore = m_vhoCollidable.size();
 
