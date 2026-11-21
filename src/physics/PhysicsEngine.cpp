@@ -412,6 +412,10 @@ void PhysicsEngine::AddCabinetBoundingHitShapes(PinTable *const table)
    m_hitPlayfield.m_surfaceHost = m_playfieldHost;
    if (m_tableBounds)
       BuildTableBounds(table);
+   // the magnets read the table's physics ini here, before the finder's index (FinderBuild at the end of the load), so the air-core coil bodies are in it; a script's
+   // SetVoltage in its Init events then goes to the loaded coil
+   Magnets::StartPlay();
+   BuildCoilBodies(table);
    MeshHoles::PlaceParts();   // the Stars, Buttons and physical kickers on their hosts (their PhysicSetup's height-dependent rest, in table item order), every host now existing
    Turntables::Setup(table, m_vmover, m_ownedHosts);   // discs set into the playfield (their holes cut into the mesh under them at MeshHoles::Build)
    MeshHoles::RepairOverlaps(PhysicsIni::Active(ContactSurfaceHost::IniPathFor(table->m_filename)).meshOverlapRepair);   // mesh_overlap_repair: every static mesh's overlapping faces on one plane cover it once (before the cut and the finder's tree)
@@ -490,6 +494,43 @@ void PhysicsEngine::BuildTableBounds(PinTable *const table)
       PLOGW << msg;
       if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
          g_pplayer->m_liveUI->PushNotification(msg, 8000);
+   }
+}
+
+// Every air-core coil's body (runs/2026-11-21-hidden-moves/design_tube.md, to-do 6.9): the winding block (bore wall, housing wall, end flanges) and the stop when set, as drawn
+// (Magnets::CoilBodies, the shape RenderGuides draws), one engine-owned static hard surface per coil (m_ownedHosts, deleted with the engine), kind "coil", found by the static
+// finder, no Hit events. Two-sided probe: a ball in the bore is held in it, a ball outside is held outside. The coil is fixed (a moving magnet is not covered, to-do 6.7);
+// a live ini reload (Magnets::Reload) changes the field, not this body (it is rebuilt at the next table start).
+void PhysicsEngine::BuildCoilBodies(PinTable *const table)
+{
+   std::vector<std::pair<std::string, Magnets::GuideMesh>> bodies;
+   Magnets::CoilBodies(bodies);
+   if (bodies.empty())
+      return;
+   const std::filesystem::path ini = ContactSurfaceHost::IniPathFor(table->m_filename);
+   // Nylon body (user 2026-11-21), every term overridable in the coil's own [Magnet:<name>] section ([Surfaces] does not apply): e_mpa 2900 = E* of nylon (E 2.5 GPa, nu 0.39)
+   // on steel, ESTIMATED; mu 0.3 (steel on nylon, handbook 0.25-0.4), ESTIMATED; tan_delta 0.03 (nylon's loss tangent, as the drop target), ESTIMATED; sideways_stiffness 1.0
+   // (Mindlin from the material, a thick body) and twist on (drilling friction): the hard-surface defaults; restitution 0.5 at 1 m/s, ASSUMED (no data).
+   constexpr double kE = 0.5, kMu = 0.3, kEMpa = 2900.0, kTanDelta = 0.03;
+   for (const auto &b : bodies)
+   {
+      const Magnets::GuideMesh &g = b.second;
+      auto faces = std::make_shared<RubberSurface>();
+      auto vtx = [&](unsigned int i) { return Vertex3Ds(g.v[6 * i], g.v[6 * i + 1], g.v[6 * i + 2]); };
+      for (size_t k = 0; k + 2 < g.idx.size(); k += 3)
+         faces->Add(vtx(g.idx[k]), vtx(g.idx[k + 1]), vtx(g.idx[k + 2]));
+      const std::string section = "magnet:" + b.first;
+      RubberObjectSettings s;
+      ContactSurfaceHost::LoadHardSurfaceSettings(s, ini, "coil", b.first, kE, kMu, kEMpa, section, kTanDelta);
+      ContactSurfaceHost *const host = new ContactSurfaceHost(table, faces, s, ini, b.first, "coil");
+      host->SetHardSurface(kE, kMu, kEMpa, section, kTanDelta);
+      host->CalcHitBBox();
+      m_ownedHosts.push_back(host);
+      if (MoverObject *const pmo = host->GetMoverObject(); pmo != nullptr && pmo->AddToList())   // as the playfield host: no hit objects of its own to bring the mover
+         m_vmover.push_back(pmo);
+      PLOGI << "Coil body: magnet " << b.first << " on the contact model (" << faces->tris.size() << " faces, box x " << faces->lo[0] << ".." << faces->hi[0] << " y " << faces->lo[1] << ".."
+            << faces->hi[1] << " z " << faces->lo[2] << ".." << faces->hi[2] << "; e_mpa " << s.eMpa << ", restitution " << (s.restitution > 0.0 ? s.restitution : kE) << ", mu " << s.mu
+            << ", tan_delta " << s.tanDelta << "; ESTIMATED nylon, [Magnet:" << b.first << "])";
    }
 }
 
@@ -986,24 +1027,6 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
          }
       }
 
-      if (g_pplayer != nullptr && Magnets::HasGuides()) // air-core guide tube and stop
-      {
-         const TestDriver::Timed tdGuides(TestDriver::kGuides);
-         for (const auto ball : g_pplayer->m_vball)
-         {
-            HitBall &hb = ball->m_hitBall;
-            if (KickerHold::Held(&hb))
-               continue;
-            float p[3] = { hb.m_d.m_pos.x, hb.m_d.m_pos.y, hb.m_d.m_pos.z }, v[3] = { hb.m_d.m_vel.x, hb.m_d.m_vel.y, hb.m_d.m_vel.z };
-            float L[3] = { hb.m_angularmomentum.x, hb.m_angularmomentum.y, hb.m_angularmomentum.z };
-            if (Magnets::ConstrainBall(p, v, L, hb.m_d.m_radius, hb.m_d.m_mass, hb.Inertia()))
-            {
-               hb.m_d.m_pos = Vertex3Ds(p[0], p[1], p[2]);
-               hb.m_d.m_vel = Vertex3Ds(v[0], v[1], v[2]);
-               hb.m_angularmomentum = Vertex3Ds(L[0], L[1], L[2]);
-            }
-         }
-      }
       for (const HitBall *const pb : m_vballs)
          ContactTraceBall("AfterGuides", pb, false, -1);   // VPX_TRACE_BALL (off by default)
 

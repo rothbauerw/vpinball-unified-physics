@@ -1593,7 +1593,7 @@ void ContactSurfaceHost::Reload() const
    if (m_surface != nullptr)
    {
       if (m_hardSurface)
-         LoadHardSurfaceSettings(s, m_ini, m_surfaceKind.c_str(), m_name, m_partE, m_partMu, m_partEMpa, m_partSection);
+         LoadHardSurfaceSettings(s, m_ini, m_surfaceKind.c_str(), m_name, m_partE, m_partMu, m_partEMpa, m_partSection, m_partTanDelta);
       else
          LoadSurfaceSettings(s, m_ini, m_surfaceKind.c_str(), m_name);   // contact follows the object's  rubber  flag, so it can be switched off while running
       m_set = s;
@@ -2654,7 +2654,7 @@ void ContactSurfaceHost::FinderBuild(const bool atLoad)
       if (h == nullptr || h->m_surface == nullptr || h->m_surface->tris.empty())
          continue;
       if (h->m_surfaceKind != "playfield" && h->m_surfaceKind != "wall" && h->m_surfaceKind != "ramp" && h->m_surfaceKind != "primitive" && h->m_surfaceKind != "kicker" && h->m_surfaceKind != "target"
-          && h->m_surfaceKind != "tableedge" && h->m_surfaceKind != "glass")
+          && h->m_surfaceKind != "tableedge" && h->m_surfaceKind != "glass" && h->m_surfaceKind != "coil")
       {
          skipped++;
          continue;

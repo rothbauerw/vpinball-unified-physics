@@ -299,7 +299,7 @@ bool ContactHost::HardSurfaceWanted(const std::filesystem::path &file, const cha
 }
 
 bool ContactHost::LoadHardSurfaceSettings(RubberObjectSettings &s, const std::filesystem::path &file, const char *kind, const std::string &name, const double elasticity, const double friction,
-                                          const double eMpa, const std::string &section)
+                                          const double eMpa, const std::string &section, const double tanDelta)
 {
    s = RubberObjectSettings();
    static const bool veDefault = []() { const char *const e = getenv("VPX_VISCOELASTIC"); return !(e != nullptr && atoi(e) == 0); }();
@@ -307,7 +307,7 @@ bool ContactHost::LoadHardSurfaceSettings(RubberObjectSettings &s, const std::fi
    s.eMpa = eMpa;   // default 7875, as the playfield: E* = 10.5 GPa
    s.betaLayer = 0.0;
    s.alphaSPerM = std::min(2.0, std::max(0.02, 1.1 * (1.0 - elasticity)));   // rebound ratio ~ 1 - alpha v at about 1 m/s: the part's restitution (the stock falloff with speed is not modelled)
-   s.tanDelta = 0.05;
+   s.tanDelta = tanDelta;   // default 0.05; the coil body's nylon 0.03
    s.shearScale = 1.0;    // a thick solid body: Mindlin as it stands
    s.shearTan = 0.4;      // (rubbercontact.h RubberParams: not rubber, value unchanged)
    s.normalLoss = true;   // (the rubber default is off; the right law for hard materials is not measured, to-do 1.21)

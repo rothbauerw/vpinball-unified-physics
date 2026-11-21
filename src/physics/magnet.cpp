@@ -8,6 +8,7 @@
 #include "physics/magnetballs.h"
 #include "physics/rubbercontact.h"
 #include "physics/contactsystem.h"
+#include "physics/contacthost.h"
 #include "physics/kickerarm.h"
 #include "parts/pintable.h"
 #include "core/player.h"
@@ -52,22 +53,17 @@ namespace Magnets
          double coilLenMm = 40;                // aircore: winding length
          double boreMm = 32;                   // aircore: inner diameter of the winding
          bool ballInteraction = true;          // the balls this magnet magnetises attract and repel each other (induced dipoles)
-         bool tube = true;                     // aircore: a guide tube inside the bore confines the ball to the axis (the tube's outer diameter is the bore)
-         double tubeWallMm = 1.5875;           // aircore: tube wall thickness (1/16 in); the ball runs in the bore less a wall on each side
-         double tubeE = 0.5;                   // aircore: restitution of the ball on the tube and on the stop (steel on plastic)
-         double tubeMu = 0.2;                  // aircore: friction coefficient of the ball on the tube and on the stop
-         bool tubeVisible = false;             // aircore: draw the tube and the stop (translucent) in the playfield view
-         std::shared_ptr<MeshBuffer> mesh;     // the drawn tube, built on first render
-         bool stop = false;                    // aircore: a stop across the tube ends the ball's travel
+         double tubeWallMm = 1.5875;           // aircore: wall thickness of the coil body (1/16 in): the bore's liner, the housing's outer wall and the end flanges; the ball runs in the bore less a wall on each side
+         bool tubeVisible = false;             // aircore: draw the coil body (winding block and stop, translucent) in the playfield view; its contact is always on
+         std::shared_ptr<MeshBuffer> mesh;     // the drawn coil body, built on first render
+         bool stop = false;                    // aircore: a stop disc across the bore (part of the coil body) ends the ball's travel
          double stopPosMm = 1e9;               // aircore: stop face position along the axis from the coil centre (signed; default = the end of the bore, half the coil length)
-         double tubeRU = 0, tubeHalfU = 0, stopU = 0;   // derived, table units: tube inner radius, half the tube length, stop face position
-         double housingRU = 0, housingHalfU = 0;   // derived, table units: winding housing outer radius (winding + a tube wall) and half length (end flanges a tube wall
-                                               // beyond the winding); solid with the tube, which runs through the flanges
+         double tubeRU = 0, stopU = 0;         // derived, table units: the bore's radius less a wall (the body's inner wall), stop face position
+         double housingRU = 0, housingHalfU = 0;   // derived, table units: the body's outer radius (winding + a wall) and half length (end flanges a wall beyond the winding)
          double solRadius[3] = { 0, 0, 0 };    // aircore: radii of the three winding layers (m), each with a third of the turns
          double solLen = 0;
          double windIn = 0, windOut = 0;       // aircore: inner and outer radius of the winding block (m)
          std::vector<float> tab;               // aircore: per node of a grid over (z along the axis >= 0, r from the axis): the gradient of the ball-energy orders Q_1..Q_4 per A^2, then Bz, Br per A
-         mutable bool overlapWarned = false;   // aircore: "ball inside the winding" raised once per table start
          double coreDiaMm = 19;                // iron core diameter
          double coreLenMm = 38;                // core length = winding length
          double returnDistMm = 0;              // > 0: the iron yoke returns the flux to flange poles in the face plane; distance from the core axis to the flanges' inner edge
@@ -115,6 +111,8 @@ namespace Magnets
       std::map<std::string, size_t> g_byName;
       const void *g_owner = nullptr;
       bool g_loaded = false, g_anyCurrent = false;
+      uint32_t g_lastMs = 0;                    // the game clock at the last entry point (CheckSession); StartPlay sets it to 0
+      bool g_shapeWarned = false;               // "coil body shape changed on reload" raised once per table start
       std::filesystem::path g_file;             // the ini the magnets were read from
       std::map<std::string, std::pair<bool, float>> g_pending;   // what the script set before the magnets were loaded (e.g. a call at the top of the script): (isDuty, volts or duty)
 
@@ -386,7 +384,6 @@ namespace Magnets
             m.tau = m.l / m.r;
             constexpr double UM = 0.53975e-3;   // m per table unit
             m.tubeRU = std::max(0.0, 0.5e-3 * (m.boreMm - 2 * m.tubeWallMm) / UM);
-            m.tubeHalfU = 0.5 * len / UM;
             m.housingRU = (rIn + build + 1e-3 * m.tubeWallMm) / UM;
             m.housingHalfU = (0.5 * len + 1e-3 * m.tubeWallMm) / UM;
             m.stopU = (m.stopPosMm > 1e8 ? 0.5 * len : 1e-3 * m.stopPosMm) / UM;
@@ -517,7 +514,7 @@ namespace Magnets
             return;
          }
          std::ifstream in(file);
-         std::string line;
+         std::string line, unknown;
          Magnet *cur = nullptr;
          while (std::getline(in, line))
          {
@@ -552,11 +549,8 @@ namespace Magnets
             else if (key == "axis_z") cur->az = v;
             else if (key == "type") { const std::string t = PhysicsIni::Lower(PhysicsIni::Trim(line.substr(eq + 1))); cur->aircore = t == "aircore" || t == "solenoid"; }   // "solenoid" is the old name
             else if (key == "ball_interaction") cur->ballInteraction = v != 0;
-            else if (key == "tube") cur->tube = v != 0;
             else if (key == "tube_visible") cur->tubeVisible = v != 0;
             else if (key == "tube_wall_mm") cur->tubeWallMm = v;
-            else if (key == "tube_restitution") cur->tubeE = v;
-            else if (key == "tube_friction") cur->tubeMu = v;
             else if (key == "stop") cur->stop = v != 0;
             else if (key == "stop_position_mm") cur->stopPosMm = v;
             else if (key == "coil_length_mm") cur->coilLenMm = v;
@@ -589,6 +583,15 @@ namespace Magnets
                std::istringstream ls(list); double vv;
                while (ls >> vv) cur->operatingVolts.push_back(vv);
             }
+            else if (!ContactHost::IsSurfaceKey(key))   // (the coil body's material keys are read by the shared hard-surface loader, PhysicsEngine::BuildCoilBodies)
+               unknown += (unknown.empty() ? "" : ", ") + cur->name + "." + key;
+         }
+         if (!unknown.empty())   // rule 8: an ignored key is shown (the removed tube, tube_restitution and tube_friction keys among them: the coil body is always solid)
+         {
+            const std::string msg = "Magnets: unknown key(s) ignored in " + file.filename().string() + ": " + unknown;
+            PLOGW << msg;
+            if (g_pplayer && g_pplayer->m_liveUI)
+               g_pplayer->m_liveUI->PushNotification(msg, 8000);
          }
          if (g_magnets.empty())
             PLOGI << "Magnets: " << file.string() << " has no [Magnet:<name>] section";
@@ -610,11 +613,10 @@ namespace Magnets
       // means everything loaded for the last session is stale. Called first by every entry point.
       void CheckSession()
       {
-         static uint32_t lastMs = 0;
          if (g_pplayer == nullptr)
             return;
          const uint32_t now = g_pplayer->m_time_msec;
-         if (g_owner != g_pplayer || now < lastMs)
+         if (g_owner != g_pplayer || now < g_lastMs)
          {
             g_loaded = false;
             g_owner = g_pplayer;
@@ -623,13 +625,13 @@ namespace Magnets
             g_pending.clear();
             g_anyCurrent = false;
          }
-         lastMs = now;
+         g_lastMs = now;
       }
 
    }
 
-   // Table load (Player::InitTableSession, after the script's Init events, before the first physics step): the magnets read the table's physics ini here, once;
-   // what the script set while it loaded (g_pending) is applied. No physics step reads the file.
+   // Table load (PhysicsEngine's load, before the coil bodies are built and the finder's index; before the script's Init events): the magnets read the table's physics ini here,
+   // once; anything set before it (g_pending) is applied. No physics step reads the file.
    void StartPlay()
    {
       CheckSession();
@@ -638,6 +640,10 @@ namespace Magnets
       g_owner = g_pplayer;
       Load();
       g_pending.clear();
+      // StartPlay marks the session start itself: it now runs in the physics engine's load, before Player::InitTableSession resets the game clock to 0 (player.cpp, after
+      // the engine is made). Without this, a table restart's first Step would see the clock go backwards from the last session's time and clear every magnet just loaded.
+      g_lastMs = 0;
+      g_shapeWarned = false;
    }
 
    // Live tuning: the table's physics ini changed (ContactSystem::ReloadChangedIni, on playfield focus gain, between frames; no physics path looks at the file).
@@ -651,7 +657,47 @@ namespace Magnets
       for (const Magnet &m : g_magnets)
          keep[PhysicsIni::Lower(m.name)] = { m.volts, m.amps };
       PLOGI << "Magnets: " << g_file.string() << " changed, reloading";
+      std::vector<Magnet> before = std::move(g_magnets);
       Load();
+      // An air-core coil's body (its contact surface, PhysicsEngine::BuildCoilBodies, and its drawing) is built once at table load. A coil whose body shape changed in the file
+      // (position, axis, length, bore, winding build, wall, stop), or that was added or removed, keeps the state it loaded with, field included, so the field, the body and the
+      // drawing stay one shape; a notice asks for a table restart. The body's material keys reload live with every contact host (ContactHost::ReloadAll).
+      auto shape = [](const Magnet &m) {
+         return std::array<double, 18> { m.aircore ? 1.0 : 0.0, m.x, m.y, m.z, m.nx, m.ny, m.nz, m.ux, m.uy, m.uz, m.vx, m.vy, m.vz, m.tubeRU, m.housingRU, m.housingHalfU, m.stop ? 1.0 : 0.0, m.stopU };
+      };
+      std::string kept;
+      std::vector<std::string> oldCoils;
+      for (Magnet &o : before)
+      {
+         if (!o.aircore)
+            continue;
+         oldCoils.push_back(PhysicsIni::Lower(o.name));
+         const auto it = g_byName.find(PhysicsIni::Lower(o.name));
+         if (it != g_byName.end() && shape(g_magnets[it->second]) == shape(o))
+            continue;
+         kept += (kept.empty() ? "" : ", ") + o.name;
+         if (it == g_byName.end())
+            g_magnets.push_back(std::move(o));
+         else
+            g_magnets[it->second] = std::move(o);
+      }
+      for (size_t i = g_magnets.size(); i-- > 0;)   // an air-core coil new in the file has no body: left out until the table restarts
+         if (g_magnets[i].aircore && std::find(oldCoils.begin(), oldCoils.end(), PhysicsIni::Lower(g_magnets[i].name)) == oldCoils.end())
+         {
+            kept += (kept.empty() ? "" : ", ") + g_magnets[i].name + " (new)";
+            g_magnets.erase(g_magnets.begin() + i);
+         }
+      g_byName.clear();
+      for (size_t i = 0; i < g_magnets.size(); ++i)
+         g_byName[PhysicsIni::Lower(g_magnets[i].name)] = i;
+      if (!kept.empty())
+      {
+         const std::string msg = "Magnets: the coil body of " + kept + " changed in " + g_file.filename().string() + " (position, axis, size, wall or stop): restart the table to apply; until then the coil keeps the shape and settings it loaded with";
+         PLOGW << msg;
+         if (!g_shapeWarned && g_pplayer && g_pplayer->m_liveUI)
+            g_pplayer->m_liveUI->PushNotification(msg, 8000);
+         g_shapeWarned = true;
+      }
       for (Magnet &m : g_magnets)
       {
          const auto it = keep.find(PhysicsIni::Lower(m.name));
@@ -1118,7 +1164,70 @@ namespace Magnets
       UpdateBallInteraction();
    }
 
-   // Draws the guide tubes (outer and inner wall), the winding housings and the stops as translucent surfaces, in table units, after the table's own dynamic parts.
+   // The coil body of air-core magnet m as triangles, in table units (x, y, z and the outward normal per vertex): the winding block (inner wall at the bore less a wall, the
+   // housing's outer wall, both end flanges, over the housing's length) and the stop disc across the bore when set. One shape for the drawing (RenderGuides) and the contact
+   // (PhysicsEngine::BuildCoilBodies). 48-sided walls: chord sag about 0.03 mm on a 32 mm bore.
+   static void BuildGuideMesh(const Magnet &m, GuideMesh &g)
+   {
+      constexpr int SEG = 48;
+      const double rIn = m.tubeRU, rOut = m.housingRU, hh = m.housingHalfU;
+      g.v.clear();
+      g.idx.clear();
+      auto pt = [&](double rad, double ax, double ang, double nrad, double nax)
+      {
+         const double ca = std::cos(ang), sa = std::sin(ang);
+         const double ex = ca * m.ux + sa * m.vx, ey = ca * m.uy + sa * m.vy, ez = ca * m.uz + sa * m.vz;
+         g.v.insert(g.v.end(), { (float)(m.x + rad * ex + ax * m.nx), (float)(m.y + rad * ey + ax * m.ny), (float)(m.z + rad * ez + ax * m.nz),
+                                 (float)(nrad * ex + nax * m.nx), (float)(nrad * ey + nax * m.ny), (float)(nrad * ez + nax * m.nz) });
+      };
+      auto band = [&](double r0, double z0, double r1, double z1, double nrad, double nax)   // a band of quads around the axis from (r0, z0) to (r1, z1)
+      {
+         const unsigned int base = (unsigned int)(g.v.size() / 6);
+         for (int k = 0; k <= SEG; ++k)
+         {
+            pt(r0, z0, 2 * PI * k / SEG, nrad, nax);
+            pt(r1, z1, 2 * PI * k / SEG, nrad, nax);
+         }
+         for (int k = 0; k < SEG; ++k)
+         {
+            const unsigned int a = base + 2 * k;
+            g.idx.insert(g.idx.end(), { a, a + 1, a + 2, a + 1, a + 3, a + 2 });
+         }
+      };
+      band(rIn, -hh, rIn, hh, -1, 0);    // the bore's wall, facing the axis
+      band(rOut, -hh, rOut, hh, 1, 0);   // the housing's outer wall
+      for (const double sg : { -1.0, 1.0 })
+         band(rIn, sg * hh, rOut, sg * hh, 0, sg);   // the end flanges
+      if (m.stop)   // the stop: a disc across the bore
+      {
+         const unsigned int base = (unsigned int)(g.v.size() / 6);
+         const double sg = m.stopU >= 0 ? 1.0 : -1.0;
+         pt(0, m.stopU, 0, 0, sg);
+         for (int k = 0; k <= SEG; ++k)
+            pt(rIn, m.stopU, 2 * PI * k / SEG, 0, sg);
+         for (int k = 0; k < SEG; ++k)
+            g.idx.insert(g.idx.end(), { base, base + 1 + (unsigned int)k, base + 2 + (unsigned int)k });
+      }
+   }
+
+   void CoilBodies(std::vector<std::pair<std::string, GuideMesh>> &out)
+   {
+      out.clear();
+      for (const Magnet &m : g_magnets)
+      {
+         if (!m.aircore)
+            continue;
+         if (m.tubeRU <= 0)
+         {
+            PLOGW << "Magnet " << m.name << ": the bore (" << m.boreMm << " mm) is no wider than two body walls (tube_wall_mm " << m.tubeWallMm << "): no coil body built";
+            continue;
+         }
+         out.emplace_back(m.name, GuideMesh());
+         BuildGuideMesh(m, out.back().second);
+      }
+   }
+
+   // Draws each coil body (BuildGuideMesh: the shape the ball touches) as a translucent surface, in table units, after the table's own dynamic parts.
    void RenderGuides(Renderer *renderer)
    {
       for (Magnet &m : g_magnets)
@@ -1128,69 +1237,20 @@ namespace Magnets
          RenderDevice *rd = renderer->m_renderDevice;
          if (!m.mesh)
          {
-            constexpr int SEG = 48;
-            constexpr double UM = 0.53975e-3;
-            const double rOut = 0.5e-3 * m.boreMm / UM, rIn = m.tubeRU, h = m.tubeHalfU;
-            std::vector<Vertex3D_NoTex2> v;
-            std::vector<unsigned int> idx;
-            auto pt = [&](double rad, double ax, double ang, double nrad, double nax)
+            GuideMesh g;
+            BuildGuideMesh(m, g);
+            std::vector<Vertex3D_NoTex2> v(g.v.size() / 6);
+            for (size_t i = 0; i < v.size(); ++i)
             {
-               const double ca = std::cos(ang), sa = std::sin(ang);
-               const double ex = ca * m.ux + sa * m.vx, ey = ca * m.uy + sa * m.vy, ez = ca * m.uz + sa * m.vz;
                Vertex3D_NoTex2 q = {};
-               q.x = (float)(m.x + rad * ex + ax * m.nx); q.y = (float)(m.y + rad * ey + ax * m.ny); q.z = (float)(m.z + rad * ez + ax * m.nz);
-               q.nx = (float)(nrad * ex + nax * m.nx); q.ny = (float)(nrad * ey + nax * m.ny); q.nz = (float)(nrad * ez + nax * m.nz);
-               v.push_back(q);
-            };
-            auto cyl = [&](double rad, double nrad, double hl)   // a cylinder wall from -hl to +hl
-            {
-               const unsigned int base = (unsigned int)v.size();
-               for (int k = 0; k <= SEG; ++k)
-               {
-                  pt(rad, -hl, 2 * PI * k / SEG, nrad, 0);
-                  pt(rad, hl, 2 * PI * k / SEG, nrad, 0);
-               }
-               for (int k = 0; k < SEG; ++k)
-               {
-                  const unsigned int a = base + 2 * k;
-                  idx.insert(idx.end(), { a, a + 1, a + 2, a + 1, a + 3, a + 2 });
-               }
-            };
-            const double hh = m.tube ? m.housingHalfU : h;
-            cyl(rIn, -1, hh);
-            if (!m.tube)
-               cyl(rOut, 1, h);
-            else   // the winding housing: outer wall and the two end flanges from the tube's inside to the housing's outside
-            {
-               cyl(m.housingRU, 1, hh);
-               for (const double sg : { -1.0, 1.0 })
-               {
-                  const unsigned int base = (unsigned int)v.size();
-                  for (int k = 0; k <= SEG; ++k)
-                  {
-                     pt(rIn, sg * hh, 2 * PI * k / SEG, 0, sg);
-                     pt(m.housingRU, sg * hh, 2 * PI * k / SEG, 0, sg);
-                  }
-                  for (int k = 0; k < SEG; ++k)
-                  {
-                     const unsigned int a = base + 2 * k;
-                     idx.insert(idx.end(), { a, a + 1, a + 2, a + 1, a + 3, a + 2 });
-                  }
-               }
-            }
-            if (m.stop)   // the stop: a disc across the bore
-            {
-               const unsigned int base = (unsigned int)v.size();
-               const double sg = m.stopU >= 0 ? 1.0 : -1.0;
-               pt(0, m.stopU, 0, 0, sg);
-               for (int k = 0; k <= SEG; ++k)
-                  pt(rIn, m.stopU, 2 * PI * k / SEG, 0, sg);
-               for (int k = 0; k < SEG; ++k)
-                  idx.insert(idx.end(), { base, base + 1 + k, base + 2 + k });
+               q.x = g.v[6 * i]; q.y = g.v[6 * i + 1]; q.z = g.v[6 * i + 2];
+               q.nx = g.v[6 * i + 3]; q.ny = g.v[6 * i + 4]; q.nz = g.v[6 * i + 5];
+               v[i] = q;
             }
             auto vb = std::make_shared<VertexBuffer>(rd, (unsigned int)v.size(), (const float *)v.data());
-            auto ib = std::make_shared<IndexBuffer>(rd, idx);
+            auto ib = std::make_shared<IndexBuffer>(rd, g.idx);
             m.mesh = std::make_shared<MeshBuffer>("Magnet guide"s, vb, ib, true);
+            PLOGI << "Magnet " << m.name << ": coil body drawn (" << g.idx.size() / 3 << " faces, the shape the ball touches)";
          }
          rd->ResetRenderState();
          rd->SetRenderState(RenderState::ZENABLE, RenderState::RS_TRUE);
@@ -1208,94 +1268,6 @@ namespace Magnets
    {
       for (Magnet &m : g_magnets)
          m.mesh.reset();   // while the render device is still alive: a mesh destroyed with the magnet list of the next session would touch a freed device
-   }
-
-   bool HasGuides()
-   {
-      for (const Magnet &m : g_magnets)
-         if (m.aircore && (m.tube || m.stop) && m.tubeRU > 0)
-            return true;
-      return false;
-   }
-
-   // Impulse contact of the ball with the tube, the winding housing and the stop (table units, U and VPT; a sphere of inertia 2/5 m R^2). The tube and the housing
-   // are one solid (a bobbin): in the coil's meridian plane the block r = tube inside .. housing outside, |z| <= the housing half length; the ball touches it where the distance from
-   // its centre to the block is under its radius (inner wall, outer wall, end rings and their edges alike). Positions are projected out of the wall,
-   // the normal velocity is reflected with the restitution (none below 0.05 m/s, so a ball pressed on the wall by the coil's pull does not chatter), and the contact
-   // point's sliding velocity is removed up to the Coulomb limit, which also spins the ball up to rolling.
-   bool ConstrainBall(float pos[3], float vel[3], float angmom[3], float radiusU, float mass, float inertia)
-   {
-      bool changed = false;
-      for (const Magnet &m : g_magnets)
-      {
-         if (!m.aircore || !(m.tube || m.stop) || m.tubeRU <= 0)
-            continue;
-         const double R = radiusU;
-         const double px = pos[0] - m.x, py = pos[1] - m.y, pz = pos[2] - m.z;
-         const double zc = px * m.nx + py * m.ny + pz * m.nz;
-         if (std::fabs(zc) > m.housingHalfU + R && std::fabs(zc) > std::fabs(m.stopU) + R)
-            continue;
-         const double rx = px - zc * m.nx, ry = py - zc * m.ny, rz = pz - zc * m.nz, rr = std::sqrt(rx * rx + ry * ry + rz * rz);
-         if (rr > m.housingRU + R)
-            continue;
-         // contact with the unit normal (cx, cy, cz) pointing from the ball to the wall, penetration pen
-         auto contact = [&](double cx, double cy, double cz, double pen)
-         {
-            pos[0] -= (float)(cx * pen); pos[1] -= (float)(cy * pen); pos[2] -= (float)(cz * pen);
-            changed = true;
-            const double vn = vel[0] * cx + vel[1] * cy + vel[2] * cz;
-            if (vn <= 0)
-               return;
-            const double vMin = 0.05 / (0.53975e-3 / DEFAULT_STEPTIME_S);   // 0.05 m/s in U/VPT
-            const double e = vn > vMin ? m.tubeE : 0.0;
-            const double jn = (1 + e) * mass * vn;
-            vel[0] -= (float)(jn / mass * cx); vel[1] -= (float)(jn / mass * cy); vel[2] -= (float)(jn / mass * cz);
-            // sliding velocity of the contact point (at +R along the normal): v + w x (R n)
-            const double wx = angmom[0] / inertia, wy = angmom[1] / inertia, wz = angmom[2] / inertia;
-            double cvx = vel[0] + wy * R * cz - wz * R * cy, cvy = vel[1] + wz * R * cx - wx * R * cz, cvz = vel[2] + wx * R * cy - wy * R * cx;
-            const double cn = cvx * cx + cvy * cy + cvz * cz;
-            cvx -= cn * cx; cvy -= cn * cy; cvz -= cn * cz;
-            const double vt = std::sqrt(cvx * cvx + cvy * cvy + cvz * cvz);
-            if (vt < 1e-12)
-               return;
-            const double mt = mass / (1.0 + mass * R * R / inertia);   // effective mass of the contact point against a tangential impulse
-            const double jt = std::min(mt * vt, m.tubeMu * jn);
-            const double tx = -cvx / vt * jt, ty = -cvy / vt * jt, tz = -cvz / vt * jt;   // impulse on the ball
-            vel[0] += (float)(tx / mass); vel[1] += (float)(ty / mass); vel[2] += (float)(tz / mass);
-            angmom[0] += (float)(R * (cy * tz - cz * ty)); angmom[1] += (float)(R * (cz * tx - cx * tz)); angmom[2] += (float)(R * (cx * ty - cy * tx));
-         };
-         if (m.tube && rr > 1e-9)
-         {
-            const double ex = rx / rr, ey = ry / rr, ez = rz / rr;   // radial unit vector
-            const double h = m.housingHalfU, a = m.tubeRU, b = m.housingRU;
-            const double az = std::fabs(zc), sz = zc < 0 ? -1.0 : 1.0;
-            if (az < h && rr > a && rr < b)
-            {
-               // centre inside the block (a fast ball, or one placed there): out through the nearest face
-               const double dIn = rr - a, dOut = b - rr, dEnd = h - az;
-               if (dIn <= dOut && dIn <= dEnd) contact(ex, ey, ez, dIn + R);
-               else if (dOut <= dEnd) contact(-ex, -ey, -ez, dOut + R);
-               else contact(-sz * m.nx, -sz * m.ny, -sz * m.nz, dEnd + R);
-            }
-            else
-            {
-               const double qz = std::min(az, h), qr = std::min(std::max(rr, a), b);   // nearest point of the block
-               const double dz = qz - az, dr = qr - rr, d = std::sqrt(dz * dz + dr * dr);
-               if (d < R && d > 1e-9)
-               {
-                  const double cz = sz * dz / d, cr = dr / d;
-                  contact(cr * ex + cz * m.nx, cr * ey + cz * m.ny, cr * ez + cz * m.nz, R - d);
-               }
-            }
-         }
-         if (m.stop && rr < m.tubeRU)
-         {
-            const double sg = m.stopU >= 0 ? 1.0 : -1.0, d = sg * zc, st = std::fabs(m.stopU);
-            if (d > st - R && d < st + R)
-               contact(sg * m.nx, sg * m.ny, sg * m.nz, d - (st - R));
-         }
-      }
-      return changed;
    }
 
    bool Active()
@@ -1384,20 +1356,8 @@ namespace Magnets
          }
       }
       const double i2 = m.amps * m.amps;
-      // The series holds while the ball is clear of the winding. A ball inside the winding block (nothing solid stops it there) keeps the dipole term only.
-      int orders = AC_L;
-      if (WindingGap(m, zc, rr) < a)
-      {
-         orders = 1;
-         if (!m.overlapWarned)
-         {
-            m.overlapWarned = true;
-            const std::string msg = "Magnet " + m.name + ": a ball is inside the air-core winding (no tube or track keeps it out); its pull there uses the dipole term only. Give the coil a tube or the ball a track.";
-            PLOGW << msg;
-            if (g_pplayer && g_pplayer->m_liveUI)
-               g_pplayer->m_liveUI->PushNotification(msg, 8000);
-         }
-      }
+      // The series holds while the ball is clear of the winding: the coil body (a solid hard surface, PhysicsEngine::BuildCoilBodies) keeps every ball out of it.
+      constexpr int orders = AC_L;
       double gz = 0, gr = 0, a2l1 = a * a * a;
       double gzz = 0, gzr = 0, grz = 0, grr = 0;   // their slopes: d gz / d|z|, d gz / dr, d gr / d|z|, d gr / dr (only with dP)
       for (int l = 0; l < orders; ++l, a2l1 *= a * a)

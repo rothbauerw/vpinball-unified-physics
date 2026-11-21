@@ -979,9 +979,6 @@ void Player::InitTableSession(const bool isInitial)
          m_scriptInterpreter->StartHangWatch([this]() { return IsPlaying(false); });
    }
 
-   // The magnets read the table's physics ini: the table and its script exist (what the script set while loading is applied), no physics step has run yet
-   Magnets::StartPlay();
-
    // Suspend play if started
    SetPlayState(false);
 

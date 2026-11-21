@@ -1,4 +1,5 @@
 #pragma once
+#include <string>
 #include <vector>
 #include "physics/pairform.h"
 class HitBall;
@@ -19,15 +20,16 @@ namespace MagnetCore { struct Model; }
 
 namespace Magnets
 {
-   void StartPlay();                                         // table load (Player::InitTableSession, after the script's Init, before the first physics step): reads the magnets from the physics ini
+   void StartPlay();                                         // table load (the physics engine's load, before the coil bodies and the finder; before the script's Init): reads the magnets from the physics ini
    void Step();                                              // once per 1 ms physics frame: advance every coil current (never reads the file)
    bool CurrentSteady();                                     // pile sleep: no coil current would change in the next Step (each at its own fixed point)
    void Reload();                                            // live tuning: the physics ini changed (ContactSystem::ReloadChangedIni, on playfield focus gain): the magnets read again, coils keep volts and amps
-   void RenderGuides(class Renderer *renderer);              // draws the guide tubes and stops that have tube_visible = 1
-   void ReleaseRender();                                     // frees the drawn guide meshes (called when the renderer shuts down)
-   bool HasGuides();                                         // true if an air-core magnet has a guide tube or stop (checked once per physics cycle)
-   // air-core guide tube and stop: keeps the ball (pos U, vel U/VPT, angular momentum, radius U, mass, inertia) inside the tube and short of the stop; true if it moved the ball
-   bool ConstrainBall(float pos[3], float vel[3], float angmom[3], float radiusU, float mass, float inertia);
+   void RenderGuides(class Renderer *renderer);              // draws the coil bodies (winding block and stop) of the air-core magnets that have tube_visible = 1
+   void ReleaseRender();                                     // frees the drawn coil body meshes (called when the renderer shuts down)
+   // An air-core coil's body as triangles, table units: v holds x, y, z, nx, ny, nz per vertex (normal out of the solid), idx three vertices per face. The same shape is drawn
+   // (RenderGuides) and touched (PhysicsEngine::BuildCoilBodies: one static hard surface per coil on the shared contact path).
+   struct GuideMesh { std::vector<float> v; std::vector<unsigned int> idx; };
+   void CoilBodies(std::vector<std::pair<std::string, GuideMesh>> &out);   // every loaded air-core coil's body, by magnet name
    bool Active();                                            // true if at least one coil carries current (the force loop is skipped otherwise)
    // Option A ball-ball force (build step B7): solved once per physics step, re-aimed at every substep by the caller. One part of a ball's force (N, table frame, m):
    //   b != nullptr: a PAIR part: turn F with the line from b to a (u0 = that line's unit vector at the step start; pa0 / pb0 = the centres then);
