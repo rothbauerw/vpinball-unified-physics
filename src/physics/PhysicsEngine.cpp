@@ -343,20 +343,26 @@ void PhysicsEngine::CollectColliders(IEditable *editable, vector<HitObject *> *h
 void PhysicsEngine::AddCabinetBoundingHitShapes(PinTable *const table)
 {
    // TODO these are the only colliders that are added without an associated editable. We could enforce one here to guarantee m_editable != nullptr and simplify the code
-   
-   // simple outer borders:
-   AddCollider(new LineSeg(table, Vertex2D(table->m_right, table->m_top), Vertex2D(table->m_right, table->m_bottom), 0.f, table->m_glassTopHeight), false);
-   AddCollider(new LineSeg(table, Vertex2D(table->m_left, table->m_bottom), Vertex2D(table->m_left, table->m_top), 0.f, table->m_glassBottomHeight), false);
-   AddCollider(new LineSeg(table, Vertex2D(table->m_right, table->m_bottom), Vertex2D(table->m_left, table->m_bottom), 0.f, table->m_glassBottomHeight),  false);
-   AddCollider(new LineSeg(table, Vertex2D(table->m_left, table->m_top), Vertex2D(table->m_right, table->m_top), 0.f, table->m_glassTopHeight), false);
 
-   // glass:
-   Vertex3Ds * const rgv3D = new Vertex3Ds[4];
-   rgv3D[0] = Vertex3Ds(table->m_left, table->m_top, table->m_glassTopHeight);
-   rgv3D[1] = Vertex3Ds(table->m_right, table->m_top, table->m_glassTopHeight);
-   rgv3D[2] = Vertex3Ds(table->m_right, table->m_bottom, table->m_glassBottomHeight);
-   rgv3D[3] = Vertex3Ds(table->m_left, table->m_bottom, table->m_glassBottomHeight);
-   AddCollider(new Hit3DPoly(table, rgv3D, 4), false);
+   // [Features] table_bounds = 1 (unified engine): the outline walls and the glass are hosts of the contact model (BuildTableBounds, after the playfield host); 0: stock's
+   m_tableBounds = PhysicsIni::Active(ContactSurfaceHost::IniPathFor(table->m_filename)).tableBounds && g_pplayer != nullptr;
+   StockCount::SetTableBounds(m_tableBounds);
+   if (!m_tableBounds)
+   {
+      // simple outer borders:
+      AddCollider(new LineSeg(table, Vertex2D(table->m_right, table->m_top), Vertex2D(table->m_right, table->m_bottom), 0.f, table->m_glassTopHeight), false);
+      AddCollider(new LineSeg(table, Vertex2D(table->m_left, table->m_bottom), Vertex2D(table->m_left, table->m_top), 0.f, table->m_glassBottomHeight), false);
+      AddCollider(new LineSeg(table, Vertex2D(table->m_right, table->m_bottom), Vertex2D(table->m_left, table->m_bottom), 0.f, table->m_glassBottomHeight),  false);
+      AddCollider(new LineSeg(table, Vertex2D(table->m_left, table->m_top), Vertex2D(table->m_right, table->m_top), 0.f, table->m_glassTopHeight), false);
+
+      // glass:
+      Vertex3Ds * const rgv3D = new Vertex3Ds[4];
+      rgv3D[0] = Vertex3Ds(table->m_left, table->m_top, table->m_glassTopHeight);
+      rgv3D[1] = Vertex3Ds(table->m_right, table->m_top, table->m_glassTopHeight);
+      rgv3D[2] = Vertex3Ds(table->m_right, table->m_bottom, table->m_glassBottomHeight);
+      rgv3D[3] = Vertex3Ds(table->m_left, table->m_bottom, table->m_glassBottomHeight);
+      AddCollider(new Hit3DPoly(table, rgv3D, 4), false);
+   }
 
    /*
    // playfield:
@@ -404,6 +410,8 @@ void PhysicsEngine::AddCabinetBoundingHitShapes(PinTable *const table)
       }
    }
    m_hitPlayfield.m_surfaceHost = m_playfieldHost;
+   if (m_tableBounds)
+      BuildTableBounds(table);
    MeshHoles::PlaceParts();   // the Stars, Buttons and physical kickers on their hosts (their PhysicSetup's height-dependent rest, in table item order), every host now existing
    Turntables::Setup(table, m_vmover, m_ownedHosts);   // discs set into the playfield (their holes cut into the mesh under them at MeshHoles::Build)
    MeshHoles::RepairOverlaps(PhysicsIni::Active(ContactSurfaceHost::IniPathFor(table->m_filename)).meshOverlapRepair);   // mesh_overlap_repair: every static mesh's overlapping faces on one plane cover it once (before the cut and the finder's tree)
@@ -419,11 +427,70 @@ void PhysicsEngine::AddCabinetBoundingHitShapes(PinTable *const table)
    }
 
    // glass:
-   Vertex3Ds glassNormal(0, table->m_bottom - table->m_top, table->m_glassBottomHeight - table->m_glassTopHeight);
-   glassNormal.Normalize();
-   m_hitTopGlass = HitPlane(table, Vertex3Ds(0, glassNormal.z, -glassNormal.y), -table->m_glassTopHeight);
-   m_hitTopGlass.m_physics = this; // copy assignment above does not preserve it
-   m_hitTopGlass.m_elasticity = 0.2f;
+   if (!m_tableBounds)
+   {
+      Vertex3Ds glassNormal(0, table->m_bottom - table->m_top, table->m_glassBottomHeight - table->m_glassTopHeight);
+      glassNormal.Normalize();
+      m_hitTopGlass = HitPlane(table, Vertex3Ds(0, glassNormal.z, -glassNormal.y), -table->m_glassTopHeight);
+      m_hitTopGlass.m_physics = this; // copy assignment above does not preserve it
+      m_hitTopGlass.m_elasticity = 0.2f;
+   }
+}
+
+// [Features] table_bounds = 1 (runs/2026-11-21-edge-glass/design.md): the table's outline walls and its top glass as two static hard surfaces of the contact model, engine-owned
+// (m_ownedHosts, deleted with the engine), found by the static finder (kinds "tableedge" and "glass"), no Hit events (as stock). Glass plane: glass top height at the table's top
+// edge (y = m_top), bottom height at its bottom edge (y = m_bottom). Walls: vertical on the outline, from kEdgeBelowU under the playfield up to the glass plane at each end.
+// Faces wound so their normals point into the table (walls) and down (glass); the probe is two-sided, so a ball outside is held outside.
+void PhysicsEngine::BuildTableBounds(PinTable *const table)
+{
+   constexpr float kEdgeBelowU = 50.f;   // walls start this far under the playfield (design 2a), so a ball pressed into the playfield still meets the wall
+   const std::filesystem::path ini = ContactSurfaceHost::IniPathFor(table->m_filename);
+   const float L = table->m_left, R = table->m_right, T = table->m_top, B = table->m_bottom;
+   const float gT = table->m_glassTopHeight, gB = table->m_glassBottomHeight, z0 = -kEdgeBelowU;
+   auto addHost = [&](std::shared_ptr<RubberSurface> faces, const char *kind, const char *name, const char *section, double e, double mu, double eMpa) {
+      RubberObjectSettings s;
+      ContactSurfaceHost::LoadHardSurfaceSettings(s, ini, kind, name, e, mu, eMpa, section);
+      ContactSurfaceHost *const host = new ContactSurfaceHost(table, faces, s, ini, name, kind);
+      host->SetHardSurface(e, mu, eMpa, section);
+      host->CalcHitBBox();
+      m_ownedHosts.push_back(host);
+      if (MoverObject *const pmo = host->GetMoverObject(); pmo != nullptr && pmo->AddToList())   // as the playfield host: no hit objects of its own to bring the mover
+         m_vmover.push_back(pmo);
+      PLOGI << "Table bounds: " << name << " on the contact model (" << faces->tris.size() << " faces, box x " << faces->lo[0] << ".." << faces->hi[0] << " y " << faces->lo[1] << ".."
+            << faces->hi[1] << " z " << faces->lo[2] << ".." << faces->hi[2] << "; e_mpa " << s.eMpa << ", restitution " << (s.restitution > 0.0 ? s.restitution : e) << ", mu " << s.mu
+            << "; ESTIMATED material, [" << section << "])";
+   };
+   // the outline walls: left (normal +x), right (-x), top (+y), bottom (-y); each wall's top edge on the glass plane
+   auto edge = std::make_shared<RubberSurface>();
+   edge->Add(Vertex3Ds(L, T, z0), Vertex3Ds(L, B, z0), Vertex3Ds(L, B, gB));
+   edge->Add(Vertex3Ds(L, T, z0), Vertex3Ds(L, B, gB), Vertex3Ds(L, T, gT));
+   edge->Add(Vertex3Ds(R, B, z0), Vertex3Ds(R, T, z0), Vertex3Ds(R, T, gT));
+   edge->Add(Vertex3Ds(R, B, z0), Vertex3Ds(R, T, gT), Vertex3Ds(R, B, gB));
+   edge->Add(Vertex3Ds(R, T, z0), Vertex3Ds(L, T, z0), Vertex3Ds(L, T, gT));
+   edge->Add(Vertex3Ds(R, T, z0), Vertex3Ds(L, T, gT), Vertex3Ds(R, T, gT));
+   edge->Add(Vertex3Ds(L, B, z0), Vertex3Ds(R, B, z0), Vertex3Ds(R, B, gB));
+   edge->Add(Vertex3Ds(L, B, z0), Vertex3Ds(R, B, gB), Vertex3Ds(L, B, gB));
+   // [TableEdge]: the cabinet's plywood side struck on its face. e_mpa 1000: E* about 1 GPa (plywood across its plies 0.5-1.5 GPa), ESTIMATED; restitution 0.5 at 1 m/s, ASSUMED;
+   // mu 0.4 (steel on wood, handbook 0.2-0.6), ESTIMATED. No measured data (PartData.txt has none).
+   addHost(edge, "tableedge", "table edge", "tableedge", 0.5, 0.4, 1000.0);
+   // the glass quad through the four glass corners (stock's Hit3DPoly's plane), facing down
+   auto glass = std::make_shared<RubberSurface>();
+   glass->Add(Vertex3Ds(L, T, gT), Vertex3Ds(R, B, gB), Vertex3Ds(R, T, gT));
+   glass->Add(Vertex3Ds(L, T, gT), Vertex3Ds(L, B, gB), Vertex3Ds(R, B, gB));
+   // [Glass]: tempered soda-lime sheet (E 70 GPa, nu 0.22) against the steel ball (E 200 GPa, nu 0.3). e_mpa 55000: E* 55 GPa, handbook; restitution 0.85 at 1 m/s, ASSUMED (steel on
+   // thick glass about 0.9, the 4-5 mm sheet on its frame loses some); mu 0.5 (steel on glass, handbook 0.5-0.7), ESTIMATED.
+   addHost(glass, "glass", "top glass", "glass", 0.85, 0.5, 55000.0);
+
+   // load notice (rule 8, once per table start): a glass lower than a ball on the playfield pinches every ball there
+   constexpr float kBallDiameterU = 50.f;   // VPX's default ball size (ASSUMED for the notice: a table's script may use another)
+   if (std::min(gT, gB) < kBallDiameterU)
+   {
+      const std::string msg = "Top glass: the glass (" + std::to_string((int)gT) + " U at the top, " + std::to_string((int)gB) + " U at the bottom) is lower than a ball on the playfield ("
+         + std::to_string((int)kBallDiameterU) + " U): every ball there is pinched; check the table's glass heights";
+      PLOGW << msg;
+      if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+         g_pplayer->m_liveUI->PushNotification(msg, 8000);
+   }
 }
 
 // Diagnostics: VPX_CONTACT_LOG=<file> writes one row per collision (C) and per resting contact (T) of the first ball: game time, kind, object type, object name,
@@ -1069,7 +1136,8 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
             // always check for playfield and top glass
             if (m_implicitPlayfieldMesh && !m_hitPlayfield.SurfaceOwns(pball->m_d)) // a ball the playfield force model holds is not tested
                DoHitTest(pball, &m_hitPlayfield, pball->m_coll);
-            DoHitTest(pball, &m_hitTopGlass, pball->m_coll);
+            if (!m_tableBounds)   // (table_bounds 1: the glass is a host of the contact model, found by the static finder)
+               DoHitTest(pball, &m_hitTopGlass, pball->m_coll);
 
             #ifndef USE_EMBREE
                if (rand_mt_01() < 0.5f) // swap order of dynamic and static obj checks randomly

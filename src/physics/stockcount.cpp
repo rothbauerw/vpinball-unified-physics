@@ -41,6 +41,7 @@ namespace StockCount
 
       const void *s_owner = nullptr;
       const HitObject *s_playfield = nullptr, *s_glass = nullptr;
+      bool s_tableBounds = false;   // [Features] table_bounds on: the table edge and top glass are hosts of the contact model
       std::vector<Row *> s_rows;
       std::unordered_map<const void *, Row *> s_byObject;
       Row *s_cur = nullptr, s_outside;
@@ -80,7 +81,7 @@ namespace StockCount
          {
             r->name = "top glass";
             r->kind = "top glass";
-            r->allowed = "top glass: no host yet (map step 8)";
+            r->allowed = s_tableBounds ? nullptr : "top glass: [Features] table_bounds = 0";
          }
          else if (type == eBall)
          {
@@ -106,10 +107,10 @@ namespace StockCount
             }
             if (t == eItemHitTarget && dynamic_cast<const HitTarget *>(obj->m_editable) != nullptr && dynamic_cast<const HitTarget *>(obj->m_editable)->OnDropModel())
                r->allowed = nullptr;   // converted: a drop target on the simple model (droptargetsimple.h) uses no stock
-            if (t == eItemTable)   // the table's own edges (PhysicsEngine): no part of the table to convert yet
+            if (t == eItemTable)   // the table's own edges and glass quad (PhysicsEngine): converted with [Features] table_bounds = 1
             {
                r->name = "table edge";
-               r->allowed = "table edge: no host yet, not in the map";
+               r->allowed = s_tableBounds ? nullptr : "table edge: [Features] table_bounds = 0";
             }
          }
          else
@@ -157,6 +158,11 @@ namespace StockCount
    {
       s_playfield = playfield;
       s_glass = topGlass;
+   }
+
+   void SetTableBounds(const bool on)
+   {
+      s_tableBounds = on;
    }
 
    bool Off()

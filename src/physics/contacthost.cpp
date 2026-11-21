@@ -298,12 +298,13 @@ bool ContactHost::HardSurfaceWanted(const std::filesystem::path &file, const cha
    return probe.surfaceRubber;
 }
 
-bool ContactHost::LoadHardSurfaceSettings(RubberObjectSettings &s, const std::filesystem::path &file, const char *kind, const std::string &name, const double elasticity, const double friction)
+bool ContactHost::LoadHardSurfaceSettings(RubberObjectSettings &s, const std::filesystem::path &file, const char *kind, const std::string &name, const double elasticity, const double friction,
+                                          const double eMpa, const std::string &section)
 {
    s = RubberObjectSettings();
    static const bool veDefault = []() { const char *const e = getenv("VPX_VISCOELASTIC"); return !(e != nullptr && atoi(e) == 0); }();
    s.viscoelastic = veDefault;
-   s.eMpa = 7875.0;   // as the playfield: E* = 10.5 GPa
+   s.eMpa = eMpa;   // default 7875, as the playfield: E* = 10.5 GPa
    s.betaLayer = 0.0;
    s.alphaSPerM = std::min(2.0, std::max(0.02, 1.1 * (1.0 - elasticity)));   // rebound ratio ~ 1 - alpha v at about 1 m/s: the part's restitution (the stock falloff with speed is not modelled)
    s.tanDelta = 0.05;
@@ -313,11 +314,12 @@ bool ContactHost::LoadHardSurfaceSettings(RubberObjectSettings &s, const std::fi
    s.mu = friction;
    s.rollingMu = ContactSettings::Get().enable ? ContactSettings::Get().rollingResistance : 0.0;
    s.surfaceRubber = true;
-   ApplySection(s, file, "surfaces");
+   if (section.empty())   // (a part with its own section, the table edge and glass: their material is not the walls', so [Surfaces] does not apply)
+      ApplySection(s, file, "surfaces");
    // [Trigger:<name>], [Gate:<name>], [Spinner:<name>], [Bumper:<name>], [Kicker:<name>] are also read by the part's own loader (contactpartsini.h), which reports every key neither reader knows:
    // not reported here, so the part's own keys (spring_n, close_mm, ...) are not called ignored
    const std::string k = kind;
-   ApplySection(s, file, k + ":" + name);
+   ApplySection(s, file, section.empty() ? k + ":" + name : section);
    Clamp(s, name, 1.0e6);
    s.contact = s.surfaceRubber;
    // Viscoelastic normal damping (the default for hard surfaces; VPX_VISCOELASTIC=0 or viscoelastic_damping = 0 restores the alpha law): gamma is calibrated so that a ball of the default

@@ -97,7 +97,9 @@ public:
    // LoadHardSurfaceSettings: the playfield's material (steel ball on lacquered wood) with the part's own friction mu and its restitution e turned into the normal damping
    // (rebound ratio ~ 1 - alpha v at 1 m/s), then [Surfaces] and the object's own section on top. PROVISIONAL, unverified: the mapping from the stock elasticity.
    static bool HardSurfaceWanted(const std::filesystem::path &file, const char *kind, const std::string &name);
-   static bool LoadHardSurfaceSettings(RubberObjectSettings &s, const std::filesystem::path &file, const char *kind, const std::string &name, double elasticity, double friction);
+   // eMpa: the default E* before the sections (7875 = the playfield's); section: the object's own section in place of [Surfaces] and [<kind>:<name>] (the table edge's [TableEdge], the glass's [Glass])
+   static bool LoadHardSurfaceSettings(RubberObjectSettings &s, const std::filesystem::path &file, const char *kind, const std::string &name, double elasticity, double friction,
+                                       double eMpa = 7875.0, const std::string &section = std::string());
    static bool IsSurfaceKey(const std::string &key);   // a key of the surface material (LoadHardSurfaceSettings): a part's own loader does not call it unknown
    static double HardSurfaceE(const HitObject *first);   // the part's restitution at 1 m/s: its elasticity with the stock falloff (0.3 without a collider)
    static bool PlungerWanted(const std::filesystem::path &file, const std::string &name);   // like HingeWanted, for [Features] plunger: a mechanical plunger's rod ([Plunger:<name>] rubber = 0 opts out)
@@ -107,7 +109,7 @@ public:
    static bool LoadPlayfieldSettings(RubberObjectSettings &s, const std::filesystem::path &file, double tableMu);
    // A turntable's disc: a hard textured surface (the playfield's material with the given friction). Never off.
    static RubberObjectSettings TurntableSettings(double mu, double rollingResistance);
-   void SetHardSurface(double elasticity, double friction) { m_hardSurface = true; m_partE = elasticity; m_partMu = friction; }
+   void SetHardSurface(double elasticity, double friction, double eMpa = 7875.0, const std::string &section = std::string()) { m_hardSurface = true; m_partE = elasticity; m_partMu = friction; m_partEMpa = eMpa; m_partSection = section; }
    const RubberObjectSettings &ContactSettings() const { return m_set; }
    // Live tuning: the table's physics ini changed (ContactSystem::ReloadChangedIni, on playfield focus gain, between frames, never inside a physics step): every host reads its
    // settings again (Reload: what a host reloads depends on its kind). No physics path looks at the file.
@@ -146,6 +148,8 @@ protected:
    std::string m_surfaceKind;                  // the ini section prefix (see the constructor)
    bool m_hardSurface = false;                 // a part that is a hard surface of the contact model without the rubber flag (unified engine)
    double m_partE = 0.3, m_partMu = 0.3;       // that part's elasticity and friction (for the reload of its settings)
+   double m_partEMpa = 7875.0;                 // its default E* and own section (LoadHardSurfaceSettings' eMpa and section; for the reload)
+   std::string m_partSection;
 
 private:
    friend struct ContactSystemImpl;   // the contact system steps the contact-held balls (contactsystem.cpp)

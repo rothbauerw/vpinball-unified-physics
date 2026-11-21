@@ -56,6 +56,9 @@ namespace PhysicsIni
       bool ballGravityInStep = true;   // ball_gravity_in_step (on while tested, rule 6; runs/2026-11-20-stock-gravity/design.md): 1 = gravity, the nudge and the magnets act on a ball only in the
                                        // contact system's step (stock's HitBall::UpdateVelocities adds none; m_vel is the true velocity between and within cycles; a ball the debug mouse drags is
                                        // held against them); 0 = stock adds the cycle's increment and the step takes it back and owes it, as before
+      bool tableBounds = true;    // table_bounds (on while tested, rule 6; runs/2026-11-21-edge-glass/design.md): 1 = the table's outline walls and its top glass are static hard surfaces of the
+                                  // contact model (engine-owned hosts, kinds "tableedge" and "glass", material [TableEdge] / [Glass]); stock's four edge LineSegs, glass quad and glass plane
+                                  // are not built; 0 = the stock edge and glass, unchanged
       bool hitSpeed = true;       // PROTOTYPE: Ball.HitSpeed (normal speed before an impact) and the table's Hit event for the playfield; off = neither
       float holeRoundMm = 0.2f;   // hole_round_mm: a round hole cut in the mesh (Button, kicker, turntable, [PlayfieldCut] circle) is a polygon whose edges touch the true circle at their midpoints;
                                   // each vertex stands at most this far outside it, mm (MeshHoles::Round: N = max(24, smallest N with r (1 / cos(pi / N) - 1) <= this); smaller = more edges, a rounder
@@ -97,7 +100,7 @@ namespace PhysicsIni
    inline void WarnUnknownSection(const std::string &lowerName)
    {
       // every section a loader reads (PartsIni::ReadSections' plain and kind names, ContactHost::ApplySection's, the magnet/turntable/playfield-cut parsers)
-      static const char *const plain[] = { "features", "contact", "flippers", "rubbers", "slings", "playfield", "surfaces", "gates", "spinners", "bumpers", "triggers", "plungers", "targets" };
+      static const char *const plain[] = { "features", "contact", "flippers", "rubbers", "slings", "playfield", "surfaces", "gates", "spinners", "bumpers", "triggers", "plungers", "targets", "tableedge", "glass" };
       static const char *const kinds[] = { "flipper:", "rubber:", "sling:", "wall:", "primitive:", "magnet:", "turntable:", "playfieldcut:", "gate:", "spinner:", "ramp:", "bumper:", "kicker:", "trigger:", "plunger:", "target:" };
       for (const char *p : plain)
          if (lowerName == p)
@@ -107,7 +110,7 @@ namespace PhysicsIni
             return;
       static std::set<std::string> warned;
       if (warned.insert(lowerName).second)
-         PLOGW << "Physics settings: section [" << lowerName << "] is not a known kind (features, contact, flippers, rubbers, slings, playfield, surfaces, gates, spinners, bumpers, triggers, plungers, targets, or a part's kind: flipper, rubber, sling, wall, primitive, magnet, turntable, playfieldcut, gate, spinner, ramp, bumper, kicker, trigger, plunger, target); it is ignored";
+         PLOGW << "Physics settings: section [" << lowerName << "] is not a known kind (features, contact, flippers, rubbers, slings, playfield, surfaces, gates, spinners, bumpers, triggers, plungers, targets, tableedge, glass, or a part's kind: flipper, rubber, sling, wall, primitive, magnet, turntable, playfieldcut, gate, spinner, ramp, bumper, kicker, trigger, plunger, target); it is ignored";
    }
 
    // true if the file has a [Features] section (it is a unified file); `f` gets its switches (a missing key = on)
@@ -180,6 +183,8 @@ namespace PhysicsIni
             f.ballGravityInStep = on;
          else if (key == "hit_speed")
             f.hitSpeed = on;
+         else if (key == "table_bounds")
+            f.tableBounds = on;
          else if (key == "seat_editor_balls")
             f.seatEditorBalls = on;
          else if (key == "hit_speed_min")
@@ -198,7 +203,7 @@ namespace PhysicsIni
       if (!ContactSystem::Unified())
       {
          f.flippers = f.flipperRubber = f.rubbers = f.playfieldContact = f.surfaceRubbers = f.hardSurfaces = f.hinges = f.plunger = f.triggers = false;
-         f.bands = f.slings = f.contact = f.magnets = f.turntables = f.meshOverlapRepair = f.hitSpeed = f.aircoreInStep = f.seatEditorBalls = f.ballGravityInStep = false;
+         f.bands = f.slings = f.contact = f.magnets = f.turntables = f.meshOverlapRepair = f.hitSpeed = f.aircoreInStep = f.seatEditorBalls = f.ballGravityInStep = f.tableBounds = false;
          return f;
       }
       if (!file.empty())
