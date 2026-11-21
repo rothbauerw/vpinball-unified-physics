@@ -769,7 +769,11 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       return;
 
    const float height = m_ptable->GetSurfaceHeight(m_d.m_szSurface, m_d.m_vCenter.x, m_d.m_vCenter.y);
-   const bool wire = CentrelineShape(m_d.m_shape);
+   // an Inder on the unified engine runs as wire A (one-switch design 2.1, user 2026-11-21: no Inder model of ours, and the unified engine runs no stock sensor): the same place,
+   // rotation, surface, [Trigger:<name>] settings and Hit / Unhit as a wire A, built and drawn as one (its mesh's long axis is the wire's, y at rotation 0). The table's shape stays
+   // Inder: the editor (isUI) and unified = 0 keep the stock Inder
+   const bool inderAsWire = !isUI && ContactSystem::Unified() && m_d.m_shape == TriggerInder;
+   const bool wire = CentrelineShape(m_d.m_shape) || inderAsWire;
    if (!isUI && ContactSystem::Unified())
    {
       const std::filesystem::path ini = ContactHost::IniPathFor(m_ptable->m_filename);
@@ -777,8 +781,10 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       if (s_noted != g_pplayer)
       {
          s_noted = g_pplayer;
-         PLOGI << "Triggers: WireA-E are rollover switches of the contact system (group step); None is a sensing zone of the unified engine; Button and Star are rollover caps of the group step; Inder stays a stock sensor (not converted)";
+         PLOGI << "Triggers: WireA-E are rollover switches of the contact system (group step), Inder runs as WireA; None is a sensing zone of the unified engine; Button and Star are rollover caps of the group step";
       }
+      if (inderAsWire)
+         PLOGI << "Trigger " << GetName() << ": Inder runs as wire A on the unified engine";
       if (wire)
       {
          // the real wire (PartData S7): a steel wire on a micro switch lever, the switch on a bracket under the playfield (GroupStepDesign 23.4); no stock sensor, mover or volume
@@ -807,7 +813,7 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
             notices.push_back("Wire trigger " + GetName() + ": Scale X / Y (" + std::to_string(m_d.m_scaleX) + ", " + std::to_string(m_d.m_scaleY) + ") are not used: a real wire has one size. Set them to 1");
          MeshHoles::HoleKeys holeKeys;   // only host is used (a wire cuts no hole): the mesh it sits on, [Triggers] then [Trigger:<name>], as a Button's or Star's (meshholes.h HoleKeys)
          PartsIni::ReadSections(ini, "triggers", "trigger:" + GetName(), [&](const std::string &k, double v, const std::string &lv) { MeshHoles::HoleKey(holeKeys, k, v, lv, "Wire trigger " + GetName()); });
-         const WireShape::Shape shape = ToWireShape(m_d.m_shape);
+         const WireShape::Shape shape = inderAsWire ? WireShape::Shape::WireA : ToWireShape(m_d.m_shape);
          const WireShape::Centreline cl = WireShape::MakeCentreline(shape, s.bendStepDeg, s.archStepDeg);
          // the rest needs the wire's height: placed once every host exists (MeshHoles::PlaceParts, after the item loop and the playfield host), as a Button's or Star's (one path)
          MeshHoles::Defer([this, physics, isUI, ini, s, shape, cl, host = holeKeys.host, notices = std::move(notices), height = height]() mutable {

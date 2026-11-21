@@ -281,6 +281,21 @@ void Surface::PhysicRelease(PhysicsEngine* physics, const bool isUI)
    }
 }
 
+void Surface::ReportIgnoredSlingshots()
+{
+   if (s_ignoredSlingshots.empty())
+      return;
+   string names;
+   for (const string &n : s_ignoredSlingshots)
+      names += (names.empty() ? "" : ", ") + n;
+   s_ignoredSlingshots.clear();
+   // rule 8: the table loses a feature it asked for, on screen and in the log once per table start
+   const string msg = "Wall slingshot ignored on the unified engine (no kick, no Slingshot event): " + names;
+   PLOGW << msg;
+   if (g_pplayer != nullptr && g_pplayer->m_liveUI != nullptr)
+      g_pplayer->m_liveUI->PushNotification(msg, 10000);
+}
+
 void Surface::SetupHitObject(PhysicsEngine* physics, HitObject * const obj, const bool isUI)
 {
    const Material * const mat = m_ptable->GetMaterial(m_d.m_szPhysicsMaterial);
@@ -325,11 +340,18 @@ void Surface::AddLine(PhysicsEngine *physics, const RenderVertex &pv1, const Ren
    const float bottom = m_d.m_heightbottom;
    const float top = m_d.m_heighttop;
 
+   // a segment marked slingshot on the unified engine is a plain segment of the wall's hard surface (one-switch design 2.2, user 2026-11-21: no sling model of ours, and the
+   // unified engine runs no stock kick): no kick, no Slingshot event, no sling animation; the wall is named in one WARN and notice per table start (ReportIgnoredSlingshots).
+   // The editor (isUI) and unified = 0 keep the stock slingshot
+   const bool sling = pv1.slingshot && (isUI || !ContactSystem::Unified());
+   if (pv1.slingshot && !sling && (s_ignoredSlingshots.empty() || s_ignoredSlingshots.back() != GetName()))
+      s_ignoredSlingshots.push_back(GetName());
+
    const auto addLineSeg = [&](const RenderVertex &pa, const RenderVertex &pb, const bool slingMesh) -> LineSegSlingshot *
    {
       LineSeg *plineseg;
       LineSegSlingshot *plinesling = nullptr;
-      if (!pv1.slingshot)
+      if (!sling)
       {
          plineseg = new LineSeg(this, pa, pb, bottom, top);
       }
@@ -346,7 +368,7 @@ void Surface::AddLine(PhysicsEngine *physics, const RenderVertex &pv1, const Ren
 
       SetupHitObject(physics, plineseg, isUI);
 
-      if (pv1.slingshot) // slingshots always have hit events
+      if (sling) // slingshots always have hit events
       {
          plineseg->m_obj = (IFireEvents *)this;
          plineseg->m_fe = true;

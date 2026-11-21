@@ -13,6 +13,7 @@
 #include "hitplunger.h"
 #include "contactsystem.h"
 #include "contactprof.h"
+#include "parts/surface.h"
 void ContactTraceBall(const char *stage, const HitBall *pb, bool items, int island);   // VPX_TRACE_BALL (contactsystem.cpp)
 
 #include "input/PlungerHandler.h"
@@ -86,6 +87,7 @@ PhysicsEngine::PhysicsEngine(PinTable *const table)
    for (IEditable *const pe : table->GetParts())
       if (IHitable *const ph = pe->GetIHitable(); ph)
          ph->PhysicSetup(this, false);
+   Surface::ReportIgnoredSlingshots();   // unified engine: the walls whose slingshot segments run as plain segments, one WARN and notice
 
    AddCabinetBoundingHitShapes(table);
    for (HitObject *const pho : *m_pendingHitObjects)

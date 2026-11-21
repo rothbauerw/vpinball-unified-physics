@@ -160,7 +160,12 @@ public:
    // The wall outline curve (drag points defining the wall shape)
    DragPointCurve m_curve;
 
+   // unified engine: one WARN and notice naming the walls whose slingshot segments run as plain segments this table start (AddLine), then the list is emptied; the physics
+   // engine calls it once after every part's PhysicSetup
+   static void ReportIgnoredSlingshots();
+
 private:
+   static inline vector<string> s_ignoredSlingshots;   // walls with a slingshot segment ignored on the unified engine, this table start (AddLine)
    void SetupHitObject(class PhysicsEngine *physics, HitObject *const obj, const bool isUI);
    void AddLine(class PhysicsEngine *physics, const RenderVertex &pv1, const RenderVertex &pv2, const bool isUI, const bool bothDirections);
 
