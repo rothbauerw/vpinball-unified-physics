@@ -1398,7 +1398,8 @@ void PhysicsEngine::PhysicsSimulateCycle(float dtime) // move physics forward to
       m_contacts.clear();
 
       #ifdef C_BALL_SPIN_HACK
-         // hacky killing of ball spin on resting balls (very low and very high spinning)
+         // hacky killing of ball spin on resting balls (very low and very high spinning); stock engine only ([Features] unified = 0), see physconst.h
+         if (!ContactSystem::Unified())
          for (HitBall *const hitBall : m_vballs)
          {
             if (hitBall->m_coll.m_hitdistance >= (float)PHYS_TOUCH)
