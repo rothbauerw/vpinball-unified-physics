@@ -482,8 +482,8 @@ namespace BumperGroup
                snprintf(s, sizeof s, " ctc d %.4g own %.4g", (e1.t.ctc[a] - e0.t.ctc[a]) * sc, (e1.t.own[a] + e1.t.ctc[a]) * sc);
                o += s;
             }
-            // each seat's chord (SeatForceAt, sd): V0 and V1, V10, V01 against it; da, dA; dVa and dVb, each over noise; Abar's and Cbar's branch (c chord, m midpoint)
-            // and value with the midpoint's; mu and s1 - s0; then each one's change from the evaluation before and its share of the seat term's thx change (m/s as
+            // each seat's force (SeatForceAt, sd): V0 and V1 - V0; the branch taken (ch chord, md midpoint) with the chord's and the midpoint's estimated errors; da, dA;
+            // dVa and dVb; Abar and Cbar with the midpoint's; mu and s1 - s0; then each one's change from the evaluation before and its share of the seat term's thx change (m/s as
             // above: h mu dAbar tiltA cz, h mu dCbar ca, h dmu (Abar tiltA cz + Cbar ca)) and the seat's whole thx change
             static const char *const sn[2] = { "lip", "rim" };
             for (int j = 0; j < 2; j++)
@@ -492,12 +492,12 @@ namespace BumperGroup
                if (e1.t.st[4 * j] == 0 && e0.t.st[4 * j] == 0)
                   continue;
                char w[700];
-               const double nz = a1[8] > 0.0 ? a1[8] : 1.0, sc = invM[kThx] * reach;
+               const double sc = invM[kThx] * reach;
                const auto X = [](const double *v) { return v[20] * v[13] * (v[9] * v[15] * v[16] + v[11] * v[18]); };
-               snprintf(w, sizeof w, " | %s V0 %.17g V1-V0 %.4g V10-V0 %.4g V01-V0 %.4g da %.4g dA %.4g dVa %.6g (%.3g nz) dVb %.6g (%.3g nz) nz %.4g A%c %.9g Va %.9g C%c %.9g Cm %.9g mu %.12g ds %.4g"
+               snprintf(w, sizeof w, " | %s V0 %.17g V1-V0 %.4g %s ech %.3g emd %.3g da %.4g dA %.4g dVa %.6g dVb %.6g A %.9g Am %.9g C %.9g Cm %.9g mu %.12g ds %.4g"
                                      " | ch dV0 %.3g ddVa %.3g ddVb %.3g dAbar %.3g dCbar %.3g dmu %.3g thx A %.3g C %.3g mu %.3g seat %.3g",
-                        sn[j], a1[0], a1[1] - a1[0], a1[2] - a1[0], a1[3] - a1[0], a1[4], a1[5], a1[6], std::fabs(a1[6]) / nz, a1[7], std::fabs(a1[7]) / nz, a1[8],
-                        std::fabs(a1[6]) > a1[8] ? 'c' : 'm', a1[9], a1[10], std::fabs(a1[7]) > a1[8] ? 'c' : 'm', a1[11], a1[12], a1[13], a1[14],
+                        sn[j], a1[0], a1[1] - a1[0], a1[8] != 0.0 ? "ch" : "md", a1[2], a1[3], a1[4], a1[5], a1[6], a1[7],
+                        a1[9], a1[10], a1[11], a1[12], a1[13], a1[14],
                         a1[0] - a0[0], a1[6] - a0[6], a1[7] - a0[7], a1[9] - a0[9], a1[11] - a0[11], a1[13] - a0[13],
                         a1[20] * a1[13] * (a1[9] - a0[9]) * a1[15] * a1[16] * sc, a1[20] * a1[13] * (a1[11] - a0[11]) * a1[18] * sc,
                         a1[20] * (a1[13] - a0[13]) * (a0[9] * a0[15] * a0[16] + a0[11] * a0[18]) * sc, (X(a1) - X(a0)) * sc);
@@ -743,14 +743,80 @@ namespace BumperGroup
       double ALip(const Pose &q) const { return q.z + q.Cz * tIn - zBase; }
       // The seat: a flat ring on an elastic rim, integrated exactly round the circle (design section 5). a: pressing depth at the centre, b: radius x tilt. Va = dV/da, VbB = (dV/db) / b
       struct SeatE { double V, Va, VbB; };
-      SeatE Seat(const double a, const double b) const
+      SeatE Seat(const double a, const double b) const { return SeatAt(kSeat, a, a + b, b); }
+      // The partial seat in theta = acos(-a / b), the half-angle of the rim's pressed arc (r = a / b = -cos theta, so acos(-r) = theta, sqrt(1 - r^2) = sin theta):
+      // V = k b^2 / (2 pi) F, Va = k b / pi G, VbB = k / pi H, with F = theta + theta/2 cos 2theta - 3/4 sin 2theta, G = sin theta - theta cos theta, H = theta/2 - sin(2 theta)/4
+      // (the forms in r, rewritten). Near lift-off (theta -> 0) the closed forms cancel down to theta^5, theta^3, theta^3: relative error about eps / theta^2 (at e = 1 + r = 1e-6
+      // V had the wrong sign). Below kThSeries the three come from their Taylor series (entire functions; coefficients exact fractions, correctly rounded):
+      // F = sum_{n>=2} (-1)^n 4^n (n-1) / (2n+1)! theta^(2n+1), G = sum_{n>=1} (-1)^(n+1) 2n / (2n+1)! theta^(2n+1), H = sum_{n>=1} (-1)^(n+1) 2^(2n-1) / (2n+1)! theta^(2n+1),
+      // 13 terms each (truncation below 1e-20 relative at the switch). The switch is where both forms are within 2 eps of the true value (offline test,
+      // runs/2026-11-21-halvings/fix_results.md). At the full side (theta -> pi) nothing cancels.
+      struct SeatShape { double F, G, H; };
+      static constexpr double kThSeries = 1.5;
+      static SeatShape ShapeOf(const double th)
+      {
+         if (th >= kThSeries)
+         {
+            const double s2 = std::sin(2.0 * th), c2 = std::cos(2.0 * th);
+            return { th + 0.5 * th * c2 - 0.75 * s2, std::sin(th) - th * std::cos(th), 0.5 * th - 0.25 * s2 };
+         }
+         static constexpr double cF[13] = { 0.13333333333333333, -0.025396825396825397, 0.0021164021164021165, -0.00010261343594676929, 3.2888921777810667e-06, -7.517467834928152e-08,
+            1.2897616383455163e-09, -1.7239921648728706e-11, 1.84713446236379e-13, -1.622428161935696e-15, 1.1897806520861771e-17, -7.395683929051606e-20, 3.94679355819667e-22 };
+         static constexpr double cG[13] = { 0.3333333333333333, -0.03333333333333333, 0.0011904761904761906, -2.2045855379188714e-05, 2.505210838544172e-07, -1.9270852604185937e-09,
+            1.0706029224547743e-11, -4.498331606952833e-14, 1.4797143443923793e-16, -3.9145882126782523e-19, 8.509974375387505e-22, -1.5472680682522736e-24, 2.387759364586842e-27 };
+         static constexpr double cH[13] = { 0.3333333333333333, -0.06666666666666667, 0.006349206349206349, -0.0003527336860670194, 1.282667949334616e-05, -3.2888921777810664e-07,
+            6.264556529106794e-09, -9.212583131039402e-11, 1.0774951030455441e-12, -1.0261858124243278e-14, 8.11214080967848e-17, -5.408093873118987e-19, 3.081534970438169e-21 };
+         const double x = th * th;
+         double f = cF[12], g = cG[12], hh = cH[12];
+         for (int n = 11; n >= 0; n--)
+         {
+            f = f * x + cF[n];
+            g = g * x + cG[n];
+            hh = hh * x + cH[n];
+         }
+         const double t3 = th * x;
+         return { f * t3 * x, g * t3, hh * t3 };
+      }
+      // theta from the depth a, the sum a + b (formed by the caller from its own parts, where it cancels) and b > 0: on the lift-off side by 2 asin(sqrt(e / 2)),
+      // e = (a + b) / b = 1 - cos theta, which keeps e's digits (acos(-r) loses them in r = a / b). As sqrt(a + b) / sqrt(2 b): /fp:fast formed (a + b) / b as a / b + 1,
+      // which threw those digits away again (offline test: V off by 6e14 eps at e = 1e-15)
+      static double ThetaOf(const double a, const double apb, const double b) { return a < 0.0 ? 2.0 * std::asin(std::sqrt(apb) / std::sqrt(2.0 * b)) : std::acos(-a / b); }
+      // The seat (k its stiffness): full (a >= b), partial, or off (a + b <= 0, the rim lifted)
+      static SeatE SeatAt(const double k, const double a, const double apb, const double b)
       {
          if (a >= b)
-            return { 0.5 * kSeat * (a * a + 0.5 * b * b), kSeat * a, 0.5 * kSeat };
-         if (a <= -b)
+            return { 0.5 * k * (a * a + 0.5 * b * b), k * a, 0.5 * k };
+         if (apb <= 0.0)
             return { 0.0, 0.0, 0.0 };
-         const double r = a / b, p = std::acos(-r), s = std::sqrt(std::max(1.0 - r * r, 0.0)), c = -r;
-         return { kSeat / (2.0 * GroupStep::kPi) * b * b * (r * r * p + 2.0 * r * s + 0.5 * p + 0.5 * s * c), kSeat / GroupStep::kPi * b * (r * p + s), kSeat / GroupStep::kPi * (r * s + 0.5 * (p + s * c)) };
+         const SeatShape f = ShapeOf(ThetaOf(a, apb, b));
+         return { k / (2.0 * GroupStep::kPi) * b * b * f.F, k / GroupStep::kPi * b * f.G, k / GroupStep::kPi * f.H };
+      }
+      // The seat energy's change over the straight move (a0, b0) -> (a0 + da, b0 + db) as Ia da + Ib db, (Ia, Ib) its gradient in the two lengths at the rim, the depth a and
+      // the tilt's lift b. Two ways to form it, one law: each call takes the one whose estimated error is the smaller (no threshold).
+      // - Midpoint: (Ia, Ib) = (Va, VbB b) at the move's middle. Its error comes from the force's curvature (order move^3) and is estimated from the values at hand as
+      //   |trapezoid - midpoint| / 3, the trapezoid being the mean of the end forces times the move (the midpoint's leading error is -1/2 the trapezoid's). Exact for the full seat,
+      //   whose force is linear in a and b, and free of V's rounding: over a small move it gives the true force where V1 - V0 does not (design.md 1.2, the bottom jet).
+      // - Chord: Ia da + Ib db = V1 - V0 exactly, the midpoint force corrected along the move (Gonzalez's discrete gradient, a and b with one weight, both lengths).
+      //   Its error is V's rounding, eps max(V0, V1) (V from the theta form is a few eps, also near lift-off), plus the end's: a1 and b1 are known to eps of themselves,
+      //   which moves V1 by eps (|Va1 a1| + VbB1 b1^2); near lift-off, where Va a / V ~ 1 / theta^2, that term is the larger (offline test: with eps max(V0, V1) alone
+      //   the chord was taken at 1e-20 m moves and its force was 45 % off). Over a move it is a force error of that over the move: the chord wins over a large move,
+      //   where the midpoint's curvature error is the larger.
+      // e1: the seat at the move's end (the caller's a1, b1, whose V1 also feeds the damper). a + b at the middle is formed from a0 + b0 (exact near lift-off) and da + db.
+      struct SeatGrad { double Ia, Ib, Iam, Ibm, errChord, errMid; bool chord; };
+      static SeatGrad SeatGradOf(const double k, const double a0, const double b0, const double da, const double db, const double V0, const SeatE &e1, const double b1)
+      {
+         const SeatE e0 = SeatAt(k, a0, a0 + b0, b0), em = SeatAt(k, a0 + 0.5 * da, (a0 + b0) + 0.5 * (da + db), b0 + 0.5 * db);
+         SeatGrad g;
+         g.Iam = em.Va;
+         g.Ibm = em.VbB * (b0 + 0.5 * db);
+         const double mid = g.Iam * da + g.Ibm * db, trap = 0.5 * ((e0.Va + e1.Va) * da + (e0.VbB * b0 + e1.VbB * b1) * db), qq = da * da + db * db;
+         g.errMid = std::fabs(trap - mid) / 3.0;
+         g.errChord = 2.220446049250313e-16 * (std::max(V0, e1.V) + std::fabs(e1.Va * (a0 + da)) + e1.VbB * b1 * b1);
+         g.chord = g.errChord < g.errMid && qq > 1e-300;
+         const double cf = g.chord ? (e1.V - V0 - mid) / qq : 0.0;
+         g.Ia = g.Iam + cf * da;
+         g.Ib = g.Ibm + cf * db;
+         return g;
       }
       // the gravity and the spring's tilt part; the spring's axial part goes on its own, exact
       double VSmooth(const Pose &q) const
@@ -787,44 +853,48 @@ namespace BumperGroup
          o[1] = g[1] + cf * dy;
       }
       // A seat's force over the move, added into Q: the discrete gradient of its energy times the damper's multiplier. Returns the loss, positive or zero.
-      // V is a function of two scalars, the depth a and the tilt's A2 (b = r sqrt(A2)), so its gradient is taken in those: dV = Abar da + Cbar dA2 exactly, the mean of the two orders of moving them (reversing the move gives the same force).
+      // V is a function of two scalars, the depth a and the tilt's A2 (b = r sqrt(A2)), so its gradient is taken in those: dV = Abar da + Cbar dA2, from the gradient in (a, b)
+      // along the straight move (SeatGradOf: the midpoint force or the chord V1 - V0, whichever has the smaller estimated error).
       // Each then goes onto the coordinates by its own chord. A 3-coordinate Gonzalez here spreads V's mismatch by the mass weight, and near the seat's onset, where the move is as large as the overlap, the tilt, 3,700 times lighter, took a steep false force from a z move.
       // a1, A21: the depth and A2 at the move's end; da, dA: their changes over the move (from MoveOf)
-      double SeatForceAt(const double am, const double a0, const double a1, const double da, const double dadz, const double tiltA, const double r, const double V0, const Pose &qm, const double A21, const double dA,
+      double SeatForceAt(const double a0, const double a1, const double da, const double dadz, const double tiltA, const double r, const double V0, const double A21, const double dA,
                        const double cz[2], const double ca[2], const double h, double *Q, int *const st = nullptr, double *const sd = nullptr) const
       {
-         const double b0 = r * std::sqrt(gA20), b1 = r * std::sqrt(A21);
-         const double V1 = Seat(a1, b1).V, V10 = Seat(a1, b0).V, V01 = Seat(a0, b1).V;
-         if (st != nullptr)   // (diagnostics, the halved line: the seat's branches, on / Abar's chord / Cbar's chord / mu clamped at 0)
+         const double sA0 = std::sqrt(gA20), sA1 = std::sqrt(A21), sAs = sA0 + sA1, b0 = r * sA0, b1 = r * sA1;
+         const SeatE e1 = Seat(a1, b1);
+         const double V1 = e1.V;
+         if (st != nullptr)   // (diagnostics, the halved line: the seat's branches, on / chord taken / - / mu clamped at 0)
             st[0] = st[1] = st[2] = st[3] = 0;
-         if (sd != nullptr)   // (diagnostics, the halved line: the seat's chord inputs and outputs, RowTrace::sd; copies only)
+         if (sd != nullptr)   // (diagnostics, the halved line: the seat's inputs and outputs, RowTrace::sd; copies only)
             std::fill(sd, sd + kSd, 0.0);
-         if (V0 <= 0.0 && V1 <= 0.0 && V10 <= 0.0 && V01 <= 0.0)
+         // both ends off (a + b <= 0, a half-plane): the whole move is off
+         if (V0 <= 0.0 && V1 <= 0.0)
             return 0.0;
-         const double bm = r * std::sqrt(qm.A2);
-         const SeatE em = Seat(am, bm);
-         const double dVa = 0.5 * (V10 - V0 + V1 - V01), dVb = 0.5 * (V01 - V0 + V1 - V10);
-         const double noise = kEps16 * (std::max(std::max(V0, V1), std::max(V10, V01)) + std::fabs(em.Va) * zBase + em.VbB * bm * bm);   // (the rounding of V is the rounding of the depth a, whose scale is the height, and of b, times their forces; far above V's own)
-         const double Abar = std::fabs(dVa) > noise ? dVa / da : em.Va, Cbar = std::fabs(dVb) > noise ? dVb / dA : em.VbB * 0.5 * r * r;
+         // the move in b from dA by the identity b1 - b0 = r (A21 - A20) / (sqrt A21 + sqrt A20); with no tilt at either end b stays 0
+         const double db = sAs > 0.0 ? r * dA / sAs : 0.0;
+         const SeatGrad g = SeatGradOf(kSeat, a0, b0, da, db, V0, e1, b1);
+         // dV = Abar da + Cbar dA: Abar = Ia; Cbar dA = Ib db, so Cbar = Ib r / (sqrt A21 + sqrt A20). With no tilt at either end, dV/dA2 at b = 0: VbB r^2 / 2.
+         const double Cb0 = sAs > 0.0 ? 0.0 : 0.5 * r * r * Seat(a0 + 0.5 * da, 0.0).VbB;
+         const double Abar = g.Ia, Cbar = sAs > 0.0 ? g.Ib * r / sAs : Cb0, dV = Abar * da + Cbar * dA;
          const double s0 = std::sqrt(2.0 * V0 / kSeat), s1 = std::sqrt(2.0 * V1 / kSeat), sum = s0 + s1;
          // 1 + fd / fe with fe = k (s0 + s1) / 2, fd = c (s1 - s0) / h: pushes only
          const double mu = sum > 0.0 ? std::max(0.0, 1.0 + 2.0 * cSeat * (s1 - s0) / (h * kSeat * sum)) : 1.0;
          if (st != nullptr)
          {
             st[0] = 1;
-            st[1] = std::fabs(dVa) > noise ? 1 : 0;
-            st[2] = std::fabs(dVb) > noise ? 1 : 0;
+            st[1] = g.chord ? 1 : 0;
             st[3] = mu == 0.0 ? 1 : 0;
          }
-         if (sd != nullptr)
+         if (sd != nullptr)   // slots 2, 3: the chord's and the midpoint's estimated errors; 8: 1 if the chord was taken; 10, 12: the midpoint's Abar, Cbar
          {
-            const double v[kSd] = { V0, V1, V10, V01, da, dA, dVa, dVb, noise, Abar, em.Va, Cbar, em.VbB * 0.5 * r * r, mu, s1 - s0, tiltA, cz[0], cz[1], ca[0], ca[1], h, dadz };
+            const double v[kSd] = { V0, V1, g.errChord, g.errMid, da, dA, Abar * da, Cbar * dA, g.chord ? 1.0 : 0.0, Abar, g.Iam, Cbar, sAs > 0.0 ? g.Ibm * r / sAs : Cb0, mu, s1 - s0,
+                                    tiltA, cz[0], cz[1], ca[0], ca[1], h, dadz };
             std::copy(v, v + kSd, sd);
          }
          Q[kZ] -= mu * Abar * dadz;
          Q[kThx] -= mu * (Abar * tiltA * cz[0] + Cbar * ca[0]);
          Q[kThy] -= mu * (Abar * tiltA * cz[1] + Cbar * ca[1]);
-         return (mu - 1.0) * (V1 - V0);
+         return (mu - 1.0) * dV;
       }
       // The part's own rows over the move dq (RowsTerms), with VPX_SKIRT_ROW_TRACE its terms for the trace
       // (the terms are kept at every main evaluation, not the Jacobian's differences: a failed attempt's last round goes to the halved line, KeepFailNote; copies only)
@@ -846,8 +916,8 @@ namespace BumperGroup
          return t;
       }
       // diagnostics (VPX_SKIRT_ROW_TRACE): the rows' terms at the last evaluation (row units: inertia row, -h x each force), the move, the four chords (Vs, Cz, A2, D)
-      // st: the branches (lip on, Abar chord, Cbar chord, mu at 0; rim the same; spring N > 0; spoon N > 0)
-      // sd: per seat (0 lip, 1 rim) SeatForceAt's chord inputs and outputs (V0, V1, V10, V01, da, dA, dVa, dVb, noise, Abar, em.Va, Cbar, em.VbB r^2/2, mu, s1 - s0,
+      // st: the branches (lip on, chord taken, -, mu at 0; rim the same; spring N > 0; spoon N > 0)
+      // sd: per seat (0 lip, 1 rim) SeatForceAt's inputs and outputs (V0, V1, chord's est. error, midpoint's est. error, da, dA, dVa, dVb, chord taken, Abar, midpoint Abar, Cbar, midpoint Cbar, mu, s1 - s0,
       // tiltA, cz, ca, h, dadz), for the halved line's seat chord note (HistNote; to-do 1.42, which of Abar / Cbar / mu carries the seat term's noise)
       static constexpr int kSd = 22;
       struct RowTrace { double inert[3], grav[3], spring[3], seat[3], spoon[3], damp[3], ctc[3], own[3], dq[3], df[4], mis[4]; int st[10]; double sd[2][kSd]; };
@@ -924,8 +994,8 @@ namespace BumperGroup
             TiltChord(dCz, tm.dCz, 0.0, dq, cz);
             TiltChord(dA2, tm.dA2, 0.0, dq, ca);
             const double daLip = dq[kZ] + tIn * tm.dCz;
-            l.lip = SeatForceAt(ALip(qm), gALip0, gALip0 + daLip, daLip, 1.0, tIn, rLip, gLip0, qm, A21, tm.dA2, cz, ca, h, Q, tr ? rt.st : nullptr, tr ? rt.sd[0] : nullptr);
-            l.rim = SeatForceAt(-qm.z, -z, -z - dq[kZ], -dq[kZ], -1.0, 0.0, rRim, gRim0, qm, A21, tm.dA2, cz, ca, h, Q, tr ? rt.st + 4 : nullptr, tr ? rt.sd[1] : nullptr);
+            l.lip = SeatForceAt(gALip0, gALip0 + daLip, daLip, 1.0, tIn, rLip, gLip0, A21, tm.dA2, cz, ca, h, Q, tr ? rt.st : nullptr, tr ? rt.sd[0] : nullptr);
+            l.rim = SeatForceAt(-z, -z - dq[kZ], -dq[kZ], -1.0, 0.0, rRim, gRim0, A21, tm.dA2, cz, ca, h, Q, tr ? rt.st + 4 : nullptr, tr ? rt.sd[1] : nullptr);
             if (tr)
             {
                chord(1, dCz, 1, tm.dCz);
