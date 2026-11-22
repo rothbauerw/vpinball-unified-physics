@@ -1476,6 +1476,75 @@ namespace RubberContact
       return v;
    }
 
+   // patch_friction (plan 2.1, piece 2b-1): each patch's pressed pieces (permanent ids: a mesh face t, a shared edge -(1 + 3 t + e) of its lower face t; a tube segment i, a joint
+   // -(j + 1)), patch p's ids id[off[p]] .. id[off[p + 1] - 1]. Written by BarsTriangles / BarsTube beside their patch list; thread-local, capacity reused.
+   // Each patch also names its deepest piece's signed geometry (plan 2.5 C1: a patch not pressed at the step's middle is evaluated there from it): kind 0 a face's plane (its
+   // depth d - n . (c' - c)), 1 a segment a-b (a shared edge, a tube segment), 2 a point a (a joint, a face's rim point): depth d + dist(c) - dist(c')
+   struct PieceGeo
+   {
+      int kind = 0;
+      V3 a, b;
+   };
+   struct PatchPieceList
+   {
+      std::vector<int> off, id;
+      std::vector<PieceGeo> geo;
+      void Clear() { off.assign(1, 0); id.clear(); geo.clear(); }
+      void One(const int piece) { Clear(); if (piece != kNoPiece) id.push_back(piece); off.push_back((int)id.size()); geo.push_back(PieceGeo()); }
+      static constexpr int kNoPiece = 0x7fffffff;
+   };
+   // patch_friction (plan 2.1): one piece's memory, its patch's shear stretch and rolling and twist angles at the last accepted step's end
+   struct PieceMem
+   {
+      int id;
+      V3 xi;
+      RollAngle ra;
+   };
+   inline PatchPieceList &PatchPieces()
+   {
+      thread_local PatchPieceList v;
+      return v;
+   }
+   // MergeBars' node -> its patch (entry in patches; -1 none), written when patches is asked for
+   inline std::vector<int> &NodePatch()
+   {
+      thread_local std::vector<int> v;
+      return v;
+   }
+   // the pieces of each patch from MergeBars' NodePatch (np patches) and each node's piece id
+   inline void FillPatchPieces(const std::vector<int> &nodePiece, const int np)
+   {
+      PatchPieceList &pl = PatchPieces();
+      const std::vector<int> &npch = NodePatch();
+      pl.off.assign(np + 1, 0);
+      pl.id.clear();
+      pl.geo.clear();
+      for (int p = 0; p < np; p++)
+      {
+         for (size_t x = 0; x < nodePiece.size(); x++)
+            if (npch[x] == p)
+               pl.id.push_back(nodePiece[x]);
+         pl.off[p + 1] = (int)pl.id.size();
+      }
+   }
+   // one patch holding every node (one peak, or several peaks in one patch)
+   inline void AllPatchPieces(const std::vector<int> &nodePiece)
+   {
+      PatchPieceList &pl = PatchPieces();
+      pl.Clear();
+      pl.id.assign(nodePiece.begin(), nodePiece.end());
+      pl.off.push_back((int)pl.id.size());
+   }
+   // the deepest of the nodes (MergeBars' order: depth, then index)
+   inline int DeepestNode(const std::vector<BarNode> &nodes)
+   {
+      int best = -1;
+      for (int x = 0; x < (int)nodes.size(); x++)
+         if (best < 0 || nodes[x].d > nodes[best].d)
+            best = x;
+      return best;
+   }
+
    // patch_contacts (runs/2026-11-22-per-peak plan 3.1): one pressed patch (a merge tree's root: every piece joined to it by a path that stays pressed), its own fold sum over its own
    // peaks (pass terms included) and its deepest node (the root)
    struct PatchSum
@@ -1597,6 +1666,13 @@ namespace RubberContact
          }
          peaks++;
       }
+      if (patches != nullptr)   // patch_friction: each node's patch
+      {
+         std::vector<int> &np = NodePatch();
+         np.resize(m);
+         for (int x = 0; x < m; x++)
+            np[x] = slot[find(x)];
+      }
       if (peaks <= 1)
          terms.clear();   // one peak: today's slope, no list
       return peaks;
@@ -1620,11 +1696,14 @@ namespace RubberContact
                              const TubeProbe *pr0 = nullptr, std::vector<TubeProbe> *patchesOut = nullptr)
    {
       TubeProbe pr = pr0 != nullptr ? *pr0 : ProbeTube(ball, pts, n, rho, c, &pre);
+      bool pcs = false;   // patch_friction: the patch pieces written (else one() takes the probe's nearest piece)
       const auto one = [&]() {   // patch_contacts: one patch (or none): today's answer is its single entry
          if (patchesOut != nullptr)
          {
             patchesOut->clear();
             patchesOut->push_back(pr);
+            if (!pcs)
+               PatchPieces().One(pr.overlap && pr.seg >= 0 ? pr.seg : PatchPieceList::kNoPiece);
          }
          return pr;
       };
@@ -1691,14 +1770,45 @@ namespace RubberContact
       }
       FoldSum sum;
       thread_local std::vector<PatchSum> patches;
+      const auto tubeGeo = [&](const int x) {   // patch_friction: a node's piece geometry (PieceGeo)
+         PieceGeo g;
+         const int s = x >= 0 ? nodeSeg[x] : 0;
+         if (x < 0)
+            return g;
+         if (s >= 0)
+         {
+            g.kind = 1;
+            g.a = pts[s];
+            g.b = pts[s + 1];
+         }
+         else
+         {
+            g.kind = 2;
+            g.a = pts[-s - 1];
+         }
+         return g;
+      };
       if (MergeBars(nodes, adj, sum, patchesOut != nullptr ? &patches : nullptr) <= 1)
+      {
+         if (patchesOut != nullptr)
+         {
+            AllPatchPieces(nodeSeg);
+            PatchPieces().geo.assign(1, tubeGeo(DeepestNode(nodes)));
+            pcs = true;
+         }
          return one();
+      }
       const TubeProbe base = pr;   // the deepest piece's probe (reff, point, seg)
       sum.Finish(pr, zero);
       if (patchesOut != nullptr)
       {
          if (patches.size() <= 1)
+         {
+            AllPatchPieces(nodeSeg);   // (every node is in the one patch)
+            PatchPieces().geo.assign(1, tubeGeo(DeepestNode(nodes)));
+            pcs = true;
             return one();   // one patch: today's merged answer
+         }
          patchesOut->clear();
          int top = patches[0].deep;   // the deepest node of all (MergeBars' tie rule): its patch keeps the probe's reff, point and seg
          for (const PatchSum &p : patches)
@@ -1731,6 +1841,9 @@ namespace RubberContact
             p.sum.Finish(q, zero);
             patchesOut->push_back(q);
          }
+         FillPatchPieces(nodeSeg, (int)patches.size());
+         for (const PatchSum &p : patches)
+            PatchPieces().geo.push_back(tubeGeo(p.deep));
       }
       return pr;
    }
@@ -1774,11 +1887,14 @@ namespace RubberContact
       thread_local std::vector<FaceHit> hits;   // each candidate measured once, by the probe (scratch kept per thread)
       hits.clear();
       TubeProbe pr = ProbeTriangles(ball, tris, cand, edgeRho, c, 0.0, &hits, fr);
+      bool pcs = false;   // patch_friction: the patch pieces written (else one() takes the probe's nearest piece)
       const auto one = [&]() {   // patch_contacts: one patch (or none): today's answer is its single entry
          if (patchesOut != nullptr)
          {
             patchesOut->clear();
             patchesOut->push_back(pr);
+            if (!pcs)
+               PatchPieces().One(pr.overlap && pr.seg >= 0 ? pr.seg : PatchPieceList::kNoPiece);
          }
          return pr;
       };
@@ -1882,7 +1998,24 @@ namespace RubberContact
          }
       }
       if (cbSkip && !cbCheck)
+      {
+         if (patchesOut != nullptr)   // patch_friction (plan 2.1, 3.1): the shortcut still reports its pieces: the near set's PRESSED faces (each probed alone, depth above the zero; one patch, cut B's own test)
+         {
+            thread_local std::vector<int> pressed, one1;
+            pressed.clear();
+            for (const int i : cand)
+            {
+               one1.assign(1, i);
+               const TubeProbe q = ProbeTriangles(ball, tris, one1, edgeRho, c);
+               if (q.overlap && q.delta > zero)
+                  pressed.push_back(i);
+            }
+            AllPatchPieces(pressed);
+            PatchPieces().geo.assign(1, PieceGeo());
+            pcs = true;
+         }
          return one();
+      }
       // an edge's nearest point from its lower-id end, so both triangles on it get the same bits
       const auto edgeMeasure = [&](const int t, const int e, V3 &nOut) {
          const SurfaceTri &T = tris[t];
@@ -1939,6 +2072,8 @@ namespace RubberContact
       thread_local std::vector<std::pair<int, int>> triNode;   // (triangle, node)
       thread_local std::vector<int> triIdx;   // triangle -> its node, -1 none; every entry set here is put back to -1 before return
       thread_local std::vector<int> nodeTri;   // patch_contacts: node -> its triangle (a shared edge's node: its lower triangle)
+      thread_local std::vector<int> nodePc;    // patch_friction: node -> its piece id (PatchPieceList)
+      nodePc.clear();
       nodes.clear();
       adj.clear();
       triNode.clear();
@@ -1985,6 +2120,7 @@ namespace RubberContact
          triNode.emplace_back(i, (int)nodes.size());
          nodes.push_back({ d, nn, 0, fh.kind == 0 ? 0.0 : ball.R - zero - d });   // (the rim: the edge's distance, edgeDepth's d = R - dist - zero)
          nodeTri.push_back(i);
+         nodePc.push_back(i);
       }
       profStamp(ContactProf::CD().bFace);
       if (profS)
@@ -1992,8 +2128,35 @@ namespace RubberContact
          ContactProf::CD().bFaceNodes += nodes.size();
          profEnd.nodes = nodes.size();
       }
+      const auto meshGeo = [&](const int x) {   // patch_friction: a node's piece geometry (PieceGeo)
+         PieceGeo g;
+         if (x < 0)
+            return g;
+         const int p = nodePc[x];
+         if (p >= 0)
+         {
+            if (nodes[x].r > 0.0)   // a face's rim: its nearest point
+            {
+               g.kind = 2;
+               g.a = c - nodes[x].n * nodes[x].r;
+            }
+            return g;
+         }
+         const int t = (-p - 1) / 3, e = (-p - 1) % 3;
+         const V3 *v[3] = { &tris[t].a, &tris[t].b, &tris[t].c };
+         g.kind = 1;
+         g.a = *v[e];
+         g.b = *v[(e + 1) % 3];
+         return g;
+      };
       if (nodes.size() < 2)
       {
+         if (patchesOut != nullptr)
+         {
+            AllPatchPieces(nodePc);
+            PatchPieces().geo.assign(1, meshGeo(DeepestNode(nodes)));
+            pcs = true;
+         }
          for (const auto &tn : triNode)
             triIdx[tn.first] = -1;
          if (profS)
@@ -2017,6 +2180,7 @@ namespace RubberContact
             const int k = (int)nodes.size();
             nodes.push_back({ de, ne, 1, ball.R - zero - de });
             nodeTri.push_back(tn.first);
+            nodePc.push_back(-(1 + 3 * tn.first + e));
             adj.emplace_back(k, tn.second);
             adj.emplace_back(k, on);
          }
@@ -2031,6 +2195,12 @@ namespace RubberContact
       profStamp(ContactProf::CD().bMerge);
       if (profPeaks <= 1)
       {
+         if (patchesOut != nullptr)
+         {
+            AllPatchPieces(nodePc);
+            PatchPieces().geo.assign(1, meshGeo(DeepestNode(nodes)));
+            pcs = true;
+         }
          if (profS)
             ContactProf::CD().bOnePeak++;
          return one();
@@ -2045,7 +2215,12 @@ namespace RubberContact
       if (patchesOut != nullptr)
       {
          if (patches.size() <= 1)
+         {
+            AllPatchPieces(nodePc);   // (every node is in the one patch)
+            PatchPieces().geo.assign(1, meshGeo(DeepestNode(nodes)));
+            pcs = true;
             return one();   // one patch: today's merged answer
+         }
          patchesOut->clear();
          int top = patches[0].deep;   // the deepest node of all (MergeBars' tie rule): its patch keeps the probe's reff, point and seg
          for (const PatchSum &p : patches)
@@ -2063,6 +2238,9 @@ namespace RubberContact
             p.sum.Finish(q, zero);
             patchesOut->push_back(q);
          }
+         FillPatchPieces(nodePc, (int)patches.size());
+         for (const PatchSum &p : patches)
+            PatchPieces().geo.push_back(meshGeo(p.deep));
       }
       return pr;
    }

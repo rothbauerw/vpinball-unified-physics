@@ -2128,11 +2128,40 @@ struct ContactSystemImpl
          const bool peaks = ContactSettings::Get().peakSlope;   // peak_slope: the level form's peaks and passes (RubberContact::PeakTerms, written by MergeBars at 2 or more peaks)
          if (peaks)
             RubberContact::PeakTerms().clear();
-         const TubeProbe pr = r->ProbePatch(bs, *it, c);
+         const bool pf = ContactSettings::Get().patchFriction;   // patch_friction: the patch list and each patch's pieces beside the merged answer (ProbePatches)
+         thread_local std::vector<TubeProbe> plist;
+         const TubeProbe pr = pf ? r->ProbePatches(bs, *it, c, plist) : r->ProbePatch(bs, *it, c);
          h.delta = pr.overlap ? pr.delta : (pr.dist > 0.0 ? R + pr.rho - pr.dist : -1.0);
          h.n = pr.normal;
          h.grad = pr.grad;
          h.np = 0;
+         h.npat = 0;
+         h.npc = 0;
+         if (pf && pr.overlap)
+         {
+            const RubberContact::PatchPieceList &pl = RubberContact::PatchPieces();
+            const bool withIds = pl.off.size() == plist.size() + 1;   // (a path that names no pieces: the patches carry none)
+            h.npat = (int)plist.size();
+            h.pat.Fit(h.npat);
+            h.npc = withIds ? (int)pl.id.size() : 0;
+            h.pc.Fit(h.npc);
+            for (int j = 0; j < h.npc; j++)
+               h.pc[j] = pl.id[j];
+            for (int j = 0; j < h.npat; j++)
+            {
+               GroupStep::HitPatch &q = h.pat[j];
+               const TubeProbe &t = plist[j];
+               q.d = t.overlap ? t.delta : -1.0;
+               q.n = t.normal;
+               q.grad = t.grad;
+               q.p0 = withIds ? pl.off[j] : 0;
+               q.pn = withIds ? pl.off[j + 1] - pl.off[j] : 0;
+               const bool withGeo = withIds && pl.geo.size() == plist.size();
+               q.gk = withGeo ? pl.geo[j].kind : 0;
+               q.ga = withGeo ? pl.geo[j].a : GroupStep::V3();
+               q.gb = withGeo ? pl.geo[j].b : GroupStep::V3();
+            }
+         }
          if (peaks && pr.overlap)
          {
             const std::vector<RubberContact::PeakTerm> &pt = RubberContact::PeakTerms();
@@ -2227,6 +2256,8 @@ struct ContactSystemImpl
          it.gs.touching = it.touching && e.dwellS > 0.0;
          it.gs.xi = it.st.xi;
          it.gs.ra = it.st.ra;
+         it.gs.pm.clear();   // (patch_friction: no piece memory across a hand-over)
+         it.gs.pmMulti = false;
          it.gs.zero = it.gs.reff = 0.0;
          // one entry per ball: an item not touching that the ball is found inside has stored nothing (rule 10b: the overlap came from no drive): its zero is its depth, by the
          // group's own probe of a fixed surface (SurfaceShape::Probe, ProbePatch); a moving part's surfaces take the same rule in SetShapeItem
@@ -2519,6 +2550,8 @@ struct ContactSystemImpl
                   it.gs.touching = it.touching = false;
                   it.gs.xi = V3();
                   it.gs.ra = RubberContact::RollAngle();
+                  it.gs.pm.clear();
+                  it.gs.pmMulti = false;
                   it.gs.zero = it.gs.reff = 0.0;
                   continue;
                }
@@ -2668,7 +2701,11 @@ struct ContactSystemImpl
             continue;
          const SurfaceShape *const sh = static_cast<const SurfaceShape *>((const GroupStep::Shape *)g.shape[it.s]);
          const SurfaceState &kept = sh->it->Surf(sh->surface);
-         g.SetShapeItem(k, kept.touching, kept.zero, kept.xi, kept.ra, &kept.tZero);
+         const GroupStep::V3 &cNow = g.ball[it.a].c;   // patch_friction: a ball moved outside a step since the cycle's end loses its piece memory (plan 2.1)
+         const bool pmKeep = kept.touching && !kept.pm.empty() && cNow.x == kept.pmC.x && cNow.y == kept.pmC.y && cNow.z == kept.pmC.z;
+         g.SetShapeItem(k, kept.touching, kept.zero, kept.xi, kept.ra, &kept.tZero, pmKeep ? &kept.pm : nullptr, kept.pmMulti);
+         it.pmEs = kept.pmEs;   // (patch_friction: read only while pmMulti)
+         it.pmEr = kept.pmEr;
          if (sh->mp != nullptr && !kept.touching && kept.zero <= 0.0 && it.dZero > 0.0)   // rule 8 for a moving part: its item took a found-inside zero here
          {
             g_qe.firstSightZero++;
@@ -3012,6 +3049,7 @@ struct ContactSystemImpl
          PLOGI << "Group step: Jacobian window:\n" << g.jacWinBuf;
          g.jacWinBuf.clear();
       }
+      g.pfMs = g_pplayer->m_time_msec;   // (patch_friction's counter log)
       if (GroupStep::Group::HistoryTraceOn())   // (diagnostics: the history's step times)
       {
          static long cycles = 0;
@@ -3347,6 +3385,11 @@ struct ContactSystemImpl
          kept.touching = gi.touching;
          kept.xi = gi.xi;
          kept.ra = gi.ra;
+         kept.pm = gi.pm;   // patch_friction: the piece memory, and where the ball was (a move outside a step clears it at the next cycle's start)
+         kept.pmMulti = gi.pmMulti;
+         kept.pmEs = gi.pmEs;
+         kept.pmEr = gi.pmEr;
+         kept.pmC = g.ball[gi.a].c;
          // one entry per ball: an item not touching keeps its zero while the ball is still inside it (the zero follows the ball out, groupstep BackOut); zero 0 only once the ball is
          // clear: its raw depth at the cycle's end <= 0. Raw depth: ProbeItem is the shape's own probe less the item's zero, so adding gi.dZero back gives the geometric depth
          double zeroKept = gi.dZero;

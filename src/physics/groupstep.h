@@ -221,6 +221,23 @@ namespace GroupStep
       RubberContact::PeakTerm in[kInline];
       std::vector<RubberContact::PeakTerm> ex;
    };
+   // patch_friction (piece 2b-1): one pressed patch of a static surface: its depth (from the object's zero), normal, gradient and its pieces (Hit::pc[p0 .. p0 + pn - 1])
+   struct HitPatch
+   {
+      double d, grad;
+      V3 n;
+      int p0, pn;
+      int gk;      // its deepest piece's signed geometry (RubberContact::PieceGeo): 0 the plane through n, 1 the segment ga-gb, 2 the point ga
+      V3 ga, gb;
+   };
+   template <class T, int K> struct InList   // the first K in place, the rest on the heap, grown as needed (storage, not a limit)
+   {
+      T &operator[](const int i) { return i < K ? in[i] : ex[(size_t)(i - K)]; }
+      const T &operator[](const int i) const { return i < K ? in[i] : ex[(size_t)(i - K)]; }
+      void Fit(const int n) { if (n > K && ex.size() < (size_t)(n - K)) ex.resize((size_t)(n - K)); }
+      T in[K];
+      std::vector<T> ex;
+   };
    struct Hit
    {
       double delta = -1.0;
@@ -236,10 +253,22 @@ namespace GroupStep
       HitTerms t;
       int np = 0;              // peak_slope: > 0 a static surface's level form with 2 or more peaks, its peaks and passes (pk), for the elastic push's Newton slope per peak
       HitPeaks pk;
+      int npat = 0;            // patch_friction: > 0 a static surface's pressed patches (pat), their pieces (pc, npc ids)
+      InList<HitPatch, 4> pat;
+      int npc = 0;
+      InList<int, 16> pc;
       Hit() {}
       Hit(const Hit &o) { *this = o; }
       Hit &operator=(const Hit &o)
       {
+         npat = o.npat;
+         pat.Fit(npat);
+         for (int j = 0; j < npat; j++)
+            pat[j] = o.pat[j];
+         npc = o.npc;
+         pc.Fit(npc);
+         for (int j = 0; j < npc; j++)
+            pc[j] = o.pc[j];
          np = o.np;
          pk.Fit(np);
          for (int j = 0; j < np; j++)
@@ -863,6 +892,11 @@ namespace GroupStep
       bool touching = false;
       V3 xi;                          // the shear spring's stretch (in the contact plane)
       RubberContact::RollAngle ra;    // the rolling and twist springs' angles (roll_model 1)
+      std::vector<RubberContact::PieceMem> pm;   // patch_friction (plan 2.1): the memory kept on the pieces pressed at the last accepted step's end (each its patch group's)
+      bool pmMulti = false;                      // that step had 2 or more friction groups: the next step reads its memory from pm, not xi / ra
+      double pmEs = 0.0, pmEr = 0.0;             // pmMulti: the springs' stored energy, the sum over its groups (shear; rolling and twist), J: the book's (ShearE, RollE)
+      double ShearE(const double d) const { return pmMulti ? pmEs : 0.5 * Kt(d) * xi.Dot(xi); }
+      double RollE(const double d) const { return pmMulti ? pmEr : 0.5 * Kr(d) * ra.th.Dot(ra.th) + 0.5 * Ktw(d) * ra.tw * ra.tw; }
       double dZero = 0.0;             // the depth its squash counts from: a ball found inside has stored nothing (no energy without the work that stored it; only ever down)
       // a union of terms (hinge_piece_sum) found inside: each term's own zero (piece id, its raw depth then), so force and book read one potential U = sum_t s_t V(a_t - z_t).
       // While it is not empty the terms carry the zeros and dZero is only their largest (the item's "has a zero" mark); each follows its term out (BackOut), dropped once clear
@@ -1679,8 +1713,8 @@ namespace GroupStep
             const Item &it = item[k];
             Hit hp;
             Probe(it, ball, hp);
-            const double vn = it.touching ? it.Energy(hp, set.termEnergy) : 0.0, vs = it.touching ? 0.5 * it.Kt(hp.delta) * it.xi.Dot(it.xi) : 0.0;
-            const double vr = it.touching && set.rollModel == 1 ? 0.5 * it.Kr(hp.delta) * it.ra.th.Dot(it.ra.th) + 0.5 * it.Ktw(hp.delta) * it.ra.tw * it.ra.tw : 0.0;
+            const double vn = it.touching ? it.Energy(hp, set.termEnergy) : 0.0, vs = it.touching ? it.ShearE(hp.delta) : 0.0;
+            const double vr = it.touching && set.rollModel == 1 ? it.RollE(hp.delta) : 0.0;
             snprintf(t, sizeof(t), "|i%d a%d b%d s%d t%d d=%.6g z=%.6g Vn=%.6g Vs=%.6g Vr=%.6g", k, it.a, it.b, it.s, it.touching ? 1 : 0, hp.delta * 1e6, it.dZero * 1e6, vn * 1e6, vs * 1e6, vr * 1e6);
             o += t;
          }
@@ -1709,7 +1743,7 @@ namespace GroupStep
             {
                Hit hp;
                Probe(item[k], ball, hp);
-               e += item[k].Energy(hp, set.termEnergy) + 0.5 * item[k].Kt(hp.delta) * item[k].xi.Dot(item[k].xi);
+               e += item[k].Energy(hp, set.termEnergy) + item[k].ShearE(hp.delta);
                if (set.rollModel == 1)
                   e += 0.5 * item[k].Kr(hp.delta) * item[k].ra.th.Dot(item[k].ra.th) + 0.5 * item[k].Ktw(hp.delta) * item[k].ra.tw * item[k].ra.tw;
             }
@@ -1741,7 +1775,7 @@ namespace GroupStep
       {
          Hit hp;
          Probe(item[k], ball, hp);
-         double e = item[k].Energy(hp, set.termEnergy) + 0.5 * item[k].Kt(hp.delta) * item[k].xi.Dot(item[k].xi);
+         double e = item[k].Energy(hp, set.termEnergy) + item[k].ShearE(hp.delta);
          if (set.rollModel == 1)
             e += 0.5 * item[k].Kr(hp.delta) * item[k].ra.th.Dot(item[k].ra.th) + 0.5 * item[k].Ktw(hp.delta) * item[k].ra.tw * item[k].ra.tw;
          return e;
@@ -1843,7 +1877,7 @@ namespace GroupStep
       }
       // After Configure: a part's own contact goes on as it was kept (touching, stretch, zero); one not touching that is already inside has stored nothing, its depth is its zero
       void SetShapeItem(const int k, const bool wasTouching, const double zero, const V3 &xi, const RubberContact::RollAngle &ra = RubberContact::RollAngle(),
-                        const std::vector<std::pair<int, double>> *tZero = nullptr)
+                        const std::vector<std::pair<int, double>> *tZero = nullptr, const std::vector<RubberContact::PieceMem> *pm = nullptr, const bool pmMulti = false)
       {
          Item &it = item[k];
          Hit hp;
@@ -1874,6 +1908,11 @@ namespace GroupStep
          }
          it.xi = xi;
          it.ra = ra;
+         if (pm != nullptr)   // patch_friction: the piece memory kept between cycles (none: cleared)
+            it.pm = *pm;
+         else
+            it.pm.clear();
+         it.pmMulti = pm != nullptr && pmMulti;
          Probe(it, ball, hp);
          it.touching = hp.delta > 0.0;
          if (it.touching)
@@ -1882,6 +1921,8 @@ namespace GroupStep
          {
             it.xi = V3();
             it.ra = RubberContact::RollAngle();
+            it.pm.clear();
+            it.pmMulti = false;
          }
       }
 
@@ -2525,6 +2566,7 @@ namespace GroupStep
       static constexpr int kHistory = 50;
       std::string history[kHistory];
       long historyN = 0;          // steps kept so far (the newest at (historyN - 1) % kHistory)
+      unsigned pfMs = 0;          // patch_friction: the table time at the cycle's start (ms), for its counter's log
       unsigned histMs = 0;        // the caller's table time at the cycle's start (ms) and how far the cycle is (s): the steps' times
       double histClock = 0.0;
       bool histInEnergy = false;  // an Accept inside EnergyStep (its move may be restored)
@@ -2548,7 +2590,7 @@ namespace GroupStep
             {
                Hit hp;
                Probe(item[k], ball, hp);
-               s.con += item[k].Energy(hp, set.termEnergy) + 0.5 * item[k].Kt(hp.delta) * item[k].xi.Dot(item[k].xi);
+               s.con += item[k].Energy(hp, set.termEnergy) + item[k].ShearE(hp.delta);
                if (set.rollModel == 1)
                   s.con += 0.5 * item[k].Kr(hp.delta) * item[k].ra.th.Dot(item[k].ra.th) + 0.5 * item[k].Ktw(hp.delta) * item[k].ra.tw * item[k].ra.tw;
                s.touching++;
@@ -2632,8 +2674,8 @@ namespace GroupStep
                continue;
             Hit hp;
             Probe(it, ball, hp);
-            const double vn = it.touching ? it.Energy(hp, set.termEnergy) : 0.0, vs = it.touching ? 0.5 * it.Kt(hp.delta) * it.xi.Dot(it.xi) : 0.0;
-            const double vr = it.touching && set.rollModel == 1 ? 0.5 * it.Kr(hp.delta) * it.ra.th.Dot(it.ra.th) + 0.5 * it.Ktw(hp.delta) * it.ra.tw * it.ra.tw : 0.0;
+            const double vn = it.touching ? it.Energy(hp, set.termEnergy) : 0.0, vs = it.touching ? it.ShearE(hp.delta) : 0.0;
+            const double vr = it.touching && set.rollModel == 1 ? it.RollE(hp.delta) : 0.0;
             const bool cd = e.active && (int)cDiag.size() >= ni;
             snprintf(t, sizeof t, " | c%d b%d %s%d t%d d %.5g um (solve d1 %.5g zero %.4g) n_z %.4f N %.5g Ft %.4g muN %.4g %s V %.5g Vs %.4g Vr %.4g uJ", k, it.a, it.b >= 0 ? "ball b" : "s", it.b >= 0 ? it.b : it.s,
                      it.touching ? 1 : 0, hp.delta * 1e6, e.d1 * 1e6, it.dZero * 1e6, hp.n.z, cd ? cDiag[k].N : 0.0, cd ? cDiag[k].ft : 0.0, cd ? cDiag[k].lim : 0.0, e.slipping ? "SLIDE" : "stick", vn * 1e6, vs * 1e6, vr * 1e6);
@@ -2770,6 +2812,7 @@ namespace GroupStep
          V3 xi1;
          RubberContact::RollAngle ra1;   // the rolling and twist springs' end angles (roll_model 1)
          double normalLoss = 0.0, slip = 0.0, shearDamp = 0.0, twist = 0.0, roll = 0.0;
+         double pmEs = 0.0, pmEr = 0.0;   // patch_friction, 2 or more groups: the springs' end energy summed over the groups (Item::pmEs)
          double ut2 = 0.0, ftTr = 0.0, lim = 0.0;   // diagnostics, never read by the step: the mid-step slip speed squared (m2/s2), the trial friction force and mu N (N)
       };
       Buf<Item> law;             // the law each contact uses in this step (held, or taken at the step's start)
@@ -2783,6 +2826,27 @@ namespace GroupStep
       Buf<Hit> h0s;   // the start's terms (hinge_piece_sum; nt 0 otherwise)
       Buf<Ball> b1r, bmr;        // InRange's moved balls
       Buf<ItemEnd> ie;
+      // patch_friction (piece 2b-1): one friction group of a step (Eval): its inputs (normal at the middle n, end gradient direction nD, depths, its load fe + fd = N, aE,
+      // its chord slope kc and normal stiffness kn, the end gradient gm, its memory xi, ra) and the friction's results the slope reads
+      struct FG
+      {
+         V3 n, nD, xi;
+         RubberContact::RollAngle ra;
+         double d0 = 0.0, d1 = 0.0, dm = 0.0, fe = 0.0, fd = 0.0, N = 0.0, aE = 0.0, dadfE = 0.0, kc = 0.0, kn = 0.0, gm[3] = {};
+         bool touching = false;
+         // results
+         V3 Ft, xi0, xi1, ut, FsTr, rA, rB, wr, wtR, mhR;
+         M3 RmS;
+         RubberContact::RollAngle ra1;
+         double kS = 0.0, kSp = 0.0, ctSp = 0.0, k0 = 0.0, k1 = 0.0, ct = 0.0, limS = 0.0, flTr = 0.0, kTw = 0.0, kkTw = 0.0, sRo = 0.0, rhoR = 0.0, wlR = 0.0;
+         double twD1 = 0.0, twA = 0.0, twN = 0.0, twF = 0.0, limN = 0.0, limF = 0.0, twM = 0.0, twLim = 0.0;
+         int twSt = 0;
+         bool slipping = false, rollS = false;
+      };
+      std::vector<FG> fgS;                                   // (Eval's scratch, capacity reused)
+      std::vector<int> fgEnd;                                // each end patch's group (-1 not pressed)
+      std::vector<std::vector<RubberContact::PieceMem>> pmEnd;   // per item: the last Eval's end pieces with their group's memory (Accept writes it to the item)
+      std::vector<signed char> pmEndOn;                      // per item: 0 not this path, 1 one group, 2 two or more
       Buf<double> x;             // the unknowns: per ball the move (3) and the spin change (3), then the parts' own
       Buf<V3> aLast, alphaLast;  // each ball's acceleration and spin's over the last step (the next step's first guess)
       // what each function of a step works in
@@ -3439,6 +3503,8 @@ namespace GroupStep
          if (hp.nt == 0 || it.tZero.empty())
          {
             hp.delta -= it.dZero;
+            for (int j = 0; j < hp.npat; j++)   // patch_friction: each patch from the object's zero, as the merged depth
+               hp.pat[j].d -= it.dZero;
             return;
          }
          double s25 = 0.0, best = -INFINITY;
@@ -3481,6 +3547,7 @@ namespace GroupStep
          hp.kb = 0.0;
          hp.ktb = 0.0;
          hp.nc = 0;   // (hits are kept and reused: a fixed surface writes no columns, and must not inherit a carried one's)
+         hp.npat = 0;   // (patch_friction: a static surface writes its patches)
          if (it.b < 0)
          {
             const Shape *const sh = shape[it.s];
@@ -3662,6 +3729,244 @@ namespace GroupStep
       }
 
       // Forces of the step at the unknowns xv: the residual R (and the approximate Jacobian J when given), the contacts' end values into ie[]
+      // patch_friction (piece 2b-1): a group's load from its own depths, the same laws as the merged contact's (Item::Elastic's chord, the damping above Eval's friction):
+      // fe the chord of F over d0 .. d1, kc its slope, fd the damping on d1 - d0, kn Newton's normal stiffness (as Eval's kn)
+      void GroupLoad(const Item &L, const double h, FG &G) const
+      {
+         const double d0 = G.d0, d1 = G.d1, dm = G.dm;
+         const bool di = set.dampingIntegral;
+         const double fe = L.Chord(d0, d1);
+         const double kc = std::fabs(d1 - d0) > 1e-13 ? (L.F(d1) - fe) / (d1 - d0) : 0.5 * L.K(std::max(std::max(dm, d1), 0.0));
+         double cD, kkJac = 0.0, cDs = 0.0;
+         bool hcChord = false;
+         if (di)
+         {
+            double sl = 0.0;
+            if (L.gammaKK > 0.0)
+            {
+               cD = L.KKStep(d0, d1, sl);
+               cDs = sl;
+            }
+            else if (L.kb > 0.0)
+            {
+               cD = L.HCBendStep(d0, d1, sl);
+               cDs = sl;
+            }
+            else
+            {
+               cD = 1.5 * L.alpha * fe;
+               hcChord = true;
+            }
+            if (L.normalLoss && L.tanDelta > 0.0)
+            {
+               cD += L.LossStep(d0, d1, sl);
+               cDs += sl;
+            }
+         }
+         else if (L.gammaKK > 0.0)
+         {
+            cD = L.KKStepMid(d0, d1, dm, kkJac);
+            if (dm > 0.0 && L.normalLoss && L.tanDelta > 0.0)
+               cD += L.tanDelta * std::sqrt(1.5 * L.F(dm) * L.mRed / dm);
+         }
+         else
+            cD = L.DampC(dm, fe);
+         const double dd = d1 - d0, fd = cD * dd / h;
+         G.fe = fe;
+         G.fd = fd;
+         G.N = std::max(0.0, fe + fd);
+         G.kc = kc;
+         G.aE = G.dadfE = 0.0;
+         if (di || set.rollingPatch)
+            L.PatchOfForce(fe, G.aE, G.dadfE);
+         const double cDp = L.gammaKK > 0.0 ? (dm > 0.0 ? 0.5 * L.gammaKK * 0.5 * std::sqrt(L.reff / dm) : 0.0) : 1.5 * L.alpha * kc;
+         const double dSl = cDs + (hcChord ? 1.5 * L.alpha * (fe + kc * dd) : 0.0);
+         G.kn = fe + fd <= 0.0 ? 0.0 : di ? h * kc + dSl : L.gammaKK > 0.0 ? h * kc + kkJac : h * kc + cD + cDp * dd;
+      }
+      static bool SharePiece(const Hit &a, const HitPatch &pa, const Hit &b, const HitPatch &pb)
+      {
+         for (int i = 0; i < pa.pn; i++)
+            for (int j = 0; j < pb.pn; j++)
+               if (a.pc[pa.p0 + i] == b.pc[pb.p0 + j])
+                  return true;
+         return false;
+      }
+      // patch_friction (plan 2.5 C1/C2): the step's friction groups: the start (h0) and end (h1) patches pressed there, linked by shared pieces. Per group: d0, d1 its start's and
+      // end's depth (several patches: the level form's one depth (sum d^2.5)^0.4); at the middle the hm patches that share a piece with it, else its reference patch's plane (its
+      // deepest end patch, else start patch; a face's depth is linear in the centre: d + grad n . (c - c_ref)); the end gradient from the reference. Returns the count; fgEnd[j],
+      // gStart[i] the group of end patch j, start patch i (-1 not pressed). The memory is read by GroupMemory.
+      int FrictionGroups(const Hit &h0, const Hit &h1, const Hit &hm, const V3 &c0, const V3 &c1, const V3 &cm)
+      {
+         const int n0 = h0.npat, n1 = h1.npat, nn = n0 + n1;
+         fgEnd.assign(n1, -1);
+         gStart.assign(n0, -1);
+         if (nn == 0)
+            return 0;
+         thread_local std::vector<int> par, gid;
+         par.resize(nn);
+         gid.assign(nn, -1);
+         for (int x = 0; x < nn; x++)
+            par[x] = x;
+         const auto find = [&](int x) { while (par[x] != x) x = par[x] = par[par[x]]; return x; };
+         const auto pat = [&](const int x) -> const HitPatch & { return x < n0 ? h0.pat[x] : h1.pat[x - n0]; };
+         for (int i = 0; i < n0; i++)
+            if (h0.pat[i].d > 0.0)
+               for (int j = 0; j < n1; j++)
+                  if (h1.pat[j].d > 0.0 && SharePiece(h0, h0.pat[i], h1, h1.pat[j]))
+                     par[find(n0 + j)] = find(i);
+         int ng = 0;
+         for (int x = 0; x < nn; x++)
+            if (pat(x).d > 0.0)
+            {
+               const int r = find(x);
+               if (gid[r] < 0)
+                  gid[r] = ng++;
+               gid[x] = gid[r];
+            }
+         if (ng == 0)
+            return 0;
+         if ((int)fgS.size() < ng)
+            fgS.resize(ng);
+         for (int i = 0; i < n0; i++)
+            gStart[i] = gid[i];
+         for (int j = 0; j < n1; j++)
+            fgEnd[j] = gid[n0 + j];
+         for (int g = 0; g < ng; g++)
+         {
+            FG &G = fgS[g];
+            G = FG();
+            double s0 = 0.0, s1 = 0.0;
+            int c0n = 0, c1n = 0, last0 = -1, last1 = -1, ref = -1;
+            for (int x = 0; x < nn; x++)
+            {
+               if (gid[x] != g)
+                  continue;
+               const double d = pat(x).d;
+               if (x < n0)
+               {
+                  s0 += d * d * std::sqrt(d);
+                  c0n++;
+                  last0 = x;
+               }
+               else
+               {
+                  s1 += d * d * std::sqrt(d);
+                  c1n++;
+                  last1 = x;
+               }
+               if (ref < 0 || (x >= n0 && ref < n0) || ((x >= n0) == (ref >= n0) && d > pat(ref).d))   // the deepest end patch, else start patch
+                  ref = x;
+            }
+            const HitPatch &R = pat(ref);
+            const V3 cR = ref >= n0 ? c1 : c0;
+            const auto dist = [&R](const V3 &c) { return R.gk == 1 ? (c - RubberContact::SegNearest(R.ga, R.gb, c)).Length() : (c - R.ga).Length(); };
+            const auto plane = [&](const V3 &c) {   // plan 2.5 C1: the reference's deepest piece's signed depth at c (its depth falls as c moves along n)
+               return R.gk == 0 ? R.d - R.n.Dot(c - cR) : R.d + dist(cR) - dist(c);
+            };
+            G.d0 = c0n == 1 ? pat(last0).d : c0n > 1 ? std::pow(s0, 0.4) : plane(c0);
+            G.d1 = c1n == 1 ? pat(last1).d : c1n > 1 ? std::pow(s1, 0.4) : plane(c1);
+            double sm = 0.0;
+            V3 gn;
+            int cmn = 0, lastM = -1;
+            for (int p = 0; p < hm.npat; p++)
+            {
+               const HitPatch &P = hm.pat[p];
+               if (P.d <= 0.0)
+                  continue;
+               bool hit = false;
+               for (int x = 0; x < nn && !hit; x++)
+                  if (gid[x] == g)
+                     hit = SharePiece(hm, P, x < n0 ? h0 : h1, pat(x));
+               if (!hit)
+                  continue;
+               const double d15 = P.d * std::sqrt(P.d);
+               sm += P.d * d15;
+               gn = gn + P.n * d15;
+               cmn++;
+               lastM = p;
+            }
+            if (cmn == 1)
+            {
+               G.dm = hm.pat[lastM].d;
+               G.n = hm.pat[lastM].n;
+            }
+            else if (cmn > 1)
+            {
+               G.dm = std::pow(sm, 0.4);
+               const double l = gn.Length();
+               G.n = l > 0.0 ? gn * (1.0 / l) : R.n;
+            }
+            else
+            {
+               G.dm = plane(cm);
+               G.n = R.n;
+            }
+            G.nD = R.n * R.grad;
+            G.gm[0] = -G.nD.x;
+            G.gm[1] = -G.nD.y;
+            G.gm[2] = -G.nD.z;
+         }
+         return ng;
+      }
+      // patch_friction: group g's memory from its start patches' pieces (plan 2.1, 2.4): each patch's (the first of its pieces found in it.pm), turned into the group's plane
+      // (length kept); several by the parallel rule (k1 x1 + k2 x2) / (k1 + k2) per spring, k at the patch's start depth. None found: no memory
+      void GroupMemory(const Item &it, const Item &L, const Hit &h0, const int g, FG &G) const
+      {
+         G.touching = false;
+         G.xi = V3();
+         G.ra = RubberContact::RollAngle();
+         if (!it.touching)
+            return;
+         double wt = 0.0, wr = 0.0, ww = 0.0, stw = 0.0;
+         V3 sx, sth;
+         int found = 0;
+         const RubberContact::PieceMem *one = nullptr;
+         const auto turn = [&G](const V3 &v) {
+            const double l0 = v.Length();
+            const V3 p = v - G.n * v.Dot(G.n);
+            const double lp = p.Length();
+            return lp > 1e-300 ? p * (l0 / lp) : V3();
+         };
+         for (int i = 0; i < h0.npat; i++)
+         {
+            if (gStart[i] != g)
+               continue;
+            const HitPatch &P = h0.pat[i];
+            const RubberContact::PieceMem *m = nullptr;
+            for (int q = 0; q < P.pn && m == nullptr; q++)
+               for (const RubberContact::PieceMem &pm : it.pm)
+                  if (pm.id == h0.pc[P.p0 + q])
+                  {
+                     m = &pm;
+                     break;
+                  }
+            if (m == nullptr)
+               continue;
+            found++;
+            one = m;
+            const double kt = L.Kt(P.d), kr = L.Kr(P.d), kw = L.Ktw(P.d);
+            sx = sx + turn(m->xi) * kt;
+            sth = sth + turn(m->ra.th) * kr;
+            stw += m->ra.tw * kw;
+            wt += kt;
+            wr += kr;
+            ww += kw;
+         }
+         if (found == 0)
+            return;
+         G.touching = true;
+         if (found == 1)
+         {
+            G.xi = one->xi;
+            G.ra = one->ra;
+            return;
+         }
+         G.xi = wt > 0.0 ? sx * (1.0 / wt) : V3();
+         G.ra.th = wr > 0.0 ? sth * (1.0 / wr) : V3();
+         G.ra.tw = ww > 0.0 ? stw / ww : 0.0;
+      }
+      std::vector<int> gStart;   // patch_friction: each start patch's group (FrictionGroups)
+
       bool Eval(double h, const double *xv, double *Res, const Jac J, bool useCache)
       {
          PhaseScope ps(phEvalRest);
@@ -3945,6 +4250,54 @@ namespace GroupStep
             const double fd = cD * dd / h;
             const double N = std::max(0.0, fe + fd);   // a contact pushes, it cannot pull (Hertz, no adhesion)
             e.normalLoss = (N - fe) * dd;              // (cD dd^2 / h while it pushes; all the spring's release once damping would make it pull)
+            // [Contact] patch_friction (piece 2b-1; plan runs/2026-11-22-per-peak 2.1, 2.4, 2.5b): a static mesh's or tube's friction, damping, rolling and twist per friction group
+            // (FrictionGroups: the start and end patches linked by shared pieces), each with its own normal, depths, load fe + fd and memory (GroupMemory). One group: today's inputs,
+            // the same arithmetic: the block below runs once per group and keeps its results in fgS for the slope. The push (gd N) stays the merged contact's. Not in this build:
+            // the B-lin stiffness average (a group's stiffness is PatchMeans on its own one depth), ridge arrival, turn terms
+            const bool pfPath = !pr && nq == 0 && !terms && (h0.npat > 0 || h1.npat > 0);
+            const int ngF = pfPath ? FrictionGroups(h0, h1, hm, A.c, b1[it.a].c, bm[it.a].c) : 0;
+            const bool multiF = ngF > 1;
+            const int ngLoop = multiF ? ngF : 1;
+            if (fgS.empty())
+               fgS.resize(1);
+            if (!multiF)
+            {
+               FG &G = fgS[0];
+               G = FG();
+               G.n = nm;
+               G.nD = nm;
+               G.d0 = d0;
+               G.d1 = d1;
+               G.dm = dm;
+               G.fe = fe;
+               G.fd = fd;
+               G.N = N;
+               G.aE = aE;
+               G.dadfE = dadfE;
+               G.touching = it.touching;
+               G.xi = it.xi;
+               G.ra = it.ra;
+               if (ngF == 1 && it.pmMulti)   // the last step had 2 or more groups: the memory from the pieces (a join: the parallel rule)
+                  GroupMemory(it, L, h0, 0, G);
+            }
+            else
+               for (int g = 0; g < ngF; g++)
+               {
+                  GroupLoad(L, h, fgS[g]);
+                  GroupMemory(it, L, h0, g, fgS[g]);
+               }
+            F[it.a] = F[it.a] - V3(gd[0], gd[1], gd[2]) * N;   // the push (a massless part's contact: its spring is in the part's U*, only the damping here)
+            if (pr)
+               F[it.b] = F[it.b] - V3(gd[3], gd[4], gd[5]) * N;
+            double accSlip = 0.0, accShear = 0.0, accRoll = 0.0, accTwist = 0.0;
+            double qf[7];   // (a carried surface's coordinates: one group only)
+            for (int gF = 0; gF < ngLoop; gF++)
+            {
+            FG &GF = fgS[gF];
+            const V3 &nm = GF.n;
+            const double dm = GF.dm, d0 = GF.d0, d1 = GF.d1, fe = GF.fe, fd = GF.fd, N = GF.N, aE = GF.aE, dadfE = GF.dadfE;
+            if (multiF)
+               e.slip = e.shearDamp = e.roll = e.twist = 0.0;
 
             // the contact point and the mid-step slip rate
             const double dmp = std::max(dm, 0.0);
@@ -3957,7 +4310,7 @@ namespace GroupStep
                u = u - hm.c[j].V() * (dq[3 + j] / h);
             const V3 ut = u - nm * u.Dot(nm);
             // the shear spring: its stretch turned into the contact plane (length kept), the midpoint force, the Coulomb limit
-            V3 xi0 = it.touching ? it.xi : V3();
+            V3 xi0 = GF.touching ? GF.xi : V3();
             {
                const double l0 = xi0.Length();
                V3 xp = xi0 - nm * xi0.Dot(nm);
@@ -4029,15 +4382,14 @@ namespace GroupStep
                e.slip += heldS - 0.5 * k1 * xi1.Dot(xi1);
             }
             e.xi1 = xi1;
-            F[it.a] = F[it.a] - V3(gd[0], gd[1], gd[2]) * N - Ft;   // (a massless part's contact: its spring is in the part's U*, only the damping here)
+            F[it.a] = F[it.a] - Ft;
             M[it.a] = M[it.a] + rA.Cross(Ft * -1.0);
             if (pr)
             {
-               F[it.b] = F[it.b] - V3(gd[3], gd[4], gd[5]) * N + Ft;
+               F[it.b] = F[it.b] + Ft;
                M[it.b] = M[it.b] + rB.Cross(Ft);
             }
             // on a carried surface's coordinates: the same work with the other sign
-            double qf[7];
             for (int j = 0; j < nq; j++)
                qf[j] = -gd[3 + j] * N + Ft.Dot(hm.c[j].V());
             if (nq > 0)
@@ -4082,7 +4434,7 @@ namespace GroupStep
             {
                // the rolling and twist stick springs (roll_model 1): the patch's tilting and torsion springs with a damper side by side, in series with rolling
                // (twisting) at the limit, taken as the shear spring is (patch rule, midpoint torque, stick or roll on the total trial torque)
-               RubberContact::RollAngle r0 = it.touching ? it.ra : RubberContact::RollAngle();
+               RubberContact::RollAngle r0 = GF.touching ? GF.ra : RubberContact::RollAngle();
                {
                   const double l0 = r0.th.Length();
                   const V3 tp = r0.th - nm * r0.th.Dot(nm);
@@ -4257,6 +4609,101 @@ namespace GroupStep
                   qf[j] -= Mr.Dot(hm.c[j].W());
                e.roll = sRo * wt.Dot(wt) * h;
             }
+            GF.Ft = Ft;
+            GF.xi0 = xi0;
+            GF.xi1 = xi1;
+            GF.ut = ut;
+            GF.FsTr = FsTr;
+            GF.rA = rA;
+            GF.rB = rB;
+            GF.wr = wr;
+            GF.wtR = wtR;
+            GF.mhR = mhR;
+            GF.RmS = RmS;
+            GF.ra1 = e.ra1;
+            GF.kS = kS;
+            GF.kSp = kSp;
+            GF.ctSp = ctSp;
+            GF.k0 = k0;
+            GF.k1 = k1;
+            GF.ct = ct;
+            GF.limS = limS;
+            GF.flTr = flTr;
+            GF.kTw = kTw;
+            GF.kkTw = kkTw;
+            GF.sRo = sRo;
+            GF.rhoR = rhoR;
+            GF.wlR = wlR;
+            GF.twD1 = twD1;
+            GF.twA = twA;
+            GF.twN = twN;
+            GF.twF = twF;
+            GF.limN = limN;
+            GF.limF = limF;
+            GF.twM = twM;
+            GF.twLim = twLim;
+            GF.twSt = twSt;
+            GF.slipping = slipping;
+            GF.rollS = rollS;
+            if (multiF)
+            {
+               accSlip += e.slip;
+               accShear += e.shearDamp;
+               accRoll += e.roll;
+               accTwist += e.twist;
+            }
+            }
+            if (pmEnd.size() < (size_t)ni)
+            {
+               pmEnd.resize(ni);
+               pmEndOn.resize(ni, 0);
+            }
+            pmEnd[k].clear();
+            pmEndOn[k] = (signed char)(ngF == 0 ? 0 : multiF ? 2 : 1);
+            if (ngF > 0)   // patch_friction: the end pieces with their group's memory (Accept keeps them on the item)
+            {
+               for (int j = 0; j < h1.npat; j++)
+               {
+                  const int g = fgEnd[j];
+                  if (g < 0)
+                     continue;
+                  const HitPatch &P = h1.pat[j];
+                  for (int q = 0; q < P.pn; q++)
+                     pmEnd[k].push_back({ h1.pc[P.p0 + q], fgS[g].xi1, fgS[g].ra1 });
+               }
+               if (multiF)   // the item's one stretch and angles (the energy book, a following one-group step's start): the groups' by the parallel rule at their end stiffness
+               {
+                  e.slip = accSlip;
+                  e.shearDamp = accShear;
+                  e.roll = accRoll;
+                  e.twist = accTwist;
+                  V3 sx, sth;
+                  double wt = 0.0, wrS = 0.0, ww = 0.0, stw = 0.0;
+                  for (int g = 0; g < ngF; g++)
+                  {
+                     const FG &Gg = fgS[g];
+                     if (Gg.d1 <= 0.0)
+                        continue;
+                     const double kt = L.Kt(Gg.d1), kr = L.Kr(Gg.d1), kw = L.Ktw(Gg.d1);
+                     e.pmEs += 0.5 * kt * Gg.xi1.Dot(Gg.xi1);   // (plan_p2b1 A4: the book's springs, one per group)
+                     e.pmEr += 0.5 * kr * Gg.ra1.th.Dot(Gg.ra1.th) + 0.5 * kw * Gg.ra1.tw * Gg.ra1.tw;
+                     sx = sx + Gg.xi1 * kt;
+                     sth = sth + Gg.ra1.th * kr;
+                     stw += Gg.ra1.tw * kw;
+                     wt += kt;
+                     wrS += kr;
+                     ww += kw;
+                  }
+                  e.xi1 = wt > 0.0 ? sx * (1.0 / wt) : V3();
+                  e.ra1.th = wrS > 0.0 ? sth * (1.0 / wrS) : V3();
+                  e.ra1.tw = ww > 0.0 ? stw / ww : 0.0;
+               }
+            }
+            // (one group, or the first: the code below until the slope reads these; the slope runs per group)
+            const V3 &Ft = fgS[0].Ft, &xi0 = fgS[0].xi0, &xi1 = fgS[0].xi1, &ut = fgS[0].ut, &rA = fgS[0].rA, &rB = fgS[0].rB;
+            const bool slipping = fgS[0].slipping;
+            const double limS = fgS[0].limS, kS = fgS[0].kS, ct = fgS[0].ct, twM = fgS[0].twM, twLim = fgS[0].twLim;
+            const int twSt = fgS[0].twSt;
             bool mlCol[7] = {};     // a massless coordinate's column (design section 3 a): its row takes the push at the step's end
             double mlSlope[7] = {};  // its end normal force's slope dN1/dd1 (N/m)
             for (int j = 0; j < nq; j++)
@@ -4494,6 +4941,21 @@ namespace GroupStep
                         for (int u = 0; u < 4; u++)
                            kvE[u] += w * tgE[t][u];
                      }
+               const double knO = kn, kcO = kc;
+               const double *const gmO = gm;
+               for (int gF = 0; gF < ngLoop; gF++)   // patch_friction: the friction's slope per group (one: today's inputs)
+               {
+               const FG &GF = fgS[gF];
+               const V3 &nm = GF.n, &nD = GF.nD, &Ft = GF.Ft, &xi0 = GF.xi0, &ut = GF.ut, &FsTr = GF.FsTr, &rA = GF.rA, &rB = GF.rB, &wr = GF.wr, &wtR = GF.wtR, &mhR = GF.mhR;
+               const M3 &RmS = GF.RmS;
+               const double dm = GF.dm, d1 = GF.d1, N = GF.N, kn = multiF ? GF.kn : knO, kc = multiF ? GF.kc : kcO;
+               const bool pp = set.patchPath;
+               const double *const gm = multiF ? GF.gm : gmO;
+               const double kS = GF.kS, kSp = GF.kSp, ctSp = GF.ctSp, k0 = GF.k0, k1 = GF.k1, ct = GF.ct, limS = GF.limS, flTr = GF.flTr, kTw = GF.kTw, kkTw = GF.kkTw;
+               const double sRo = GF.sRo, rhoR = GF.rhoR, wlR = GF.wlR, twD1 = GF.twD1, twA = GF.twA, twN = GF.twN, twF = GF.twF, limN = GF.limN, limF = GF.limF;
+               const bool slipping = GF.slipping, rollS = GF.rollS;
+               const M3 Pt = M3::Tangent(nm);
+               const V3 rr[2] = { rA, rB };
                if (kS > 0.0)
                {
                   M3 Cm;
@@ -4534,8 +4996,8 @@ namespace GroupStep
                      else
                         fd1 = fh * (L.mu * dN) + Pg * r;
                   }
-                  const M3 Dn = M3::Outer(fd1, nm);
-                  if (set.stickZoneTrial && slipping && limS > 0.0 && flTr > 0.0)   // stick_zone_trial: the trial force's linear model along a move (kS, ct, stretch, geometry held)
+                  const M3 Dn = M3::Outer(fd1, nD);   // (patch_friction: the group's end gradient; one group: nm, today's)
+                  if (set.stickZoneTrial && !multiF && slipping && limS > 0.0 && flTr > 0.0)   // (patch_friction: one item's record: one group only)   // stick_zone_trial: the trial force's linear model along a move (kS, ct, stretch, geometry held)
                   {
                      StickRec &sr = szRec[k];
                      sr.on = true;
@@ -4752,6 +5214,7 @@ namespace GroupStep
                            }
                         }
                   }
+               }
                // a massless column: the slope of the work its contact's mean reaction does on it, qf q (MasslessEnergy), over every unknown: q dqf/du + qf on its own.
                // dqf/du: the normal push -gd N by the slope a coordinate with mass takes in its row (h d(gd N)/du, above), the shear's and the spins' by their change to the row
                for (int j = 0; j < nq; j++)
@@ -6067,12 +6530,33 @@ namespace GroupStep
                it.touching = true;
                it.xi = e.xi1;
                it.ra = e.ra1;
+               if (k < (int)pmEndOn.size() && pmEndOn[k] > 0)   // patch_friction: the memory on the end pieces (plan 2.1); a piece not pressed now loses it
+               {
+                  it.pm = pmEnd[k];
+                  it.pmMulti = pmEndOn[k] == 2;
+                  it.pmEs = e.pmEs;
+                  it.pmEr = e.pmEr;
+                  if (it.pmMulti)   // (VPX_GROUP_STATS-free count: accepted steps with 2 or more friction groups, running totals at 1, 2, 4, ...; the bench never closes the table)
+                  {
+                     static std::atomic<long long> nMulti { 0 };
+                     const long long c = ++nMulti;
+                     if ((c & (c - 1)) == 0)
+                        PLOGI << "patch_friction: " << c << " accepted contact steps with 2 or more friction groups (this one at table time " << pfMs << " ms, ball " << it.a << ")";
+                  }
+               }
+               else
+               {
+                  it.pm.clear();
+                  it.pmMulti = false;
+               }
             }
             else
             {
                it.touching = false;
                it.xi = V3();
                it.ra = RubberContact::RollAngle();
+               it.pm.clear();
+               it.pmMulti = false;
             }
             if (!it.tZero.empty())   // a union of terms: each term's zero follows its term out (its raw depth at the step's end), dropped once the term is clear
             {

@@ -1801,9 +1801,10 @@ RubberContact::TubeProbe ContactSurfaceHost::ProbePatch(const RubberContact::Bal
    return pr;
 }
 
-void ContactSurfaceHost::ProbePatches(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, std::vector<RubberContact::TubeProbe> &out) const
+RubberContact::TubeProbe ContactSurfaceHost::ProbePatches(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, std::vector<RubberContact::TubeProbe> &out) const
 {
-   ProbeList(bs, it, c, &out);
+   RubberContact::PatchPieces().Clear();   // (patch_friction: a path that writes no pieces leaves the list short of out; the caller checks)
+   return ProbeList(bs, it, c, &out);
 }
 
 RubberContact::TubeProbe ContactSurfaceHost::ProbeList(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, std::vector<RubberContact::TubeProbe> *out) const

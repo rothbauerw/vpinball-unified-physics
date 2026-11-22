@@ -183,7 +183,7 @@ public:
    void Refresh(SurfaceContact &it, double ballR, double reachM, const RubberContact::V3 &c) const override;   // the faces the ball can reach this cycle
    double ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, double a, double hMax, double touchM, double arriveM) const override;
    RubberContact::TubeProbe ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const override;
-   void ProbePatches(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, std::vector<RubberContact::TubeProbe> &out) const override;   // patch_contacts: the patch list (BarsTriangles / BarsTube)
+   RubberContact::TubeProbe ProbePatches(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, std::vector<RubberContact::TubeProbe> &out) const override;   // patch_contacts: the patch list (BarsTriangles / BarsTube)
    RubberContact::TubeProbe ProbeList(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, std::vector<RubberContact::TubeProbe> *out) const;   // ProbePatch's answer; out (optional): the patch list
    int PathReach(const SurfaceContact &it, const RubberContact::V3 &s, const RubberContact::V3 &d, double R) const override;   // the path test: a static mesh (its faces) or a static tube
    RubberContact::TubeProbe Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const override;   // the nearest point of one surface contact (tube or faces)

@@ -28,6 +28,12 @@ struct SurfaceState
    double endDepth = 0.0;   // a part's surface: its depth at the cycle's end, from its zero (a fixed surface's is SurfaceContact::endDepth, the energy check's)
    std::vector<std::pair<int, double>> tZero;   // a part's union of terms found inside: each term's own zero (GroupStep::Item::tZero), kept with zero
    std::vector<std::pair<int, double>> tEnd;    // a part's union of terms: each term's depth at the cycle's end, from its own zero (piece id, as endDepth is the union's)
+   // patch_friction (plan 2.1): the memory kept on pieces at the cycle's end (GroupStep::Item::pm), whether its last step had 2 or more friction groups, and the ball's centre then
+   // (a ball found elsewhere at the next cycle's start was moved outside a step: the list is cleared)
+   std::vector<RubberContact::PieceMem> pm;
+   bool pmMulti = false;
+   double pmEs = 0.0, pmEr = 0.0;   // pmMulti: the springs' energy summed over the groups (GroupStep::Item::pmEs)
+   RubberContact::V3 pmC;
 };
 
 // What one ball has with ONE surface: the material parameters, the shear state kept between cycles, and the faces near the ball this cycle.
@@ -88,7 +94,14 @@ public:
    // The same, as the group step's law reads it: the ball's contact patch has a size, so a fold under it pushes along the patch's average (rubbercontact.h PatchTube, PatchTriangles)
    virtual RubberContact::TubeProbe ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const { return Probe(bs, it, c); }
    // patch_contacts (runs/2026-11-22-per-peak plan 3.1): one entry per pressed patch, each its own depth, normal and gradient over that patch only; one patch: exactly ProbePatch's answer
-   virtual void ProbePatches(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, std::vector<RubberContact::TubeProbe> &out) const { out.assign(1, ProbePatch(bs, it, c)); }
+   // patch_friction: returns ProbePatch's merged answer and fills the list beside it (RubberContact::PatchPieces: each entry's pieces)
+   virtual RubberContact::TubeProbe ProbePatches(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, std::vector<RubberContact::TubeProbe> &out) const
+   {
+      const RubberContact::TubeProbe pr = ProbePatch(bs, it, c);
+      out.assign(1, pr);
+      RubberContact::PatchPieces().One(pr.overlap && pr.seg >= 0 ? pr.seg : RubberContact::PatchPieceList::kNoPiece);
+      return pr;
+   }
    // the path test: can a ball of radius R whose centre moves straight from s to s + d touch the surface on the way (any piece within R plus the piece's radius of the path)?
    // 1 = yes, 0 = no (the whole path checked exactly, rubbercontact.h path kit), -1 = this surface has no exact path test (a cord band, no query): the caller probes as before
    virtual int PathReach(const SurfaceContact & /*it*/, const RubberContact::V3 & /*s*/, const RubberContact::V3 & /*d*/, double /*R*/) const { return -1; }
