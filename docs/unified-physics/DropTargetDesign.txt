@@ -241,6 +241,21 @@ down within 15-35 ms of the hit (PartData D5), no stuck ball, ONE step per 1 ms 
       drop spring attaches just below the latch, pulling forward and down. The beam reference has these supports (beamref.py: latch at -15.9 mm, wall edge at the
       playfield top, pin) except that the spring's forward share acts at playfield height (about 0.1 N; small for a hit, INFERRED). So the reference's 0.648 stands
       and no rerun is needed. NEXT: the knock-law model's gap to the beam (flat +25 / +29 %): the press's release loss at the lip (paper -pressloss).
+      SUPERSEDED 2026-11-21 (user): the yardstick is the measured rebound (PartData D10, 0.55-0.60 at 0.64-2.6 m/s), not the beam (a model, physically unchecked).
+      DECIDED 2026-11-21 (user): the ball-face contact is damped by the nylon (Kuwabara-Kono damping time from tan 0.03 at the contact's own frequency, INFERRED form;
+      first-touch restitution 0.95); the target's flex (press damper and knock store) loses at the nylon's 0.03 plus a joints-and-mounting loss factor 0.105, FITTED
+      to D10 on the Thick shape (the Centaur's targets are thick with a hat; the user: the Thick shape is the real part without the hat). Paper (runs/2026-11-21-
+      drop-flexloss, lead_thick.py): 0.555 at 0.64 m/s, 0.569 at 2.6, 0.570 at 2.5; worst step rise 8e-14 mJ; at most 3 events per cycle. The flat type would need
+      0.16. The lip knock is not the carrier (a slow hit cannot bow the stem the 2.7 mm to the lip). D5's 15-35 ms is a free drop (user); pinched hits fall slower.
+      Walk-through 2026-11-21 (user): pieces 1-8 agreed (lead log runs/2026-11-21-drop-lead): first touch impact; swing in closed form with spring (forward and down)
+      and lip friction (friction only while on the lip); knock law; press (above); every touch with its own normal from the shape (top edge, hat); touch rule: impact
+      when the touch ends well inside the 1 ms cycle, contact otherwise; rear hits press on pin + lip, side hits on a held body; R1 over every coordinate incl. the drop;
+      no event cap. Brick (user's mechanism): the stem returns forward and knocks the lip tip; it stays latched (brick) if it bounces back less than the lip width.
+      Paper runs/2026-11-21-drop-brick: no brick, because the knock law leaves the target at rest after the press (ASSUMED: all stored bend energy to the ball);
+      CORRECTED (runs/2026-11-21-drop-throw, -bricksweep): the beam's latch point is held by the stem's bow during the press (no forward throw there); after release
+      the bow springs back and carries it past the lip: the beam drops every head-on hit, 0.64-3.5 m/s, lip-stop restitution 0.3 and 0.7 (16/16), as the measured
+      head-on hits (D10). BRICK PARKED (user 2026-11-21, Requirement I.5): the one measured brick was a near-edge hit; the likely cause is the target's twist in its slot
+      (3-D), which neither model has. The design must not rule it out: a twist coordinate can be added later. NEXT: the build plan for the agreed pieces.
    e. OPEN (paper -cases-a): no top edge in the face event (a dropped target still blocks the ball: stuck); resting ball chatters (restitution 1 below 1e-6 m/s:
       needs a resting contact); no rear face (rear press supports: clip and the slot's front edge, 5.2); +16.9 mJ in one pressed step as z starts to move (R1); a
       235-event cycle in a hit during the drop.
@@ -270,6 +285,49 @@ down within 15-35 ms of the hit (PartData D5), no stuck ball, ONE step per 1 ms 
       pinched and launched (Rubber Test 2: Wall33 at 55 U over sw2, whose top rises to 55.6 U; 2.96 m/s, 517 mJ booked as drive in 1 ms). The user: bad table design,
       no wall sits that low over drop targets. The enhanced model must handle it: its reset bar (5.2e) is also a driven stop today, so check that a pinch stalls it.
    f. Not run: side and rear hits (Rubber Test 2 has no clear start), a ball resting on the face (that bank slopes it off), cost with 6 balls.
+
+6. BUILD PLAN FOR THE ENHANCED MODEL (drop lead 4, 2026-11-21; REVIEWED with the user piece by piece 2026-11-21, B0 done 22ceba05a)
+-----------------------------------------------------------------------------------------------------------
+Basis: section 5 as agreed in the 11-21 walk-through (5.5d notes), PartData D3a / D9 / D10. Built today on branch drop-axis (61e002db2): the v1 model of
+sections 1-4 (a sliding target, stepped Hertz contact, face and wall flex springs); 3 m/s hit worst cycle ~180 us (limit 30), rebound 0.54 at 1 m/s.
+Each piece works and is measured against a baseline before the next (DevelopmentRules 4, 11; Opus codes, Sonnet tests; every brief carries DECISION, TOTAL CAP, HAND OVER).
+B0 Branch: drop-axis branches from 0297e048e; unified-physics is 11 commits ahead. Bring it up to date (merge or rebase: user). Baseline on the result: the v1 bench
+   driveB (Rubber Test 2) cost per cycle, steps, rebound; the snapshot self-test. Reused as they are: P0 BodyAxis split, P1 BodyAxesPart, P3 adapter (drop_model key,
+   events, IsDropped, drawing, mesh shape with the hat), impact-law stops, friction hold (section 4), reset bar as a driven stop.
+B1 Impact mode in the shared contact path (5.6 A; also serves to-do Switches 1): a ball touch on a light part taken as one closed-form KK impulse at the reduced
+   mass, contact damping from the part's material loss (5.5d), chosen per touch by the touch rule (impact if the touch ends well inside the 1 ms cycle, else contact).
+   Offline first on a test body, then the engine with the setting off for every other part (same bytes, /fp:precise). Measure: one event's cost in us (the unknown that
+   decides 5.4's budget), energy never rising.
+   AGREED 2026-11-21 (user): on for the drop target only; other light parts later, each with its own check. Friction in the impact: sliding (Coulomb impulse, at most
+   mu x the normal impulse, against the slip, ends at stick, never reverses it: 5.3 R2) and twist (same cap at the patch's lever, INFERRED ~3 % of sliding); rolling
+   resistance left out of the impact only (INFERRED tiny over 0.1 ms). Given up: the contact's tangential spring-back. FIRST STEP, paper: the impact with this friction
+   against the stepped contact at 1 us, glancing hits at 1 and 3 m/s: rebound, sideways speed, spin. A gap of a few % or less: plain Coulomb is enough.
+   DONE (runs/2026-11-21-b1-impact, MEASURED): 30 / 60 deg, 1 / 3 m/s, sliding and rolling: rebound 0.003 %, tangential 0.14 %, spin 0.29 %; energy falls in both.
+   ACCEPTED (user 2026-11-21): plain Coulomb. LIMIT (5.7): within ~7 deg of head-on the impact reaches stick and the stepped law does not: sideways speed up to 7 %
+   lower (<= 0.021 m/s), vertical-axis spin up to 25 % higher (<= 3.9 rad/s); the stepped law's tangential stiffness (shearTan 0.4) is itself a guess.
+B2 Target coordinates: y becomes theta, a tilt about the bottom pin (angle axis; pin depth key, default 101.6 mm); mass, inertia and bend k(a) from the type's mesh
+   section, nylon 1.14 g/cm3, 2.5 GPa (ESTIMATED); spring pull forward and down at its attach point; lip friction only while the ledge is on the lip; the face and wall
+   flex springs deleted. Check offline against the paper (runs/2026-11-21-drop-flexloss, lead_thick.py): swing, unlatch, free drop 20-25 ms (D5).
+   AGREED 2026-11-21 (user): the spring's attach point a setting, default 5 mm below the latch (21 mm below the playfield top: 12.7 mm playfield + 3.2 mm latch, T10 / D3),
+   ASSUMED (D3a: 'just below the latch'); a few mm move its forward pull on the lip about 5 % (80 mm lever to the pin).
+B3 Knock law at the wall edge (5.5d): the tilt stopped by one impulse, its energy into the bend store, lost at nylon 0.03 + 0.105 (FITTED), returned at the press end.
+   AGREED 2026-11-21 (user): a knock with no ball on the face (the paper code, flexloss.py, released the store only at a press's end; with no press it decayed, INFERRED
+   within a few ms): the store springs the target forward off the wall after half the held bend's period, less its loss; with a ball pressing, to the ball as before.
+   Paper first: a glancing hit (the ball gone before the knock), then the fitted head-on cases rerun unchanged (they always press).
+B4 Press: the bend as the contact's series spring (Hit::kb) with k(a) and the same loss factor; R1 discrete gradient over every coordinate the stored energy depends on,
+   the drop included (piece 7). Check: rebound 0.555 / 0.569 at 0.64 / 2.6 m/s (paper), against D10 0.52-0.69. APPROVED as written (user 2026-11-21).
+B5 Other touches: top edge and hat while dropping, rear (press on pin + lip), side (held body), resting ball (held contact by the touch rule); a reset-bar pinch must
+   stall the bar, not launch the ball (5.8 e).
+   DECIDED 2026-11-21 (user): the bar moves at its speed (reset_speed_mps) while the force it needs on the target stays under a constant cap, and stalls above it
+   (coil model not used). Energy in: the cap's force times the bar's actual travel at most. A pinched ball is squashed only until its Hertz force reaches the cap.
+   Cap: a setting, default 10 N per target (user 2026-11-21), ESTIMATED: the shared AE-23-800 coil (coilmodel.h) at 28 V gives 36 N closed, 7-9 N per target of a
+   4-5 bank near the top of the rise (lever 1:1 ASSUMED). A pinch at 10 N stores about 30 uJ (INFERRED, Hertz, E* 3 GPa).
+B6 VPX checks: bench rebound and drop vs D10 at 0.64 / 1.9 / 2.6 m/s; worst cycle us vs 30 us with 1, 2, 6 balls; the 7-cycle window vs 3 ms; stress set (rule 10);
+   snapshot self-test; then the user's Gorgar with VPX targets (P4). The old v1 path and its keys deleted once the user accepts (rule 6).
+   ACCEPTED 2026-11-21 (user) with two additions: the free drop against D5 (15 - 35 ms) and the 1.5 m/s hit (D10 item 6) in the bench checks; the simple interim
+   model (drop_model 1, section 6 above) deleted with the v1 path, so the enhanced model is the one drop model on the unified engine.
+Parked: the brick (twist in the slot on off-centre hits, 3-D, Requirement I.5). Open in the paper code: the 1e-9 m latch threshold lets the corner law hold a landed
+ledge (runs/2026-11-21-drop-brick); the contact damping's form is INFERRED.
 
 STATUS (2026-11-20, end of drop lead 2; branch drop-axis in worktree C:\Pinball\VPX-Physics\wt-drop-axis, NOT merged into unified-physics, NOT pushed)
 Lead 2 (log runs/2026-11-19-drop-lead2/log.md) committed: 8903cceb2 friction hold (section 4), ea5421775 spring path deleted, 1524ca50a five audit fixes

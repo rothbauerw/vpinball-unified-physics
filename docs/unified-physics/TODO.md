@@ -12,9 +12,10 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-Next: plunger (PlungerDesign.txt): steps 1-3 in VPX (auto: autoplungerhost.h; tip head and drawing unchecked); open items: section 14; next: user's call. Lead log runs/2026-11-17-lead. GL exe and main_exe stale: pass -Exe. Stress v2 bench bytes moved with the part-placing step (1 ulp, trap 112).
-Judge a change by one exe, its setting on vs off; never by an older exe's md5 (ModelStandards trap 112). Query outliers 0.3-9 ms are the OS (measured). 1.33: cut B kept.
-Stand-up targets: massless-face design decided (runs/2026-11-15-standup-simple/design.md, plan P1-P7); next piece 1 (plumbing, fixed face) in its own worktree.
+Plunger converted (PlungerDesign; open: section 14). GL exe and main_exe stale: pass -Exe. 1.42 (user: halvings first, tests clean): jet seat and spinner pin fixed; stand-ups skipped (face_travel 0); next slope repro (1.49/1.50) with the stress CenterRamp ball (runs/2026-11-21-halvings).
+Judge a change by one exe, its setting on vs off; never by an older exe's md5 (ModelStandards trap 112).
+Drop targets: branch drop-axis (wt-drop-axis, not merged). Design v2 (DropTargetDesign 5), plan 6 reviewed. B0, B1 (1050a4fa2) and 1.52 (3f6d54f06) committed on drop-axis. Next: B2 (DropTargetDesign 6). P4: user's Gorgar with VPX targets and slots.
+STOCK OFF done (one switch, runs/2026-11-21-stock-search/design.md): unified runs no stock, one Step per 1 ms. Play-stop-play OK (user). Untested: in-game live editor. G3/G4 met, kept for reference (user).
 N5. One reach rule from physics (speed plus force) for grouping and step length; first built in 1.34 P2. Grouping: Gate001's 81 mm swing as one-cycle travel joins two lanes. Step length: speed only, no force. Check all parts; ball pairs of unequal mass and resting-ball wake (read only).
 N7. Stress v2 bench: ball travel energy +2 % at 57 ms; spin not counted. Check total energy in the saved run (no new run).
 N8. Test driver must refuse a ball placed inside any object, unless the file declares the overlap (rule 10b: then judged on recovery, no energy gained).
@@ -45,6 +46,8 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 41. Magnet pull in the energy reach is taken at the ball's place, not the largest over its travel: a true bound needs current, saturation, in-winding and per-type terms. Re-looks while a magnet is on (stress C1).
 49. Jacobian: rolling resistance's torque has no slope with depth (Kr ~ a^3, its damper, its turn at the limit); every contact. Measured 1e-4 of the row (runs/2026-11-19-standup-p2/fix2).
 50. Jacobian: a mesh contact's depth slopes come from the mid-step probe; when the end lies on another facet they are wrong (0.36 of the row at a stand-up face crossing, fix2).
+52. Stop search replaced by event prediction on drop-axis (3f6d54f06, [Contact] event_predict; runs/2026-11-21-stop-search-design): open until merged into unified-physics and the old search's 0 path deleted.
+53. One 'on the stop' rule for the engine (design 1.52 Q7): 35 checks and 5+ nearness constants decide it today (runs/2026-11-21-onstop-read/onstop.md). Paper first.
 
 ## 2. Flippers
 1. Rubber separation at the end stop: details from the user.
@@ -68,11 +71,12 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 2. Cost over 30 us; stops as impact law.
 5. Redraw to match the real parts.
 6. Deep late contacts on gates (Gate002 317 um at 1.08 m/s); check the reach test's missing part acceleration (runs/2026-11-10-reach-accel/design.md section 4).
+7. Plate gates: bottom edge at or above the ball's centre at rest, the wire-gate rule (user 2026-11-19). Today 20 mm from a 31.75 mm pivot puts it 1.1 mm below at the 15 deg rest: a back hit lifts the ball over Gorgar Ramp2 (runs/2026-11-19-laptop-lead/gate).
+8. Ball-gate restitution comes from the stock Elasticity (Gorgar 1.1 gives damping 0, no loss in the contact); needs a physical steel-on-steel value (user 2026-11-19).
 
 ## 6. Magnets (rules: ModelStandards section 8)
 2. Energy by construction for magnets (goal G2): pair force not energy exact; iron-core and plug cases unchecked.
 7. Long rod core, moving magnets.
-9. Guide tube ConstrainBall acts outside the group step (PhysicsEngine.cpp:866): breaks the shared path. The coil body must always be solid: tube = 0 lets a ball into the winding, where the pull drops to a dipole-only cutoff (magnet.cpp AircorePull); remove both.
 
 ## 7. Turntable
 1. Constant-speed AC motor option.
@@ -90,17 +94,17 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 1. Stand-up and drop targets.
 4. Plunger: other tables, auto plunger, mechanical input.
 6. Playfield material values unverified: compare with the user's video of a ball rolling on a playfield.
+7. Playfield bounce too high (user 2026-11-19): a falling ball rebounds at 0.77-0.98 of its fall speed at 0.28-0.56 m/s (Gorgar, runs/2026-11-19-laptop-lead/gate run_F1, t 3559-3871). No measured value in PartData; find where the restitution comes from.
 
 ## 10. Branch and housekeeping (release path 3, 5, 10: see ReleasePlan.txt)
-3. unified = 0 against a plain upstream build; plunger fix.
-5. Stock-file hooks to separate.
+3. unified = 0 against a plain upstream build; plunger fix.5. Stock-file hooks to separate.
 6. Editor changes to replace the ini files (panels, settings saved in the .vpx); unified off per table for release.
 7. Old keys in 14 inis.
 10. Review ReleasePlan with the user, then PR to the official repo after 3-5.
 13. Old-law switches to delete once accepted (CLAUDE.md): roll/pivot/step_model 0 (stock's copies of converted parts are out of the path: balls fall through; load warns).
 
 ## 11. Switches and triggers
-1. Light-part contact cost (ball on a part of a few grams): worst cycle wire switch 54-181 us, Button 271 us (runs/2026-11-10-rollover/S1); limit 30 us. Midpoint solver must follow the ball-on-part contact clock: needs another solver class (rigid contact + impact law, or L-stable). Parked to N10.
+1. Light-part contact cost (limit 30 us): wire switch 54-181 us, Button 271 us (runs/2026-11-10-rollover/S1); drop target 3 m/s ~180 us, its pinch ring is physical (runs/2026-11-19-drop-rattle). Midpoint solver follows the ball-on-part clock: needs another solver class. Parked to N10.
 
 ## 12. Kickers (when kickers are extended)
 1. Physical cup settles too slowly (user's play): find the missing damping, maybe the switch blade. Resting cost 102 us per cycle is the contact system's (runs/2026-11-12-lead).
@@ -117,3 +121,4 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 4. The same 2 mm key launch gives 0.513-0.580 m/s between bench runs (e2d, e2f, e2g); INFERRED driver start offset, unproven. Understand before any release design.
 5. Extension (user 2026-11-18, later): design 2h, a cabinet plunger on an auto-plunger table acts as the Launch Ball button (pull-and-release or a press past rest).
 6. Auto plunger not rechecked with a clean ball: the tip head, a lower energy (0.64 J), the fork drawing on screen (a3c-clean ran the fork at 1 J only).
+7. Plunger button lost control once (user 2026-11-19): Enter went down/up every 308 ms (tables/logs 183700). VPX drops OS repeats and acts on changes only: source outside VPX (runs/2026-11-19-laptop-lead/plunger_input.md). Rod log lines capped at 40 per load (plunger.cpp:163).

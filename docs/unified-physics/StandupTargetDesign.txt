@@ -133,6 +133,8 @@ at 2-5 rounds; a resting ball 1 round per cycle. INFERRED within the limit; meas
   The stuck-mass restitution rule (2a) was approved on a wrong paper input (slip after, not before, the old impulse); it never acts in the runs.
   Open from the lead review (runs/2026-11-14-standup-review/review.md): A3 release force without velocity terms, A5 switch from the beam shape, B1-B6 standards,
   C1-C2 tests never run. Shared fault to propose for the to-do: the stop search has no guard for a stop already passed at its start (groupstep.h ~2052, h -> 1e-307).
+  The stop search is being replaced (to-do 1.52, runs/2026-11-21-stop-search-design): the carried release at contact force 0 (3d) is the one force event it does not
+  cover; its tolerance and rate are settled when the release is built (user 2026-11-21). Q4 of that design covers the start-past-stop guard.
 - Two balls carried with the face at the plate: not modelled on paper.
 - A ball held by a kicker is never carried (its motion is given).
 - A ball pinched between a carried face and a wall: the wall's compliance takes it (reasoned, not tested).
