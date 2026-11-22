@@ -310,10 +310,16 @@ B2 Target coordinates: y becomes theta, a tilt about the bottom pin (angle axis;
    flex springs deleted. Check offline against the paper (runs/2026-11-21-drop-flexloss, lead_thick.py): swing, unlatch, free drop 20-25 ms (D5).
    AGREED 2026-11-21 (user): the spring's attach point a setting, default 5 mm below the latch (21 mm below the playfield top: 12.7 mm playfield + 3.2 mm latch, T10 / D3),
    ASSUMED (D3a: 'just below the latch'); a few mm move its forward pull on the lip about 5 % (80 mm lever to the pin).
+   DONE 9c1a50809 (runs/2026-11-21-drop-b2-p1, -p2, -p3): bench clean; rebound 0.02 until B3 / B4 (target rattles on the rigid wall). OPEN, AGREED 2026-11-22 (user): the wall edge and the catch are world-fixed edges whose gap depends on
+   theta and z (paper runs/2026-11-21-drop-b2-p2b, energy safe); the engine's stops and rests are per coordinate, so a shared stop over several coordinates (with the
+   impact mode's constrained mass) is built as its own piece, paper first, before B5. Until then piece 2's rule (edge moved with z between steps, never behind the
+   target) is a named LIMIT: up to 0.97 mm overlap at flush with a ball pressing through the fall; the catch at the constant lever P - L.
 B3 Knock law at the wall edge (5.5d): the tilt stopped by one impulse, its energy into the bend store, lost at nylon 0.03 + 0.105 (FITTED), returned at the press end.
    AGREED 2026-11-21 (user): a knock with no ball on the face (the paper code, flexloss.py, released the store only at a press's end; with no press it decayed, INFERRED
    within a few ms): the store springs the target forward off the wall after half the held bend's period, less its loss; with a ball pressing, to the ball as before.
    Paper first: a glancing hit (the ball gone before the knock), then the fitted head-on cases rerun unchanged (they always press).
+   User 2026-11-21: the joints-and-mounting loss factor (0.105 FITTED) is an ini key, adjustable (B3 and B4 share it). B2 piece 1 (runs/2026-11-21-drop-b2-p1): the
+   VPX Simple mesh is 5 % softer, 3 % less inertia than the paper's Thick it was fitted on: B4's rebound check redone on the mesh numbers.
 B4 Press: the bend as the contact's series spring (Hit::kb) with k(a) and the same loss factor; R1 discrete gradient over every coordinate the stored energy depends on,
    the drop included (piece 7). Check: rebound 0.555 / 0.569 at 0.64 / 2.6 m/s (paper), against D10 0.52-0.69. APPROVED as written (user 2026-11-21).
 B5 Other touches: top edge and hat while dropping, rear (press on pin + lip), side (held body), resting ball (held contact by the touch rule); a reset-bar pinch must
