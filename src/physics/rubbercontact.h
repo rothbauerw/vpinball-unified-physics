@@ -1460,7 +1460,21 @@ namespace RubberContact
       double d;      // depth above the found-inside zero, m
       V3 n;          // the depth's gradient direction at the piece (surface -> ball centre)
       int order;     // on equal depths: pieces (0) before the humps that join them (1)
+      double r = 0.0;   // peak_slope: the distance from the ball's centre to the piece's nearest point, about which n turns as the ball moves (0: a face's inside, n fixed)
    };
+
+   // peak_slope (runs/2026-11-22-per-peak plan 2.5a): every node that enters the level form's sum (s = +1 a peak, -1 its pass), for the elastic push's Newton slope taken per
+   // peak. MergeBars writes it when it finds 2 or more peaks and empties it otherwise; thread-local, capacity reused (no allocation per step once grown).
+   struct PeakTerm
+   {
+      double s, d, r;   // sign, depth above the zero (m), turning distance (m, 0 none)
+      V3 n;
+   };
+   inline std::vector<PeakTerm> &PeakTerms()
+   {
+      thread_local std::vector<PeakTerm> v;
+      return v;
+   }
 
    // patch_contacts (runs/2026-11-22-per-peak plan 3.1): one pressed patch (a merge tree's root: every piece joined to it by a path that stays pressed), its own fold sum over its own
    // peaks (pass terms included) and its deepest node (the root)
@@ -1511,6 +1525,10 @@ namespace RubberContact
       thread_local std::vector<V3> passN;
       pass.assign(m, 0.0);
       passN.assign(m, V3());
+      thread_local std::vector<double> passR;   // peak_slope: the pass node's turning distance
+      passR.assign(m, 0.0);
+      std::vector<PeakTerm> &terms = PeakTerms();
+      terms.clear();
       const auto deeper = [&](const int pa, const int pb) { return nodes[pa].d != nodes[pb].d ? nodes[pa].d > nodes[pb].d : pa < pb; };
       for (const int x : ord)
       {
@@ -1529,6 +1547,7 @@ namespace RubberContact
             const int pl = peak[lose];
             pass[pl] = nodes[x].d;
             passN[pl] = nodes[x].n;
+            passR[pl] = nodes[x].r;
             passed[pl] = 1;
             parent[lose] = keep;
          }
@@ -1549,11 +1568,13 @@ namespace RubberContact
          const double d = nodes[i].d, d15 = d * std::sqrt(d);
          sum.s25 += d * d15;
          sum.g = sum.g + nodes[i].n * d15;
+         terms.push_back({ 1.0, d, nodes[i].r, nodes[i].n });
          if (passed[i] && pass[i] > 0.0)
          {
             const double p = pass[i], p15 = p * std::sqrt(p);
             sum.s25 -= p * p15;
             sum.g = sum.g - passN[i] * p15;
+            terms.push_back({ -1.0, p, passR[i], passN[i] });
          }
          if (patches != nullptr)   // the same terms into the peak's own patch (a root is its group's deepest node: the deeper group always keeps its root)
          {
@@ -1576,6 +1597,8 @@ namespace RubberContact
          }
          peaks++;
       }
+      if (peaks <= 1)
+         terms.clear();   // one peak: today's slope, no list
       return peaks;
    }
 
@@ -1630,7 +1653,7 @@ namespace RubberContact
             if (d > 0.0 && dist > 1e-12)
             {
                jointNode[j] = (int)nodes.size();
-               nodes.push_back({ d, dv / dist, 1 });
+               nodes.push_back({ d, dv / dist, 1, dist });
                nodeSeg.push_back(-(j + 1));
             }
          }
@@ -1654,7 +1677,7 @@ namespace RubberContact
             if (d > 0.0 && dist > 1e-12)
             {
                const int k = (int)nodes.size();
-               nodes.push_back({ d, dv / dist, 0 });
+               nodes.push_back({ d, dv / dist, 0, dist });
                nodeSeg.push_back(i);
                if (j0 >= 0)
                   adj.emplace_back(k, j0);
@@ -1960,7 +1983,7 @@ namespace RubberContact
          if (triIdx[i] < 0)
             triIdx[i] = (int)nodes.size();   // the first node of a triangle (as the search it replaces)
          triNode.emplace_back(i, (int)nodes.size());
-         nodes.push_back({ d, nn, 0 });
+         nodes.push_back({ d, nn, 0, fh.kind == 0 ? 0.0 : ball.R - zero - d });   // (the rim: the edge's distance, edgeDepth's d = R - dist - zero)
          nodeTri.push_back(i);
       }
       profStamp(ContactProf::CD().bFace);
@@ -1992,7 +2015,7 @@ namespace RubberContact
             if (de <= 0.0)
                continue;   // the edge between them is not pressed: two separate contacts
             const int k = (int)nodes.size();
-            nodes.push_back({ de, ne, 1 });
+            nodes.push_back({ de, ne, 1, ball.R - zero - de });
             nodeTri.push_back(tn.first);
             adj.emplace_back(k, tn.second);
             adj.emplace_back(k, on);

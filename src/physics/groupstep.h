@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -211,6 +212,15 @@ namespace GroupStep
       HitTerm in[kInline];
       std::vector<HitTerm> ex;
    };
+   struct HitPeaks   // peak_slope: a static surface's level-form nodes (RubberContact::PeakTerms), the first kInline in place
+   {
+      static constexpr int kInline = 8;
+      RubberContact::PeakTerm &operator[](const int i) { return i < kInline ? in[i] : ex[(size_t)(i - kInline)]; }
+      const RubberContact::PeakTerm &operator[](const int i) const { return i < kInline ? in[i] : ex[(size_t)(i - kInline)]; }
+      void Fit(const int n) { if (n > kInline && ex.size() < (size_t)(n - kInline)) ex.resize((size_t)(n - kInline)); }
+      RubberContact::PeakTerm in[kInline];
+      std::vector<RubberContact::PeakTerm> ex;
+   };
    struct Hit
    {
       double delta = -1.0;
@@ -224,10 +234,16 @@ namespace GroupStep
       Column c[7];             // one rigid body's 6 coordinates and 1 given motion of its frame: a physical size, not a table limit
       int nt = 0;              // > 0: the union's terms (hinge_piece_sum), the same list in the same order at every place of the ball; delta, n, c are the union's
       HitTerms t;
+      int np = 0;              // peak_slope: > 0 a static surface's level form with 2 or more peaks, its peaks and passes (pk), for the elastic push's Newton slope per peak
+      HitPeaks pk;
       Hit() {}
       Hit(const Hit &o) { *this = o; }
       Hit &operator=(const Hit &o)
       {
+         np = o.np;
+         pk.Fit(np);
+         for (int j = 0; j < np; j++)
+            pk[j] = o.pk[j];
          delta = o.delta;
          n = o.n;
          reff = o.reff;
@@ -245,6 +261,32 @@ namespace GroupStep
          return *this;
       }
    };
+   // peak_slope (plan runs/2026-11-22-per-peak 2.5a): the merged depth's Hessian for a level form of peaks and passes, e = s25^0.4, s25 = sum s_i d_i^2.5:
+   // H = (M - 1.5 e^0.5 gm gm^T) / e^1.5, M = sum s_i (1.5 d_i^0.5 n_i n_i^T - d_i^1.5 (I - n_i n_i^T) / r_i) (r_i = 0: n_i does not turn), gm the merged depth's gradient on
+   // the ball's centre (-n grad). One peak with no turn: M = 1.5 d^0.5 n n^T = 1.5 e^0.5 gm gm^T, H = 0 (to the rounding of e = (d^2.5)^0.4). False: no pressed sum.
+   inline bool PeakHessian(const HitPeaks &pk, const int np, const double *gm, double H[3][3])
+   {
+      double s25 = 0.0, M[3][3] = {};
+      for (int i = 0; i < np; i++)
+      {
+         const RubberContact::PeakTerm &t = pk[i];
+         const double sd = std::sqrt(t.d), a = t.s * 1.5 * sd, b = t.r > 0.0 ? t.s * t.d * sd / t.r : 0.0;
+         const double n[3] = { t.n.x, t.n.y, t.n.z };
+         s25 += t.s * t.d * t.d * sd;
+         for (int p = 0; p < 3; p++)
+            for (int q = 0; q < 3; q++)
+               M[p][q] += (a + b) * n[p] * n[q] - (p == q ? b : 0.0);
+      }
+      if (s25 <= 0.0)
+         return false;
+      const double e = std::pow(s25, 0.4), se = std::sqrt(e), c = 1.5 * se, k = 1.0 / (e * se);
+      for (int p = 0; p < 3; p++)
+         for (int q = 0; q < 3; q++)
+            H[p][q] = (M[p][q] - c * gm[p] * gm[q]) * k;
+      return true;
+   }
+   inline bool PeakSlopeCheckEnv() { static const bool on = []() { const char *const e = getenv("VPX_PATCH_CHECK"); return e != nullptr && atoi(e) != 0; }(); return on; }
+
    class Shape
    {
    public:
@@ -400,6 +442,9 @@ namespace GroupStep
       // forces change, at h dG/du = (I - G g^T) K / fe (K = sum_t h tk_t tg_t tg_t^T, g = G's ball part). Newton's slope then takes fd h dG/du and dd = G . dq's change
       // through G, (kd / h) G dq^T dG/du; N's slope (kv) the latter. The force is unchanged. true (default) = on; false = G held fixed in the slope.
       bool dampDirSlope = true;
+      // peakSlope ([Contact] peak_slope): 1: the elastic push's Newton slope summed per peak, each with its own normal and turn (plan runs/2026-11-22-per-peak 2.5a); 0: today's
+      // slope along the merged normal. A static surface with 2 or more peaks only (Hit::np); the push itself is unchanged.
+      bool peakSlope = true;
       // leverRollSlope ([Contact] lever_roll_slope; runs/2026-11-08-lead/slope_terms_design.md): Newton's slope takes two terms of laws the residual already computes.
       // The contact point rA = -n (R - dm / 2) moves with the mid depth (d dm / du = gm / 2): the slip changes by (gm / 4) sum_p wm_p x n and the torque arm by (gm / 4) s_p n, on the
       // balls' force and spin rows. The rolling limit lim = muRr R N (roll_model 1, rolling) changes with N: muRr R (h dN/du) along the torque's direction, on the spin rows.
@@ -4296,6 +4341,12 @@ namespace GroupStep
                      for (int q = 0; q < 4; q++)
                         gK[p][q] += gd[p] * gW[q];
                }
+               // peak_slope (P2a-3): a static surface with 2 or more peaks: the push P = N gd (N = fe + fd) by the product rule, in place of today's kn gm gm^T below:
+               // h dP/du = kn gd g1^T + h N dgd/du, g1 the end depth's gradient on the ball's centre; Gonzalez gd = gm + lam W u, lam = (dd - gm . u) / (u . W u), so
+               // dgd/du = H / 2 + lam W + (W u) dlam^T, dlam = (g1 - gm - (H / 2) u - 2 lam W u) / (u . W u); H / 2 alone where Gonzalez left its correction out
+               // (H the merged depth's Hessian, PeakHessian; paper check runs/2026-11-22-per-peak/paper/dampslope.py form A3: exact to 2e-5 of |J|)
+               double pkH[3][3];
+               const bool pkOn = set.peakSlope && hm.np > 0 && nq == 0 && !pr && fe > 0.0 && fe + fd > 0.0 && PeakHessian(hm.pk, hm.np, gm, pkH);
                if (terms)   // each term's own chord slope on its own gradient, the damping's on G
                {
                   if (fe + fd > 0.0)
@@ -4316,12 +4367,53 @@ namespace GroupStep
                               }
                   }
                }
-               else
+               else if (!pkOn)
                   for (int p = 0; p < na + nq; p++)
                      if (ix[p] >= 0 && !(p >= na && mlCol[p - na]))
                         for (int q = 0; q < na + nq; q++)
                            if (ix[q] >= 0)
                               J[ix[p]][ix[q]] += kn * gm[p] * gm[q];
+               // peak_slope: the push's product-rule slope (above); hm is the middle probe: it moves half the move. Friction, rolling and twist unchanged.
+               if (pkOn)
+               {
+                  const double g1[3] = { -h1.n.x * h1.grad, -h1.n.y * h1.grad, -h1.n.z * h1.grad }, N = fe + fd;
+                  double W[3], Wu[3], Hu[3], uWu = 0.0, gu = 0.0;
+                  for (int a = 0; a < 3; a++)
+                  {
+                     W[a] = !set.gonzalezMass ? iM[a] : iM[a] > 0.0 ? iM[0] / iM[a] : 0.0;   // (Gonzalez's weights)
+                     Wu[a] = W[a] * dq[a];
+                     gu += gm[a] * dq[a];
+                     uWu += dq[a] * W[a] * dq[a];
+                     Hu[a] = pkH[a][0] * dq[0] + pkH[a][1] * dq[1] + pkH[a][2] * dq[2];
+                  }
+                  const double lam = uWu > 1e-300 && std::fabs(d1 - d0 - gu) > noiseD ? (d1 - d0 - gu) / uWu : 0.0;   // (Gonzalez's cf, its noise test)
+                  double dlam[3] = {};
+                  if (lam != 0.0)
+                     for (int q = 0; q < 3; q++)
+                        dlam[q] = (g1[q] - gm[q] - 0.5 * Hu[q] - 2.0 * lam * Wu[q]) / uWu;
+                  for (int p = 0; p < 3; p++)
+                     if (ix[p] >= 0)
+                        for (int q = 0; q < 3; q++)
+                           if (ix[q] >= 0)
+                              J[ix[p]][ix[q]] += kn * gd[p] * g1[q] + h * N * (0.5 * pkH[p][q] + (p == q ? lam * W[p] : 0.0) + Wu[p] * dlam[q]);
+                  if (PeakSlopeCheckEnv())   // check mode (VPX_PATCH_CHECK=1): the list's first peak alone, unturned, gives today's slope (H = 0 to rounding)
+                  {
+                     static std::atomic<long long> nChk { 0 }, nBad { 0 };
+                     HitPeaks one;
+                     one[0] = hm.pk[0];
+                     one[0].s = 1.0;
+                     one[0].r = 0.0;
+                     const double g1[3] = { -one[0].n.x, -one[0].n.y, -one[0].n.z };
+                     double H1[3][3], w = 0.0;
+                     if (PeakHessian(one, 1, g1, H1))
+                        for (int p = 0; p < 3; p++)
+                           for (int q = 0; q < 3; q++)
+                              w = std::max(w, std::abs(H1[p][q]) * one[0].d / 1.5);   // relative to the peak's own 1.5 d^0.5 / d^1.5
+                     const long long c = ++nChk, b = w > 1e-12 ? ++nBad : nBad.load();
+                     if ((c & (c - 1)) == 0 || (w > 1e-12 && b <= 20))   // running totals at 1, 2, 4, ... lists (the bench never closes the table), and the first 20 misses
+                        PLOGI << "peak_slope check: " << c << " lists, " << b << " with one peak not today's slope (this one " << w << ", np " << hm.np << ")";
+                  }
+               }
                // a massless row (rule C): -h times the end push's slope, h s1 dN1/dd1 g1 over the unknowns (g1 the end depth's gradient: the ball's centre -n1 grad1, the
                // columns' slope x grad1); the shear's push keeps its slope below
                for (int j = 0; j < nq; j++)

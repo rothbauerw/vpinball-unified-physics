@@ -2115,6 +2115,7 @@ struct ContactSystemImpl
          const ContactProf::Stage profStage(ContactProf::StGroupShape);   // P3a profile: the calling stage of the checks here (diagnostics only)
          if (mp != nullptr)
          {
+            h.np = 0;   // (peak_slope: static surfaces only)
             mp->GroupProbe(surface, c, R, trial, h);
             if (heldReff > 0.0)
             {
@@ -2124,10 +2125,22 @@ struct ContactSystemImpl
             }
             return;
          }
+         const bool peaks = ContactSettings::Get().peakSlope;   // peak_slope: the level form's peaks and passes (RubberContact::PeakTerms, written by MergeBars at 2 or more peaks)
+         if (peaks)
+            RubberContact::PeakTerms().clear();
          const TubeProbe pr = r->ProbePatch(bs, *it, c);
          h.delta = pr.overlap ? pr.delta : (pr.dist > 0.0 ? R + pr.rho - pr.dist : -1.0);
          h.n = pr.normal;
          h.grad = pr.grad;
+         h.np = 0;
+         if (peaks && pr.overlap)
+         {
+            const std::vector<RubberContact::PeakTerm> &pt = RubberContact::PeakTerms();
+            h.np = (int)pt.size();
+            h.pk.Fit(h.np);
+            for (int j = 0; j < h.np; j++)
+               h.pk[j] = pt[j];
+         }
          h.reff = heldReff > 0.0 ? heldReff : pr.reff > 0.0 ? pr.reff : R;
          h.curvDist = pr.reff > 0.0 && pr.reff < 0.999 * R ? pr.dist : 0.0;
       }
