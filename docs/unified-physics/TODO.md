@@ -14,7 +14,7 @@ G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 ## Now
 Plunger converted (PlungerDesign; open: section 14). GL exe and main_exe stale: pass -Exe. 1.42: CenterRamp halvings = floor+wall merged in one contact. Fix: one contact per pressed patch (runs/2026-11-22-per-peak/plan.md, Status): P1 844e91d83, P2 next.
 Judge a change by one exe, its setting on vs off; never by an older exe's md5 (ModelStandards trap 112).
-Drop targets: branch drop-axis (wt-drop-axis, not merged). Design v2 (DropTargetDesign 5), plan 6 reviewed. B0, B1, 1.52 and B2 (9c1a50809) committed on drop-axis. PAUSED (user 11-22): hits 15-30x over 30 us; 1.55 first (new lead), then B3.
+Drop targets: branch drop-axis (wt-drop-axis, not merged). Design v2 (DropTargetDesign 5), plan 6 reviewed. B0, B1, 1.52 and B2 (9c1a50809) committed on drop-axis. PAUSED (user 11-22): hits 15-30x over 30 us. Read DropTargetDesign 6 STATUS first: next decision, events inside one step.
 STOCK OFF done (one switch, runs/2026-11-21-stock-search/design.md): unified runs no stock, one Step per 1 ms. Play-stop-play OK (user). Untested: in-game live editor. G3/G4 met, kept for reference (user).
 N5. One reach rule from physics (speed plus force) for grouping and step length; first built in 1.34 P2. Grouping: Gate001's 81 mm swing as one-cycle travel joins two lanes. Step length: speed only, no force. Check all parts; ball pairs of unequal mass and resting-ball wake (read only).
 N7. Stress v2 bench: ball travel energy +2 % at 57 ms; spin not counted. Check total energy in the saved run (no new run).

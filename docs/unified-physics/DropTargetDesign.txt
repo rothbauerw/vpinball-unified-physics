@@ -291,6 +291,23 @@ down within 15-35 ms of the hit (PartData D5), no stuck ball, ONE step per 1 ms 
 Basis: section 5 as agreed in the 11-21 walk-through (5.5d notes), PartData D3a / D9 / D10. Built today on branch drop-axis (61e002db2): the v1 model of
 sections 1-4 (a sliding target, stepped Hertz contact, face and wall flex springs); 3 m/s hit worst cycle ~180 us (limit 30), rebound 0.54 at 1 m/s.
 Each piece works and is measured against a baseline before the next (DevelopmentRules 4, 11; Opus codes, Sonnet tests; every brief carries DECISION, TOTAL CAP, HAND OVER).
+STATUS 2026-11-22 (drop lead 5; log runs/2026-11-21-drop-lead/log.md, end): PAUSED BY THE USER FOR COST. Read this first.
+   Cost (MEASURED from the bench group books; unfocused, /fp:precise, diagnostics on, so rough as wall time; step counts exact): a group with one ball costs
+   10-12 us per step; a target hit takes 32-62 steps in its worst cycle (B2: 446 / 602 / 985 us; before B2: 310 / 314 / 543). 30 us allows about 2 steps.
+   Static-wall hits are over too (5-17 steps, 78-157 us): to-do 1.55, a separate lead.
+   Cause: 5.4 and 5.6 (option A) agreed ONE step per cycle in the shared step with the target's events taken inside it; B1 and 1.52 instead end a step at every
+   touch, knock and catch (~15 us each), and this plan left the cost check to B6. Lead 5 then judged B2 on physics only and proposed pieces that add steps
+   without pricing them. FROM NOW: every piece states its steps per cycle and us before it is built and is measured after; no piece that adds steps.
+   Next decision (open, the user's): a paper design taking the target's events inside one shared step per cycle (removing the impulse-and-new-step path), cost
+   stated, reviewed section by section before code. Whether to wait for 1.55: the user's call.
+   Paper findings of 11-22 (not built; B3 below): runs/2026-11-22-drop-b3-paper, -beam-bounce, -first-touch (MEASURED on the models):
+   - The beam keeps 2-4 % of the knock's tilt energy (the B3 no-press rule assumed 65 %): the knock does not throw the target back; its later forward motion is the spring's.
+   - The beam's first touch takes about half the rigid target: m_eff / m_rigid flat 0.50, Thick 0.565, the same at 0.64 / 1.5 / 2.6 m/s within 5 % (one setting
+     per type would fit; not adopted). The face then moves no faster than the ball, which follows the target to the wall (ball back 0.5 ms after the knock).
+   - The paper code applies the drop spring's torque as two half-kicks: a knock in the second half of a cycle raises energy 0.03-0.085 mJ (the engine form must not).
+   - Mesh bodies against the fitted Thick: rebound -0.003 / -0.005 / -0.039 (refit 0.102); flat would refit at 0.159. B3 alone (store returned at the rigid
+     touch's end) rebounds 0.90-0.94 until B4.
+   - Thick 9.18 g and Beveled 9.48 g exceed D2 (6.8-9.1 g): their stem is carried down to the pin at full width (18.1 x 2.59 mm); check the real stem before B4.
 B0 Branch: drop-axis branches from 0297e048e; unified-physics is 11 commits ahead. Bring it up to date (merge or rebase: user). Baseline on the result: the v1 bench
    driveB (Rubber Test 2) cost per cycle, steps, rebound; the snapshot self-test. Reused as they are: P0 BodyAxis split, P1 BodyAxesPart, P3 adapter (drop_model key,
    events, IsDropped, drawing, mesh shape with the hat), impact-law stops, friction hold (section 4), reset bar as a driven stop.
@@ -318,6 +335,8 @@ B3 Knock law at the wall edge (5.5d): the tilt stopped by one impulse, its energ
    AGREED 2026-11-21 (user): a knock with no ball on the face (the paper code, flexloss.py, released the store only at a press's end; with no press it decayed, INFERRED
    within a few ms): the store springs the target forward off the wall after half the held bend's period, less its loss; with a ball pressing, to the ball as before.
    Paper first: a glancing hit (the ball gone before the knock), then the fitted head-on cases rerun unchanged (they always press).
+   PAPER 2026-11-22 (runs/2026-11-22-drop-b3-paper): the no-press rule also fires in slow head-on hits (ball back after half the bend period below ~1.35 m/s
+   Thick): 0.64 m/s rebound 0.555 -> 0.481, one loss factor no longer fits both speeds; and the beam does not back it (STATUS above). Rule to re-decide.
    User 2026-11-21: the joints-and-mounting loss factor (0.105 FITTED) is an ini key, adjustable (B3 and B4 share it). B2 piece 1 (runs/2026-11-21-drop-b2-p1): the
    VPX Simple mesh is 5 % softer, 3 % less inertia than the paper's Thick it was fitted on: B4's rebound check redone on the mesh numbers.
 B4 Press: the bend as the contact's series spring (Hit::kb) with k(a) and the same loss factor; R1 discrete gradient over every coordinate the stored energy depends on,

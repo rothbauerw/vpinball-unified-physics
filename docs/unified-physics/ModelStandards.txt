@@ -139,6 +139,9 @@ e. Every test run writes its pass/fail report to disk the day it runs.
   Catches it: compare deterministic work counts (steps, rounds, evaluations, queries), not wall time.
 - An energy bound built term by term misses the terms nobody listed (band post squash, ball-part squash, a soft stop, a magnet off the playfield): each showed only as a re-look.
   Catches it: the inside check's re-look count with the bound's terms printed at each re-look.
+- A cost principle agreed in the design lost in the build: the drop target's design took a cycle's events inside one step (30 us); the build ended a step at
+  every touch and knock (~15 us each) and the plan left cost to its last piece; four pieces later a hit took 32-62 steps, 15-30x over (DropTargetDesign 6 STATUS).
+  Catches it: none yet (each piece states its steps per cycle before it is built; the group book's steps per cycle measured after every piece).
 Each trap names the test that now catches it ("none yet" until one exists); the older entries above get theirs as they are reviewed.
 
 
