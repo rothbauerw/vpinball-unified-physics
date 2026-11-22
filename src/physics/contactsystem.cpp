@@ -125,6 +125,8 @@ namespace ContactSystem
       g_partEnergy.clear();
       g_partEnergyLines = 0;
       g_partEnergyTold = false;
+      GroupStep::Group::HalvedLines() = 0;   // (the halved lines: capped per table start)
+      GroupStep::Group::HalvedNotPrinted() = 0;
       const std::filesystem::path file = PhysicsIni::FindUnified(tableFile);
       s_iniFile = file;
       s_iniTime = {};
@@ -2854,9 +2856,51 @@ struct ContactSystemImpl
             names.push_back(c->Name());
          return names;
       };
+      // the energy-step and halved lines' shared pieces: the group's parts by name and its balls (position U, speed m/s); the contacts touching (surface/piece, depth)
+      const auto groupNote = [&](std::string &msg, const std::vector<std::string> &names) {
+         char s[160];
+         msg += ", parts [";
+         for (size_t a = 0; a < names.size(); a++)
+            msg += (a > 0 ? ", " : "") + names[a];
+         msg += "], balls " + std::to_string(g.nb);
+         for (int i = 0; i < g.nb; i++)
+         {
+            snprintf(s, sizeof s, " (%.2f, %.2f, %.2f U, %.3f m/s)", g.ball[i].c.x / U, g.ball[i].c.y / U, g.ball[i].c.z / U, g.ball[i].v.Length());
+            msg += s;
+         }
+      };
+      const auto touchNote = [&](std::string &msg) {
+         char s[260];
+         msg += ", touching";
+         for (int k = 0; k < g.ni; k++)
+            if (g.item[k].touching)
+            {
+               GroupStep::Hit hp;
+               if (g.item[k].b >= 0)
+                  snprintf(s, sizeof s, " [c%d ball %d on ball %d]", k, g.item[k].a, g.item[k].b);
+               else
+               {
+                  g.ProbeItem(k, hp);
+                  const SurfaceShape *const sh = isSurf(g.item[k].s) ? static_cast<const SurfaceShape *>(g.shape[g.item[k].s]) : nullptr;
+                  snprintf(s, sizeof s, " [c%d s%d ball %d %s/%d depth %.1f um]", k, g.item[k].s, g.item[k].a, sh != nullptr ? sh->r->Name().c_str() : "post", sh != nullptr ? sh->surface : 0, hp.delta * 1e6);
+               }
+               msg += s;
+            }
+      };
       // Rule 8: each energy step with a moving part in the group: which parts, where, when, how long and why (why: GroupStep::Group's letters, each attempt of the step). The lines are capped per table start; the totals go at the table's end (ReleaseHost)
       long esSeen = g.books.energySteps, esBounces = g.books.energyBounces, esFree = g.books.energyFree;
       double esDone = 0.0;
+      // Rule 8 diagnostic (always on, log only, capped: GroupStep::Group::LogHalved): each step with a halved attempt, the group's parts, balls and contacts at the step's end and each
+      // failed attempt's why and per-round moves. Called before partEnergy moves esDone (the step's start)
+      const auto halvedNote = [&]() {
+         g.LogHalved([&](std::string &msg) {
+            char s[160];
+            snprintf(s, sizeof s, " t=%u ms + %.1f us, step %.3f us", g_pplayer->m_time_msec, esDone * 1e6, (done - esDone) * 1e6);
+            msg += s;
+            groupNote(msg, groupParts());
+            touchNote(msg);
+         });
+      };
       const auto partEnergy = [&]() {
          const double hTaken = done - esDone;
          esDone = done;
@@ -2882,39 +2926,14 @@ struct ContactSystemImpl
             return;
          g_partEnergyLines++;
          char s[260];
-         std::string msg = "Group step: energy step, parts [";
-         for (size_t a = 0; a < names.size(); a++)
-            msg += (a > 0 ? ", " : "") + names[a];
-         msg += "], balls " + std::to_string(g.nb);
-         for (int i = 0; i < g.nb; i++)
-         {
-            snprintf(s, sizeof s, " (%.2f, %.2f, %.2f U, %.3f m/s)", g.ball[i].c.x / U, g.ball[i].c.y / U, g.ball[i].c.z / U, g.ball[i].v.Length());
-            msg += s;
-         }
+         std::string msg = "Group step: energy step";
+         groupNote(msg, names);
          snprintf(s, sizeof s, ", t=%u ms + %.1f us, step %.3f us, %s, why", g_pplayer->m_time_msec, (done - hTaken) * 1e6, hTaken * 1e6, how);
          msg += s;
-         for (int a = 0; a < g.nHalveDiag; a++)
-         {
-            const GroupStep::Group::HalveDiag &hd = g.halveDiag[a];
-            snprintf(s, sizeof s, " [%c h %.3g us rounds %d move %.3g rim %.3g slipFlips %d touchFlips %d sliding %d]", hd.why, hd.h * 1e6, hd.rounds, hd.moveC, hd.moveW, hd.slipFlips, hd.touchFlips, hd.maxSliding);
-            msg += s;
-         }
-         snprintf(s, sizeof s, " last %c, touching", g.failWhy);
+         g.AppendHalveNotes(msg, false);
+         snprintf(s, sizeof s, " last %c", g.failWhy);
          msg += s;
-         for (int k = 0; k < g.ni; k++)
-            if (g.item[k].touching)
-            {
-               GroupStep::Hit hp;
-               if (g.item[k].b >= 0)
-                  snprintf(s, sizeof s, " [ball %d on ball %d]", g.item[k].a, g.item[k].b);
-               else
-               {
-                  g.ProbeItem(k, hp);
-                  const SurfaceShape *const sh = isSurf(g.item[k].s) ? static_cast<const SurfaceShape *>(g.shape[g.item[k].s]) : nullptr;
-                  snprintf(s, sizeof s, " [ball %d %s/%d depth %.1f um]", g.item[k].a, sh != nullptr ? sh->r->Name().c_str() : "post", sh != nullptr ? sh->surface : 0, hp.delta * 1e6);
-               }
-               msg += s;
-            }
+         touchNote(msg);
          for (ContactMovingPart *const mp : parts)
          {
             msg += "; " + mp->StateNote();
@@ -3118,6 +3137,7 @@ struct ContactSystemImpl
       const bool ok = g.StepsOver(cy.dt, done, ruleCap, [&]() {
          ringStep();
          book.AfterStep();
+         halvedNote();
          partEnergy();
          for (size_t j = 0; j < joinedK.size(); j++)   // re-engage: a joined contact touching at a step's end
             joinedTouch[j] = joinedTouch[j] || g.item[joinedK[j]].touching ? 1 : 0;
@@ -3366,12 +3386,7 @@ struct ContactSystemImpl
          {
             std::string how;
             char s[220];
-            for (int a = 0; a < g.nHalveDiag; a++)
-            {
-               const GroupStep::Group::HalveDiag &hd = g.halveDiag[a];
-               snprintf(s, sizeof s, " [%c h %.3g us rounds %d move %.3g rim %.3g slipFlips %d touchFlips %d sliding %d]", hd.why, hd.h * 1e6, hd.rounds, hd.moveC, hd.moveW, hd.slipFlips, hd.touchFlips, hd.maxSliding);
-               how += s;
-            }
+            g.AppendHalveNotes(how, false);
             for (int k = 0; k < g.ni; k++)
                if (g.item[k].touching)
                {
@@ -4567,6 +4582,8 @@ void ContactSystem::ReleaseHost(ContactHost *const host)
          PLOGI << "Group step: energy steps with a ball, table end: none";
       else
          PLOGW << "Group step: energy steps with a ball, table end, per part in the group:" << totals;
+      if (GroupStep::Group::HalvedNotPrinted() > 0)   // the halved lines over their cap (GroupStep::Group::LogHalved)
+         PLOGI << "Group step: halved, table end: " << GroupStep::Group::HalvedNotPrinted() << " more steps with a halved attempt not printed (cap " << GroupStep::Group::kHalvedLines << " lines)";
    }
    if (ContactSystem::s_unified && g_qe.cycles > 0)   // one entry per ball counters at the table's end (diagnostics only)
    {

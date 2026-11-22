@@ -361,15 +361,29 @@ namespace BumperGroup
             {
                const double e = (c == kZ ? 1e-9 : 1e-8) + 1e-6 * std::fabs(x[off + c]);
                xp[c] = x[off + c] + e;
-               Rows(xp, h, rp, ignore);
+               RowsTerms(xp, h, rp, ignore, &rtP);   // (the terms traced: copies only, the halved line's slopes)
                xp[c] = x[off + c] - e;
-               Rows(xp, h, rm, ignore);
+               RowsTerms(xp, h, rm, ignore, &rtM);
                xp[c] = x[off + c];
                for (int a = 0; a < 3; a++)
                   J[off + a][off + c] += (rp[a] - rm[a]) / (2.0 * e);
+               eNow[c] = e;
+               for (int k = 0; k < 6; k++)
+                  for (int a = 0; a < 3; a++)
+                     slopeNow[c][k][a] = (TermOf(rtP, k)[a] - TermOf(rtM, k)[a]) / (2.0 * e);
             }
+            slopeSet = true;
          }
          Rows(x + off, h, r, gLoss);
+         {   // (the halved line's history: this evaluation, copies only)
+            HistE &he = hist[histN % kHist];
+            he.t = rt;
+            he.hasSlope = slopeSet;
+            std::memcpy(he.slope, slopeNow, sizeof slopeNow);
+            std::memcpy(he.e, eNow, sizeof eNow);
+            if (++histN > (1 << 30))
+               histN = kHist + histN % kHist;
+         }
          for (int a = 0; a < 3; a++)
             Res[off + a] = r[a];
          // the ring: weight, return spring and viscous loss over the move; the coil and its force over the same move
@@ -395,9 +409,8 @@ namespace BumperGroup
       void Loads(const double *q, const V3 &) override
       {
          gLoad = q[kR];
-         if (SkirtRowTraceOn())
-            for (int a = 0; a < 3; a++)
-               gCtcQ[a] = q[a];
+         for (int a = 0; a < 3; a++)   // (diagnostics: the row terms' ctc)
+            gCtcQ[a] = q[a];
       }
       // diagnostics (VPX_SKIRT_ROW_TRACE=1, with VPX_GROUP_ROUND_TRACE): the skirt's three rows term by term at the round's last evaluation, in the round trace's units (m/s: the row x invM x reach),
       // with the move, the step-start tilt, and each function's chord: its change df (MoveOf) and the mismatch df - g . dq
@@ -406,7 +419,96 @@ namespace BumperGroup
       {
          if (!SkirtRowTraceOn())
             return std::string();
-         const RowTrace &t = rt;
+         return TermsNote(-1);
+      }
+      // the halved line (GroupStep::Group::LogHalved): each failed attempt's skirt rows term by term at its last round, the format of RowNote
+      void KeepFailNote(const int slot, const double *, const int) override
+      {
+         if (slot >= 0 && slot < GroupStep::Group::kHalveDiag)
+         {
+            failRt[slot] = rt;
+            const int n = std::min(histN, kHist);
+            failHistN[slot] = n;
+            for (int i = 0; i < n; i++)   // oldest first
+               failHist[slot][i] = hist[(histN - n + i) % kHist];
+         }
+         histN = 0;
+      }
+      std::string FailNote(const int slot) const override { return slot >= 0 && slot < GroupStep::Group::kHalveDiag ? TermsNote(slot) + HistNote(slot) : std::string(); }
+      // the failed attempt's last evaluations, each against the one before: the move per coordinate (m, rad), the branches (lip on/Abar/Cbar/mu0, rim the same, spring, spoon),
+      // and per row and term its change d against its slope x the move p (m/s as RowNote; the slope of the latest Jacobian before; ctc: its change only)
+      std::string HistNote(const int slot) const
+      {
+         std::string o;
+         char s[200];
+         static const char *const tn[6] = { "inert", "grav", "spring", "seat", "spoon", "damp" }, *const rn[3] = { "z", "thx", "thy" };
+         const HistE *const H = failHist[slot];
+         if (failHistN[slot] > 0)
+         {
+            snprintf(s, sizeof s, " || jac e z %.3g m thx %.3g thy %.3g rad", H[failHistN[slot] - 1].e[0], H[failHistN[slot] - 1].e[1], H[failHistN[slot] - 1].e[2]);
+            o += s;
+         }
+         for (int i = 1; i < failHistN[slot]; i++)
+         {
+            const HistE &e0 = H[i - 1], &e1 = H[i];
+            double d[3];
+            for (int c = 0; c < 3; c++)
+               d[c] = e1.t.dq[c] - e0.t.dq[c];
+            char st0[11], st1[11];
+            for (int k = 0; k < 10; k++)
+            {
+               st0[k] = (char)('0' + e0.t.st[k]);
+               st1[k] = (char)('0' + e1.t.st[k]);
+            }
+            st0[10] = st1[10] = 0;
+            snprintf(s, sizeof s, " || ev%d move z %.3g thx %.3g thy %.3g st %s>%s", i, d[0], d[1], d[2], st0, st1);
+            o += s;
+            for (int a = 0; a < 3; a++)
+            {
+               const double sc = invM[a] * (a == kZ ? 1.0 : reach);
+               o += std::string(" | ") + rn[a] + ":";
+               for (int k = 0; k < 6; k++)
+               {
+                  const double dt = (TermOf(e1.t, k)[a] - TermOf(e0.t, k)[a]) * sc;
+                  double p = 0.0;
+                  for (int c = 0; c < 3; c++)
+                     p += e0.slope[c][k][a] * d[c];
+                  p *= sc;
+                  if (dt == 0.0 && p == 0.0)
+                     continue;
+                  snprintf(s, sizeof s, " %s d %.4g p %.4g", tn[k], dt, e0.hasSlope ? p : 0.0);
+                  o += s;
+               }
+               snprintf(s, sizeof s, " ctc d %.4g own %.4g", (e1.t.ctc[a] - e0.t.ctc[a]) * sc, (e1.t.own[a] + e1.t.ctc[a]) * sc);
+               o += s;
+            }
+            // each seat's chord (SeatForceAt, sd): V0 and V1, V10, V01 against it; da, dA; dVa and dVb, each over noise; Abar's and Cbar's branch (c chord, m midpoint)
+            // and value with the midpoint's; mu and s1 - s0; then each one's change from the evaluation before and its share of the seat term's thx change (m/s as
+            // above: h mu dAbar tiltA cz, h mu dCbar ca, h dmu (Abar tiltA cz + Cbar ca)) and the seat's whole thx change
+            static const char *const sn[2] = { "lip", "rim" };
+            for (int j = 0; j < 2; j++)
+            {
+               const double *const a0 = e0.t.sd[j], *const a1 = e1.t.sd[j];
+               if (e1.t.st[4 * j] == 0 && e0.t.st[4 * j] == 0)
+                  continue;
+               char w[700];
+               const double nz = a1[8] > 0.0 ? a1[8] : 1.0, sc = invM[kThx] * reach;
+               const auto X = [](const double *v) { return v[20] * v[13] * (v[9] * v[15] * v[16] + v[11] * v[18]); };
+               snprintf(w, sizeof w, " | %s V0 %.17g V1-V0 %.4g V10-V0 %.4g V01-V0 %.4g da %.4g dA %.4g dVa %.6g (%.3g nz) dVb %.6g (%.3g nz) nz %.4g A%c %.9g Va %.9g C%c %.9g Cm %.9g mu %.12g ds %.4g"
+                                     " | ch dV0 %.3g ddVa %.3g ddVb %.3g dAbar %.3g dCbar %.3g dmu %.3g thx A %.3g C %.3g mu %.3g seat %.3g",
+                        sn[j], a1[0], a1[1] - a1[0], a1[2] - a1[0], a1[3] - a1[0], a1[4], a1[5], a1[6], std::fabs(a1[6]) / nz, a1[7], std::fabs(a1[7]) / nz, a1[8],
+                        std::fabs(a1[6]) > a1[8] ? 'c' : 'm', a1[9], a1[10], std::fabs(a1[7]) > a1[8] ? 'c' : 'm', a1[11], a1[12], a1[13], a1[14],
+                        a1[0] - a0[0], a1[6] - a0[6], a1[7] - a0[7], a1[9] - a0[9], a1[11] - a0[11], a1[13] - a0[13],
+                        a1[20] * a1[13] * (a1[9] - a0[9]) * a1[15] * a1[16] * sc, a1[20] * a1[13] * (a1[11] - a0[11]) * a1[18] * sc,
+                        a1[20] * (a1[13] - a0[13]) * (a0[9] * a0[15] * a0[16] + a0[11] * a0[18]) * sc, (X(a1) - X(a0)) * sc);
+               o += w;
+            }
+         }
+         return o;
+      }
+      std::string TermsNote(const int slot) const   // (slot -1: the last evaluation's terms)
+      {
+         const auto &t = slot < 0 ? rt : failRt[slot];
          char line[2400];
          int n = snprintf(line, sizeof line, "skirt dq z %.6g thx %.6g thy %.6g th0 %.9g %.9g |", t.dq[0], t.dq[1], t.dq[2], thx, thy);
          static const char *const gn[4] = { "Vs", "Cz", "A2", "D" };
@@ -689,10 +791,14 @@ namespace BumperGroup
       // Each then goes onto the coordinates by its own chord. A 3-coordinate Gonzalez here spreads V's mismatch by the mass weight, and near the seat's onset, where the move is as large as the overlap, the tilt, 3,700 times lighter, took a steep false force from a z move.
       // a1, A21: the depth and A2 at the move's end; da, dA: their changes over the move (from MoveOf)
       double SeatForceAt(const double am, const double a0, const double a1, const double da, const double dadz, const double tiltA, const double r, const double V0, const Pose &qm, const double A21, const double dA,
-                       const double cz[2], const double ca[2], const double h, double *Q) const
+                       const double cz[2], const double ca[2], const double h, double *Q, int *const st = nullptr, double *const sd = nullptr) const
       {
          const double b0 = r * std::sqrt(gA20), b1 = r * std::sqrt(A21);
          const double V1 = Seat(a1, b1).V, V10 = Seat(a1, b0).V, V01 = Seat(a0, b1).V;
+         if (st != nullptr)   // (diagnostics, the halved line: the seat's branches, on / Abar's chord / Cbar's chord / mu clamped at 0)
+            st[0] = st[1] = st[2] = st[3] = 0;
+         if (sd != nullptr)   // (diagnostics, the halved line: the seat's chord inputs and outputs, RowTrace::sd; copies only)
+            std::fill(sd, sd + kSd, 0.0);
          if (V0 <= 0.0 && V1 <= 0.0 && V10 <= 0.0 && V01 <= 0.0)
             return 0.0;
          const double bm = r * std::sqrt(qm.A2);
@@ -703,13 +809,26 @@ namespace BumperGroup
          const double s0 = std::sqrt(2.0 * V0 / kSeat), s1 = std::sqrt(2.0 * V1 / kSeat), sum = s0 + s1;
          // 1 + fd / fe with fe = k (s0 + s1) / 2, fd = c (s1 - s0) / h: pushes only
          const double mu = sum > 0.0 ? std::max(0.0, 1.0 + 2.0 * cSeat * (s1 - s0) / (h * kSeat * sum)) : 1.0;
+         if (st != nullptr)
+         {
+            st[0] = 1;
+            st[1] = std::fabs(dVa) > noise ? 1 : 0;
+            st[2] = std::fabs(dVb) > noise ? 1 : 0;
+            st[3] = mu == 0.0 ? 1 : 0;
+         }
+         if (sd != nullptr)
+         {
+            const double v[kSd] = { V0, V1, V10, V01, da, dA, dVa, dVb, noise, Abar, em.Va, Cbar, em.VbB * 0.5 * r * r, mu, s1 - s0, tiltA, cz[0], cz[1], ca[0], ca[1], h, dadz };
+            std::copy(v, v + kSd, sd);
+         }
          Q[kZ] -= mu * Abar * dadz;
          Q[kThx] -= mu * (Abar * tiltA * cz[0] + Cbar * ca[0]);
          Q[kThy] -= mu * (Abar * tiltA * cz[1] + Cbar * ca[1]);
          return (mu - 1.0) * (V1 - V0);
       }
       // The part's own rows over the move dq (RowsTerms), with VPX_SKIRT_ROW_TRACE its terms for the trace
-      void Rows(const double *dq, const double h, double *r, StepLosses &l) const { RowsTerms(dq, h, r, l, SkirtRowTraceOn() && &l == &gLoss); }
+      // (the terms are kept at every main evaluation, not the Jacobian's differences: a failed attempt's last round goes to the halved line, KeepFailNote; copies only)
+      void Rows(const double *dq, const double h, double *r, StepLosses &l) const { RowsTerms(dq, h, r, l, &l == &gLoss ? &rt : nullptr); }
       // the step's change of each function of the tilt the rows take a difference of, from the move by exact identities, so each carries the rounding of its own
       // size and not of the near-1 value it is the change of (Cz = cos thx cos thy is 1 - 9e-5 at 0.78 deg: one ulp of it is a tilt move of 8e-15 rad; bumper2/results.md W1):
       // cos a - cos b = -2 sin((a + b) / 2) sin((a - b) / 2), sin a - sin b = 2 cos((a + b) / 2) sin((a - b) / 2) (the mean angle is the mid-step pose's), a1 b1 - a0 b0 =
@@ -727,11 +846,29 @@ namespace BumperGroup
          return t;
       }
       // diagnostics (VPX_SKIRT_ROW_TRACE): the rows' terms at the last evaluation (row units: inertia row, -h x each force), the move, the four chords (Vs, Cz, A2, D)
-      struct RowTrace { double inert[3], grav[3], spring[3], seat[3], spoon[3], damp[3], ctc[3], own[3], dq[3], df[4], mis[4]; };
-      mutable RowTrace rt = {};
+      // st: the branches (lip on, Abar chord, Cbar chord, mu at 0; rim the same; spring N > 0; spoon N > 0)
+      // sd: per seat (0 lip, 1 rim) SeatForceAt's chord inputs and outputs (V0, V1, V10, V01, da, dA, dVa, dVb, noise, Abar, em.Va, Cbar, em.VbB r^2/2, mu, s1 - s0,
+      // tiltA, cz, ca, h, dadz), for the halved line's seat chord note (HistNote; to-do 1.42, which of Abar / Cbar / mu carries the seat term's noise)
+      static constexpr int kSd = 22;
+      struct RowTrace { double inert[3], grav[3], spring[3], seat[3], spoon[3], damp[3], ctc[3], own[3], dq[3], df[4], mis[4]; int st[10]; double sd[2][kSd]; };
+      mutable RowTrace rt = {}, rtP = {}, rtM = {};
+      // the halved line's history (diagnostics, copies only): the last kHist main evaluations' terms, move and branches, and the terms' slopes (per coordinate,
+      // central differences as the Jacobian takes them) of the latest Jacobian before each
+      static constexpr int kHist = 4;
+      struct HistE { RowTrace t; double slope[3][6][3]; double e[3]; bool hasSlope; };
+      mutable double slopeNow[3][6][3] = {}, eNow[3] = {};
+      mutable bool slopeSet = false;
+      mutable HistE hist[kHist] = {};
+      mutable int histN = 0;
+      HistE failHist[GroupStep::Group::kHalveDiag][kHist] = {};
+      int failHistN[GroupStep::Group::kHalveDiag] = {};
+      static const double *TermOf(const RowTrace &t, const int k) { const double *const p[6] = { t.inert, t.grav, t.spring, t.seat, t.spoon, t.damp }; return p[k]; }
+      RowTrace failRt[GroupStep::Group::kHalveDiag] = {};   // each failed attempt's rt at its last round (KeepFailNote)
       // The part's own rows over the move dq: the shared inertia row (2 M dq / h - 2 M v) - h Q, and the losses
-      void RowsTerms(const double *dq, const double h, double *r, StepLosses &l, const bool tr) const
+      void RowsTerms(const double *dq, const double h, double *r, StepLosses &l, RowTrace *const trTo) const
       {
+         const bool tr = trTo != nullptr;   // (trace: the terms go to *trTo, the member rt or the Jacobian's differences rtP / rtM)
+         RowTrace &rt = tr ? *trTo : this->rt;
          const Pose qm = PoseAt(dq, 0.5), q1 = PoseAt(dq);
          double Q[3] = { 0.0, 0.0, 0.0 };
          const double dCz[2] = { -qm.sx * qm.cy, -qm.cx * qm.sy };
@@ -771,6 +908,8 @@ namespace BumperGroup
          // the spring's axial part: exact, along z only; it pushes, with its damper
          {
             const double ds = -dq[kZ], fe = fSpring + kSpring * (zRest - z + 0.5 * ds), N = std::max(0.0, fe + cZ * ds / h);
+            if (tr)
+               rt.st[8] = fe + cZ * ds / h > 0.0 ? 1 : 0;
             Q[kZ] += N;
             l.spring = (N - fe) * ds;
          }
@@ -785,8 +924,8 @@ namespace BumperGroup
             TiltChord(dCz, tm.dCz, 0.0, dq, cz);
             TiltChord(dA2, tm.dA2, 0.0, dq, ca);
             const double daLip = dq[kZ] + tIn * tm.dCz;
-            l.lip = SeatForceAt(ALip(qm), gALip0, gALip0 + daLip, daLip, 1.0, tIn, rLip, gLip0, qm, A21, tm.dA2, cz, ca, h, Q);
-            l.rim = SeatForceAt(-qm.z, -z, -z - dq[kZ], -dq[kZ], -1.0, 0.0, rRim, gRim0, qm, A21, tm.dA2, cz, ca, h, Q);
+            l.lip = SeatForceAt(ALip(qm), gALip0, gALip0 + daLip, daLip, 1.0, tIn, rLip, gLip0, qm, A21, tm.dA2, cz, ca, h, Q, tr ? rt.st : nullptr, tr ? rt.sd[0] : nullptr);
+            l.rim = SeatForceAt(-qm.z, -z, -z - dq[kZ], -dq[kZ], -1.0, 0.0, rRim, gRim0, qm, A21, tm.dA2, cz, ca, h, Q, tr ? rt.st + 4 : nullptr, tr ? rt.sd[1] : nullptr);
             if (tr)
             {
                chord(1, dCz, 1, tm.dCz);
@@ -809,6 +948,8 @@ namespace BumperGroup
             if (tr)
                chord(3, gr, 0, dD);
             const double fe = fSpoon + kSpoon * (gD0 + 0.5 * dD), N = std::max(0.0, fe + cSpoon * dD / h);
+            if (tr)
+               rt.st[9] = fe + cSpoon * dD / h > 0.0 ? 1 : 0;
             for (int a = 0; a < 3; a++)
                Q[a] -= N * gd[a];
             l.spoon = (N - fe) * dD;

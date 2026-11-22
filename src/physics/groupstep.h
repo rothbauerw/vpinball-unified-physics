@@ -2265,6 +2265,47 @@ namespace GroupStep
                   const int r = std::min(lastRounds, kRounds) - 6 + k;
                   hd.lastW[k] = r >= 0 ? roundDiag[r].moveW : 0.0;
                }
+               {   // the last round's residual: its three largest rows in speed units (as rn weighs them), and the contacts' states
+                  const double *const R = resS;
+                  for (int u = 0; u < nUnk; u++)
+                  {
+                     double v = 0.0;
+                     if (u < 6 * nb)
+                        v = R[u] * (u % 6 < 3 ? 1.0 / ball[u / 6].m : ball[u / 6].R / ball[u / 6].I());
+                     else
+                        for (int c = 0; c < nCoord; c++)
+                           if (cUnk[c] == u)
+                              v = Massless(c) ? (mlJii[c] != 0.0 ? R[u] / mlJii[c] * (2.0 / h) : 0.0) : R[u] * ci[c].invM * ci[c].reach;
+                     for (int t = 0; t < 3; t++)
+                        if (hd.topRow[t] < 0 || std::fabs(v) > std::fabs(hd.topVal[t]))
+                        {
+                           for (int m = 2; m > t; m--)
+                           {
+                              hd.topRow[m] = hd.topRow[m - 1];
+                              hd.topVal[m] = hd.topVal[m - 1];
+                           }
+                           hd.topRow[t] = u;
+                           hd.topVal[t] = (float)v;
+                           break;
+                        }
+                  }
+                  for (int k = 0; k < ni && hd.nCon < HalveDiag::kCon; k++)
+                     if (ie[k].active)
+                     {
+                        HalveDiag::Con &c = hd.con[hd.nCon++];
+                        c.k = k;
+                        c.slide = ie[k].slipping;
+                        c.ut = (float)std::sqrt(ie[k].ut2);
+                        c.fRatio = ie[k].lim > 0.0 ? (float)(ie[k].ftTr / ie[k].lim) : -1.0f;
+                        c.d1 = (float)ie[k].d1;
+                     }
+               }
+               hd.nRound = std::min(lastRounds, kRounds);
+               for (int r = 0; r < hd.nRound; r++)   // each round's move and residual (the halved line, AppendHalveNotes)
+               {
+                  hd.roundMv[r] = (float)roundDiag[r].mv;
+                  hd.roundRn[r] = roundDiag[r].back ? -1.0f : (float)roundDiag[r].rn;
+               }
             }
             h *= 0.5;
             books.halvings++;
@@ -2279,9 +2320,100 @@ namespace GroupStep
       // why the last Step's attempts failed and were halved: P a part could not begin the step, B a part's forces could not be formed (the band's path would not
       // settle), G a first guess the layer check refused 60 times, N a residual not finite, L the linear solve
       // singular, R a Newton move the layer check refused 60 times, C not solved within maxRounds, E the end evaluation not finite
-      struct HalveDiag { char why = '?'; double h = 0.0; int rounds = 0; double moveC = 0.0, moveW = 0.0; int slipFlips = 0, touchFlips = 0, maxSliding = 0; double lastW[6] = {}; };
+      // roundMv, roundRn: per round (the first kRounds) the round's move max(ch, grip) and the residual norm rn it started from (m/s); rn -1 marks a line-search retake
+      static constexpr int kRounds = 64;
+      // topRow, topVal: the last round's three largest residual rows (unknown index; speed units, m/s, as rn weighs them); con: the contacts in play at the last round
+      // (item k, sliding at mu N or sticking, mid-step slip speed m/s, trial friction over mu N, end depth m)
+      struct HalveDiag
+      {
+         char why = '?'; double h = 0.0; int rounds = 0; double moveC = 0.0, moveW = 0.0; int slipFlips = 0, touchFlips = 0, maxSliding = 0; double lastW[6] = {}; int nRound = 0; float roundMv[kRounds] = {}, roundRn[kRounds] = {};
+         int topRow[3] = { -1, -1, -1 }; float topVal[3] = {};
+         static constexpr int kCon = 6;
+         struct Con { int k = 0; bool slide = false; float ut = 0.0f, fRatio = 0.0f, d1 = 0.0f; };
+         int nCon = 0; Con con[kCon];
+      };
       static constexpr int kHalveDiag = 8;
       HalveDiag halveDiag[kHalveDiag];
+      // the step's failed attempts as the log lines print them (the energy-step line and the halved line, contactsystem.cpp and AdvanceAlone; one format): per attempt
+      // [why, h, rounds, move, rim, slip and touch flips, sliding]; with rounds, each round's move/residual (m/s, "b" a line-search retake). Called only when a line is printed
+      void AppendHalveNotes(std::string &msg, const bool rounds) const
+      {
+         char s[260];
+         for (int a = 0; a < nHalveDiag; a++)
+         {
+            const HalveDiag &hd = halveDiag[a];
+            snprintf(s, sizeof s, " [%c h %.3g us rounds %d move %.3g rim %.3g slipFlips %d touchFlips %d sliding %d", hd.why, hd.h * 1e6, hd.rounds, hd.moveC, hd.moveW, hd.slipFlips, hd.touchFlips, hd.maxSliding);
+            msg += s;
+            if (rounds)
+            {
+               msg += " | move/rn";
+               for (int r = 0; r < hd.nRound; r++)
+               {
+                  if (hd.roundRn[r] < 0.0f)
+                     snprintf(s, sizeof s, " b");
+                  else
+                     snprintf(s, sizeof s, " %.2g/%.2g", hd.roundMv[r], hd.roundRn[r]);
+                  msg += s;
+               }
+               msg += " | last res";
+               for (int t = 0; t < 3 && hd.topRow[t] >= 0; t++)
+               {
+                  const int u = hd.topRow[t];
+                  std::string name = UnkName(u);
+                  if (u >= 6 * nb)   // a part's coordinate: the part's kind
+                     for (int p = np - 1; p >= 0; p--)
+                        if (partOff[p] <= u)
+                        {
+                           name += std::string("(") + typeid(*part[p]).name() + ")";
+                           break;
+                        }
+                  snprintf(s, sizeof s, " %s %.2g", name.c_str(), hd.topVal[t]);
+                  msg += s;
+               }
+               msg += " | contacts";
+               for (int c = 0; c < hd.nCon; c++)
+               {
+                  const HalveDiag::Con &cn = hd.con[c];
+                  const Item &it = item[cn.k];
+                  snprintf(s, sizeof s, " c%d b%d %s%d %s ut %.3g mm/s f/muN %.4g d1 %.2g um", cn.k, it.a, it.b >= 0 ? "ball" : "s", it.b >= 0 ? it.b : it.s, cn.slide ? "SLIDE" : "stick", cn.ut * 1e3, cn.fRatio, cn.d1 * 1e6);
+                  msg += s;
+               }
+            }
+            msg += "]";
+         }
+      }
+      // the halved lines (one per step with a halved attempt, VPX_GROUP_ROUND_TRACE not needed) printed this table start, and those over the cap not printed (contactsystem.cpp: reset at
+      // SetTable, the count of the rest at the table's end)
+      static constexpr int kHalvedLines = 60;
+      static int &HalvedLines() { static int n = 0; return n; }
+      static long &HalvedNotPrinted() { static long n = 0; return n; }
+      // Rule 8 diagnostic, always on, log only: after a step with a halved attempt, one INFO line (capped at kHalvedLines per table start); pre: the caller's own part (its names, its
+      // balls) ahead of the attempts. Builds the string only for a line printed
+      template <class Pre> void LogHalved(const Pre &pre) const
+      {
+         if (nHalveDiag == 0)
+            return;
+         if (HalvedLines() >= kHalvedLines)
+         {
+            HalvedNotPrinted()++;
+            return;
+         }
+         HalvedLines()++;
+         std::string msg = "Group step: halved,";
+         pre(msg);
+         msg += ", attempts";
+         AppendHalveNotes(msg, true);
+         for (int p = 0; p < np; p++)   // each part's own note of each failed attempt's last round (a bumper's skirt rows by term, a bat's rows)
+            for (int a = 0; a < nHalveDiag; a++)
+            {
+               const std::string note = part[p]->FailNote(a);
+               if (!note.empty())
+                  msg += " | part " + std::to_string(p) + " (" + typeid(*part[p]).name() + ") attempt " + std::to_string(a) + ": " + note;
+            }
+         if (HalvedLines() == kHalvedLines)
+            msg += " (no more of these lines this table start: the count of the rest comes at its end)";
+         PLOGI << msg;
+      }
       std::string roundBuf, failRoundBuf;   // VPX_GROUP_ROUND_TRACE: this attempt's rounds; the first failed attempt of the step
       mutable std::string probeTrace;       // VPX_GROUP_ROUND_TRACE: the carried surfaces' probes of the last Eval (end and mid, their pieces)
       // VPX_GROUP_JAC_WINDOW=<t0>-<t1> (ms of game time; with VPX_GROUP_JAC_MODE=1; a diagnostic, read once; unset = off): the difference Jacobian is formed only in
@@ -2494,8 +2626,8 @@ namespace GroupStep
          return msg;
       }
       // back: a line-search round (the last move retaken shorter); grip: the parts' grip change after the move (m/s)
-      struct RoundDiag { double moveC = 0.0, moveW = 0.0, scale = 1.0, grip = 0.0; int nActive = 0, nSlip = 0, nSlipFlip = 0, nOnFlip = 0, back = 0; };
-      static constexpr int kRounds = 64;
+      // mv: the round's move max(ch, grip), as the no-progress rule reads it; rn: the residual norm the round started from (m/s)
+      struct RoundDiag { double moveC = 0.0, moveW = 0.0, scale = 1.0, grip = 0.0, mv = 0.0, rn = 0.0; int nActive = 0, nSlip = 0, nSlipFlip = 0, nOnFlip = 0, back = 0; };
       RoundDiag roundDiag[kRounds];
       // Settings::jacMode: the solve's own Jacobian and the central-difference one at the last round of the last solve (rows: per ball the momentum residual 3,
       // then the spin residual 3; columns: per ball the move 3, then the spin change 3)
@@ -2593,6 +2725,7 @@ namespace GroupStep
          V3 xi1;
          RubberContact::RollAngle ra1;   // the rolling and twist springs' end angles (roll_model 1)
          double normalLoss = 0.0, slip = 0.0, shearDamp = 0.0, twist = 0.0, roll = 0.0;
+         double ut2 = 0.0, ftTr = 0.0, lim = 0.0;   // diagnostics, never read by the step: the mid-step slip speed squared (m2/s2), the trial friction force and mu N (N)
       };
       Buf<Item> law;             // the law each contact uses in this step (held, or taken at the step's start)
       // Probes kept instead of repeated (a tube probe is most of a step's cost): the positions now (ChooseStep; valid while nowStamp == stamp), and the end and
@@ -3654,6 +3787,7 @@ namespace GroupStep
             } impItem(F, M, impOn ? &impIt[4 * (size_t)k] : nullptr, it.a, it.b);
             const Item &L = law[k];
             ItemEnd &e = ie[k];
+            e.ut2 = e.ftTr = e.lim = 0.0;   // (diagnostics: this Eval's own)
             if (J)
                szRec[k].on = false;   // (stick_zone_trial: written below for a sliding patch)
             if (farNow[k])
@@ -3823,6 +3957,9 @@ namespace GroupStep
                const double lim = L.mu * N, fl = Ft.Length();
                limS = lim;
                flTr = fl;
+               e.ut2 = ut.Dot(ut);   // (diagnostics, copies only: the halved line's contact states)
+               e.ftTr = fl;
+               e.lim = lim;
                xi1 = xtr;
                if (fl > lim)
                {
@@ -5562,6 +5699,8 @@ namespace GroupStep
             gripMoved = gch > set.tolV;
             rd.scale = scale;
             rd.grip = gch;
+            rd.mv = std::max(ch, gch);
+            rd.rn = rn;
             if (RoundTraceOn())
             {
                char line[400];
@@ -6060,7 +6199,16 @@ namespace GroupStep
       CycleBook book(g);
       double done = 0.0;
       const double hFix = GroupFixedStepS();
-      const bool ok = g.StepsOver(dt, done, [&](const double h) { return hFix > 0.0 ? std::min(hFix, dt - done) : h; }, [&book]() { book.AfterStep(); });
+      double stepStart = 0.0;
+      const bool ok = g.StepsOver(dt, done, [&](const double h) { return hFix > 0.0 ? std::min(hFix, dt - done) : h; }, [&]() {
+         book.AfterStep();
+         g.LogHalved([&](std::string &msg) {   // (the halved line: Group::LogHalved)
+            char s[200];   // (a part keeps no name: its kind, and its state after the step)
+            snprintf(s, sizeof s, " t=%d ms + %.1f us, step %.3f us, part alone [%s], balls 0, state", tMs, stepStart * 1e6, (done - stepStart) * 1e6, typeid(p).name());
+            msg += s + p.HistoryNote();
+         });
+         stepStart = done;
+      });
       book.End(tMs, true, dt, !ok);
       if (out != nullptr)
          *out = g.books;
