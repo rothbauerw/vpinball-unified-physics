@@ -15,6 +15,7 @@ struct ContactSettings
 {
    bool enable = true;               // false = plain Coulomb friction with one mu (the object's friction), no rolling resistance, no twist
    double muDynamicRatio = 0.85;     // dynamic (sliding) mu = ratio * the object's friction, which is the static mu (typically 0.7 - 0.95 for hard dry surfaces)
+   bool pinMemory = true;            // pin_memory (default 1 since 2026-11-21, on while tested; to-do 1.42): 1 = a moving part's pivot pin (gate, spinner, wire switch, disc, plunger rod; bodypart.h PinStep) remembers whether it held at the end of the last step: that step's friction limit is the static one if it held, else the sliding one (mu_dynamic_ratio times it), the same for every Newton guess; within the step the pin's spring holds while its torque is within that limit, else slides at it (no jump in the friction between guesses). A part at rest at the table's start, or let go from a stop, starts holding (runs/2026-11-21-halvings/pin_design.md v2); 0 = hold within the static limit or slide at the sliding one, chosen afresh at each guess from its trial torque
    double rollingResistance = 0.003; // rolling resistance coefficient (dimensionless, not a friction mu): torque = rollingResistance * R * N (steel ball on hard wood / plastic is ~0.002 - 0.005)
    bool twist = true;                // drilling friction: spin about the contact normal is resisted
    double twistPatchMm = 0.5;        // contact patch radius used for the twist torque (3 pi / 16) * mu * a * N; steel on hard wood ~ 0.3 - 0.6 mm

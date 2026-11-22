@@ -69,6 +69,8 @@ namespace
             s.twist = on;
          else if (key == "mu_dynamic_ratio" && num)
             s.muDynamicRatio = d;
+         else if (key == "pin_memory")
+            s.pinMemory = on;
          else if (key == "rolling_resistance" && num)
             s.rollingResistance = d;
          else if (key == "ball_e_mpa" && num)
@@ -188,7 +190,7 @@ namespace
       LoadContactSettings(s, path);
       cur = s;
       Publish();
-      PLOGI << "Contact settings loaded from " << path.string() << ": " << (s.enable ? "on" : "off") << ", dynamic ratio " << s.muDynamicRatio
+      PLOGI << "Contact settings loaded from " << path.string() << ": " << (s.enable ? "on" : "off") << ", dynamic ratio " << s.muDynamicRatio << ", pin_memory " << (s.pinMemory ? 1 : 0)
             << ", rolling resistance " << s.rollingResistance << ", twist " << (s.twist ? "on" : "off") << " patch " << s.twistPatchMm << " mm, roll_model " << s.rollModel << ", step_model " << s.stepModel << ", step_swing_cap " << (s.stepSwingCap ? 1 : 0) << ", term_arrival " << (s.termArrival ? 1 : 0) << ", eps_rest_um " << s.epsRestUm << ", hinge_piece_sum " << (s.hingePieceSum ? 1 : 0) << ", damp_dir_slope " << (s.dampDirSlope ? 1 : 0) << ", lever_roll_slope " << (s.leverRollSlope ? 1 : 0) << ", twist_slope " << (s.twistSlope ? 1 : 0) << ", end_grad_slope " << (s.endGradSlope ? 1 : 0) << ", term_force_rows " << (s.termForceRows ? 1 : 0) << ", term_energy " << (s.termEnergy ? 1 : 0) << ", joint_zero_floor " << (s.jointZeroFloor ? 1 : 0) <<", gonzalez_mass " << (s.gonzalezMass ? 1 : 0) << ", physics_defaults " << (s.physicsDefaults ? 1 : 0) << ", damping_integral " << (s.dampingIntegral ? 1 : 0) << ", rolling_patch " << (s.rollingPatch ? 1 : 0) << ", stick_zone_trial " << (s.stickZoneTrial ? 1 : 0) << ", patch_path " << (s.patchPath ? 1 : 0) << ", grip_in_step " << (s.gripInStep ? 1 : 0) << ", part_guess_accel " << (s.partGuessAccel ? 1 : 0) << ", multi_contact " << (s.multiContact ? 1 : 0);
    }
 }

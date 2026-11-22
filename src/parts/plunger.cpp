@@ -11,6 +11,7 @@
 #include "physics/collideex.h"
 #include "physics/contacthost.h"
 #include "physics/contactparthost.h"
+#include "physics/contactsettings.h"
 #include "physics/contactsystem.h"
 #include "physics/plungerhost.h"
 #include "physics/autoplungerhost.h"
@@ -351,6 +352,7 @@ void Plunger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          }
          m_rod = std::make_shared<PlungerHost::Rod>();
          m_rod->Build(s, axis, ContactPartHost::PartGravitySI(), apex, RubberContact::BallSI());
+         m_rod->part.SetPinMemory(ContactSettings::Get().pinMemory);   // [Contact] pin_memory (the rod keeps the default mu_dynamic_ratio)
          const RubberContact::V3 o = m_rod->Origin();
          const double reach = m_rod->Reach();
          const float lo[3] = { (float)((o.x - reach) / U), (float)((o.y - reach) / U), (float)((o.z - reach) / U) };

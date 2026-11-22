@@ -360,6 +360,7 @@ namespace Turntables
          ContactPartHost *const host = new ContactPartHost(table, t.part, std::make_unique<DiscAdapter>(t.part, t.name, note), ps, file, t.name, "turntable", lo, hi);
          t.part->gp.Build(t.part->gp.motor, GroupStep::V3(t.x * UM, t.y * UM, t.z * UM), t.radiusMm * 1e-3, (double)zBottom * UM, ps.edgeRadiusMm * 1e-3);
          t.part->gp.dynRatio = ContactSettings::Get().muDynamicRatio;
+         t.part->gp.SetPinMemory(ContactSettings::Get().pinMemory);
          t.part->rp = ps.ToParams();
          t.part->layerM = host->LayerM();
          hosts.push_back(host);   // the physics engine owns it and deletes it with itself (the host is in the process-wide registry: a leaked one is tested against every ball in every later session)

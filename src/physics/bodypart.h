@@ -131,6 +131,7 @@ namespace GroupStep
       BodyPart()
       {
          KeepState<BodyState>(this);
+         pinHolds = pinMemory;   // (at rest at the start: holds under pin_memory 1; the owner's SetPinMemory sets it from the setting)
          WipeEachAttempt<BodyAttemptWork>(this);
          KeepQueue(&stopEvents);
       }
@@ -141,6 +142,13 @@ namespace GroupStep
       std::vector<BodyStopEvent> stopEvents;   // until the owner reads them
       // the pin's law: a stick spring in its hole (it holds to the static limit, slides at dynRatio times it)
       double dynRatio = 0.85;   // [Contact] mu_dynamic_ratio
+      bool pinMemory = true;    // [Contact] pin_memory: the step's friction limit is the static one if the pin held at the end of the last step (pinHolds), else dynRatio times it (PinStep); false = chosen at each guess
+      // the owner, at the table's start: a part at rest there holds (pin_memory 1; pin_design.md 2.5); 0 as before (not holding)
+      void SetPinMemory(const bool on)
+      {
+         pinMemory = on;
+         pinHolds = on && rate == 0.0;
+      }
 
       // ---- what the derived part supplies ----
       virtual double StoredEnergy(double at) const = 0;
@@ -543,7 +551,10 @@ namespace GroupStep
          pm.c = kPinShearTan * std::sqrt(pm.K * mass);
          const double s0 = pm.K > pinK ? pinS * (pinK / pm.K) : pinS, sTr = s0 + dq, mTr = -0.5 * pm.K * (s0 + sTr) - pm.c * dq / h;
          pm.loss = held0 - 0.5 * pm.K * s0 * s0;
-         if (std::fabs(mTr) <= lim)
+         // pin_memory 1: one limit for the whole step, the static one if the pin held at the end of the last step, else the sliding one; it holds within it, else slides at it
+         // (the torque bends at the limit, no jump between guesses). 0: holds within the static limit, slides at dynRatio times it
+         const double holdLim = pinMemory && !pinHolds ? dynRatio * lim : lim, slideLim = pinMemory ? holdLim : dynRatio * lim;
+         if (std::fabs(mTr) <= holdLim)
          {
             pm.M = mTr;
             pm.s1 = sTr;
@@ -552,7 +563,7 @@ namespace GroupStep
          }
          else
          {
-            pm.M = mTr > 0.0 ? dynRatio * lim : -dynRatio * lim;
+            pm.M = mTr > 0.0 ? slideLim : -slideLim;
             pm.s1 = (-pm.M - s0 * (0.5 * pm.K - pm.c / h)) / (0.5 * pm.K + pm.c / h);   // -M = 0.5 K (s0 + s1) + c (s1 - s0) / h
             pm.loss += std::fabs(pm.M * (sTr - pm.s1)) + pm.c * (pm.s1 - s0) * (pm.s1 - s0) / h;
          }
@@ -564,7 +575,7 @@ namespace GroupStep
          lossJ += PinSpringJ();
          bk.frictionJ += PinSpringJ();
          pinS = pinK = 0.0;
-         pinHolds = false;
+         pinHolds = pinMemory;   // (pin_memory 1: let go from the stop, it starts holding, pin_design.md 2.5)
       }
 
    private:

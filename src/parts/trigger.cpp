@@ -194,6 +194,7 @@ namespace
       {
          const ContactSettings &cs = ContactSettings::Get();
          m_model->gp.dynRatio = cs.muDynamicRatio;
+         m_model->gp.SetPinMemory(cs.pinMemory);
          m_model->gp.SetPieceSum(cs.hingePieceSum);
       }
       void Publish() override
