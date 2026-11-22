@@ -291,7 +291,7 @@ namespace GroupStep
       }
    };
    // peak_slope (plan runs/2026-11-22-per-peak 2.5a): the merged depth's Hessian for a level form of peaks and passes, e = s25^0.4, s25 = sum s_i d_i^2.5:
-   // H = (M - 1.5 e^0.5 gm gm^T) / e^1.5, M = sum s_i (1.5 d_i^0.5 n_i n_i^T - d_i^1.5 (I - n_i n_i^T) / r_i) (r_i = 0: n_i does not turn), gm the merged depth's gradient on
+   // H = (M - 1.5 e^0.5 gm gm^T) / e^1.5, M = sum s_i (1.5 d_i^0.5 n_i n_i^T - d_i^1.5 (I - n_i n_i^T - t_i t_i^T) / r_i) (r_i = 0: n_i does not turn; t_i a line piece's axis), gm the merged depth's gradient on
    // the ball's centre (-n grad). One peak with no turn: M = 1.5 d^0.5 n n^T = 1.5 e^0.5 gm gm^T, H = 0 (to the rounding of e = (d^2.5)^0.4). False: no pressed sum.
    inline bool PeakHessian(const HitPeaks &pk, const int np, const double *gm, double H[3][3])
    {
@@ -300,11 +300,11 @@ namespace GroupStep
       {
          const RubberContact::PeakTerm &t = pk[i];
          const double sd = std::sqrt(t.d), a = t.s * 1.5 * sd, b = t.r > 0.0 ? t.s * t.d * sd / t.r : 0.0;
-         const double n[3] = { t.n.x, t.n.y, t.n.z };
+         const double n[3] = { t.n.x, t.n.y, t.n.z }, ax[3] = { t.t.x, t.t.y, t.t.z };   // C4: a line piece turns by (I - n n^T - t t^T) / r (t = 0: a joint, vertex)
          s25 += t.s * t.d * t.d * sd;
          for (int p = 0; p < 3; p++)
             for (int q = 0; q < 3; q++)
-               M[p][q] += (a + b) * n[p] * n[q] - (p == q ? b : 0.0);
+               M[p][q] += (a + b) * n[p] * n[q] - b * ((p == q ? 1.0 : 0.0) - ax[p] * ax[q]);
       }
       if (s25 <= 0.0)
          return false;
@@ -2834,6 +2834,7 @@ namespace GroupStep
          RubberContact::RollAngle ra;
          double d0 = 0.0, d1 = 0.0, dm = 0.0, fe = 0.0, fd = 0.0, N = 0.0, aE = 0.0, dadfE = 0.0, kc = 0.0, kn = 0.0, gm[3] = {};
          bool touching = false;
+         int trCmn = -1, trFound = -1;   // (VPX_PATCH_TRACE: hm patches sharing a piece with the group (0: its reference plane); GroupMemory's start patches found in it.pm (-1 not called, -2 not touching))
          // results
          V3 Ft, xi0, xi1, ut, FsTr, rA, rB, wr, wtR, mhR;
          M3 RmS;
@@ -2847,6 +2848,33 @@ namespace GroupStep
       std::vector<int> fgEnd;                                // each end patch's group (-1 not pressed)
       std::vector<std::vector<RubberContact::PieceMem>> pmEnd;   // per item: the last Eval's end pieces with their group's memory (Accept writes it to the item)
       std::vector<signed char> pmEndOn;                      // per item: 0 not this path, 1 one group, 2 two or more
+      // diagnostics VPX_PATCH_TRACE=t0-t1 (engine ms, read once): inside the window, one log line per Eval of a patch_friction contact (PTEV: each friction group's start and end
+      // pieces, depths, load, stick/slip, memory found, stretch) and one per start patch with none of its pieces in it.pm (PTMISS); 400 lines in all. Outside: a bool test only
+      static bool PatchTraceWin(const uint32_t ms)
+      {
+         static const double *const w = []() -> const double * {
+            static double v[2];
+            const char *const e = getenv("VPX_PATCH_TRACE");
+            return e != nullptr && sscanf(e, "%lf-%lf", &v[0], &v[1]) == 2 ? v : nullptr;
+         }();
+         return w != nullptr && ms >= w[0] && ms <= w[1];
+      }
+      mutable int trLines = 0;               // (VPX_PATCH_TRACE lines written)
+      int trRound = 0, trFd = 0;             // (VPX_PATCH_TRACE: the solve's round; 1 inside NumericJacobian)
+      long trAtt = 0;                        // (VPX_PATCH_TRACE: attempts started)
+      static std::string TraceIds(const Hit &hh, const HitPatch &P) { std::string s; char b[24]; for (int q = 0; q < P.pn; q++) { snprintf(b, sizeof b, "%s%d", q ? "," : "", hh.pc[P.p0 + q]); s += b; } return s; }
+      static std::string TracePmIds(const std::vector<RubberContact::PieceMem> &v) { std::string s; char b[24]; for (size_t q = 0; q < v.size(); q++) { snprintf(b, sizeof b, "%s%d", q ? "," : "", v[q].id); s += b; } return s; }
+      std::vector<signed char> pmEndJoin, pmEndSplit;        // per item: the last Eval's groups with more start than end patches (join), more end than start (split)
+      int fgJoins = 0, fgSplits = 0;                         // FrictionGroups' last call: its joins and splits
+      // patch_friction counters (running totals logged at 1, 2, 4, ...; the bench never closes the table): Evals with 2+ groups, joins, splits, memory pieces dropped unpressed
+      static void PfCount(std::atomic<long long> &n, const long long add, const char *what, const unsigned ms)
+      {
+         if (add <= 0)
+            return;
+         const long long was = n.fetch_add(add), c = was + add;
+         if (was == 0 || (c ^ was) > was)   // a power of 2 crossed (the top bit moved)
+            PLOGI << "patch_friction: " << c << " " << what << " (table time " << ms << " ms)";
+      }
       Buf<double> x;             // the unknowns: per ball the move (3) and the spin change (3), then the parts' own
       Buf<V3> aLast, alphaLast;  // each ball's acceleration and spin's over the last step (the next step's first guess)
       // what each function of a step works in
@@ -3799,6 +3827,7 @@ namespace GroupStep
       {
          const int n0 = h0.npat, n1 = h1.npat, nn = n0 + n1;
          fgEnd.assign(n1, -1);
+         fgJoins = fgSplits = 0;
          gStart.assign(n0, -1);
          if (nn == 0)
             return 0;
@@ -3865,6 +3894,8 @@ namespace GroupStep
             };
             G.d0 = c0n == 1 ? pat(last0).d : c0n > 1 ? std::pow(s0, 0.4) : plane(c0);
             G.d1 = c1n == 1 ? pat(last1).d : c1n > 1 ? std::pow(s1, 0.4) : plane(c1);
+            if (c0n > 0 && c1n > 0 && c0n != c1n)   // (counters: more start than end patches a join, more end than start a split)
+               (c0n > c1n ? fgJoins : fgSplits)++;
             double sm = 0.0;
             V3 gn;
             int cmn = 0, lastM = -1;
@@ -3885,6 +3916,7 @@ namespace GroupStep
                cmn++;
                lastM = p;
             }
+            G.trCmn = cmn;
             if (cmn == 1)
             {
                G.dm = hm.pat[lastM].d;
@@ -3910,11 +3942,12 @@ namespace GroupStep
       }
       // patch_friction: group g's memory from its start patches' pieces (plan 2.1, 2.4): each patch's (the first of its pieces found in it.pm), turned into the group's plane
       // (length kept); several by the parallel rule (k1 x1 + k2 x2) / (k1 + k2) per spring, k at the patch's start depth. None found: no memory
-      void GroupMemory(const Item &it, const Item &L, const Hit &h0, const int g, FG &G) const
+      void GroupMemory(const Item &it, const Item &L, const Hit &h0, const int g, FG &G, const int k) const
       {
          G.touching = false;
          G.xi = V3();
          G.ra = RubberContact::RollAngle();
+         G.trFound = -2;
          if (!it.touching)
             return;
          double wt = 0.0, wr = 0.0, ww = 0.0, stw = 0.0;
@@ -3941,7 +3974,15 @@ namespace GroupStep
                      break;
                   }
             if (m == nullptr)
+            {
+               if (trLines < 400 && PatchTraceWin(pfMs))   // (VPX_PATCH_TRACE: a start patch with none of its pieces in it.pm)
+               {
+                  trLines++;
+                  PLOGI << "PTMISS ms " << pfMs << " evc " << evalCount << " att " << trAtt << " rnd " << trRound << " fd " << trFd << " a " << it.a << " s " << it.s << " k " << k
+                        << " g " << g << " patch " << i << "/" << h0.npat << " d " << P.d << " ids [" << TraceIds(h0, P) << "] pm [" << TracePmIds(it.pm) << "] pmMulti " << it.pmMulti;
+               }
                continue;
+            }
             found++;
             one = m;
             const double kt = L.Kt(P.d), kr = L.Kr(P.d), kw = L.Ktw(P.d);
@@ -3952,6 +3993,7 @@ namespace GroupStep
             wr += kr;
             ww += kw;
          }
+         G.trFound = found;
          if (found == 0)
             return;
          G.touching = true;
@@ -4278,13 +4320,13 @@ namespace GroupStep
                G.xi = it.xi;
                G.ra = it.ra;
                if (ngF == 1 && it.pmMulti)   // the last step had 2 or more groups: the memory from the pieces (a join: the parallel rule)
-                  GroupMemory(it, L, h0, 0, G);
+                  GroupMemory(it, L, h0, 0, G, k);
             }
             else
                for (int g = 0; g < ngF; g++)
                {
                   GroupLoad(L, h, fgS[g]);
-                  GroupMemory(it, L, h0, g, fgS[g]);
+                  GroupMemory(it, L, h0, g, fgS[g], k);
                }
             F[it.a] = F[it.a] - V3(gd[0], gd[1], gd[2]) * N;   // the push (a massless part's contact: its spring is in the part's U*, only the damping here)
             if (pr)
@@ -4660,6 +4702,43 @@ namespace GroupStep
             }
             pmEnd[k].clear();
             pmEndOn[k] = (signed char)(ngF == 0 ? 0 : multiF ? 2 : 1);
+            if (pmEndJoin.size() < (size_t)ni)
+            {
+               pmEndJoin.resize(ni, 0);
+               pmEndSplit.resize(ni, 0);
+            }
+            pmEndJoin[k] = (signed char)(ngF > 0 ? std::min(fgJoins, 127) : 0);
+            pmEndSplit[k] = (signed char)(ngF > 0 ? std::min(fgSplits, 127) : 0);
+            if (ngF > 0 && trLines < 400 && PatchTraceWin(pfMs))   // (VPX_PATCH_TRACE: this Eval's friction groups)
+            {
+               trLines++;
+               char b[512];
+               snprintf(b, sizeof b, "PTEV ms %u evc %ld att %ld rnd %d fd %d h %.6g us k %d a %d s %d c %.9g %.9g %.9g pm0 %d pmMulti %d n0 %d n1 %d nm %d ngF %d",
+                        pfMs, evalCount, trAtt, trRound, trFd, h * 1e6, k, it.a, it.s, b1[it.a].c.x, b1[it.a].c.y, b1[it.a].c.z, (int)it.pm.size(), (int)it.pmMulti,
+                        h0.npat, h1.npat, hm.npat, ngF);
+               std::string s = b;
+               for (int g = 0; g < ngF; g++)
+               {
+                  const FG &Gg = fgS[g];
+                  std::string si, se;
+                  for (int i = 0; i < h0.npat; i++)
+                     if (gStart[i] == g)
+                        si += "[" + TraceIds(h0, h0.pat[i]) + "]";
+                  for (int j = 0; j < h1.npat; j++)
+                     if (fgEnd[j] == g)
+                        se += "[" + TraceIds(h1, h1.pat[j]) + "]";
+                  snprintf(b, sizeof b, " | g%d s%s e%s d0 %.6g dm %.6g d1 %.6g cmn %d N %.6g %s found %d xi0 %.6g xi1 %.6g n %.6f %.6f %.6f", g, si.c_str(), se.c_str(),
+                           Gg.d0 * 1e6, Gg.dm * 1e6, Gg.d1 * 1e6, Gg.trCmn, Gg.N, Gg.slipping ? "slip" : "stick", ngF == 1 && !it.pmMulti ? 9 : Gg.trFound,   // (found 9: one group, memory from it.xi)
+                           Gg.xi0.Length() * 1e6, Gg.xi1.Length() * 1e6, Gg.n.x, Gg.n.y, Gg.n.z);
+                  s += b;
+               }
+               PLOGI << s;
+            }
+            if (multiF)
+            {
+               static std::atomic<long long> nEvalMulti { 0 };
+               PfCount(nEvalMulti, 1, "Evals with 2 or more friction groups", pfMs);
+            }
             if (ngF > 0)   // patch_friction: the end pieces with their group's memory (Accept keeps them on the item)
             {
                for (int j = 0; j < h1.npat; j++)
@@ -5786,7 +5865,18 @@ namespace GroupStep
             if (h0.nt > 0)
                h0s[k] = h0;
             else
+            {
                h0s[k].nt = 0;
+               Hit &hs = h0s[k];   // patch_friction: the start's patches and their pieces (the friction groups' start side and memory; without them every group's d0 is a plane's)
+               hs.npat = h0.npat;
+               hs.pat.Fit(hs.npat);
+               for (int j = 0; j < hs.npat; j++)
+                  hs.pat[j] = h0.pat[j];
+               hs.npc = h0.npc;
+               hs.pc.Fit(hs.npc);
+               for (int j = 0; j < hs.npc; j++)
+                  hs.pc[j] = h0.pc[j];
+            }
             farNow[k] = !farOff && OutOfReach(item[k], h0.delta, h, h0);
             if (farNow[k])
                continue;
@@ -6004,10 +6094,16 @@ namespace GroupStep
          double lastCh = INFINITY;
          int stallCount = 0, sinceBest = 0;
          double stallMin = 0.0, bestMove = INFINITY;
+         trAtt++;   // (VPX_PATCH_TRACE's attempt, round and difference-Jacobian marks)
          for (; round <= set.maxRounds; round++)
          {
+            trRound = round;
             if (jacNow != 0)
+            {
+               trFd = 1;
                NumericJacobian(h);   // into jacFd (the Eval calls it makes are undone by the Eval below)
+               trFd = 0;
+            }
             partEvalFailed = false;
             if (jacNow == 0 && round > 1 && lastCh < set.tolCheckMove && !gripMoved && Eval(h, x, Res, nullptr, trialCached))
             {
@@ -6532,6 +6628,24 @@ namespace GroupStep
                it.ra = e.ra1;
                if (k < (int)pmEndOn.size() && pmEndOn[k] > 0)   // patch_friction: the memory on the end pieces (plan 2.1); a piece not pressed now loses it
                {
+                  {
+                     static std::atomic<long long> nJoin { 0 }, nSplit { 0 }, nDrop { 0 };
+                     long long dropped = 0;
+                     for (const RubberContact::PieceMem &om : it.pm)
+                     {
+                        bool kept = false;
+                        for (const RubberContact::PieceMem &nm2 : pmEnd[k])
+                           if (nm2.id == om.id)
+                           {
+                              kept = true;
+                              break;
+                           }
+                        dropped += kept ? 0 : 1;
+                     }
+                     PfCount(nJoin, pmEndJoin[k], "joins in accepted steps", pfMs);
+                     PfCount(nSplit, pmEndSplit[k], "splits in accepted steps", pfMs);
+                     PfCount(nDrop, dropped, "memory pieces dropped unpressed", pfMs);
+                  }
                   it.pm = pmEnd[k];
                   it.pmMulti = pmEndOn[k] == 2;
                   it.pmEs = e.pmEs;

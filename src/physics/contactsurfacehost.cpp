@@ -8,6 +8,7 @@
 #include <fstream>
 #include <sstream>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <map>
 #include <mutex>
@@ -2000,6 +2001,62 @@ int ContactSurfaceHost::PathReach(const SurfaceContact &it, const RubberContact:
    return 0;
 }
 
+// patch_friction (plan 3.6, brief p2b1b item 2): the arrival rule (ArrivalStep: gap, closing speed, a) also for the ridges between patches: each unpressed shared edge between two pressed
+// faces of different patches (about to press: a join), and each pressed pass of the level form (about to let go: a split). A static mesh only (a tube never gets ArrivalS).
+// The patches at c from ProbePatches (its pieces: PatchPieces; its passes: PeakTerms, written when 2 or more peaks); thread-local lists, capacity reused. Counts each bound that sets h.
+double ContactSurfaceHost::RidgeArrival(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, const RubberContact::V3 &v, const double a, const double hIn) const
+{
+   thread_local std::vector<RubberContact::TubeProbe> pl;
+   thread_local std::vector<std::pair<int, int>> fp;   // (pressed face, its patch)
+   ProbePatches(bs, it, c, pl);
+   const RubberContact::PatchPieceList &pp = RubberContact::PatchPieces();
+   double h = hIn;
+   for (const RubberContact::PeakTerm &t : RubberContact::PeakTerms())   // a pass about to let go: its depth falls at v . n
+      if (t.s < 0.0 && t.d > 0.0)
+         h = RubberContact::ArrivalStep(t.d, std::max(v.Dot(t.n), 0.0), a, h);
+   const int np = (int)pp.off.size() - 1;
+   if (np >= 2 && pl.size() >= 2)
+   {
+      fp.clear();
+      for (int p = 0; p < np; p++)
+         for (int q = pp.off[p]; q < pp.off[p + 1]; q++)
+            if (pp.id[q] >= 0 && pp.id[q] != RubberContact::PatchPieceList::kNoPiece)
+               fp.emplace_back(pp.id[q], p);
+      const double S = bs.R - it.gs.zero;
+      for (const auto &f : fp)
+         for (int e = 0; e < 3; e++)
+         {
+            const int o = m_surface->nb[f.first][e];
+            if (o <= f.first)   // each shared edge once (from its lower face)
+               continue;
+            int po = -1;
+            for (const auto &g : fp)
+               if (g.first == o)
+                  po = g.second;
+            if (po < 0 || po == f.second)
+               continue;
+            const RubberContact::SurfaceTri &T = m_surface->tris[f.first];
+            const RubberContact::V3 *vt[3] = { &T.a, &T.b, &T.c };
+            const int ea = e, eb = (e + 1) % 3;
+            const bool fwd = m_surface->vid[f.first][ea] < m_surface->vid[f.first][eb];   // (edgeMeasure's order)
+            const RubberContact::V3 q = fwd ? RubberContact::SegNearest(*vt[ea], *vt[eb], c) : RubberContact::SegNearest(*vt[eb], *vt[ea], c);
+            const RubberContact::V3 dv = c - q;
+            const double dist = dv.Length();
+            if (dist <= 1e-12 || dist <= S)
+               continue;   // (pressed: the patches are linked by it)
+            h = RubberContact::ArrivalStep(dist - S, std::max(-v.Dot(dv) / dist, 0.0), a, h);
+         }
+   }
+   if (h < hIn)   // (counter: the ridge bound set the step; running totals at 1, 2, 4, ...)
+   {
+      static std::atomic<long long> nRidge { 0 };
+      const long long was = nRidge.fetch_add(1), cnt = was + 1;
+      if (was == 0 || (cnt ^ was) > was)
+         PLOGI << "patch_friction: " << cnt << " ridge-arrival step bounds (object " << Name() << ")";
+   }
+   return h;
+}
+
 double ContactSurfaceHost::ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, const int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, const double a, const double hMax, const double touchM, const double arriveM) const
 {
    CheckProfScope checkProf(2);   // P3a profile (diagnostics only)
@@ -2015,7 +2072,10 @@ double ContactSurfaceHost::ArrivalS(const RubberContact::BallSI &bs, const Surfa
    checkProf.Tab(ft);
    const TabCheck tabCheck(ft, this, it, c);
    if (m_surface != nullptr)
-      return RubberContact::ArrivalTriangles(bs, m_surface->tris, it.Faces(c), nearestSeg, c, v, a, hMax, touchM, arriveM, fr);
+   {
+      const double hF = RubberContact::ArrivalTriangles(bs, m_surface->tris, it.Faces(c), nearestSeg, c, v, a, hMax, touchM, arriveM, fr);
+      return ContactSettings::Get().patchFriction ? RidgeArrival(bs, it, c, v, a, hF) : hF;
+   }
    return hMax;   // a tube: never called (the one caller, the group step's ringCap, skips an item with no face list, candR < 0, and a tube item never gets one)
 }
 

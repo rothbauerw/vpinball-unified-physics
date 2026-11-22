@@ -86,10 +86,10 @@ VPX_BENCH_PREROLL=<ms>     bench physics time before the driver's time 0 (defaul
 **Diagnostics** (log or file only; a ball's bytes do not change)
 ```
 VPX_SPEED_WATCH=<m/s>      fast-ball warning with the ball's last 8 cycles and every other ball (default 8, 0 = off; at most once a second per ball).
-VPX_CONTACT_TRACE=1|2      contact engage / release / hit lines (1); also per-cycle lines (2, huge). Old name VPX_RING_TRACE.
+VPX_CONTACT_TRACE=1|2      contact engage / release / hit lines (1); also per-cycle lines (2, huge).
 VPX_CONTACT_LOG=<csv>      every stock collision and resting contact of the first ball: object type and name (stock engine, unified = 0, only).
-VPX_CONTACT_NEAR=x,y,r     rubber faces within r of (x, y), U, when the surface is built. Old name VPX_RING_NEAR.
-VPX_CONTACT_TIMING=<csv>   per-cycle cost of the contact system by stage. One file per process (every Play of an editor session).
+VPX_CONTACT_NEAR=x,y,r     rubber faces within r of (x, y), U, when the surface is built.
+VPX_CONTACT_TIMING=<csv>   per-cycle cost of the contact system by stage. One file per process.
 VPX_CONTACT_PROFILE=<n>    scoped timers, a log table every n step calls (default 5000).     VPX_CHECK_PROFILE=1   one check's time split ("Check profile"), cut, tube counters ("Finder P4b/P5 totals").
 VPX_PHYS_TIMING=<csv>      frame and iteration timing rows past a threshold (us): VPX_PHYS_TIMING_FRAME_US, _GAP_US, _ITER_US.
 VPX_RUBBERS_LOG=1          a RubberSolve line when a rubber contact ends: in / out velocity, spin, dwell, peak force.
@@ -110,12 +110,13 @@ VPX_GROUP_ROUND_TRACE=1    per-round Newton trace with probe notes (group and hi
 VPX_GROUP_SEARCH_TRACE=1   the failing stop-search solve, per round, to stderr.     VPX_GROUP_STOP_TRACE=1   the first 12 stop checks of a cycle.
 VPX_GROUP_JAC_MODE=1       also a central-difference Jacobian, logged; changes last digits.  VPX_GROUP_JAC_WINDOW=t0-t1  mode 1 or 2 only in that ms (engine) window; else as mode 0.
 VPX_SKIRT_ROW_TRACE=1      with ROUND_TRACE: bumper skirt rows by term per round (m/s), tilt move, each chord's change and mismatch.
-VPX_FINDER_CHECK=1         finder check: missed pieces within reach, face-table mismatches, playfield cut lists and static tube readers against the full scan (log, screen).
+VPX_FINDER_CHECK=1         finder vs the full scan: missed pieces within reach, face-table mismatches, playfield cut lists, static tube readers (log, screen).
 VPX_RELOOK_TRACE=1         energy-reach re-look: each bound term, the move; no cap.
-VPX_PATCH_CHECK=1          patch_contacts 1: each static host's patch list summed against today's merged (s25, g); counts by patch, mismatches (rel > 1e-12), first 20 logged, running totals; with peak_slope 1 also one peak = today's slope.
+VPX_PATCH_CHECK=1          patch_contacts 1: static hosts' patch lists summed vs the merged one (s25, g): counts, mismatches (rel > 1e-12, 20 logged); peak_slope 1: one peak = today's slope.
+VPX_PATCH_TRACE=t0-t1      patch_friction, engine ms: per Eval each friction group (PTEV), start patches not in memory (PTMISS); 400 lines.
 VPX_PAIR_CHECK=1           ball pairs: the every-pair test beside the sorted list; counts any pair the list missed (log).
 VPX_HINGE_NEAR_ALL=1       every near-piece list takes all pieces (A/B of the short list, same result expected).
-VPX_SNAPSHOT_TEST=1        after each contact step: restore the snapshot, step again, log any difference (=2 changes the result: see below).
+VPX_SNAPSHOT_TEST=1        after each contact step: restore the snapshot, step again, log any difference (=2: see below).
 ```
 
 **Change the result** (test only; each is removed or made an ini key: to-do 1.32)
