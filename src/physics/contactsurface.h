@@ -87,6 +87,8 @@ public:
    virtual RubberContact::TubeProbe Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const = 0;
    // The same, as the group step's law reads it: the ball's contact patch has a size, so a fold under it pushes along the patch's average (rubbercontact.h PatchTube, PatchTriangles)
    virtual RubberContact::TubeProbe ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const { return Probe(bs, it, c); }
+   // patch_contacts (runs/2026-11-22-per-peak plan 3.1): one entry per pressed patch, each its own depth, normal and gradient over that patch only; one patch: exactly ProbePatch's answer
+   virtual void ProbePatches(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, std::vector<RubberContact::TubeProbe> &out) const { out.assign(1, ProbePatch(bs, it, c)); }
    // the path test: can a ball of radius R whose centre moves straight from s to s + d touch the surface on the way (any piece within R plus the piece's radius of the path)?
    // 1 = yes, 0 = no (the whole path checked exactly, rubbercontact.h path kit), -1 = this surface has no exact path test (a cord band, no query): the caller probes as before
    virtual int PathReach(const SurfaceContact & /*it*/, const RubberContact::V3 & /*s*/, const RubberContact::V3 & /*d*/, double /*R*/) const { return -1; }

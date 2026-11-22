@@ -361,6 +361,70 @@ namespace
       return on;
    }
 
+   // patch_contacts check mode (VPX_PATCH_CHECK=1, diagnostics only; runs/2026-11-22-per-peak P1): at every ProbePatch of a static host, the patch list's summed (s25, g) against
+   // today's merged answer, both read back from the probes (s25 = (delta - zero)^2.5, g = normal grad (delta - zero)^1.5); relative difference (s25 by s25, g by d^1.5) > 1e-12 is a mismatch
+   bool PatchCheckOn()
+   {
+      static const bool on = [] { const char *e = std::getenv("VPX_PATCH_CHECK"); return e != nullptr && e[0] == '1'; }();
+      return on;
+   }
+   struct PatchCheckStats
+   {
+      uint64_t probes = 0, one = 0, two = 0, more = 0, mism = 0;
+      double worst = 0.0;
+   };
+   PatchCheckStats g_patchCheck;
+   std::mutex g_patchCheckMu;
+
+   void PatchCompare(const std::string &name, const RubberContact::TubeProbe &pr, const std::vector<RubberContact::TubeProbe> &list, const double zero)
+   {
+      const auto terms = [zero](const RubberContact::TubeProbe &p, double &s25, RubberContact::V3 &g) {
+         const double d = p.delta - zero;
+         if (d <= 0.0)
+            return;
+         const double d15 = d * std::sqrt(d);
+         s25 += d * d15;
+         g = g + p.normal * (p.grad * d15);
+      };
+      double s0 = 0.0, s1 = 0.0;
+      RubberContact::V3 g0, g1;
+      terms(pr, s0, g0);
+      for (const RubberContact::TubeProbe &p : list)
+         terms(p, s1, g1);
+      double rel = 0.0;
+      if (s0 > 0.0 || s1 > 0.0)
+      {
+         const double s = std::max(s0, s1);
+         rel = std::max(std::abs(s1 - s0) / s, (g1 - g0).Length() / std::pow(s, 0.6));
+      }
+      const std::lock_guard<std::mutex> lock(g_patchCheckMu);
+      PatchCheckStats &st = g_patchCheck;
+      st.probes++;
+      (list.size() <= 1 ? st.one : list.size() == 2 ? st.two : st.more)++;
+      st.worst = std::max(st.worst, rel);
+      if (rel > 1e-12 && st.mism++ < 20)
+      {
+         std::ostringstream o;
+         o << "Patch check mismatch: object " << name << ", merged depth " << pr.delta - zero << " m, patches " << list.size() << ", depths";
+         for (const RubberContact::TubeProbe &p : list)
+            o << " " << p.delta - zero;
+         o << ", rel diff " << rel;
+         PLOGW << o.str();
+      }
+   }
+
+   // the totals line: running totals once a second of table time (FinderTotals; the bench ends without closing the table), and at the table's close, which clears them
+   void PatchCheckLog(const bool close)
+   {
+      if (!PatchCheckOn())
+         return;
+      const std::lock_guard<std::mutex> lock(g_patchCheckMu);
+      const PatchCheckStats &st = g_patchCheck;
+      PLOGI << "Patch check: probes " << st.probes << ", one-patch " << st.one << ", two " << st.two << ", more " << st.more << ", mismatches " << st.mism << ", worst rel diff " << st.worst;
+      if (close)
+         g_patchCheck = PatchCheckStats();
+   }
+
    inline double Comp(const RubberContact::V3 &v, const int a) { return a == 0 ? v.x : a == 1 ? v.y : v.z; }
 
    struct CheckProfScope   // P3a profile (diagnostics only, VPX_CHECK_PROFILE=1): one contact check's time, split in contactprof.h CheckData
@@ -641,6 +705,7 @@ namespace
    {
       if (meshHost && g_finder.built)
       {
+         PatchCheckLog(true);   // patch_contacts check mode totals (VPX_PATCH_CHECK=1)
          ContactSurfaceHost::FinderTotals(true);
          FinderReport();
          g_finder.Reset();
@@ -1728,13 +1793,28 @@ RubberContact::TubeProbe ContactSurfaceHost::Probe(const RubberContact::BallSI &
 
 RubberContact::TubeProbe ContactSurfaceHost::ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const
 {
+   if (!ContactSettings::Get().patchContacts || !PatchCheckOn())
+      return ProbeList(bs, it, c, nullptr);
+   thread_local std::vector<RubberContact::TubeProbe> list;   // check mode (VPX_PATCH_CHECK=1): the patch list beside today's answer, which is returned unchanged
+   const RubberContact::TubeProbe pr = ProbeList(bs, it, c, &list);
+   PatchCompare(Name(), pr, list, it.gs.zero);
+   return pr;
+}
+
+void ContactSurfaceHost::ProbePatches(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, std::vector<RubberContact::TubeProbe> &out) const
+{
+   ProbeList(bs, it, c, &out);
+}
+
+RubberContact::TubeProbe ContactSurfaceHost::ProbeList(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, std::vector<RubberContact::TubeProbe> *out) const
+{
    if (m_surface != nullptr && !g_nearCmp && it.qFaces != nullptr && FinderCheckOn())   // P3b check mode: as Probe
    {
       g_nearCmp = true;
       g_nearOff = true;
-      const RubberContact::TubeProbe r0 = ProbePatch(bs, it, c);
+      const RubberContact::TubeProbe r0 = ProbeList(bs, it, c, nullptr);
       g_nearOff = false;
-      const RubberContact::TubeProbe r1 = ProbePatch(bs, it, c);
+      const RubberContact::TubeProbe r1 = ProbeList(bs, it, c, out);
       g_nearCmp = false;
       if (!SameProbe(r0, r1))
       {
@@ -1762,7 +1842,7 @@ RubberContact::TubeProbe ContactSurfaceHost::ProbePatch(const RubberContact::Bal
    if (ContactSettings::Get().multiContact)   // every pressed part its own Hertz bar (rubbercontact.h BarsTube / BarsTriangles); the playfield too (its holes are in its faces: meshholes.h)
    {
       if (m_surface != nullptr)
-         return RubberContact::BarsTriangles(bs, m_surface->tris, m_surface->vid, m_surface->nb, *prL, m_set.edgeRadiusMm * 1e-3, c, it.gs.zero, pPr, &m_surface->fold);   // P3b: the near pass's faces (bars only use faces within R)
+         return RubberContact::BarsTriangles(bs, m_surface->tris, m_surface->vid, m_surface->nb, *prL, m_set.edgeRadiusMm * 1e-3, c, it.gs.zero, pPr, &m_surface->fold, out);   // P3b: the near pass's faces (bars only use faces within R)
       const bool prof = SegProfOn() && !CordModel();   // P5 counters (static tubes; diagnostics only)
       const uint64_t t0 = prof ? __rdtsc() : 0;
       const int n = (int)m_ptsSI.size();
@@ -1772,7 +1852,7 @@ RubberContact::TubeProbe ContactSurfaceHost::ProbePatch(const RubberContact::Bal
       {
          const double need = bs.R + m_radiusSI - it.gs.zero;
          const RubberContact::TubeProbe p0 = ProbeSegs(bs, it, c, need, segs);
-         pr = RubberContact::BarsTube(bs, m_ptsSI.data(), n, m_radiusSI, c, m_tubePre, it.gs.zero, segs, &p0);
+         pr = RubberContact::BarsTube(bs, m_ptsSI.data(), n, m_radiusSI, c, m_tubePre, it.gs.zero, segs, &p0, out);
          if (FinderCheckOn())   // check mode: the whole tube's answer
          {
             const RubberContact::TubeProbe w = RubberContact::BarsTube(bs, m_ptsSI.data(), n, m_radiusSI, c, m_tubePre, it.gs.zero);
@@ -1783,7 +1863,7 @@ RubberContact::TubeProbe ContactSurfaceHost::ProbePatch(const RubberContact::Bal
          }
       }
       else
-         pr = RubberContact::BarsTube(bs, m_ptsSI.data(), n, m_radiusSI, c, m_tubePre, it.gs.zero);
+         pr = RubberContact::BarsTube(bs, m_ptsSI.data(), n, m_radiusSI, c, m_tubePre, it.gs.zero, nullptr, nullptr, out);
       if (prof)
       {
          g_segStats.calls[1]++;
@@ -1827,6 +1907,8 @@ RubberContact::TubeProbe ContactSurfaceHost::ProbePatch(const RubberContact::Bal
          g_segStats.ticks[2] += __rdtsc() - t0;
       }
    }
+   if (out != nullptr)   // multi_contact 0: one merged answer
+      out->assign(1, pr);
    return pr;
 }
 
@@ -3037,6 +3119,7 @@ void ContactSurfaceHost::FinderTotals(const bool force)
    if (!force && now < g.nextTotalsMs)
       return;
    g.nextTotalsMs = now + 1000;
+   PatchCheckLog(false);   // patch_contacts check mode (VPX_PATCH_CHECK=1): running totals
    if (GroupStep::partFinderProf)   // the part finder's counters, running totals once a second of table time (VPX_CHECK_PROFILE or VPX_FINDER_CHECK)
       PLOGI << GroupStep::PartFinderReport();
    if (g.queries == 0)

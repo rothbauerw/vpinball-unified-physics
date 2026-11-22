@@ -112,6 +112,7 @@ VPX_GROUP_JAC_MODE=1       also a central-difference Jacobian, logged; changes l
 VPX_SKIRT_ROW_TRACE=1      with ROUND_TRACE: bumper skirt rows by term per round (m/s), tilt move, each chord's change and mismatch.
 VPX_FINDER_CHECK=1         finder check: missed pieces within reach, face-table mismatches, playfield cut lists and static tube readers against the full scan (log, screen).
 VPX_RELOOK_TRACE=1         energy-reach re-look: each bound term, the move; no cap.
+VPX_PATCH_CHECK=1          patch_contacts 1: each static host's patch list summed against today's merged (s25, g); counts by patch number, mismatches (rel > 1e-12), first 20 logged; running totals once a second and at table end.
 VPX_PAIR_CHECK=1           ball pairs: the every-pair test beside the sorted list; counts any pair the list missed (log).
 VPX_HINGE_NEAR_ALL=1       every near-piece list takes all pieces (A/B of the short list, same result expected).
 VPX_SNAPSHOT_TEST=1        after each contact step: restore the snapshot, step again, log any difference (=2 changes the result: see below).

@@ -1462,8 +1462,17 @@ namespace RubberContact
       int order;     // on equal depths: pieces (0) before the humps that join them (1)
    };
 
+   // patch_contacts (runs/2026-11-22-per-peak plan 3.1): one pressed patch (a merge tree's root: every piece joined to it by a path that stays pressed), its own fold sum over its own
+   // peaks (pass terms included) and its deepest node (the root)
+   struct PatchSum
+   {
+      FoldSum sum;
+      int deep = -1;
+   };
+
    // nodes: the pieces pressing the ball (d > 0); adj: pairs of nodes that touch on the surface. Returns the number of peaks; sum holds their s25 and g.
-   inline int MergeBars(const std::vector<BarNode> &nodes, const std::vector<std::pair<int, int>> &adj, FoldSum &sum)
+   // patches (optional): one entry per patch, in the order of its first peak; sum itself is unchanged (the same additions in the same order).
+   inline int MergeBars(const std::vector<BarNode> &nodes, const std::vector<std::pair<int, int>> &adj, FoldSum &sum, std::vector<PatchSum> *patches = nullptr)
    {
       const int m = (int)nodes.size();
       thread_local std::vector<int> ord, parent, peak, first, nbr, fill;   // scratch kept per thread: capacity reused, no heap use per call
@@ -1524,6 +1533,12 @@ namespace RubberContact
             parent[lose] = keep;
          }
       }
+      thread_local std::vector<int> slot;   // patch_contacts: root -> its entry in patches, -1 none yet
+      if (patches != nullptr)
+      {
+         patches->clear();
+         slot.assign(m, -1);
+      }
       int peaks = 0;
       for (int i = 0; i < m; i++)
       {
@@ -1539,6 +1554,25 @@ namespace RubberContact
             const double p = pass[i], p15 = p * std::sqrt(p);
             sum.s25 -= p * p15;
             sum.g = sum.g - passN[i] * p15;
+         }
+         if (patches != nullptr)   // the same terms into the peak's own patch (a root is its group's deepest node: the deeper group always keeps its root)
+         {
+            const int r = find(i);
+            if (slot[r] < 0)
+            {
+               slot[r] = (int)patches->size();
+               patches->push_back(PatchSum());
+               patches->back().deep = r;
+            }
+            FoldSum &ps = (*patches)[slot[r]].sum;
+            ps.s25 += d * d15;
+            ps.g = ps.g + nodes[i].n * d15;
+            if (passed[i] && pass[i] > 0.0)
+            {
+               const double p = pass[i], p15 = p * std::sqrt(p);
+               ps.s25 -= p * p15;
+               ps.g = ps.g - passN[i] * p15;
+            }
          }
          peaks++;
       }
@@ -1560,19 +1594,29 @@ namespace RubberContact
    // One peak: ProbeTube's result unchanged. More: the level form above, reff and the nearest point kept from the deepest (held reff, piece 2).
    // segs, pr0 (shared_finder P5): the segments to read, in index order, and their probe (ProbeTube's result, given by the caller); null: all, probed here
    inline TubeProbe BarsTube(const BallSI &ball, const V3 *pts, const int n, const double rho, const V3 &c, const TubePre &pre, const double zero, const std::vector<int> *segs = nullptr,
-                             const TubeProbe *pr0 = nullptr)
+                             const TubeProbe *pr0 = nullptr, std::vector<TubeProbe> *patchesOut = nullptr)
    {
       TubeProbe pr = pr0 != nullptr ? *pr0 : ProbeTube(ball, pts, n, rho, c, &pre);
-      if (!pr.overlap || pr.seg < 0 || pr.reff <= 0.0 || pr.delta <= zero || n < 3)
+      const auto one = [&]() {   // patch_contacts: one patch (or none): today's answer is its single entry
+         if (patchesOut != nullptr)
+         {
+            patchesOut->clear();
+            patchesOut->push_back(pr);
+         }
          return pr;
+      };
+      if (!pr.overlap || pr.seg < 0 || pr.reff <= 0.0 || pr.delta <= zero || n < 3)
+         return one();
       const double S = ball.R + rho;
       const bool ring = pts[0].x == pts[n - 1].x && pts[0].y == pts[n - 1].y && pts[0].z == pts[n - 1].z;
       const int nv = ring ? n - 1 : n;   // joints: point n-1 of a ring is joint 0
       thread_local std::vector<BarNode> nodes;   // scratch kept per thread
       thread_local std::vector<std::pair<int, int>> adj;
       thread_local std::vector<int> jointNode;
+      thread_local std::vector<int> nodeSeg;   // patch_contacts: node -> its piece (segment i, or joint j as -(j + 1))
       nodes.clear();
       adj.clear();
+      nodeSeg.clear();
       jointNode.assign(nv, -2);   // -2 not looked at, -1 not pressed
       const auto joint = [&](int j) {
          if (j >= nv)
@@ -1587,6 +1631,7 @@ namespace RubberContact
             {
                jointNode[j] = (int)nodes.size();
                nodes.push_back({ d, dv / dist, 1 });
+               nodeSeg.push_back(-(j + 1));
             }
          }
          return jointNode[j];
@@ -1610,6 +1655,7 @@ namespace RubberContact
             {
                const int k = (int)nodes.size();
                nodes.push_back({ d, dv / dist, 0 });
+               nodeSeg.push_back(i);
                if (j0 >= 0)
                   adj.emplace_back(k, j0);
                if (j1 >= 0)
@@ -1621,9 +1667,48 @@ namespace RubberContact
             adj.emplace_back(j0, j1);
       }
       FoldSum sum;
-      if (MergeBars(nodes, adj, sum) <= 1)
-         return pr;
+      thread_local std::vector<PatchSum> patches;
+      if (MergeBars(nodes, adj, sum, patchesOut != nullptr ? &patches : nullptr) <= 1)
+         return one();
+      const TubeProbe base = pr;   // the deepest piece's probe (reff, point, seg)
       sum.Finish(pr, zero);
+      if (patchesOut != nullptr)
+      {
+         if (patches.size() <= 1)
+            return one();   // one patch: today's merged answer
+         patchesOut->clear();
+         int top = patches[0].deep;   // the deepest node of all (MergeBars' tie rule): its patch keeps the probe's reff, point and seg
+         for (const PatchSum &p : patches)
+            if (nodes[p.deep].d > nodes[top].d || (nodes[p.deep].d == nodes[top].d && p.deep < top))
+               top = p.deep;
+         thread_local std::vector<int> one1;
+         for (const PatchSum &p : patches)
+         {
+            TubeProbe q = base;
+            if (p.deep != top)   // the patch's deepest piece probed alone: a segment, or a joint as the segments that meet there (index order)
+            {
+               const int s = nodeSeg[p.deep];
+               one1.clear();
+               if (s >= 0)
+                  one1.push_back(s);
+               else
+               {
+                  const int j = -s - 1;
+                  if (j > 0)
+                     one1.push_back(j - 1);
+                  if (j < n - 1)
+                     one1.push_back(j);
+                  if (ring && j == 0)
+                     one1.push_back(n - 2);
+               }
+               const int hint = pre.hint;
+               q = ProbeTube(ball, pts, n, rho, c, &pre, &one1);
+               pre.hint = hint;
+            }
+            p.sum.Finish(q, zero);
+            patchesOut->push_back(q);
+         }
+      }
       return pr;
    }
 
@@ -1632,7 +1717,7 @@ namespace RubberContact
    // One peak: ProbeTriangles' result unchanged. More: the level form, reff and the nearest point kept from the deepest.
    inline TubeProbe BarsTriangles(const BallSI &ball, const std::vector<SurfaceTri> &tris, const std::vector<std::array<int, 3>> &vid, const std::vector<std::array<int, 3>> &nb,
                                   const std::vector<int> &cand, const double edgeRho, const V3 &c, const double zero, const FaceRead *fr = nullptr,
-                                  const std::vector<std::array<int8_t, 3>> *fold = nullptr)
+                                  const std::vector<std::array<int8_t, 3>> *fold = nullptr, std::vector<TubeProbe> *patchesOut = nullptr)
    {
       const ContactProf::Ticks profBars(fr != nullptr && fr->t != nullptr && fr->t->tag == 1 ? ContactProf::CD().barsCorner : ContactProf::CD().bars);   // P3c profile (diagnostics only): the whole call, the probe inside included; the rubber corners apart
       if (ContactProf::CheckOn())
@@ -1666,6 +1751,14 @@ namespace RubberContact
       thread_local std::vector<FaceHit> hits;   // each candidate measured once, by the probe (scratch kept per thread)
       hits.clear();
       TubeProbe pr = ProbeTriangles(ball, tris, cand, edgeRho, c, 0.0, &hits, fr);
+      const auto one = [&]() {   // patch_contacts: one patch (or none): today's answer is its single entry
+         if (patchesOut != nullptr)
+         {
+            patchesOut->clear();
+            patchesOut->push_back(pr);
+         }
+         return pr;
+      };
       uint64_t profT = profS ? __rdtsc() : 0;
       if (profS)
          ContactProf::CD().bProbe += profT - profEnd.t0;
@@ -1680,7 +1773,7 @@ namespace RubberContact
       {
          if (profS)
             ContactProf::CD().bRetProbe++;
-         return pr;
+         return one();
       }
       if (profS)
          ContactProf::CD().bCand += cand.size();
@@ -1766,7 +1859,7 @@ namespace RubberContact
          }
       }
       if (cbSkip && !cbCheck)
-         return pr;
+         return one();
       // an edge's nearest point from its lower-id end, so both triangles on it get the same bits
       const auto edgeMeasure = [&](const int t, const int e, V3 &nOut) {
          const SurfaceTri &T = tris[t];
@@ -1822,9 +1915,11 @@ namespace RubberContact
       thread_local std::vector<std::pair<int, int>> adj;
       thread_local std::vector<std::pair<int, int>> triNode;   // (triangle, node)
       thread_local std::vector<int> triIdx;   // triangle -> its node, -1 none; every entry set here is put back to -1 before return
+      thread_local std::vector<int> nodeTri;   // patch_contacts: node -> its triangle (a shared edge's node: its lower triangle)
       nodes.clear();
       adj.clear();
       triNode.clear();
+      nodeTri.clear();
       if (triIdx.size() < tris.size())
          triIdx.resize(tris.size(), -1);
       for (const FaceHit &fh : hits)
@@ -1866,6 +1961,7 @@ namespace RubberContact
             triIdx[i] = (int)nodes.size();   // the first node of a triangle (as the search it replaces)
          triNode.emplace_back(i, (int)nodes.size());
          nodes.push_back({ d, nn, 0 });
+         nodeTri.push_back(i);
       }
       profStamp(ContactProf::CD().bFace);
       if (profS)
@@ -1879,7 +1975,7 @@ namespace RubberContact
             triIdx[tn.first] = -1;
          if (profS)
             ContactProf::CD().bRetNodes++;
-         return pr;
+         return one();
       }
       const auto nodeOf = [&](const int t) { return triIdx[t]; };
       for (const auto &tn : triNode)
@@ -1897,6 +1993,7 @@ namespace RubberContact
                continue;   // the edge between them is not pressed: two separate contacts
             const int k = (int)nodes.size();
             nodes.push_back({ de, ne, 1 });
+            nodeTri.push_back(tn.first);
             adj.emplace_back(k, tn.second);
             adj.emplace_back(k, on);
          }
@@ -1906,20 +2003,44 @@ namespace RubberContact
       if (profS)
          ContactProf::CD().bNodes += nodes.size();
       FoldSum sum;
-      const int profPeaks = MergeBars(nodes, adj, sum);
+      thread_local std::vector<PatchSum> patches;
+      const int profPeaks = MergeBars(nodes, adj, sum, patchesOut != nullptr ? &patches : nullptr);
       profStamp(ContactProf::CD().bMerge);
       if (profPeaks <= 1)
       {
          if (profS)
             ContactProf::CD().bOnePeak++;
-         return pr;
+         return one();
       }
       if (cbCheck)   // cut B check mode: the rule would have returned the probe's single answer here
          fr->t->cbMism++;
+      const TubeProbe base = pr;   // the deepest piece's probe (reff, point, seg)
       sum.Finish(pr, zero);
       profStamp(ContactProf::CD().bFinish);
       if (profS)
          ContactProf::CD().bMulti++;
+      if (patchesOut != nullptr)
+      {
+         if (patches.size() <= 1)
+            return one();   // one patch: today's merged answer
+         patchesOut->clear();
+         int top = patches[0].deep;   // the deepest node of all (MergeBars' tie rule): its patch keeps the probe's reff, point and seg
+         for (const PatchSum &p : patches)
+            if (nodes[p.deep].d > nodes[top].d || (nodes[p.deep].d == nodes[top].d && p.deep < top))
+               top = p.deep;
+         thread_local std::vector<int> one1;
+         for (const PatchSum &p : patches)
+         {
+            TubeProbe q = base;
+            if (p.deep != top)   // the patch's deepest piece probed alone (its triangle)
+            {
+               one1.assign(1, nodeTri[p.deep]);
+               q = ProbeTriangles(ball, tris, one1, edgeRho, c);
+            }
+            p.sum.Finish(q, zero);
+            patchesOut->push_back(q);
+         }
+      }
       return pr;
    }
 
