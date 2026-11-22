@@ -12,9 +12,9 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-Plunger converted (PlungerDesign; open: section 14). GL exe and main_exe stale: pass -Exe. 1.42 (user: halvings first, tests clean): jet seat and spinner pin fixed; stand-ups skipped (face_travel 0); next slope repro (1.49/1.50) with the stress CenterRamp ball (runs/2026-11-21-halvings).
+Plunger converted (PlungerDesign; open: section 14). GL exe and main_exe stale: pass -Exe. 1.42: CenterRamp halvings = floor+wall merged in one contact. Fix: one contact per pressed patch (runs/2026-11-22-per-peak/plan.md, Status): P1 844e91d83, P2 next.
 Judge a change by one exe, its setting on vs off; never by an older exe's md5 (ModelStandards trap 112).
-Drop targets: branch drop-axis (wt-drop-axis, not merged). Design v2 (DropTargetDesign 5), plan 6 reviewed. B0, B1 (1050a4fa2) and 1.52 (3f6d54f06) committed on drop-axis. Next: B2 (DropTargetDesign 6). P4: user's Gorgar with VPX targets and slots.
+Drop targets: branch drop-axis (wt-drop-axis, not merged). Design v2 (DropTargetDesign 5), plan 6 reviewed. B0, B1, 1.52 and B2 (9c1a50809) committed on drop-axis. PAUSED (user 11-22): hits 15-30x over 30 us; 1.55 first (new lead), then B3.
 STOCK OFF done (one switch, runs/2026-11-21-stock-search/design.md): unified runs no stock, one Step per 1 ms. Play-stop-play OK (user). Untested: in-game live editor. G3/G4 met, kept for reference (user).
 N5. One reach rule from physics (speed plus force) for grouping and step length; first built in 1.34 P2. Grouping: Gate001's 81 mm swing as one-cycle travel joins two lanes. Step length: speed only, no force. Check all parts; ball pairs of unequal mass and resting-ball wake (read only).
 N7. Stress v2 bench: ball travel energy +2 % at 57 ms; spin not counted. Check total energy in the saved run (no new run).
@@ -47,7 +47,9 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 49. Jacobian: rolling resistance's torque has no slope with depth (Kr ~ a^3, its damper, its turn at the limit); every contact. Measured 1e-4 of the row (runs/2026-11-19-standup-p2/fix2).
 50. Jacobian: a mesh contact's depth slopes come from the mid-step probe; when the end lies on another facet they are wrong (0.36 of the row at a stand-up face crossing, fix2).
 52. Stop search replaced by event prediction on drop-axis (3f6d54f06, [Contact] event_predict; runs/2026-11-21-stop-search-design): open until merged into unified-physics and the old search's 0 path deleted.
+54. Playfield and turntable damp the bounce by their own alpha law (contacthost.cpp LoadPlayfieldSettings, TurntableSettings); every other hard surface uses the viscoelastic law: use the shared one (user 2026-11-21). Needs a playfield restitution (see 9.7).
 53. One 'on the stop' rule for the engine (design 1.52 Q7): 35 checks and 5+ nearness constants decide it today (runs/2026-11-21-onstop-read/onstop.md). Paper first.
+55. Cost of a ball (rule 5): Gorgar one ball ~90 us/cycle in play vs stock ~6 (user: 1.5 vs 0.1 ms per 16.7 ms frame); bench median 37 us, group steps ~9 of it. Hits 5-17 steps, 78-157 us. Find where it goes, then a hit in ~2 steps. Drop targets wait.
 
 ## 2. Flippers
 1. Rubber separation at the end stop: details from the user.

@@ -108,7 +108,7 @@ VPX_GROUP_CLAMP_TRACE=<file>  every Newton round of steps with a wire contact.
 VPX_GROUP_CONTACT_TRACE=1  per-round depth, force, friction (first 3 energy steps).     VPX_GROUP_HISTORY_TRACE=1   last 50 steps, at the first energy-step warning.
 VPX_GROUP_ROUND_TRACE=1    per-round Newton trace with probe notes (group and hinge solves), printed only with an energy-step warning.
 VPX_GROUP_SEARCH_TRACE=1   the failing stop-search solve, per round, to stderr.     VPX_GROUP_STOP_TRACE=1   the first 12 stop checks of a cycle.
-VPX_GROUP_JAC_MODE=1       also a central-difference Jacobian, logged; changes last digits.  VPX_GROUP_JAC_WINDOW=t0-t1  only in that ms window; else as mode 0.
+VPX_GROUP_JAC_MODE=1       also a central-difference Jacobian, logged; changes last digits.  VPX_GROUP_JAC_WINDOW=t0-t1  mode 1 or 2 only in that ms (engine) window; else as mode 0.
 VPX_SKIRT_ROW_TRACE=1      with ROUND_TRACE: bumper skirt rows by term per round (m/s), tilt move, each chord's change and mismatch.
 VPX_FINDER_CHECK=1         finder check: missed pieces within reach, face-table mismatches, playfield cut lists and static tube readers against the full scan (log, screen).
 VPX_RELOOK_TRACE=1         energy-reach re-look: each bound term, the move; no cap.

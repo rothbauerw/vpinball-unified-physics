@@ -2416,7 +2416,7 @@ namespace GroupStep
       }
       std::string roundBuf, failRoundBuf;   // VPX_GROUP_ROUND_TRACE: this attempt's rounds; the first failed attempt of the step
       mutable std::string probeTrace;       // VPX_GROUP_ROUND_TRACE: the carried surfaces' probes of the last Eval (end and mid, their pieces)
-      // VPX_GROUP_JAC_WINDOW=<t0>-<t1> (ms of game time; with VPX_GROUP_JAC_MODE=1; a diagnostic, read once; unset = off): the difference Jacobian is formed only in
+      // VPX_GROUP_JAC_WINDOW=<t0>-<t1> (ms of game time; with VPX_GROUP_JAC_MODE=1 or 2; a diagnostic, read once; unset = off): the difference Jacobian is formed (mode 2: and solved with) only in
       // solves inside that window (outside it a solve runs exactly as with VPX_GROUP_JAC_MODE=0); for solves that converge in that window, each round's
       // residual and evaluations, and every Jacobian entry (balls and parts) where the solve's own (a) and central differences (f) differ by more than 10 % and 1e-6
       // (jacWinBuf, written by the owner; 600 lines in all)
@@ -2634,7 +2634,7 @@ namespace GroupStep
       Jac JacAna() { return Jac(jacAnaS, jStride); }
       Jac JacFd() { return Jac(jacFdS, jStride); }
       int jacRound = 0;
-      int jacNow = 0;   // this solve's Settings::jacMode (with VPX_GROUP_JAC_WINDOW and mode 1: 1 inside the window, 0 outside)
+      int jacNow = 0;   // this solve's Settings::jacMode (with VPX_GROUP_JAC_WINDOW: the mode inside the window, 0 outside)
 
       // Test tooling, off by default (VPX_TEST_IMPULSES=1; read only: no value of a step depends on it): the impulse each force of the group gives each ball over the
       // accepted steps, h x the force and h x the torque about the ball's centre of the Eval the step was accepted on (implicit midpoint: m (v1 - v0) = h x their sum, to the
@@ -5430,7 +5430,7 @@ namespace GroupStep
          jacWinTry.clear();
          jacWinCon.clear();
          jacWinTryEntries = 0;
-         jacNow = set.jacMode == 1 && JacWindowRange() != nullptr ? (JacWindow(phaseMs) ? 1 : 0) : set.jacMode;
+         jacNow = set.jacMode != 0 && JacWindowRange() != nullptr ? (JacWindow(phaseMs) ? set.jacMode : 0) : set.jacMode;
          if (!BeginAttempt(h))
             return false;
          const int nU = nUnk;

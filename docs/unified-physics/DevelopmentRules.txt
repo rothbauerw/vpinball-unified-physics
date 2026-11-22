@@ -46,11 +46,13 @@ Set by the project owner. They apply to every change, by a person or an assistan
    Every setting is described in a comment beside it in the code; every diagnostic environment variable in docs/unified-physics/TestingPlaybook.md; the
    history of a change in its commit message (user, 2026-11-07: NewPhysicsReference.txt retired to archive/). Names follow the physical part, never a table.
    Nothing is committed or pushed until the user says so. Convention differences from stock VPX are stated and documented.
-   New work goes behind an ini setting, on by default while it is tested; 0 gives the old path unchanged. Once the user accepts the new path, the old path and its
+   One switch, in one place, chooses the engine (user, 2026-11-21): [Features] unified = 0 runs stock and only stock; 1 bypasses stock entirely. On the unified
+   engine no setting falls back to stock; a setting may only choose between unified models. Everything on the unified engine on 2026-11-21 is accepted.
+   New work goes behind an ini setting, on by default while it is tested; 0 gives the old (unified) path unchanged. Once the user accepts the new path, the old path and its
    setting are deleted after the code is committed (the change log names that commit); ask first only if removal is high risk or later A/B tests need it.
    A dropped idea's code and setting are deleted. Private source copies only for offline test programs.
-   A new to-do item, stated by the user or found by a lead, is added only after the user says whether to add it and where it goes in the priority (user, 2026-11-07);
-   until then it waits in the lead log. The to-do list is the single source of open work.
+   Work the user states is added to the to-do at once, and the lead says where it went (user, 2026-11-21). An item a lead finds is added only after the user says
+   whether to add it and where it goes in the priority (user, 2026-11-07); until then it waits in the lead log. The to-do list is the single source of open work.
 
 7. WHAT BREAKS, AND WHAT THE DESIGN DOES ABOUT IT (user, 2026-10-13)
    a. Every new design and every fix includes a step that lists the scenarios it would NOT handle or would break: other sources of the same case, other objects and modes, restart and teardown, extreme values
