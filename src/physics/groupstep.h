@@ -272,10 +272,13 @@ namespace GroupStep
       return c;
    }
    // touch_predict counters (always on, cheap; written to the VPX_GROUP_STATS file): steps a predicted touch set and ended (predicted), of them landed within d and closing
-   // (taken) or more than d short (shortL); re-solves at the Hermite root of a step that ended past a predicted touch (hermite); re-solves at today's limit after that (net)
+   // (taken) or more than d short (shortL); re-solves at the Hermite root of a step that ended past a predicted touch (hermite); re-solves at today's limit after that (net).
+   // Each by kind (piece 2): [0] a fixed surface, [1] a moving part's surface (a union's term with it), [2] a ball pair; a re-solve counts under the kind whose touch set its length
    struct TouchStats
    {
-      long predicted = 0, taken = 0, shortL = 0, hermite = 0, net = 0;
+      long predicted[3] = {}, taken[3] = {}, shortL[3] = {}, hermite[3] = {}, net[3] = {};
+      long partEvals = 0;   // the parts' start accelerations formed (ChooseStep, PartAccel: one BeginStep and one Eval each)
+      static long Sum(const long (&c)[3]) { return c[0] + c[1] + c[2]; }
    };
    inline TouchStats touchStats;
    struct Hit
@@ -523,8 +526,8 @@ namespace GroupStep
       // clock an untouched approaching contact gets there (rule 3). The union's depth sees only the deepest piece, so a second piece arriving inside a step is otherwise invisible.
       // true (default) = on; false = the union's rule alone.
       bool termArrival = true;
-      // touchPredict ([Contact] touch_predict): a ball not touching a fixed surface (no part columns, not a pair) gets no clock; its step ends at the predicted touch (ChooseStep,
-      // TouchPredict) and the solved end is checked (Step, TouchEnd). false = today's arrival rule and clock. Not under VPX_GROUP_HFIX.
+      // touchPredict ([Contact] touch_predict): a ball not touching a fixed surface, a moving part's surface (with the part's start acceleration, PartAccel) or another ball gets
+      // no clock; its step ends at the predicted touch (ChooseStep) and the solved end is checked (Step, TouchEnd). false = today's arrival rule and clock. Not under VPX_GROUP_HFIX.
       bool touchPredict = true;
       // dampDirSlope ([Contact] damp_dir_slope): a contact made of terms damps along G = Fel / |Fel| (the pressing terms' summed elastic force); G turns as the terms'
       // forces change, at h dG/du = (I - G g^T) K / fe (K = sum_t h tk_t tg_t tg_t^T, g = G's ball part). Newton's slope then takes fd h dG/du and dd = G . dq's change
@@ -1544,6 +1547,8 @@ namespace GroupStep
          aLast.Grow(n);
          alphaLast.Grow(n);
          fNetS.Grow(n);
+         paF.Grow(n);
+         paM.Grow(n);
          evF.Grow(n);
          evM.Grow(n);
          evDc.Grow(n);
@@ -1736,6 +1741,16 @@ namespace GroupStep
             mlWg.Grow((size_t)np * (size_t)jStride);
             mlSnap.Grow(7 * (size_t)jStride);
             mlDmis.Grow((size_t)jStride);
+            paX.Grow(nU);   // (touch_predict piece 2: PartAccel's own move, rows and Jacobian, so the solve's are not touched)
+            paRes.Grow(nU);
+            paJ.Grow(nU * nU);
+            paQ.Grow(nCoord);
+            paAcc.Grow(nCoord);
+            paF.Grow((size_t)nb);
+            paM.Grow((size_t)nb);
+            paDone.Grow((size_t)np);
+            for (int p = 0; p < np; p++)
+               paSave.Grow(part[p]->StateBytes());
          }
          set.tolEndRes = 0.0;
          for (int p = 0; p < np; p++)
@@ -2045,9 +2060,10 @@ namespace GroupStep
       mutable StepDiag diag;
 
       // the depth an approach at closing speed v reaches on law L (all the closing energy into the squash): the stiffness while it lasts (ChooseStep; touch_predict's size d)
-      double ReachDepth(const Item &L, const double v) const
+      double ReachDepth(const Item &L, const double v) const { return ReachDepth(L, v, L.mRed); }
+      double ReachDepth(const Item &L, const double v, const double mRed) const   // (mRed: the mass the touch meets, a part's body with the ball's: ChooseStep's L.mRed)
       {
-         const double eC = 0.5 * L.mRed * v * v;
+         const double eC = 0.5 * mRed * v * v;
          double lo = std::pow(2.5 * eC / L.kH, 0.4);   // the Hertz spring alone; a layer only makes it shallower
          if (L.cL > 0.0)
          {
@@ -2074,21 +2090,160 @@ namespace GroupStep
          return lo;
       }
 
-      // touch_predict (runs/2026-11-22-touch-predict/design.md 2.1, 2.3): a ball not touching a fixed surface (an item or a static piece entry, no part columns, not a pair).
-      // ChooseStep writes one per such item or entry it predicted; the next Step reads them while the positions are the same (tpStamp == stamp): nothing else is kept between steps
+      // touch_predict (runs/2026-11-22-touch-predict/design.md 2.1, 2.3): a ball not touching a fixed surface (an item or a static piece entry), a moving part's surface (an item, or
+      // a term of its union: 2.1b, 2.2) or another ball (2.1b, 2.6). ChooseStep writes one per such item, entry or term it predicted; the next Step reads them while the positions
+      // are the same (tpStamp == stamp): nothing else is kept between steps
+      enum TouchKind { tkFixed = 0, tkPart = 1, tkPair = 2, tkTerm = 3 };   // (a term counts as a part's surface: TouchStats)
       struct TouchPred
       {
-         int k, e;                // the item and its entry (-1 the object)
-         double gap, v, a, d;     // at the step's start: gap (m), closing speed (m/s), closing acceleration (m/s^2), the law's squash d at the arrival speed (m)
-         double t, hToday;        // the predicted touch time d/2 short (inf: none), and today's limit for the item (the net: max(0.5 gap / v, its clock))
+         int k = -1, e = -1;      // the item and its entry (-1 the object); tkTerm: e is the term's index in the union
+         int kind = tkFixed;
+         double gap = 0.0, v = 0.0, a = 0.0, d = 0.0;   // at the step's start: gap (m), closing speed (m/s), closing acceleration (m/s^2), the law's squash d at the arrival speed (m)
+         double t = 0.0, hToday = 0.0;   // the predicted touch time d/2 short (inf: none), and today's limit for the item (the net: max(0.5 gap / v, its clock))
+         double mRed = 0.0;       // the mass the touch meets (ChooseStep's L.mRed): d at the end's closing speed
          V3 n;                    // its normal at the start (the end's closing speed is taken along it)
-         bool past;               // (Step: touching at the end of the first solve)
+         int nc = 0;              // a part's surface: its columns at the start, each as the group's coordinate (coordOff + coord) and its point speed per unit rate along n
+         int cc[7] = {};          // (a term: one column, the union's column 0, with the term's own slope)
+         double cn[7] = {};
+         bool past = false;       // (Step: touching at the end of the first solve)
       };
       mutable std::vector<TouchPred> tpList;
       mutable long tpStamp = -1;
       mutable int tpSet = -1;     // the prediction that set the step (-1 none) and its h
       mutable double tpH = 0.0;
       bool tpCounted = false;     // (Step: the step's prediction is counted once)
+
+      // touch_predict piece 2 (design 2.2): a part's coordinates' accelerations at the state now, formed at most once per ChooseStep and only for a part whose surface an untouched
+      // ball's item reaches within the longest step. One Newton correction of the part's own rows from the free move (each unknown at rate x h, the balls at v h with no spin change)
+      // at h = kAccH: dx = -J^-1 R, R its rows from its Eval less h times the balls' loads on its coordinates now (each touching contact's start force, as fNet takes it, through
+      // its columns' point speeds, as the group adds them), J its Jacobian block; a = 2 dx / h^2. The inertia row 2 m dq / h - 2 m v - h Q is -h Q on the free move: exact for a
+      // constant mass, a pose-varying or linked inertia from the rows themselves (paper runs/2026-11-23-touch-p2paper P1-P2: <= 2.4e-6 relative at 1e-8 s, rounding ~1e-9 s).
+      // A coordinate with no unknown (on a stop, a given move): 0 (P2 d); a massless one (no inertia row: its move is a balance, not an acceleration): 0.
+      // The part's kept state is not written: its state records (PartRecords: state, lists, queue counts) are copied before and put back after, then AfterRestore re-makes what
+      // derives from them (the bat's pivot, the cord's probe angle), as the net's retake does; its step work and attempt work are wiped at Step's start (WipeStepWork) and at each
+      // attempt's start (BeginAttempt: WipeAttemptWork, then BeginStep makes its start values again) before the real solve reads them. Its Eval's diagnostics (last row terms)
+      // are rewritten by every Eval of the real solve. Indexed by the part's coordinate; nullptr never (a failed Eval or a singular block: all 0)
+      static constexpr double kAccH = 1e-8;   // (s) the free move's length (paper P1)
+      mutable Buf<double> paX, paRes, paJ, paQ, paAcc;
+      mutable Buf<V3> paF, paM;
+      mutable Buf<unsigned char> paSave;
+      mutable Buf<char> paDone;
+      const double *PartAccel(const int p) const
+      {
+         double *const acc = (double *)paAcc + coordOff[p];
+         if (paDone[p])
+            return acc;
+         paDone[p] = 1;
+         Part &P = *part[p];
+         const int nc = P.NumCoords();
+         for (int c = 0; c < nc; c++)
+            acc[c] = 0.0;
+         int off = 6 * nb, nU = 6 * nb;   // (its unknowns' place and the unknowns' count, as NumUnk lays them out now)
+         for (int q = 0; q < np; q++)
+         {
+            if (q == p)
+               off = nU;
+            nU += part[q]->NumDof();
+         }
+         const int nd = P.NumDof();
+         if (nd == 0)
+            return acc;
+         touchStats.partEvals++;
+         const double h = kAccH;
+         const size_t sb = P.StateBytes();
+         paSave.Grow(sb);   // (grows to the largest part's records once; no allocation after)
+         P.SaveRecords(paSave);
+         double *const X = paX, *const R = paRes, *const Jd = paJ, *const Q = paQ;
+         V3 *const F = paF, *const M = paM;
+         for (int i = 0; i < nb; i++)
+         {
+            const V3 g = ball[i].held ? ball[i].Given(h) : ball[i].v * h;
+            X[6 * i] = g.x; X[6 * i + 1] = g.y; X[6 * i + 2] = g.z;
+            X[6 * i + 3] = X[6 * i + 4] = X[6 * i + 5] = 0.0;
+            F[i] = M[i] = V3();
+         }
+         for (int u = 6 * nb; u < nU; u++)
+            X[u] = 0.0;
+         for (int u = 0; u < nU; u++)
+            R[u] = 0.0;
+         std::fill(Jd, Jd + (size_t)nU * (size_t)nU, 0.0);
+         // the balls' loads on its coordinates now: each touching contact on a surface it carries, its start force on the ball (fNet's) reversed, through each column's point speed
+         V3 loadP;
+         for (int c = 0; c < nc; c++)
+            Q[c] = 0.0;
+         for (int k = 0; k < ni; k++)
+         {
+            const Item &it = item[k];
+            const Hit &hk = hNow[k];
+            if (it.b >= 0 || !it.touching || hk.delta <= 0.0 || it.s < 0 || shape[it.s] == nullptr || shape[it.s]->part != p)
+               continue;
+            const V3 f = hk.n * it.F(hk.delta) - it.xi * it.Kt(hk.delta);
+            loadP = loadP - f;
+            for (int j = 0; j < hk.nc; j++)
+               Q[hk.c[j].coord] -= f.Dot(hk.c[j].V());
+         }
+         P.guessAccel = set.partGuessAccel;
+         P.gripInStep = set.gripInStep;
+         P.WipeAttemptWork();
+         bool ok = P.BeginStep(ball, nb, h, X, off);
+         for (int c = 0; ok && c < nc; c++)   // the free move (BeginStep's guess may carry the last step's acceleration: part_guess_accel)
+            if (const int d = P.DofOf(c); d >= 0)
+               X[off + d] = P.Coord(c).rate * h;
+         if (ok)
+         {
+            P.Loads(Q, loadP);
+            ok = P.Eval(X, off, h, F, M, R, Jac(Jd, nU));
+         }
+         if (ok)
+         {
+            // its block: rows and columns off .. off + nd - 1, the loads' share of its rows (as the group's Eval: Res -= h qF), then Gaussian elimination with partial pivoting
+            for (int c = 0; c < nc; c++)
+               if (const int d = P.DofOf(c); d >= 0)
+                  R[off + d] -= h * Q[c];
+            const auto Jb = [&](const int r, const int c) -> double & { return Jd[(size_t)(off + r) * (size_t)nU + (size_t)(off + c)]; };
+            double *const b = R + off;
+            for (int r = 0; r < nd; r++)
+               b[r] = -b[r];
+            for (int col = 0; ok && col < nd; col++)
+            {
+               int piv = col;
+               for (int r = col + 1; r < nd; r++)
+                  if (std::fabs(Jb(r, col)) > std::fabs(Jb(piv, col)))
+                     piv = r;
+               if (!(std::fabs(Jb(piv, col)) > 0.0))
+               {
+                  ok = false;
+                  break;
+               }
+               if (piv != col)
+               {
+                  for (int c = 0; c < nd; c++)
+                     std::swap(Jb(piv, c), Jb(col, c));
+                  std::swap(b[piv], b[col]);
+               }
+               for (int r = col + 1; r < nd; r++)
+               {
+                  const double m = Jb(r, col) / Jb(col, col);
+                  for (int c = col; c < nd; c++)
+                     Jb(r, c) -= m * Jb(col, c);
+                  b[r] -= m * b[col];
+               }
+            }
+            for (int r = nd - 1; ok && r >= 0; r--)
+            {
+               double s = b[r];
+               for (int c = r + 1; c < nd; c++)
+                  s -= Jb(r, c) * b[c];
+               b[r] = s / Jb(r, r);
+            }
+            for (int c = 0; ok && c < nc; c++)
+               if (const int d = P.DofOf(c); d >= 0 && P.Coord(c).invM != 0.0)
+                  acc[c] = 2.0 * b[d] / (h * h);
+         }
+         P.RestoreRecords(paSave);
+         P.AfterRestore();
+         return acc;
+      }
 
       // The step choice from the state now (accuracy only)
       double ChooseStep() const
@@ -2099,6 +2254,8 @@ namespace GroupStep
          const bool tpOn = set.touchPredict && GroupFixedStepS() <= 0.0;   // (touch_predict; never under VPX_GROUP_HFIX)
          tpList.clear();
          tpSet = -1;
+         for (int p = 0; tpOn && p < np; p++)   // (piece 2: no part's start acceleration formed yet)
+            paDone[p] = 0;
          V3 *const fNet = fNetS;   // the net force on each ball now: gravity, each touching contact's spring and shear stretch; with touch_predict each part's own force (BallForceNow)
          for (int i = 0; i < nb; i++)
          {
@@ -2263,32 +2420,68 @@ namespace GroupStep
                // touch_predict: an item not touching a fixed surface gets no clock (2.1b, e): its closing speed v, closing acceleration a (the reach test's), arrival speed
                // va = sqrt(v^2 + 2 a gap) and d the law's squash at va; the step ends at the smallest root t of gap - d/2 = v t + a t^2 / 2, taken closing (the stable form
                // 2 s / (v + sqrt(v^2 + 2 a s)), or (sqrt(v^2 + 2 a s) - v) / a where that has no positive denominator: a receding item inside d/2 takes the later, closing
-               // crossing; none: no limit). Not an event, today's rule instead: a closing item within d at the start (J5), an arrival slower than vSteady (J7)
+               // crossing; none: no limit). Not an event, today's rule instead: a closing item within d at the start (J5), an arrival slower than vSteady (J7).
+               // Piece 2: the same rule on a moving part's surface and on a ball pair. a = -(aBall - aPoint) . n: aBall the reach test's (a pair: a's less b's, b's a held ball's
+               // heldA), aPoint the surface point's acceleration, its columns' point speeds (the ones that give vs) times the part's coordinate accelerations now (PartAccel, 2.2);
+               // the centripetal part of a turning point left out (2.2: 2.3's re-solve takes it)
                bool tpDone = false;
-               if (tpOn && !it.touching && it.b < 0 && nq == 0 && it.s >= 0 && shape[it.s] != nullptr && shape[it.s]->part < 0)
-               {
-                  const double gap = -delta, a = -aRelNow.Dot(n), va2 = dDot * dDot + 2.0 * a * gap;
-                  const bool arrives = va2 >= 0.0 && (dDot > 0.0 || a > 0.0);
-                  const double va = arrives ? std::sqrt(va2) : 0.0, d = reachDepth(va);
-                  if ((gap > d || dDot <= 0.0) && (!arrives || va >= set.vSteady))
+               const int tpKind = !tpOn || it.touching ? -1 : it.b >= 0 ? tkPair : it.s < 0 || shape[it.s] == nullptr ? -1 : shape[it.s]->part >= 0 ? tkPart : nq == 0 ? tkFixed : -1;
+               const double *const qAcc = tpKind == tkPart && nq > 0 ? PartAccel(shape[it.s]->part) : nullptr;
+               // the root rule for one touch (gap, closing speed v, closing acceleration a): false = not an event (J5, J7); d the law's squash at the arrival speed, t the root
+               const auto predict = [&](const double gap, const double v, const double a, double &d, double &t) {
+                  const double va2 = v * v + 2.0 * a * gap;
+                  const bool arrives = va2 >= 0.0 && (v > 0.0 || a > 0.0);
+                  const double va = arrives ? std::sqrt(va2) : 0.0;
+                  d = reachDepth(va);
+                  if (!((gap > d || v <= 0.0) && (!arrives || va >= set.vSteady)))
+                     return false;
+                  const double s = gap - 0.5 * d, disc = v * v + 2.0 * a * s;
+                  t = std::numeric_limits<double>::infinity();
+                  if (disc >= 0.0)
                   {
-                     const double s = gap - 0.5 * d, disc = dDot * dDot + 2.0 * a * s;
-                     double t = std::numeric_limits<double>::infinity();
-                     if (disc >= 0.0)
+                     const double q = v + std::sqrt(disc);
+                     const double tr = q > 0.0 ? 2.0 * s / q : a > 0.0 ? (std::sqrt(disc) - v) / a : -1.0;
+                     if (tr > 0.0)
+                        t = tr;
+                  }
+                  return true;
+               };
+               // its record (the columns of a part's surface for the end's closing speed), and the step ended at it when it is the earliest so far
+               const auto record = [&](TouchPred &tp) {
+                  tp.mRed = L.mRed;
+                  tpList.push_back(tp);
+                  if (tp.t < h)
+                  {
+                     lim(tp.t, 9);
+                     tpSet = (int)tpList.size() - 1;
+                     tpH = tp.t;
+                     return true;
+                  }
+                  return false;
+               };
+               if (tpKind >= 0)
+               {
+                  V3 aPt;
+                  for (int j = 0; qAcc != nullptr && j < nq; j++)
+                     aPt = aPt + hp.c[j].V() * qAcc[hp.c[j].coord];
+                  const double gap = -delta, a = qAcc != nullptr ? -aRelNow.Dot(n) + aPt.Dot(n) : -aRelNow.Dot(n);
+                  double d = 0.0, t = 0.0;
+                  if (predict(gap, dDot, a, d, t))
+                  {
+                     TouchPred tp;
+                     tp.k = k;
+                     tp.e = e;
+                     tp.kind = tpKind;
+                     tp.gap = gap, tp.v = dDot, tp.a = a, tp.d = d, tp.t = t;
+                     tp.hToday = delta < 0.0 && dDot > 0.0 ? std::max(set.arrivalShare * -delta / dDot, hs) : hs;
+                     tp.n = n;
+                     for (int j = 0; tpKind == tkPart && j < nq; j++)
                      {
-                        const double q = dDot + std::sqrt(disc);
-                        const double tr = q > 0.0 ? 2.0 * s / q : a > 0.0 ? (std::sqrt(disc) - dDot) / a : -1.0;
-                        if (tr > 0.0)
-                           t = tr;
+                        tp.cc[j] = coordOff[shape[it.s]->part] + hp.c[j].coord;
+                        tp.cn[j] = hp.c[j].V().Dot(n);
                      }
-                     const double hToday = delta < 0.0 && dDot > 0.0 ? std::max(set.arrivalShare * -delta / dDot, hs) : hs;
-                     tpList.push_back(TouchPred { k, e, gap, dDot, a, d, t, hToday, n, false });
-                     if (t < h)
-                     {
-                        lim(t, 9);
-                        tpSet = (int)tpList.size() - 1;
-                        tpH = t;
-                     }
+                     tp.nc = tpKind == tkPart ? nq : 0;
+                     record(tp);
                      tpDone = true;
                   }
                }
@@ -2301,10 +2494,39 @@ namespace GroupStep
                   lim(hs, steady ? 7 : 1);
                // termArrival: each term not yet pressing is an approaching contact of its own: the arrival rule with the clock an untouched contact gets there
                // (unsteady, at the depth its own closing speed reaches), not the contact's (a resting contact's clock can be hMax)
+               // touch_predict (piece 2): on an untouched item each term not pressing takes the root rule instead, by its own normal and slope: closing speed termDot, closing
+               // acceleration -aBall . n_t + slope_t a_q (a_q the union's column-0 coordinate's, PartAccel); its record carries that one column with the term's slope
                for (int t = 0; terms && t < hp.nt; t++)
                {
                   const HitTerm &ht = hp.t[t];
                   const double dDotT = termDot(ht);
+                  if (qAcc != nullptr && ht.d < 0.0)
+                  {
+                     const double aT = -aRelNow.Dot(ht.n) + ht.slope * qAcc[hp.c[0].coord];
+                     double dT = 0.0, tT = 0.0;
+                     if (predict(-ht.d, dDotT, aT, dT, tT))
+                     {
+                        double omNT = 0.0;
+                        const double hsT = unsteadyClock(reachDepth(std::max(dDotT, set.vFloor)), omNT);
+                        TouchPred tp;
+                        tp.k = k;
+                        tp.e = t;
+                        tp.kind = tkTerm;
+                        tp.gap = -ht.d, tp.v = dDotT, tp.a = aT, tp.d = dT, tp.t = tT;
+                        tp.hToday = dDotT > 0.0 ? std::max(set.arrivalShare * -ht.d / dDotT, hsT) : hsT;
+                        tp.n = ht.n;
+                        tp.nc = 1;
+                        tp.cc[0] = coordOff[shape[it.s]->part] + hp.c[0].coord;
+                        tp.cn[0] = ht.slope;
+                        if (record(tp))
+                        {
+                           dg.term = t;
+                           dg.delta = ht.d;
+                           dg.dDot = dDotT;
+                        }
+                        continue;
+                     }
+                  }
                   if (ht.d >= 0.0 || dDotT <= 0.0)
                      continue;
                   const double ha = set.arrivalShare * -ht.d / dDotT;
@@ -2405,7 +2627,8 @@ namespace GroupStep
       // A prediction past at the end (touching): one re-solve at the earliest Hermite root of the past ones, aimed d/2 short; still past: the net, a re-solve at today's limit for
       // that item (counted; WARN and notice: contactsystem.cpp). Not past, the prediction that set the step: taken (end gap in [0, d], d at the end's closing speed, and closing)
       // or short (end gap > d). Returns the h to solve again, 0 = none. The end's closing speed along the start normal; an entry's end gap the larger of the object's (its
-      // nearest piece, from the solve) and its own face moved along its start normal
+      // nearest piece, from the solve) and its own face moved along its start normal. Piece 2 (design 2.3): a moving part's surface by its end probe at the part's solved end and
+      // the relative end speed (its point's through the start columns), a ball pair by the pair's end depth and the two balls' end speeds; the same bands, re-solve and net
       double TouchEnd(const double h, const double hTry, int &stage)
       {
          // VPX_TOUCH_TRACE=<csv> (a diagnostic, read once; off: nothing changes): one row per predicted touch outcome
@@ -2413,19 +2636,24 @@ namespace GroupStep
             const char *const e = getenv("VPX_TOUCH_TRACE");
             FILE *const o = e != nullptr && *e ? fopen(e, "w") : nullptr;
             if (o != nullptr)
-               fprintf(o, "t_ms,object,entry,gap_um,v,a,d_um,tpred_us,h_us,endgap_um,endv,outcome\n");
+               fprintf(o, "t_ms,object,entry,gap_um,v,a,d_um,tpred_us,h_us,endgap_um,endv,outcome,kind\n");
             return o;
          }();
+         // (kind: fixed, part, term (entry = the term's index), pair (object: ball_pair))
          const auto row = [&](const TouchPred &p, const double gEnd, const double vEnd, const char *const out) {
             if (tf == nullptr)
                return;
-            fprintf(tf, "%u,%s,%d,%.4f,%.5f,%.5g,%.4f,%.4f,%.4f,%.4f,%.5f,%s\n", phaseMs, shape[item[p.k].s]->Name().c_str(), p.e, p.gap * 1e6, p.v, p.a, p.d * 1e6,
-                    std::isfinite(p.t) ? p.t * 1e6 : -1.0, h * 1e6, gEnd * 1e6, vEnd, out);
+            static const char *const kKind[4] = { "fixed", "part", "pair", "term" };
+            const int s = item[p.k].s;
+            fprintf(tf, "%u,%s,%d,%.4f,%.5f,%.5g,%.4f,%.4f,%.4f,%.4f,%.5f,%s,%s\n", phaseMs, p.kind == tkPair || s < 0 ? "ball_pair" : shape[s]->Name().c_str(), p.e, p.gap * 1e6, p.v,
+                    p.a, p.d * 1e6, std::isfinite(p.t) ? p.t * 1e6 : -1.0, h * 1e6, gEnd * 1e6, vEnd, out, kKind[p.kind]);
          };
          if (stage >= 3)
             return 0.0;
          const bool counting = stage == 0 && !tpCounted && tpSet >= 0 && hTry == tpH;
          double hHerm = std::numeric_limits<double>::infinity(), hNet = hHerm, setG = 0.0, setV = 0.0, setD = 0.0;
+         int kindHerm = tkFixed, kindNet = tkFixed;   // (the counters' kind: the touch that set the re-solve's length)
+         const auto statKind = [](const int kind) { return kind == tkTerm ? (int)tkPart : kind; };
          bool anyPast = false;
          for (size_t j = 0; j < tpList.size(); j++)
          {
@@ -2434,24 +2662,46 @@ namespace GroupStep
                continue;
             const Item &it = item[p.k];
             const V3 dc(x[6 * it.a], x[6 * it.a + 1], x[6 * it.a + 2]);
-            const double vEnd = -EndRate(dc, ball[it.a].v, h).Dot(p.n);
+            double vEnd = -EndRate(dc, ball[it.a].v, h).Dot(p.n);
+            // piece 2: a moving surface's point at the end, its start columns at each coordinate's end rate (the inertia row's trapezoid, 2 dq / h - rate, a given move's too;
+            // a pose-varying inertia's p1 / I1 differs by its change over the step, a band test only); its own face moved (an entry's rule, for a term) takes them too.
+            // A pair: the other ball's end rate
+            double qMove = 0.0;   // (the surface's move along n over the step: a term's own end gap)
+            for (int j = 0; j < p.nc; j++)
+            {
+               const int c = p.cc[j];
+               const double dq = cUnk[c] >= 0 ? x[cUnk[c]] : ci[c].given;
+               vEnd += p.cn[j] * EndRate(dq, ci[c].rate, h);
+               qMove += p.cn[j] * dq;
+            }
+            if (p.kind == tkPair)
+               vEnd += EndRate(V3(x[6 * it.b], x[6 * it.b + 1], x[6 * it.b + 2]), ball[it.b].v, h).Dot(p.n);
             const double d1 = farNow[p.k] ? -1.0 : ie[p.k].d1;
-            const double gEnd = p.e < 0 ? -d1 : std::max(-d1, p.gap + dc.Dot(p.n));
+            // the end gap: the object's (fixed or pair: the solve's end depth; a part's surface: its end probe at the part's solved end), an entry's or a term's the larger of that
+            // and its own face moved along its start normal
+            const double gEnd = p.e < 0 ? -d1 : std::max(-d1, p.gap + dc.Dot(p.n) - qMove);
             if (gEnd < 0.0)   // touching at the end: past
             {
                anyPast = true;
-               hNet = std::min(hNet, p.hToday);
+               if (p.hToday < hNet)
+               {
+                  hNet = p.hToday;
+                  kindNet = p.kind;
+               }
                if (stage == 0)
                {
                   p.past = true;
                   const double s = HermiteFirst(p.gap, -p.v, gEnd, -vEnd, h, 0.5 * p.d);
-                  if (s > 0.0)
-                     hHerm = std::min(hHerm, s);
+                  if (s > 0.0 && s < hHerm)
+                  {
+                     hHerm = s;
+                     kindHerm = p.kind;
+                  }
                }
                row(p, gEnd, vEnd, stage == 0 ? "past" : stage == 1 ? "hermite_past" : "net_past");
                continue;
             }
-            const double dEnd = farNow[p.k] ? p.d : ReachDepth(law[p.k], std::max(vEnd, 0.0));
+            const double dEnd = farNow[p.k] ? p.d : ReachDepth(law[p.k], std::max(vEnd, 0.0), p.mRed);
             const char *const band = gEnd <= dEnd && vEnd > 0.0 ? "taken" : gEnd > dEnd ? "short" : "open";
             if (stage > 0 && p.past)
             {
@@ -2469,12 +2719,13 @@ namespace GroupStep
          if (counting)
          {
             tpCounted = true;
-            touchStats.predicted++;
+            const int ks = statKind(tpList[(size_t)tpSet].kind);
+            touchStats.predicted[ks]++;
             if (!anyPast)
             {
                const bool taken = setG <= setD && setV > 0.0, shortL = setG > setD;
-               touchStats.taken += taken ? 1 : 0;
-               touchStats.shortL += shortL ? 1 : 0;
+               touchStats.taken[ks] += taken ? 1 : 0;
+               touchStats.shortL[ks] += shortL ? 1 : 0;
                row(tpList[(size_t)tpSet], setG, setV, taken ? "taken" : shortL ? "short" : "open");
             }
          }
@@ -2488,11 +2739,11 @@ namespace GroupStep
          if (stage == 0 && hHerm < h)
          {
             stage = 1;
-            touchStats.hermite++;
+            touchStats.hermite[statKind(kindHerm)]++;
             return hHerm;
          }
          stage = 2;   // (still past after the Hermite re-solve, or no root short of the end: the net)
-         touchStats.net++;
+         touchStats.net[statKind(kindNet)]++;
          return hNet < h ? hNet : 0.0;
       }
 

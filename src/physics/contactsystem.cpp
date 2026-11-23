@@ -3382,9 +3382,9 @@ struct ContactSystemImpl
          ContactSurfaceHost::FinderJoinCapHit(g.joinCapHit);
          g.joinCapHit = 0;
       }
-      if (GroupStep::touchStats.net > ContactSystem::s_touchNetTold)   // touch_predict: a net taken (rule 8: one WARN and one notice per table start)
+      if (GroupStep::TouchStats::Sum(GroupStep::touchStats.net) > ContactSystem::s_touchNetTold)   // touch_predict: a net taken (rule 8: one WARN and one notice per table start)
       {
-         ContactSystem::s_touchNetTold = GroupStep::touchStats.net;
+         ContactSystem::s_touchNetTold = GroupStep::TouchStats::Sum(GroupStep::touchStats.net);
          ContactSystem::NoticeRetired("touch_predict: a step ended past a predicted touch after its Hermite re-solve; the net (today's limit) took it (counts: VPX_GROUP_STATS, rows: VPX_TOUCH_TRACE)");
       }
       if (statsPath != nullptr)
@@ -3408,8 +3408,15 @@ struct ContactSystemImpl
             {
                fprintf(f, "cycles %ld us/cycle %.2f max %.0f steps %ld rounds %ld halvings %ld energysteps %ld failed %ld balls %d\n", n, us / n, usMax, steps, rounds, halv, eSteps, fails, g.nb);
                fprintf(f, "pieces lookups %ld entries %ld stepsset %ld\n", GroupStep::pieceStats.lookups, GroupStep::pieceStats.entries, GroupStep::pieceStats.set);   // (shared_step_only counters)
-               fprintf(f, "touch predicted %ld taken %ld short %ld hermite %ld net %ld\n", GroupStep::touchStats.predicted, GroupStep::touchStats.taken, GroupStep::touchStats.shortL,
-                       GroupStep::touchStats.hermite, GroupStep::touchStats.net);   // (touch_predict counters)
+               {   // (touch_predict counters: the totals, then by kind (fixed surface, moving part's surface, ball pair), then the parts' start accelerations formed)
+                  const GroupStep::TouchStats &ts = GroupStep::touchStats;
+                  using TS = GroupStep::TouchStats;
+                  fprintf(f, "touch predicted %ld taken %ld short %ld hermite %ld net %ld\n", TS::Sum(ts.predicted), TS::Sum(ts.taken), TS::Sum(ts.shortL), TS::Sum(ts.hermite), TS::Sum(ts.net));
+                  static const char *const kKind[3] = { "fixed", "part", "pair" };
+                  for (int c = 0; c < 3; c++)
+                     fprintf(f, "touch %s predicted %ld taken %ld short %ld hermite %ld net %ld\n", kKind[c], ts.predicted[c], ts.taken[c], ts.shortL[c], ts.hermite[c], ts.net[c]);
+                  fprintf(f, "touch partaccel %ld\n", ts.partEvals);
+               }
                const long *const rc = GroupStep::RestWatch::Counts();   // (parts alone: bumper, hinge part, disc, flipper, sling plate)
                fprintf(f, "alone calls %ld %ld %ld %ld %ld asleep after %ld %ld %ld %ld %ld\n", rc[0], rc[1], rc[2], rc[3], rc[4], rc[5], rc[6], rc[7], rc[8], rc[9]);
                fclose(f);
