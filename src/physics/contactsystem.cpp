@@ -2112,7 +2112,50 @@ struct ContactSystemImpl
       double PathCoverSag(int &kind) const override { return mp != nullptr ? mp->GroupPathCoverSag(surface, kind) : -1.0; }   // (the self-check, VPX_FINDER_CHECK)   // (the path test; a part's surface: its own answer, -1 for one that moves: build 3)
       void Probe(const V3 &c, double R, GroupStep::Hit &h) const override
       {
+         int seg;
+         ProbeSeg(c, R, h, seg);
+      }
+      // shared_step_only (runs/2026-11-22-ringcap design 2.3-2.7): the step-start probe: Probe, then a static surface's other convex pieces and its ridges, each with its gap and
+      // normal, as entries for the step rule (no force, no state). Off (0): Probe alone
+      void ProbeStart(const V3 &c, const double R, GroupStep::Hit &h) const override
+      {
+         int seg;
+         ProbeSeg(c, R, h, seg);
+         if (mp != nullptr || !ContactSettings::Get().sharedStepOnly)
+            return;
+         thread_local RubberContact::RidgeStart rsS;   // (the probe's own patches and passes: the ridges, patch_friction only; ringCap's RidgeStart from the same Hit)
+         const RubberContact::RidgeStart *rs = nullptr;
+         if (ContactSettings::Get().patchFriction)
+         {
+            rsS.pieces.Clear();
+            rsS.pieces.off.clear();
+            rsS.pieces.off.push_back(0);
+            for (int p = 0; p < h.npat; p++)
+            {
+               const GroupStep::HitPatch &P = h.pat[p];
+               for (int q = 0; q < P.pn; q++)
+                  rsS.pieces.id.push_back(h.pc[P.p0 + q]);
+               rsS.pieces.off.push_back((int)rsS.pieces.id.size());
+            }
+            rsS.passes.clear();
+            for (int j = 0; j < h.np; j++)
+               rsS.passes.push_back(h.pk[j]);
+            rs = &rsS;
+         }
+         thread_local std::vector<RubberContact::StepPiece> ent;
+         r->StepPieces(bs, *it, c, seg, rs, ent);
+         GroupStep::pieceStats.lookups++;
+         GroupStep::pieceStats.entries += (long)ent.size();
+         h.ne = (int)ent.size();
+         h.en.Fit(h.ne);
+         for (int j = 0; j < h.ne; j++)
+            h.en[j] = GroupStep::HitEntry { ent[j].d, ent[j].n, ent[j].zeroed };
+      }
+      // Probe's body; seg: the face or segment its answer comes from (-1 none, or a moving part's surface)
+      void ProbeSeg(const V3 &c, const double R, GroupStep::Hit &h, int &seg) const
+      {
          const ContactProf::Stage profStage(ContactProf::StGroupShape);   // P3a profile: the calling stage of the checks here (diagnostics only)
+         seg = -1;
          if (mp != nullptr)
          {
             h.np = 0;   // (peak_slope: static surfaces only)
@@ -2131,6 +2174,7 @@ struct ContactSystemImpl
          const bool pf = ContactSettings::Get().patchFriction;   // patch_friction: the patch list and each patch's pieces beside the merged answer (ProbePatches)
          thread_local std::vector<TubeProbe> plist;
          const TubeProbe pr = pf ? r->ProbePatches(bs, *it, c, plist) : r->ProbePatch(bs, *it, c);
+         seg = pr.seg;
          h.delta = pr.overlap ? pr.delta : (pr.dist > 0.0 ? R + pr.rho - pr.dist : -1.0);
          h.n = pr.normal;
          h.grad = pr.grad;
@@ -2878,7 +2922,7 @@ struct ContactSystemImpl
       // at any step: so that a hit on a hidden face is resolved, not one long step into it.
       const auto ringCap = [&](double h) {
          const ContactProf::Stage profStage(ContactProf::StRingCap);   // P3a profile: the calling stage of the checks here (diagnostics only)
-         if (!ring)
+         if (!ring || ContactSettings::Get().sharedStepOnly)   // shared_step_only: no cut of its own (runs/2026-11-22-ringcap)
             return h;
          const double a = g.set.g.Length();
          for (int s = 0; s < g.ns; s++)
@@ -3267,6 +3311,7 @@ struct ContactSystemImpl
             if (FILE *const f = fopen(statsPath, "w"))
             {
                fprintf(f, "cycles %ld us/cycle %.2f max %.0f steps %ld rounds %ld halvings %ld energysteps %ld failed %ld balls %d\n", n, us / n, usMax, steps, rounds, halv, eSteps, fails, g.nb);
+               fprintf(f, "pieces lookups %ld entries %ld stepsset %ld\n", GroupStep::pieceStats.lookups, GroupStep::pieceStats.entries, GroupStep::pieceStats.set);   // (shared_step_only counters)
                const long *const rc = GroupStep::RestWatch::Counts();   // (parts alone: bumper, hinge part, disc, flipper, sling plate)
                fprintf(f, "alone calls %ld %ld %ld %ld %ld asleep after %ld %ld %ld %ld %ld\n", rc[0], rc[1], rc[2], rc[3], rc[4], rc[5], rc[6], rc[7], rc[8], rc[9]);
                fclose(f);

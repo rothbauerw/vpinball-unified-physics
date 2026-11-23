@@ -239,6 +239,20 @@ namespace GroupStep
       T in[K];
       std::vector<T> ex;
    };
+   // shared_step_only (runs/2026-11-22-ringcap design 2.4, 2.7): a static object's other convex piece in reach (not the one its own answer comes from), or a ridge of its pressed
+   // patches, found by the step-start probe (Shape::ProbeStart). For the step rule only: ChooseStep takes it as it takes an object (no force, no state kept)
+   struct HitEntry
+   {
+      double d;      // its depth as Hit::delta (> 0 pressed, < 0 the gap): a piece's before the item's zero (ZeroHit takes it off), a ridge's final (zeroed)
+      V3 n;          // its normal (surface -> ball centre): the closing speed is -v . n
+      bool zeroed;   // true: d is already from the object's zero (a ridge: the pass's depth, or the edge's gap from R - zero)
+   };
+   // shared_step_only counters (always on, cheap; written to the VPX_GROUP_STATS file): step-start lookups of a static surface, entries they built, steps an entry set
+   struct PieceStats
+   {
+      long lookups = 0, entries = 0, set = 0;
+   };
+   inline PieceStats pieceStats;
    struct Hit
    {
       double delta = -1.0;
@@ -259,10 +273,16 @@ namespace GroupStep
       int npc = 0;
       InList<int, 16> pc;
       InList<RubberContact::PieceData, 16> pd;   // level_stiffness: each piece's depth (from the object's zero, as pat's), normal, geometry and neighbours (parallel to pc)
+      int ne = 0;              // shared_step_only: the step-start probe's entries (en): the object's other convex pieces and ridges for the step rule; 0 from every other probe
+      InList<HitEntry, 8> en;
       Hit() {}
       Hit(const Hit &o) { *this = o; }
       Hit &operator=(const Hit &o)
       {
+         ne = o.ne;
+         en.Fit(ne);
+         for (int j = 0; j < ne; j++)
+            en[j] = o.en[j];
          npat = o.npat;
          pat.Fit(npat);
          for (int j = 0; j < npat; j++)
@@ -332,6 +352,8 @@ namespace GroupStep
       mutable const double *trial = nullptr;   // a carried surface: each of its part's coordinates moved by this for the probe; null = where they are now
       virtual ~Shape() = default;
       virtual void Probe(const V3 &c, double R, Hit &h) const = 0;
+      // the step-start probe (ChooseStep's, only): Probe, and a static surface also lists its other convex pieces and ridges in reach as entries (Hit::en; shared_step_only)
+      virtual void ProbeStart(const V3 &c, const double R, Hit &h) const { Probe(c, R, h); }
       virtual std::string Name() const { return std::string(); }   // diagnostics (VPX_GROUP_CLAMP_TRACE): its owner's name
       // the path test: does the ball's centre moving straight from s to s + d come within reach of a piece (depth above 0 anywhere on the path, before the item's zero)?
       // 1 = yes, 0 = no (exact, the path kit in rubbercontact.h; a curved piece by its cover, PathRevolve), -1 = no exact test for this shape: FarStillFar probes the middle and the end as before.
@@ -1972,6 +1994,7 @@ namespace GroupStep
          int unsteady = 0;                   // the steady test the contact failed, the first in order: 0 none (steady, or no test), 1 closing speed, 2 acceleration, 3 slip
          double unsteadyVal = 0.0, unsteadyLim = 0.0;   // that test's value and limit (m/s, m/s^2, m/s)
          int term = -1;                      // >= 0: the contact's term (Hit::t) whose arrival set the step (termArrival); delta and dDot are then that term's
+         int entry = -1;                     // >= 0: the contact's entry (Hit::en, shared_step_only) that set the step; rule is then its own + 10 (11 stiffness, 13 arrival, 17 steady clock); delta and dDot its
       };
       mutable StepDiag diag;
 
@@ -1999,7 +2022,7 @@ namespace GroupStep
          {
             const Item &it = item[k];
             Hit &hp = hNow[k];   // kept: the step's start probes the same positions
-            Probe(it, ball, hp);
+            Probe(it, ball, hp, true);   // (the step-start probe: a static surface's entries, shared_step_only)
             if (it.touching && hp.delta > 0.0)
             {
                const V3 f = hp.n * it.F(hp.delta) - it.xi * it.Kt(hp.delta);
@@ -2025,179 +2048,187 @@ namespace GroupStep
                vs = vs + hp.c[j].V() * q.rate;
                invQ += sl * sl * (pq.DofOf(hp.c[j].coord) >= 0 ? q.invM : q.blockedSide == 0 || q.blockedSide * sl > 0.0 ? q.invMFree : 0.0);
             }
-            const V3 vr = it.b >= 0 ? A.v - ball[it.b].v : A.v - vs;
-            const double dDot = -vr.Dot(hp.n);   // closing speed
-            const double vc = std::max(dDot, set.vFloor);
-            // termArrival: each term's closing rate by its own gradient, -v . n_t + slope_t * rate (the part's one coordinate, column 0)
-            const bool terms = set.termArrival && hp.nt > 0 && nq > 0;
-            const double qRate = terms ? part[shape[it.s]->part]->Coord(hp.c[0].coord).rate : 0.0;
-            const auto termDot = [&](const HitTerm &ht) { return -A.v.Dot(ht.n) + ht.slope * qRate; };
-            // the reach over the longest step along normal n: distance under a steady acceleration, s = v h + a h^2 / 2, a the closing part of the net acceleration
-            // now (fNet: gravity with the nudge, external, fields, touching contacts; a surface's own acceleration is not in it). Only a closing a widens the reach,
-            // an opening one is not taken off: the test only decides whether the item is probed; probing one more costs one probe, dropping one that arrives is a fault
-            V3 aRelNow = fNet[it.a] * (1.0 / A.m);
-            if (it.b >= 0)
-               aRelNow = aRelNow - (ball[it.b].held ? ball[it.b].heldA : fNet[it.b] * (1.0 / ball[it.b].m));
-            const auto reach = [&](const double v, const V3 &n) { return v * set.hMax + 0.5 * std::max(-aRelNow.Dot(n), 0.0) * set.hMax * set.hMax; };
-            bool termNear = false;   // a term the longest step can reach though the union's depth cannot be
-            for (int t = 0; terms && !termNear && t < hp.nt; t++)
-               termNear = hp.t[t].d > 0.0 || -hp.t[t].d < reach(std::max(termDot(hp.t[t]), set.vFloor), hp.t[t].n) + 1e-9;
-            if (hp.delta <= 0.0 && -hp.delta >= reach(vc, hp.n) + 1e-9 && !termNear)
-               continue;   // cannot be reached within the longest step
-            Item L = it;
-            if (!it.touching)
-               TakeLaw(L, hp);
-            if (invQ > 0.0)
-               L.mRed = 1.0 / (1.0 / A.m + invQ);
-            // the depth an approach at closing speed v reaches (all the closing energy into the squash): the stiffness while it lasts
-            const auto reachDepth = [&](const double v) {
-               const double eC = 0.5 * L.mRed * v * v;
-               double lo = std::pow(2.5 * eC / L.kH, 0.4);   // the Hertz spring alone; a layer only makes it shallower
-               if (L.cL > 0.0)
-               {
-                  double hi = std::min(lo, L.hL);
-                  lo = 0.0;
-                  for (int r = 0; r < 50 && hi - lo > 1e-4 * hi; r++)
+            // one object, or one entry of it (shared_step_only: another convex piece or a ridge of a static surface, Hit::en): the same rule. delta, n, curvDist: its depth,
+            // normal and turning distance; e: its entry, -1 the object (runs/2026-11-22-ringcap design 2.5)
+            const auto one = [&](const double delta, const V3 &n, const double curvDist, const int e) {
+               const V3 vr = it.b >= 0 ? A.v - ball[it.b].v : A.v - vs;
+               const double dDot = -vr.Dot(n);   // closing speed
+               const double vc = std::max(dDot, set.vFloor);
+               // termArrival: each term's closing rate by its own gradient, -v . n_t + slope_t * rate (the part's one coordinate, column 0)
+               const bool terms = e < 0 && set.termArrival && hp.nt > 0 && nq > 0;   // (an entry has no terms)
+               const double qRate = terms ? part[shape[it.s]->part]->Coord(hp.c[0].coord).rate : 0.0;
+               const auto termDot = [&](const HitTerm &ht) { return -A.v.Dot(ht.n) + ht.slope * qRate; };
+               // the reach over the longest step along normal n: distance under a steady acceleration, s = v h + a h^2 / 2, a the closing part of the net acceleration
+               // now (fNet: gravity with the nudge, external, fields, touching contacts; a surface's own acceleration is not in it). Only a closing a widens the reach,
+               // an opening one is not taken off: the test only decides whether the item is probed; probing one more costs one probe, dropping one that arrives is a fault
+               V3 aRelNow = fNet[it.a] * (1.0 / A.m);
+               if (it.b >= 0)
+                  aRelNow = aRelNow - (ball[it.b].held ? ball[it.b].heldA : fNet[it.b] * (1.0 / ball[it.b].m));
+               const auto reach = [&](const double v, const V3 &n) { return v * set.hMax + 0.5 * std::max(-aRelNow.Dot(n), 0.0) * set.hMax * set.hMax; };
+               bool termNear = false;   // a term the longest step can reach though the union's depth cannot be
+               for (int t = 0; terms && !termNear && t < hp.nt; t++)
+                  termNear = hp.t[t].d > 0.0 || -hp.t[t].d < reach(std::max(termDot(hp.t[t]), set.vFloor), hp.t[t].n) + 1e-9;
+               if (delta <= 0.0 && -delta >= reach(vc, n) + 1e-9 && !termNear)
+                  return;   // cannot be reached within the longest step
+               Item L = it;
+               if (!it.touching || e >= 0)   // (an entry: an untouched contact of the same material, its law from the item's probe)
+                  TakeLaw(L, hp);
+               if (invQ > 0.0)
+                  L.mRed = 1.0 / (1.0 / A.m + invQ);
+               // the depth an approach at closing speed v reaches (all the closing energy into the squash): the stiffness while it lasts
+               const auto reachDepth = [&](const double v) {
+                  const double eC = 0.5 * L.mRed * v * v;
+                  double lo = std::pow(2.5 * eC / L.kH, 0.4);   // the Hertz spring alone; a layer only makes it shallower
+                  if (L.cL > 0.0)
                   {
-                     const double mid = 0.5 * (lo + hi);
-                     (L.V(mid) < eC ? lo : hi) = mid;
+                     double hi = std::min(lo, L.hL);
+                     lo = 0.0;
+                     for (int r = 0; r < 50 && hi - lo > 1e-4 * hi; r++)
+                     {
+                        const double mid = 0.5 * (lo + hi);
+                        (L.V(mid) < eC ? lo : hi) = mid;
+                     }
                   }
-               }
-               if (L.kb > 0.0)   // springs in series (the bend): the closing energy shared by them, the squash the Hertz part of it
-               {
-                  const double cS = 1.0 / L.kb;
-                  double uLo = 0.0, uHi = lo;
-                  for (int r = 0; r < 30 && uHi - uLo > 1e-3 * uHi; r++)
+                  if (L.kb > 0.0)   // springs in series (the bend): the closing energy shared by them, the squash the Hertz part of it
                   {
-                     const double u = 0.5 * (uLo + uHi), f = L.kH * u * std::sqrt(u);
-                     (0.4 * f * u + 0.5 * f * f * cS < eC ? uLo : uHi) = u;
+                     const double cS = 1.0 / L.kb;
+                     double uLo = 0.0, uHi = lo;
+                     for (int r = 0; r < 30 && uHi - uLo > 1e-3 * uHi; r++)
+                     {
+                        const double u = 0.5 * (uLo + uHi), f = L.kH * u * std::sqrt(u);
+                        (0.4 * f * u + 0.5 * f * f * cS < eC ? uLo : uHi) = u;
+                     }
+                     const double fE = L.kH * uHi * std::sqrt(uHi);
+                     lo = uHi + (L.kb > 0.0 ? fE / L.kb : 0.0);   // (the bend is in the depth; the part's give is in its solved angle, not in the depth)
                   }
-                  const double fE = L.kH * uHi * std::sqrt(uHi);
-                  lo = uHi + (L.kb > 0.0 ? fE / L.kb : 0.0);   // (the bend is in the depth; the part's give is in its solved angle, not in the depth)
-               }
-               return lo;
-            };
-            const double lo = reachDepth(vc);
-            // the bounce's fastest rate at depth dE: m x'' + c x' + k x = 0 (c the law's own damping) decays at most at (c + sqrt(c^2 - 4 m k)) / 2m when overdamped,
-            // else swings at omN. The mid-step damping takes a rate v to v (1 - z/2) / (1 + z/2), z = c h / m: on the spring's clock alone a damper past 2.56 times
-            // critical reverses the rate in one step, a rebound the law has not (runs/2026-11-10-damped-clock/design.md)
-            const auto fastRate = [&](const double dE, const double omN) {
-               const double m = L.mRed, k = L.K(dE), c = L.DampC(dE, L.F(dE));
-               return c * c > 4.0 * m * k ? (c + std::sqrt(c * c - 4.0 * m * k)) / (2.0 * m) : omN;
-            };
-            // an unsteady contact's clock at the expected depth dE: the bounce's fastest rate
-            const auto unsteadyClock = [&](const double dE, double &omN) {
-               omN = std::sqrt(L.K(dE) / L.mRed);
-               const double r = fastRate(dE, omN);
-               return r > 0.0 ? set.omegaH / r : set.hMax;
-            };
-            const double dE = std::max(hp.delta, lo);
-            const double ktE = L.Kt(dE);
-            const double omN = std::sqrt(L.K(dE) / L.mRed);
-            // steady (Settings): by the motion, at the contact's own time scale. At the friction limit (Coulomb): a spring within mu N holds at most (mu N)^2 / (2 kt) of energy, so a slip with more than that
-            // in 1/2 mt u^2 cannot be stopped by it: the contact slides, its force is mu N whatever the spring's stiffness, and the spring's time scale is not in the motion.
-            bool steady = false;
-            int why = 0;
-            double whyVal = 0.0, whyLim = 0.0;
-            if (set.vSteady > 0.0)
-            {
-               if (hp.delta > 0.0)
+                  return lo;
+               };
+               const double lo = reachDepth(vc);
+               // the bounce's fastest rate at depth dE: m x'' + c x' + k x = 0 (c the law's own damping) decays at most at (c + sqrt(c^2 - 4 m k)) / 2m when overdamped,
+               // else swings at omN. The mid-step damping takes a rate v to v (1 - z/2) / (1 + z/2), z = c h / m: on the spring's clock alone a damper past 2.56 times
+               // critical reverses the rate in one step, a rebound the law has not (runs/2026-11-10-damped-clock/design.md)
+               const auto fastRate = [&](const double dE, const double omN) {
+                  const double m = L.mRed, k = L.K(dE), c = L.DampC(dE, L.F(dE));
+                  return c * c > 4.0 * m * k ? (c + std::sqrt(c * c - 4.0 * m * k)) / (2.0 * m) : omN;
+               };
+               // an unsteady contact's clock at the expected depth dE: the bounce's fastest rate
+               const auto unsteadyClock = [&](const double dE, double &omN) {
+                  omN = std::sqrt(L.K(dE) / L.mRed);
+                  const double r = fastRate(dE, omN);
+                  return r > 0.0 ? set.omegaH / r : set.hMax;
+               };
+               const double dE = std::max(delta, lo);
+               const double ktE = L.Kt(dE);
+               const double omN = std::sqrt(L.K(dE) / L.mRed);
+               // steady (Settings): by the motion, at the contact's own time scale. At the friction limit (Coulomb): a spring within mu N holds at most (mu N)^2 / (2 kt) of energy, so a slip with more than that
+               // in 1/2 mt u^2 cannot be stopped by it: the contact slides, its force is mu N whatever the spring's stiffness, and the spring's time scale is not in the motion.
+               bool steady = false;
+               int why = 0;
+               double whyVal = 0.0, whyLim = 0.0;
+               if (set.vSteady > 0.0)
                {
-                  V3 u = A.v + A.w.Cross(hp.n * (-(A.R - 0.5 * hp.delta)));
-                  if (it.b >= 0)
-                     u = u - (ball[it.b].v + ball[it.b].w.Cross(hp.n * (ball[it.b].R - 0.5 * hp.delta)));
+                  if (delta > 0.0)
+                  {
+                     V3 u = A.v + A.w.Cross(n * (-(A.R - 0.5 * delta)));
+                     if (it.b >= 0)
+                        u = u - (ball[it.b].v + ball[it.b].w.Cross(n * (ball[it.b].R - 0.5 * delta)));
+                     else
+                        u = u - vs;   // (a fixed surface: 0)
+                     const V3 ut = u - n * u.Dot(n);
+                     const double slipNow = ut.Length();
+                     V3 aRel = fNet[it.a] * (1.0 / A.m);
+                     if (it.b >= 0)
+                        aRel = aRel - (ball[it.b].held ? ball[it.b].heldA : fNet[it.b] * (1.0 / ball[it.b].m));
+                     const double omNow = std::sqrt(L.K(delta) / L.mRed);
+                     steady = std::fabs(dDot) <= set.vSteady && std::fabs(aRel.Dot(n)) <= set.vSteady * omNow && (slipNow <= set.vSteady || (set.slideFree && slipNow * std::sqrt(ktE * L.mt) > L.mu * L.F(dE)));
+                     if (!steady)
+                     {
+                        if (std::fabs(dDot) > set.vSteady)
+                           why = 1, whyVal = dDot, whyLim = set.vSteady;
+                        else if (std::fabs(aRel.Dot(n)) > set.vSteady * omNow)
+                           why = 2, whyVal = aRel.Dot(n), whyLim = set.vSteady * omNow;
+                        else
+                           why = 3, whyVal = slipNow, whyLim = set.vSteady;
+                     }
+                  }
                   else
-                     u = u - vs;   // (a fixed surface: 0)
-                  const V3 ut = u - hp.n * u.Dot(hp.n);
-                  const double slipNow = ut.Length();
+                  {
+                     steady = dDot <= set.vSteady;
+                     if (!steady)
+                        why = 1, whyVal = dDot, whyLim = set.vSteady;
+                  }
+               }
+               const double om = steady ? omN : fastRate(dE, omN);   // (a resting contact's rate is near 0 and the damping factor's size stays under 1: its spring's clock)
+               double hs = om > 0.0 ? (steady ? set.omegaHRest : set.omegaH) / om : set.hMax;
+               if (set.stepModel == 1 && steady && delta > 0.0)   // by the motion in its mode (Settings::stepModel)
+               {
+                  const double omR = std::sqrt(L.K(delta) / L.mRed);
                   V3 aRel = fNet[it.a] * (1.0 / A.m);
                   if (it.b >= 0)
                      aRel = aRel - (ball[it.b].held ? ball[it.b].heldA : fNet[it.b] * (1.0 / ball[it.b].m));
-                  const double omNow = std::sqrt(L.K(hp.delta) / L.mRed);
-                  steady = std::fabs(dDot) <= set.vSteady && std::fabs(aRel.Dot(hp.n)) <= set.vSteady * omNow && (slipNow <= set.vSteady || (set.slideFree && slipNow * std::sqrt(ktE * L.mt) > L.mu * L.F(dE)));
-                  if (!steady)
+                  const double x = dDot / omR, y = aRel.Dot(n) / (omR * omR), amp = std::sqrt(x * x + y * y);
+                  const double hm = amp > 0.0 ? std::sqrt(12.0 * set.epsRest / amp) / omR : set.hMax;
+                  hs = std::max(hs, std::min(hm, set.hMax));
+                  if (set.swingCap && 2.0 * amp <= set.epsRest)
+                     hs = set.hMax;
+               }
+               const auto lim = [&](const double c, const int rule) {
+                  if (c < h)
                   {
-                     if (std::fabs(dDot) > set.vSteady)
-                        why = 1, whyVal = dDot, whyLim = set.vSteady;
-                     else if (std::fabs(aRel.Dot(hp.n)) > set.vSteady * omNow)
-                        why = 2, whyVal = aRel.Dot(hp.n), whyLim = set.vSteady * omNow;
-                     else
-                        why = 3, whyVal = slipNow, whyLim = set.vSteady;
+                     h = c;
+                     dg.rule = e >= 0 ? rule + 10 : rule;
+                     dg.item = k;
+                     dg.entry = e;
+                     dg.delta = delta;
+                     dg.dDot = dDot;
+                     dg.omN = omN;
+                     dg.unsteady = why;
+                     dg.unsteadyVal = whyVal;
+                     dg.unsteadyLim = whyLim;
+                     dg.term = -1;
                   }
+               };
+               if (delta < 0.0 && dDot > 0.0)   // reached in about two steps, not overshot
+               {
+                  const double ha = set.arrivalShare * -delta / dDot;
+                  lim(std::max(ha, hs), ha > hs ? 3 : 1);
                }
                else
+                  lim(hs, steady ? 7 : 1);
+               // termArrival: each term not yet pressing is an approaching contact of its own: the arrival rule with the clock an untouched contact gets there
+               // (unsteady, at the depth its own closing speed reaches), not the contact's (a resting contact's clock can be hMax)
+               for (int t = 0; terms && t < hp.nt; t++)
                {
-                  steady = dDot <= set.vSteady;
-                  if (!steady)
-                     why = 1, whyVal = dDot, whyLim = set.vSteady;
+                  const HitTerm &ht = hp.t[t];
+                  const double dDotT = termDot(ht);
+                  if (ht.d >= 0.0 || dDotT <= 0.0)
+                     continue;
+                  const double ha = set.arrivalShare * -ht.d / dDotT;
+                  if (ha >= h)
+                     continue;   // (max(ha, hsT) >= h: no limit; the clock is not needed)
+                  double omNT = 0.0;
+                  const double hsT = unsteadyClock(reachDepth(std::max(dDotT, set.vFloor)), omNT);
+                  if (std::max(ha, hsT) < h)
+                  {
+                     lim(std::max(ha, hsT), ha > hsT ? 3 : 1);
+                     dg.term = t;
+                     dg.delta = ht.d;
+                     dg.dDot = dDotT;
+                     dg.omN = omNT;
+                     dg.unsteady = 1, dg.unsteadyVal = dDotT, dg.unsteadyLim = set.vSteady;
+                  }
                }
-            }
-            const double om = steady ? omN : fastRate(dE, omN);   // (a resting contact's rate is near 0 and the damping factor's size stays under 1: its spring's clock)
-            double hs = om > 0.0 ? (steady ? set.omegaHRest : set.omegaH) / om : set.hMax;
-            if (set.stepModel == 1 && steady && hp.delta > 0.0)   // by the motion in its mode (Settings::stepModel)
-            {
-               const double omR = std::sqrt(L.K(hp.delta) / L.mRed);
-               V3 aRel = fNet[it.a] * (1.0 / A.m);
-               if (it.b >= 0)
-                  aRel = aRel - (ball[it.b].held ? ball[it.b].heldA : fNet[it.b] * (1.0 / ball[it.b].m));
-               const double x = dDot / omR, y = aRel.Dot(hp.n) / (omR * omR), amp = std::sqrt(x * x + y * y);
-               const double hm = amp > 0.0 ? std::sqrt(12.0 * set.epsRest / amp) / omR : set.hMax;
-               hs = std::max(hs, std::min(hm, set.hMax));
-               if (set.swingCap && 2.0 * amp <= set.epsRest)
-                  hs = set.hMax;
-            }
-            const auto lim = [&](const double c, const int rule) {
-               if (c < h)
+               if (curvDist > 0.0 && delta > -1e-4)   // rolling round a post or a ball
                {
-                  h = c;
-                  dg.rule = rule;
-                  dg.item = k;
-                  dg.delta = hp.delta;
-                  dg.dDot = dDot;
-                  dg.omN = omN;
-                  dg.unsteady = why;
-                  dg.unsteadyVal = whyVal;
-                  dg.unsteadyLim = whyLim;
-                  dg.term = -1;
+                  const V3 vt = vr - n * vr.Dot(n);
+                  const double sp = vt.Length();
+                  if (sp > 1e-9)
+                     lim(set.turnMaxRad * curvDist / sp, 4);
                }
             };
-            if (hp.delta < 0.0 && dDot > 0.0)   // reached in about two steps, not overshot
-            {
-               const double ha = set.arrivalShare * -hp.delta / dDot;
-               lim(std::max(ha, hs), ha > hs ? 3 : 1);
-            }
-            else
-               lim(hs, steady ? 7 : 1);
-            // termArrival: each term not yet pressing is an approaching contact of its own: the arrival rule with the clock an untouched contact gets there
-            // (unsteady, at the depth its own closing speed reaches), not the contact's (a resting contact's clock can be hMax)
-            for (int t = 0; terms && t < hp.nt; t++)
-            {
-               const HitTerm &ht = hp.t[t];
-               const double dDotT = termDot(ht);
-               if (ht.d >= 0.0 || dDotT <= 0.0)
-                  continue;
-               const double ha = set.arrivalShare * -ht.d / dDotT;
-               if (ha >= h)
-                  continue;   // (max(ha, hsT) >= h: no limit; the clock is not needed)
-               double omNT = 0.0;
-               const double hsT = unsteadyClock(reachDepth(std::max(dDotT, set.vFloor)), omNT);
-               if (std::max(ha, hsT) < h)
-               {
-                  lim(std::max(ha, hsT), ha > hsT ? 3 : 1);
-                  dg.term = t;
-                  dg.delta = ht.d;
-                  dg.dDot = dDotT;
-                  dg.omN = omNT;
-                  dg.unsteady = 1, dg.unsteadyVal = dDotT, dg.unsteadyLim = set.vSteady;
-               }
-            }
-            if (hp.curvDist > 0.0 && hp.delta > -1e-4)   // rolling round a post or a ball
-            {
-               const V3 vt = vr - hp.n * vr.Dot(hp.n);
-               const double sp = vt.Length();
-               if (sp > 1e-9)
-                  lim(set.turnMaxRad * hp.curvDist / sp, 4);
-            }
+            one(hp.delta, hp.n, hp.curvDist, -1);
+            for (int e = 0; e < hp.ne; e++)   // (an item whose own answer is out of reach is still read for its entries)
+               one(hp.en[e].d, hp.en[e].n, 0.0, e);
          }
          for (int p = 0; p < np; p++)
          {
@@ -2214,6 +2245,8 @@ namespace GroupStep
          }
          if (h < 1e-7)
             dg.rule = 5;
+         if (dg.rule != 5 && dg.rule != 8 && dg.entry >= 0)   // (shared_step_only counter: an entry set the step)
+            pieceStats.set++;
          diag = dg;
          nowStamp = stamp;
          return std::max(h, 1e-7);
@@ -3558,6 +3591,9 @@ namespace GroupStep
       // book (V of the union) and gating read the one potential sum_t s_t V(a_t - z_t)
       void ZeroHit(const Item &it, Hit &hp) const
       {
+         for (int j = 0; j < hp.ne; j++)   // shared_step_only: each piece entry from the object's zero, as the merged depth (a ridge's is already)
+            if (!hp.en[j].zeroed)
+               hp.en[j].d -= it.dZero;
          if (hp.nt == 0 || it.tZero.empty())
          {
             hp.delta -= it.dZero;
@@ -3601,9 +3637,11 @@ namespace GroupStep
             }
          }
       }
-      void Probe(const Item &it, const Ball *bs, Hit &hp) const
+      // start: the step-start probe (ChooseStep): a shape's ProbeStart, which may write entries; every other probe writes none
+      void Probe(const Item &it, const Ball *bs, Hit &hp, const bool start = false) const
       {
          const Ball &A = bs[it.a];
+         hp.ne = 0;   // (shared_step_only: hits are kept and reused; only ProbeStart writes entries)
          hp.kb = 0.0;
          hp.ktb = 0.0;
          hp.nc = 0;   // (hits are kept and reused: a fixed surface writes no columns, and must not inherit a carried one's)
@@ -3614,7 +3652,10 @@ namespace GroupStep
             const bool listed = nearOn && it.nearK >= 0 && sh->part >= 0;
             if (listed)
                part[sh->part]->nearNow = &nearL[(size_t)it.nearK];
-            sh->Probe(A.c, A.R, hp);
+            if (start)
+               sh->ProbeStart(A.c, A.R, hp);
+            else
+               sh->Probe(A.c, A.R, hp);
             if (listed)
                part[sh->part]->nearNow = nullptr;
             ZeroHit(it, hp);
@@ -6455,6 +6496,10 @@ namespace GroupStep
             {
                h0s[k].nt = 0;
                Hit &hs = h0s[k];   // patch_friction: the start's patches and their pieces (the friction groups' start side and memory; without them every group's d0 is a plane's)
+               hs.ne = h0.ne;   // (shared_step_only: the entries, as every copy of a Hit)
+               hs.en.Fit(hs.ne);
+               for (int j = 0; j < hs.ne; j++)
+                  hs.en[j] = h0.en[j];
                hs.npat = h0.npat;
                hs.pat.Fit(hs.npat);
                for (int j = 0; j < hs.npat; j++)

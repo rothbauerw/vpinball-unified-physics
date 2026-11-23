@@ -2062,6 +2062,234 @@ double ContactSurfaceHost::RidgeArrival(const RubberContact::BallSI &bs, const S
    return h;
 }
 
+// shared_step_only (runs/2026-11-22-ringcap design 2.3-2.7): the step-start lookup's entries for the shared step rule (GroupStep ChooseStep takes each as an object).
+// Pieces: the faces of the ball's list (it.Faces(c), the finder's cull) joined through shared edges (nb) unless the edge is an inside corner toward c (cut B's test, BarsTriangles,
+// on the fold sides built at load; fold 2, unknown, counts as inside: more pieces, never a miss); a tube's segments of its list joined at a joint unless c is on the side the line
+// bends toward ((c - joint) . dn > 0, TubePre; a bend with no horizontal direction, dnOk false, counts as inside; a straight joint joins, as a flat edge). Each piece's nearest point
+// by the probe's own measurement (the ball's table), a face skipped when its box cannot beat the piece's best so far. Not entries: the piece the probe's answer comes from (seg)
+// and a pressed piece (in the answer's patches). Then the ridges, RidgeArrival's two bounds as entries (a static mesh, patch_friction: rs): a pass about to let go (its depth, its
+// normal turned: the depth falls at v . n) and an unpressed shared edge between two pressed patches (its gap from R - zero). A cord band moves with its cord: none.
+void ContactSurfaceHost::StepPieces(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, const int seg, const RubberContact::RidgeStart *rs,
+                                    std::vector<RubberContact::StepPiece> &out) const
+{
+   using RubberContact::V3;
+   out.clear();
+   if (CordModel())
+      return;
+   thread_local std::vector<int> pid;          // per list position: its piece
+   thread_local std::vector<double> bestD2;    // per piece: its nearest point's squared distance, the point, the face's normal, its kind (0 face, 1 edge, 2 vertex), whether it holds seg
+   thread_local std::vector<V3> bestP, bestN;
+   thread_local std::vector<int> bestK;
+   thread_local std::vector<char> hasSeg;
+   if (m_surface != nullptr)
+   {
+      const RubberSurface &sf = *m_surface;
+      const std::vector<int> &L = it.Faces(c);
+      const int nL = (int)L.size();
+      if (nL == 0 || sf.nb.size() != sf.tris.size())
+         return;
+      thread_local std::vector<uint32_t> mark;   // stamp: the face is in the list (its position in posOf)
+      thread_local std::vector<int> posOf, st;
+      thread_local uint32_t stamp = 0;
+      if (mark.size() < sf.tris.size())
+      {
+         mark.resize(sf.tris.size(), 0u);
+         posOf.resize(sf.tris.size(), -1);
+      }
+      if (++stamp == 0)
+      {
+         std::fill(mark.begin(), mark.end(), 0u);
+         stamp = 1;
+      }
+      for (int j = 0; j < nL; j++)
+      {
+         mark[L[j]] = stamp;
+         posOf[L[j]] = j;
+      }
+      const bool withFold = sf.fold.size() == sf.tris.size();
+      pid.assign(nL, -1);
+      int npc = 0;
+      for (int j0 = 0; j0 < nL; j0++)
+      {
+         if (pid[j0] >= 0)
+            continue;
+         pid[j0] = npc;
+         st.clear();
+         st.push_back(L[j0]);
+         while (!st.empty())
+         {
+            const int i = st.back();
+            st.pop_back();
+            const RubberContact::SurfaceTri &A = sf.tris[i];
+            const double sA = (c - A.a).Dot(A.n);
+            for (int e = 0; e < 3; e++)
+            {
+               const int o = sf.nb[i][e];
+               if (o < 0 || mark[o] != stamp || pid[posOf[o]] >= 0)
+                  continue;
+               bool join = false;   // (no fold data: every face its own piece)
+               if (withFold)
+               {
+                  const int fi = sf.fold[i][e];
+                  int fo = 2;
+                  for (int f = 0; f < 3; f++)
+                     if (sf.nb[o][f] == i)
+                        fo = sf.fold[o][f];
+                  const double sB = (c - sf.tris[o].a).Dot(sf.tris[o].n);
+                  join = fi == 0 || !(fi == 2 || fo == 2 || (fi * sA >= 0.0 && fo * sB >= 0.0));   // (cut B: flat, or not concave toward c)
+               }
+               if (join)
+               {
+                  pid[posOf[o]] = npc;
+                  st.push_back(o);
+               }
+            }
+         }
+         npc++;
+      }
+      bestD2.assign(npc, INFINITY);
+      bestP.resize(npc);
+      bestN.resize(npc);
+      bestK.assign(npc, 0);
+      hasSeg.assign(npc, 0);
+      for (int j = 0; j < nL; j++)
+         if (L[j] == seg)
+            hasSeg[pid[j]] = 1;
+      RubberContact::FaceTable *const ft = FinderTable(it, c);   // (the probe's measurements, at the same c)
+      const RubberContact::FaceRead frd { ft, nullptr };
+      for (int j = 0; j < nL; j++)
+      {
+         const int p = pid[j];
+         if (hasSeg[p])
+            continue;
+         const RubberContact::SurfaceTri &t = sf.tris[L[j]];
+         if (bestD2[p] < INFINITY && RubberContact::FaceTable::BoxD2(t, c) > (bestD2[p] + 1e-18) * (1.0 + RubberContact::FaceTable::kBoxSlack))
+            continue;   // (cannot be nearer than the piece's best nor tie with it: the probe's box bound)
+         const RubberContact::FaceTable::Slot &sl = frd.At((size_t)j, t, c);
+         if (sl.d2 < bestD2[p] - 1e-18 || (sl.d2 < bestD2[p] + 1e-18 && sl.kind < bestK[p]))   // (the probe's tie rule: the face over an edge or a corner)
+         {
+            bestD2[p] = sl.d2;
+            bestP[p] = sl.p;
+            bestK[p] = sl.kind;
+            bestN[p] = t.n;
+         }
+      }
+      for (int p = 0; p < npc; p++)
+      {
+         if (hasSeg[p] || !(bestD2[p] < INFINITY))
+            continue;
+         const double d = std::sqrt(bestD2[p]);
+         const double raw = bs.R - d;
+         if (raw > it.gs.zero || d <= 1e-12)
+            continue;   // pressed: in the probe's answer (its patches)
+         V3 n = bestN[p];
+         if ((c - bestP[p]).Dot(n) < 0.0)
+            n = n * -1.0;
+         if (bestK[p] != 0)
+            n = (c - bestP[p]) / d;
+         out.push_back({ raw, n, false });
+      }
+      if (rs != nullptr)   // the ridges (RidgeArrival's bounds, moved)
+      {
+         for (const RubberContact::PeakTerm &t : rs->passes)   // a pass about to let go: its depth falls at v . n
+            if (t.s < 0.0 && t.d > 0.0)
+               out.push_back({ -t.d, t.n * -1.0, true });
+         thread_local std::vector<std::pair<int, int>> fp;   // (pressed face, its patch)
+         const RubberContact::PatchPieceList &pp = rs->pieces;
+         const int np = (int)pp.off.size() - 1;
+         if (np >= 2)
+         {
+            fp.clear();
+            for (int p = 0; p < np; p++)
+               for (int q = pp.off[p]; q < pp.off[p + 1]; q++)
+                  if (pp.id[q] >= 0 && pp.id[q] != RubberContact::PatchPieceList::kNoPiece)
+                     fp.emplace_back(pp.id[q], p);
+            const double S = bs.R - it.gs.zero;
+            for (const auto &f : fp)
+               for (int e = 0; e < 3; e++)
+               {
+                  const int o = sf.nb[f.first][e];
+                  if (o <= f.first)   // each shared edge once (from its lower face)
+                     continue;
+                  int po = -1;
+                  for (const auto &g : fp)
+                     if (g.first == o)
+                        po = g.second;
+                  if (po < 0 || po == f.second)
+                     continue;
+                  const RubberContact::SurfaceTri &T = sf.tris[f.first];
+                  const V3 *vt[3] = { &T.a, &T.b, &T.c };
+                  const int ea = e, eb = (e + 1) % 3;
+                  const bool fwd = sf.vid[f.first][ea] < sf.vid[f.first][eb];   // (edgeMeasure's order)
+                  const V3 q = fwd ? RubberContact::SegNearest(*vt[ea], *vt[eb], c) : RubberContact::SegNearest(*vt[eb], *vt[ea], c);
+                  const V3 dv = c - q;
+                  const double dist = dv.Length();
+                  if (dist <= 1e-12 || dist <= S)
+                     continue;   // (pressed: the patches are linked by it)
+                  out.push_back({ S - dist, dv / dist, true });
+               }
+         }
+      }
+      return;
+   }
+   const int n = (int)m_ptsSI.size();
+   if (n < 2)
+      return;
+   thread_local std::vector<int> allSegs;
+   const std::vector<int> *segs;
+   if (SegsOn())
+      segs = &SegsFor(it, c, bs.R + m_radiusSI);   // (the ball's query: every segment within its reach)
+   else
+   {
+      allSegs.resize((size_t)(n - 1));
+      for (int i = 0; i + 1 < n; i++)
+         allSegs[(size_t)i] = i;
+      segs = &allSegs;
+   }
+   const RubberContact::TubePre &pre = m_tubePre;
+   bool open = false, holds = false;
+   double b2 = INFINITY;
+   V3 bp;
+   int prev = -2;
+   const auto flush = [&]() {
+      if (open && !holds && b2 < INFINITY)
+      {
+         const double d = std::sqrt(b2);
+         const double raw = bs.R + m_radiusSI - d;
+         if (raw <= it.gs.zero && d > 1e-12)   // (a pressed piece is in the probe's answer)
+            out.push_back({ raw, (c - bp) / d, false });
+      }
+      open = false;
+      holds = false;
+      b2 = INFINITY;
+   };
+   for (const int i : *segs)   // (index order)
+   {
+      bool join = open && i == prev + 1;
+      if (join)   // the joint i between segments i - 1 and i: straight, or c not on the side the line bends toward
+         join = pre.kap[i] <= 1e-9 || (pre.dnOk[i] != 0 && (c.x - m_ptsSI[i].x) * pre.dnx[i] + (c.y - m_ptsSI[i].y) * pre.dny[i] <= 0.0);
+      if (!join)
+         flush();
+      open = true;
+      prev = i;
+      if (i == seg)
+         holds = true;
+      const double L2 = pre.L2[i];
+      if (L2 <= 0.0)
+         continue;
+      const double s = std::min(std::max((c - m_ptsSI[i]).Dot(pre.t[i]) / L2, 0.0), 1.0);
+      const V3 p = m_ptsSI[i] + pre.t[i] * s;
+      const V3 dv = c - p;
+      const double d2 = dv.Dot(dv);
+      if (d2 < b2)
+      {
+         b2 = d2;
+         bp = p;
+      }
+   }
+   flush();
+}
+
 double ContactSurfaceHost::ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, const int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, const double a, const double hMax, const double touchM, const double arriveM,
                                     const RubberContact::RidgeStart *rs) const
 {

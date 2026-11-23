@@ -183,6 +183,7 @@ public:
    void Refresh(SurfaceContact &it, double ballR, double reachM, const RubberContact::V3 &c) const override;   // the faces the ball can reach this cycle
    double ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, double a, double hMax, double touchM, double arriveM, const RubberContact::RidgeStart *rs) const override;
    double RidgeArrival(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, const RubberContact::V3 &v, double a, double hIn, const RubberContact::RidgeStart *rs) const;   // patch_friction (plan 3.6)
+   void StepPieces(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, int seg, const RubberContact::RidgeStart *rs, std::vector<RubberContact::StepPiece> &out) const override;   // shared_step_only
    RubberContact::TubeProbe ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const override;
    RubberContact::TubeProbe ProbePatches(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, std::vector<RubberContact::TubeProbe> &out) const override;   // patch_contacts: the patch list (BarsTriangles / BarsTube)
    RubberContact::TubeProbe ProbeList(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, std::vector<RubberContact::TubeProbe> *out) const;   // ProbePatch's answer; out (optional): the patch list

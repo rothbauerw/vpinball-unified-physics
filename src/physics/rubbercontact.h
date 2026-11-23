@@ -1538,6 +1538,13 @@ namespace RubberContact
       PatchPieceList pieces;
       std::vector<PeakTerm> passes;
    };
+   // shared_step_only (runs/2026-11-22-ringcap design 2.4, 2.7): one entry of a static surface's step-start lookup for the shared step rule: another convex piece in reach, or a ridge
+   struct StepPiece
+   {
+      double d;      // its depth (> 0 pressed, < 0 the gap): a piece's R (+ a tube's radius) - distance before the item's zero; a ridge's already from the zero (zeroed)
+      V3 n;          // its normal (surface -> ball centre): the closing speed is -v . n
+      bool zeroed;
+   };
    // VPX_PATCH_CHECK=1 (diagnostics, read once): cut B's pressed faces from the probe's hits are also compared with each face probed alone (BarsTriangles): [0] shortcut calls
    // compared, [1] calls whose pressed set differs; logged on the patch check's totals line
    inline bool PatchCheckEnv()
