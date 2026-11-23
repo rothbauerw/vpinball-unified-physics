@@ -1835,6 +1835,57 @@ public:
          Tmax = std::max(Tmax, T);
       }
    }
+   // GroupStep::Part: the cord's own force on each ball now, added to F (touch_predict's net force; runs/2026-11-22-touch-predict/design.md 2.7). Each span: the stored
+   // energy's pull as CordForce has it, and the grip's force at the start state by BeginSpan's own rule at slip 0 (Chord with S = 0: k x0, x0 the start held within f / k),
+   // along Eval's axes. No rate term (dashpot, Hunt-Crossley, twist damper): the step's start has no move. Writes no state but phiQ = phi (dVdP is put back)
+   void BallForceNow(const Ball *b, const int, V3 *F) const override
+   {
+      phiQ = phi;
+      const double dVdPWas = dVdP;
+      thread_local std::vector<Out> oo;
+      thread_local std::vector<V3> gg;
+      oo.resize(nb);
+      gg.resize(nb);
+      for (int j = 0; j < ns; j++)
+      {
+         const Span &sp = span[j];
+         for (int i = 0; i < nb; i++)
+            Length(sp, tch[(size_t)i * ns + j], b[i].c, b[i].R, true, oo[i]);
+         Chain(sp, [&](const int i) -> Out & { return oo[i]; }, nb, true);
+         double L, T;
+         Solve(sp, [&](const int i) -> const Out & { return oo[i]; }, nb, L, T, gg.data());
+         for (int i = 0; i < nb; i++)
+         {
+            F[i] = F[i] - gg[i];
+            const Out &o = oo[i];
+            const double f = grip ? mu * T * o.Gfree : 0.0;
+            if (f <= 0.0 || o.Deff <= 0.0)   // (Eval's test at slip 0: no limit, or not touching)
+               continue;
+            // BeginSpan's grip stiffness and the start held rescaled to it (cordfixed.h BeginSpan)
+            const Touch &u = tch[(size_t)i * ns + j];
+            const double aw = std::max(o.a, w), bw = std::max(sp.len - o.a, w), l0a = sp.l0 * aw / sp.len, l0b = sp.l0 * bw / sp.len;
+            double kT = EA * (1.0 / l0a + 1.0 / l0b), kB = kT / 6.0 * twistScale;
+            if (patchShear)
+            {
+               const double kP = PatchKt(T * o.Gfree, b[i].R);
+               kT = kP > 0.0 ? kT * kP / (kT + kP) : 0.0;
+               kB = kP > 0.0 && kB > 0.0 ? kB * kP / (kB + kP) : 0.0;
+            }
+            const double xiT = (kT > u.kT && u.kT > 0.0) ? u.xiT * u.kT / kT : u.xiT;
+            const double xiB = (kB > u.kB && u.kB > 0.0) ? u.xiB * u.kB / kB : u.xiB;
+            double fT, fB, x1, p0, p1;
+            Chord(kT, f, xiT, 0.0, fT, x1, p0, p1);
+            Chord(kB, f, xiB, 0.0, fB, x1, p0, p1);
+            // Eval's axes at slip 0 (o0 = o1): along the span, and up the span's plane by the across axis bm = n x t
+            const V3 nm0 = o.n + o.n;
+            const double nl = nm0.Length();
+            const V3 nm = nl > 1e-9 ? nm0 * (1.0 / nl) : o.n;
+            const V3 bm = nm.Cross(sp.t);
+            F[i] = F[i] - sp.t * fT - sp.up * (sp.up.Dot(bm) * fB);
+         }
+      }
+      dVdP = dVdPWas;
+   }
    // What a run gains lifted by e off its straight line between two points a1, a2 away, without the cancellation
    static double Lift(const double e, const double a1, const double a2)
    {

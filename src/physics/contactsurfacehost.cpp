@@ -2013,6 +2013,10 @@ int ContactSurfaceHost::PathReach(const SurfaceContact &it, const RubberContact:
 // by the probe's own measurement (the ball's table), a face skipped when its box cannot beat the piece's best so far. Not entries: the piece the probe's answer comes from (seg)
 // and a pressed piece (in the answer's patches). Then the ridges as entries (a static mesh, patch_friction: rs): a pass about to let go (its depth, its
 // normal turned: the depth falls at v . n) and an unpressed shared edge between two pressed patches (its gap from R - zero). A cord band moves with its cord: none.
+// touchable_faces (a static mesh, runs/2026-11-23-touch-pieces/design_D.md, rule D2 runs/2026-11-23-touch-d2/brief.md): the list's faces in flat groups (joined through flat
+// shared edges only, fold 0: a chain never leaves the plane, so never goes round a corner); each group one entry at its nearest point as a piece above, except the group of a
+// pressed face (the probe's patches; with no patches, pressed past the zero), of a face sharing an uncut edge with a pressed face (cut B's test as above) and of the probe's own
+// face (seg: its answer covers it). Tubes and ridges as above.
 void ContactSurfaceHost::StepPieces(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, const int seg, const RubberContact::RidgeStart *rs,
                                     std::vector<RubberContact::StepPiece> &out) const
 {
@@ -2051,93 +2055,216 @@ void ContactSurfaceHost::StepPieces(const RubberContact::BallSI &bs, const Surfa
          posOf[L[j]] = j;
       }
       const bool withFold = sf.fold.size() == sf.tris.size();
-      pid.assign(nL, -1);
-      int npc = 0;
-      for (int j0 = 0; j0 < nL; j0++)
+      const std::vector<std::pair<int, double>> *const zl = RubberContact::PatchZeros();   // patch_zero (D3): each piece from its own patch's zero (its faces' entries; none: 0), final
+      if (ContactSettings::Get().touchableFaces)   // touchable_faces (design_D.md, rule D2): one entry per flat group of the list
       {
-         if (pid[j0] >= 0)
-            continue;
-         pid[j0] = npc;
-         st.clear();
-         st.push_back(L[j0]);
-         while (!st.empty())
+         thread_local std::vector<char> skip;    // per list position: its group is no entry (pressed, sharing an uncut edge with a pressed face, or seg)
+         thread_local std::vector<char> skipG;   // per flat group: no entry (holds a face marked in skip)
+         thread_local std::vector<int> pressed;   // the pressed faces
+         pid.assign(nL, -1);   // (pid: per list position, its flat group)
+         int ng = 0;
+         for (int j0 = 0; j0 < nL; j0++)   // flat groups: joined through shared edges with fold 0 only (no fold data: every face its own group)
          {
-            const int i = st.back();
-            st.pop_back();
+            if (pid[j0] >= 0)
+               continue;
+            pid[j0] = ng;
+            st.clear();
+            st.push_back(L[j0]);
+            while (!st.empty())
+            {
+               const int i = st.back();
+               st.pop_back();
+               if (!withFold)
+                  continue;
+               for (int e = 0; e < 3; e++)
+               {
+                  const int o = sf.nb[i][e];
+                  if (o < 0 || mark[o] != stamp || pid[posOf[o]] >= 0 || sf.fold[i][e] != 0)
+                     continue;   // (not in the list, grouped, or not flat)
+                  pid[posOf[o]] = ng;
+                  st.push_back(o);
+               }
+            }
+            ng++;
+         }
+         skip.assign(nL, 0);
+         pressed.clear();
+         RubberContact::FaceTable *const ft = FinderTable(it, c);   // (the probe's measurements, at the same c)
+         const RubberContact::FaceRead frd { ft, nullptr };
+         if (rs != nullptr)   // pressed: a face in the probe's patches (patch_zero: and pressed past its own patch's zero; one under it is still an entry)
+         {
+            for (const int q : rs->pieces.id)
+               if (q >= 0 && q != RubberContact::PatchPieceList::kNoPiece && q < (int)sf.tris.size())
+               {
+                  if (zl != nullptr && mark[q] == stamp && bs.R - std::sqrt(frd.At((size_t)posOf[q], sf.tris[q], c).d2) - RubberContact::PieceZero(*zl, q) <= 0.0)
+                     continue;
+                  pressed.push_back(q);
+               }
+         }
+         else   // (no patches, patch_friction 0: pressed past the item's zero, today's test)
+            for (int j = 0; j < nL; j++)
+               if (bs.R - std::sqrt(frd.At((size_t)j, sf.tris[L[j]], c).d2) > it.gs.zero)
+                  pressed.push_back(L[j]);
+         for (const int i : pressed)   // a pressed face and each face of the list sharing an uncut edge with it (the contact rolls onto it as one): no chaining
+         {
+            if (mark[i] == stamp)
+               skip[posOf[i]] = 1;
+            if (!withFold)
+               continue;   // (no fold data: every edge a cut)
             const RubberContact::SurfaceTri &A = sf.tris[i];
             const double sA = (c - A.a).Dot(A.n);
             for (int e = 0; e < 3; e++)
             {
                const int o = sf.nb[i][e];
-               if (o < 0 || mark[o] != stamp || pid[posOf[o]] >= 0)
+               if (o < 0 || mark[o] != stamp)
                   continue;
-               bool join = false;   // (no fold data: every face its own piece)
-               if (withFold)
-               {
-                  const int fi = sf.fold[i][e];
-                  int fo = 2;
-                  for (int f = 0; f < 3; f++)
-                     if (sf.nb[o][f] == i)
-                        fo = sf.fold[o][f];
-                  const double sB = (c - sf.tris[o].a).Dot(sf.tris[o].n);
-                  join = fi == 0 || !(fi == 2 || fo == 2 || (fi * sA >= 0.0 && fo * sB >= 0.0));   // (cut B: flat, or not concave toward c)
-               }
-               if (join)
-               {
-                  pid[posOf[o]] = npc;
-                  st.push_back(o);
-               }
+               const int fi = sf.fold[i][e];
+               int fo = 2;
+               for (int f = 0; f < 3; f++)
+                  if (sf.nb[o][f] == i)
+                     fo = sf.fold[o][f];
+               const double sB = (c - sf.tris[o].a).Dot(sf.tris[o].n);
+               if (fi == 0 || !(fi == 2 || fo == 2 || (fi * sA >= 0.0 && fo * sB >= 0.0)))   // (cut B: flat, or not concave toward c; fold 2, unknown, a cut)
+                  skip[posOf[o]] = 1;
             }
          }
-         npc++;
-      }
-      bestD2.assign(npc, INFINITY);
-      bestP.resize(npc);
-      bestN.resize(npc);
-      bestK.assign(npc, 0);
-      hasSeg.assign(npc, 0);
-      for (int j = 0; j < nL; j++)
-         if (L[j] == seg)
-            hasSeg[pid[j]] = 1;
-      RubberContact::FaceTable *const ft = FinderTable(it, c);   // (the probe's measurements, at the same c)
-      const RubberContact::FaceRead frd { ft, nullptr };
-      for (int j = 0; j < nL; j++)
-      {
-         const int p = pid[j];
-         if (hasSeg[p])
-            continue;
-         const RubberContact::SurfaceTri &t = sf.tris[L[j]];
-         if (bestD2[p] < INFINITY && RubberContact::FaceTable::BoxD2(t, c) > (bestD2[p] + 1e-18) * (1.0 + RubberContact::FaceTable::kBoxSlack))
-            continue;   // (cannot be nearer than the piece's best nor tie with it: the probe's box bound)
-         const RubberContact::FaceTable::Slot &sl = frd.At((size_t)j, t, c);
-         if (sl.d2 < bestD2[p] - 1e-18 || (sl.d2 < bestD2[p] + 1e-18 && sl.kind < bestK[p]))   // (the probe's tie rule: the face over an edge or a corner)
+         if (seg >= 0 && seg < (int)sf.tris.size() && mark[seg] == stamp)   // the probe's own face: its answer covers it
+            skip[posOf[seg]] = 1;
+         skipG.assign(ng, 0);
+         for (int j = 0; j < nL; j++)
+            if (skip[j])
+               skipG[pid[j]] = 1;
+         bestD2.assign(ng, INFINITY);
+         bestP.resize(ng);
+         bestN.resize(ng);
+         bestK.assign(ng, 0);
+         for (int j = 0; j < nL; j++)   // each other group: its nearest point by the probe's measurement
          {
-            bestD2[p] = sl.d2;
-            bestP[p] = sl.p;
-            bestK[p] = sl.kind;
-            bestN[p] = t.n;
+            const int p = pid[j];
+            if (skipG[p])
+               continue;
+            const RubberContact::SurfaceTri &t = sf.tris[L[j]];
+            if (bestD2[p] < INFINITY && RubberContact::FaceTable::BoxD2(t, c) > (bestD2[p] + 1e-18) * (1.0 + RubberContact::FaceTable::kBoxSlack))
+               continue;   // (cannot be nearer than the group's best nor tie with it: the probe's box bound)
+            const RubberContact::FaceTable::Slot &sl = frd.At((size_t)j, t, c);
+            if (sl.d2 < bestD2[p] - 1e-18 || (sl.d2 < bestD2[p] + 1e-18 && sl.kind < bestK[p]))   // (the probe's tie rule: the face over an edge or a corner)
+            {
+               bestD2[p] = sl.d2;
+               bestP[p] = sl.p;
+               bestK[p] = sl.kind;
+               bestN[p] = t.n;
+            }
+         }
+         thread_local std::vector<double> pzG;   // patch_zero: per flat group, the largest of its faces' patch zeros (as the grouping below does per piece)
+         pzG.assign(ng, 0.0);
+         if (zl != nullptr)
+            for (int j = 0; j < nL; j++)
+               pzG[pid[j]] = std::max(pzG[pid[j]], RubberContact::PieceZero(*zl, L[j]));
+         for (int p = 0; p < ng; p++)
+         {
+            if (skipG[p] || !(bestD2[p] < INFINITY))
+               continue;
+            const double d = std::sqrt(bestD2[p]);
+            const double raw = bs.R - d - pzG[p];   // (patch_zero: from its patch's zero; else before the item's zero, ZeroHit takes it off)
+            if (raw > (zl != nullptr ? 0.0 : it.gs.zero) || d <= 1e-12)
+               continue;   // pressed (in the probe's answer), or the centre on the face (no normal)
+            V3 n = bestN[p];
+            if ((c - bestP[p]).Dot(n) < 0.0)
+               n = n * -1.0;
+            if (bestK[p] != 0)   // (nearest on an edge or a corner: toward it)
+               n = (c - bestP[p]) / d;
+            out.push_back({ raw, n, zl != nullptr });
          }
       }
-      const std::vector<std::pair<int, double>> *const zl = RubberContact::PatchZeros();   // patch_zero (D3): each piece from its own patch's zero (its faces' entries; none: 0), final
-      thread_local std::vector<double> pz;
-      pz.assign(npc, 0.0);
-      if (zl != nullptr)
-         for (int j = 0; j < nL; j++)
-            pz[pid[j]] = std::max(pz[pid[j]], RubberContact::PieceZero(*zl, L[j]));
-      for (int p = 0; p < npc; p++)
+      else
       {
-         if (hasSeg[p] || !(bestD2[p] < INFINITY))
-            continue;
-         const double d = std::sqrt(bestD2[p]);
-         const double raw = bs.R - d - pz[p];   // (patch_zero: from its patch's zero; else before the item's zero, ZeroHit takes it off)
-         if (raw > (zl != nullptr ? 0.0 : it.gs.zero) || d <= 1e-12)
-            continue;   // pressed: in the probe's answer (its patches)
-         V3 n = bestN[p];
-         if ((c - bestP[p]).Dot(n) < 0.0)
-            n = n * -1.0;
-         if (bestK[p] != 0)
-            n = (c - bestP[p]) / d;
-         out.push_back({ raw, n, zl != nullptr });
+         pid.assign(nL, -1);
+         int npc = 0;
+         for (int j0 = 0; j0 < nL; j0++)
+         {
+            if (pid[j0] >= 0)
+               continue;
+            pid[j0] = npc;
+            st.clear();
+            st.push_back(L[j0]);
+            while (!st.empty())
+            {
+               const int i = st.back();
+               st.pop_back();
+               const RubberContact::SurfaceTri &A = sf.tris[i];
+               const double sA = (c - A.a).Dot(A.n);
+               for (int e = 0; e < 3; e++)
+               {
+                  const int o = sf.nb[i][e];
+                  if (o < 0 || mark[o] != stamp || pid[posOf[o]] >= 0)
+                     continue;
+                  bool join = false;   // (no fold data: every face its own piece)
+                  if (withFold)
+                  {
+                     const int fi = sf.fold[i][e];
+                     int fo = 2;
+                     for (int f = 0; f < 3; f++)
+                        if (sf.nb[o][f] == i)
+                           fo = sf.fold[o][f];
+                     const double sB = (c - sf.tris[o].a).Dot(sf.tris[o].n);
+                     join = fi == 0 || !(fi == 2 || fo == 2 || (fi * sA >= 0.0 && fo * sB >= 0.0));   // (cut B: flat, or not concave toward c)
+                  }
+                  if (join)
+                  {
+                     pid[posOf[o]] = npc;
+                     st.push_back(o);
+                  }
+               }
+            }
+            npc++;
+         }
+         bestD2.assign(npc, INFINITY);
+         bestP.resize(npc);
+         bestN.resize(npc);
+         bestK.assign(npc, 0);
+         hasSeg.assign(npc, 0);
+         for (int j = 0; j < nL; j++)
+            if (L[j] == seg)
+               hasSeg[pid[j]] = 1;
+         RubberContact::FaceTable *const ft = FinderTable(it, c);   // (the probe's measurements, at the same c)
+         const RubberContact::FaceRead frd { ft, nullptr };
+         for (int j = 0; j < nL; j++)
+         {
+            const int p = pid[j];
+            if (hasSeg[p])
+               continue;
+            const RubberContact::SurfaceTri &t = sf.tris[L[j]];
+            if (bestD2[p] < INFINITY && RubberContact::FaceTable::BoxD2(t, c) > (bestD2[p] + 1e-18) * (1.0 + RubberContact::FaceTable::kBoxSlack))
+               continue;   // (cannot be nearer than the piece's best nor tie with it: the probe's box bound)
+            const RubberContact::FaceTable::Slot &sl = frd.At((size_t)j, t, c);
+            if (sl.d2 < bestD2[p] - 1e-18 || (sl.d2 < bestD2[p] + 1e-18 && sl.kind < bestK[p]))   // (the probe's tie rule: the face over an edge or a corner)
+            {
+               bestD2[p] = sl.d2;
+               bestP[p] = sl.p;
+               bestK[p] = sl.kind;
+               bestN[p] = t.n;
+            }
+         }
+         thread_local std::vector<double> pz;
+         pz.assign(npc, 0.0);
+         if (zl != nullptr)
+            for (int j = 0; j < nL; j++)
+               pz[pid[j]] = std::max(pz[pid[j]], RubberContact::PieceZero(*zl, L[j]));
+         for (int p = 0; p < npc; p++)
+         {
+            if (hasSeg[p] || !(bestD2[p] < INFINITY))
+               continue;
+            const double d = std::sqrt(bestD2[p]);
+            const double raw = bs.R - d - pz[p];   // (patch_zero: from its patch's zero; else before the item's zero, ZeroHit takes it off)
+            if (raw > (zl != nullptr ? 0.0 : it.gs.zero) || d <= 1e-12)
+               continue;   // pressed: in the probe's answer (its patches)
+            V3 n = bestN[p];
+            if ((c - bestP[p]).Dot(n) < 0.0)
+               n = n * -1.0;
+            if (bestK[p] != 0)
+               n = (c - bestP[p]) / d;
+            out.push_back({ raw, n, zl != nullptr });
+         }
       }
       if (rs != nullptr)   // the ridges (a ridge about to press, a pass about to let go)
       {

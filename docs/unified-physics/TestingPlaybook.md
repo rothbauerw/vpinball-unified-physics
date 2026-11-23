@@ -105,6 +105,7 @@ VPX_PLUNGER_TRACE=<file>   the cabinet plunger sensor per ms while active: raw r
 VPX_GROUP_STATS=<file>     run totals (cycles, us/cycle, steps, rounds, halvings, energy steps, failures) every 200 ms of table time; line 2: steps alone and sleeps per part kind.
 VPX_GROUP_PHASE_TIMING=<csv>  per-step phase timing and counts (attempts, evals, linear solves, halvings, capsules, terms).
 VPX_STEP_RULE=<csv>        one row per group step: what set the step, h, solve rounds.
+VPX_TOUCH_TRACE=<csv>      touch_predict: one row per predicted touch outcome (gap, v, a, d, h, end gap, outcome).
 VPX_GROUP_CLAMP_TRACE=<file>  every Newton round of steps with a wire contact.
 VPX_GROUP_CONTACT_TRACE=1  per-round depth, force, friction (first 3 energy steps).     VPX_GROUP_HISTORY_TRACE=1   last 50 steps, at the first energy-step warning.
 VPX_GROUP_ROUND_TRACE=1    per-round Newton trace with probe notes (group and hinge solves), printed only with an energy-step warning.

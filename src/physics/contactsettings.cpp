@@ -146,6 +146,10 @@ namespace
             s.linkWindows = on;
          else if (key == "patch_zero")
             s.patchZero = on;
+         else if (key == "touch_predict")
+            s.touchPredict = on;
+         else if (key == "touchable_faces")
+            s.touchableFaces = on;
          else if (key == "cord_held_reff")
             s.cordHeldReff = on;
          else if (key == "level_stiffness")
@@ -203,7 +207,7 @@ namespace
       cur = s;
       Publish();
       PLOGI << "Contact settings loaded from " << path.string() << ": " << (s.enable ? "on" : "off") << ", dynamic ratio " << s.muDynamicRatio << ", pin_memory " << (s.pinMemory ? 1 : 0)
-            << ", rolling resistance " << s.rollingResistance << ", twist " << (s.twist ? "on" : "off") << " patch " << s.twistPatchMm << " mm, roll_model " << s.rollModel << ", step_model " << s.stepModel << ", step_swing_cap " << (s.stepSwingCap ? 1 : 0) << ", term_arrival " << (s.termArrival ? 1 : 0) << ", eps_rest_um " << s.epsRestUm << ", hinge_piece_sum " << (s.hingePieceSum ? 1 : 0) << ", damp_dir_slope " << (s.dampDirSlope ? 1 : 0) << ", lever_roll_slope " << (s.leverRollSlope ? 1 : 0) << ", twist_slope " << (s.twistSlope ? 1 : 0) << ", end_grad_slope " << (s.endGradSlope ? 1 : 0) << ", term_force_rows " << (s.termForceRows ? 1 : 0) << ", term_energy " << (s.termEnergy ? 1 : 0) << ", joint_zero_floor " << (s.jointZeroFloor ? 1 : 0) <<", gonzalez_mass " << (s.gonzalezMass ? 1 : 0) << ", physics_defaults " << (s.physicsDefaults ? 1 : 0) << ", damping_integral " << (s.dampingIntegral ? 1 : 0) << ", rolling_patch " << (s.rollingPatch ? 1 : 0) << ", stick_zone_trial " << (s.stickZoneTrial ? 1 : 0) << ", patch_path " << (s.patchPath ? 1 : 0) << ", grip_in_step " << (s.gripInStep ? 1 : 0) << ", part_guess_accel " << (s.partGuessAccel ? 1 : 0) << ", multi_contact " << (s.multiContact ? 1 : 0) << ", peak_slope " << (s.peakSlope ? 1 : 0) << ", patch_friction " << (s.patchFriction ? 1 : 0) << ", link_windows " << (s.linkWindows ? 1 : 0) << ", patch_zero " << (s.patchZero ? 1 : 0) << (s.patchZero && !(s.multiContact && s.linkWindows) ? " (off: needs multi_contact and link_windows)" : "") << ", level_stiffness " << (s.levelStiffness ? 1 : 0) << ", cord_held_reff " << (s.cordHeldReff ? 1 : 0);
+            << ", rolling resistance " << s.rollingResistance << ", twist " << (s.twist ? "on" : "off") << " patch " << s.twistPatchMm << " mm, roll_model " << s.rollModel << ", step_model " << s.stepModel << ", step_swing_cap " << (s.stepSwingCap ? 1 : 0) << ", term_arrival " << (s.termArrival ? 1 : 0) << ", eps_rest_um " << s.epsRestUm << ", hinge_piece_sum " << (s.hingePieceSum ? 1 : 0) << ", damp_dir_slope " << (s.dampDirSlope ? 1 : 0) << ", lever_roll_slope " << (s.leverRollSlope ? 1 : 0) << ", twist_slope " << (s.twistSlope ? 1 : 0) << ", end_grad_slope " << (s.endGradSlope ? 1 : 0) << ", term_force_rows " << (s.termForceRows ? 1 : 0) << ", term_energy " << (s.termEnergy ? 1 : 0) << ", joint_zero_floor " << (s.jointZeroFloor ? 1 : 0) <<", gonzalez_mass " << (s.gonzalezMass ? 1 : 0) << ", physics_defaults " << (s.physicsDefaults ? 1 : 0) << ", damping_integral " << (s.dampingIntegral ? 1 : 0) << ", rolling_patch " << (s.rollingPatch ? 1 : 0) << ", stick_zone_trial " << (s.stickZoneTrial ? 1 : 0) << ", patch_path " << (s.patchPath ? 1 : 0) << ", grip_in_step " << (s.gripInStep ? 1 : 0) << ", part_guess_accel " << (s.partGuessAccel ? 1 : 0) << ", multi_contact " << (s.multiContact ? 1 : 0) << ", peak_slope " << (s.peakSlope ? 1 : 0) << ", patch_friction " << (s.patchFriction ? 1 : 0) << ", link_windows " << (s.linkWindows ? 1 : 0) << ", patch_zero " << (s.patchZero ? 1 : 0) << (s.patchZero && !(s.multiContact && s.linkWindows) ? " (off: needs multi_contact and link_windows)" : "") << ", level_stiffness " << (s.levelStiffness ? 1 : 0) << ", cord_held_reff " << (s.cordHeldReff ? 1 : 0) << ", touch_predict " << (s.touchPredict ? 1 : 0) << ", touchable_faces " << (s.touchableFaces ? 1 : 0);
    }
 }
 
@@ -236,6 +240,7 @@ void ContactSettings::ToStep(GroupStep::Settings& s) const
    s.stepModel = stepModel;
    s.swingCap = stepSwingCap;
    s.termArrival = termArrival;
+   s.touchPredict = touchPredict;
    s.dampDirSlope = dampDirSlope;
    s.peakSlope = peakSlope;
    s.levelStiffness = levelStiffness;

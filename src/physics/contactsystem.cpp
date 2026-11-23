@@ -119,6 +119,7 @@ namespace ContactSystem
    static std::filesystem::file_time_type s_iniTime{};   // its write time when the readers last read it (SetTable, ReloadChangedIni)
    static bool s_aircoreInStep = false;     // [Features] aircore_in_step of this table (physicsini.h), read likewise: 1 = an air-core coil's pull is read at each step's midpoint (AircorePullForce, CordIsland); 0 = held for the cycle as before
    static std::set<std::string> s_retiredTold;   // the retired-setting notices told since this table started (NoticeRetired: one WARN and one notice each per table start)
+   static long s_touchNetTold = 0;   // touch_predict: the nets told this table start (GroupStep::touchStats.net; reset with it at SetTable)
 
    void SetTable(const std::filesystem::path &tableFile)
    {
@@ -142,6 +143,8 @@ namespace ContactSystem
       s_seatEditorBalls = s_unified && f.seatEditorBalls;
       s_aircoreInStep = s_unified && f.aircoreInStep;
       s_retiredTold.clear();
+      GroupStep::touchStats = GroupStep::TouchStats();   // (touch_predict counters: one play)
+      s_touchNetTold = 0;
       g_cullListed = g_cullNamed = false;   // (the part cull: its lists, told misses and counters per table start)
       g_cullParts.clear();
       g_cullBands.clear();
@@ -3379,6 +3382,11 @@ struct ContactSystemImpl
          ContactSurfaceHost::FinderJoinCapHit(g.joinCapHit);
          g.joinCapHit = 0;
       }
+      if (GroupStep::touchStats.net > ContactSystem::s_touchNetTold)   // touch_predict: a net taken (rule 8: one WARN and one notice per table start)
+      {
+         ContactSystem::s_touchNetTold = GroupStep::touchStats.net;
+         ContactSystem::NoticeRetired("touch_predict: a step ended past a predicted touch after its Hermite re-solve; the net (today's limit) took it (counts: VPX_GROUP_STATS, rows: VPX_TOUCH_TRACE)");
+      }
       if (statsPath != nullptr)
       {
          static long n = 0, steps = 0, rounds = 0, eSteps = 0, fails = 0, halv = 0;
@@ -3400,6 +3408,8 @@ struct ContactSystemImpl
             {
                fprintf(f, "cycles %ld us/cycle %.2f max %.0f steps %ld rounds %ld halvings %ld energysteps %ld failed %ld balls %d\n", n, us / n, usMax, steps, rounds, halv, eSteps, fails, g.nb);
                fprintf(f, "pieces lookups %ld entries %ld stepsset %ld\n", GroupStep::pieceStats.lookups, GroupStep::pieceStats.entries, GroupStep::pieceStats.set);   // (shared_step_only counters)
+               fprintf(f, "touch predicted %ld taken %ld short %ld hermite %ld net %ld\n", GroupStep::touchStats.predicted, GroupStep::touchStats.taken, GroupStep::touchStats.shortL,
+                       GroupStep::touchStats.hermite, GroupStep::touchStats.net);   // (touch_predict counters)
                const long *const rc = GroupStep::RestWatch::Counts();   // (parts alone: bumper, hinge part, disc, flipper, sling plate)
                fprintf(f, "alone calls %ld %ld %ld %ld %ld asleep after %ld %ld %ld %ld %ld\n", rc[0], rc[1], rc[2], rc[3], rc[4], rc[5], rc[6], rc[7], rc[8], rc[9]);
                fclose(f);

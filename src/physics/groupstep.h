@@ -271,6 +271,13 @@ namespace GroupStep
       static std::atomic<long long> c[5] { { 0 }, { 0 }, { 0 }, { 0 }, { 0 } };
       return c;
    }
+   // touch_predict counters (always on, cheap; written to the VPX_GROUP_STATS file): steps a predicted touch set and ended (predicted), of them landed within d and closing
+   // (taken) or more than d short (shortL); re-solves at the Hermite root of a step that ended past a predicted touch (hermite); re-solves at today's limit after that (net)
+   struct TouchStats
+   {
+      long predicted = 0, taken = 0, shortL = 0, hermite = 0, net = 0;
+   };
+   inline TouchStats touchStats;
    struct Hit
    {
       double delta = -1.0;
@@ -516,6 +523,9 @@ namespace GroupStep
       // clock an untouched approaching contact gets there (rule 3). The union's depth sees only the deepest piece, so a second piece arriving inside a step is otherwise invisible.
       // true (default) = on; false = the union's rule alone.
       bool termArrival = true;
+      // touchPredict ([Contact] touch_predict): a ball not touching a fixed surface (no part columns, not a pair) gets no clock; its step ends at the predicted touch (ChooseStep,
+      // TouchPredict) and the solved end is checked (Step, TouchEnd). false = today's arrival rule and clock. Not under VPX_GROUP_HFIX.
+      bool touchPredict = true;
       // dampDirSlope ([Contact] damp_dir_slope): a contact made of terms damps along G = Fel / |Fel| (the pressing terms' summed elastic force); G turns as the terms'
       // forces change, at h dG/du = (I - G g^T) K / fe (K = sum_t h tk_t tg_t tg_t^T, g = G's ball part). Newton's slope then takes fd h dG/du and dd = G . dq's change
       // through G, (kd / h) G dq^T dG/du; N's slope (kv) the latter. The force is unchanged. true (default) = on; false = G held fixed in the slope.
@@ -877,6 +887,9 @@ namespace GroupStep
       virtual CoordInfo Coord(int coord) const = 0;
       // the part's stored energy and its own bodies' kinetic energy at the balls' positions b (the balls' own energy is the group's)
       virtual double Energy(const Ball *b, int nb) const = 0;
+      // the part's own force on each ball at the balls' positions b and its state now, added to F[i] (one per group ball): only a force its Eval puts on a ball directly, not
+      // through an item, and no rate term (touch_predict's net force, ChooseStep; runs/2026-11-22-touch-predict/design.md 2.7). Writes no state. None: nothing
+      virtual void BallForceNow(const Ball * /*b*/, int /*nb*/, V3 * /*F*/) const {}
       // a step of h from the state b: its start values, and the first guess of its own unknowns into x[off..]
       virtual bool BeginStep(const Ball *b, int nb, double h, double *x, int off) = 0;
       // the step's forces at x (see above); with J its entries of the residual's Jacobian (the balls' rows and columns in the group's layout). The group adds the balls' reaction on its own rows
@@ -2031,13 +2044,62 @@ namespace GroupStep
       };
       mutable StepDiag diag;
 
+      // the depth an approach at closing speed v reaches on law L (all the closing energy into the squash): the stiffness while it lasts (ChooseStep; touch_predict's size d)
+      double ReachDepth(const Item &L, const double v) const
+      {
+         const double eC = 0.5 * L.mRed * v * v;
+         double lo = std::pow(2.5 * eC / L.kH, 0.4);   // the Hertz spring alone; a layer only makes it shallower
+         if (L.cL > 0.0)
+         {
+            double hi = std::min(lo, L.hL);
+            lo = 0.0;
+            for (int r = 0; r < 50 && hi - lo > 1e-4 * hi; r++)
+            {
+               const double mid = 0.5 * (lo + hi);
+               (L.V(mid) < eC ? lo : hi) = mid;
+            }
+         }
+         if (L.kb > 0.0)   // springs in series (the bend): the closing energy shared by them, the squash the Hertz part of it
+         {
+            const double cS = 1.0 / L.kb;
+            double uLo = 0.0, uHi = lo;
+            for (int r = 0; r < 30 && uHi - uLo > 1e-3 * uHi; r++)
+            {
+               const double u = 0.5 * (uLo + uHi), f = L.kH * u * std::sqrt(u);
+               (0.4 * f * u + 0.5 * f * f * cS < eC ? uLo : uHi) = u;
+            }
+            const double fE = L.kH * uHi * std::sqrt(uHi);
+            lo = uHi + (L.kb > 0.0 ? fE / L.kb : 0.0);   // (the bend is in the depth; the part's give is in its solved angle, not in the depth)
+         }
+         return lo;
+      }
+
+      // touch_predict (runs/2026-11-22-touch-predict/design.md 2.1, 2.3): a ball not touching a fixed surface (an item or a static piece entry, no part columns, not a pair).
+      // ChooseStep writes one per such item or entry it predicted; the next Step reads them while the positions are the same (tpStamp == stamp): nothing else is kept between steps
+      struct TouchPred
+      {
+         int k, e;                // the item and its entry (-1 the object)
+         double gap, v, a, d;     // at the step's start: gap (m), closing speed (m/s), closing acceleration (m/s^2), the law's squash d at the arrival speed (m)
+         double t, hToday;        // the predicted touch time d/2 short (inf: none), and today's limit for the item (the net: max(0.5 gap / v, its clock))
+         V3 n;                    // its normal at the start (the end's closing speed is taken along it)
+         bool past;               // (Step: touching at the end of the first solve)
+      };
+      mutable std::vector<TouchPred> tpList;
+      mutable long tpStamp = -1;
+      mutable int tpSet = -1;     // the prediction that set the step (-1 none) and its h
+      mutable double tpH = 0.0;
+      bool tpCounted = false;     // (Step: the step's prediction is counted once)
+
       // The step choice from the state now (accuracy only)
       double ChooseStep() const
       {
          PhaseScope ps(phChoose);
          double h = set.hMax;
          StepDiag dg;
-         V3 *const fNet = fNetS;   // the net force on each ball now: gravity, each touching contact's spring and shear stretch
+         const bool tpOn = set.touchPredict && GroupFixedStepS() <= 0.0;   // (touch_predict; never under VPX_GROUP_HFIX)
+         tpList.clear();
+         tpSet = -1;
+         V3 *const fNet = fNetS;   // the net force on each ball now: gravity, each touching contact's spring and shear stretch; with touch_predict each part's own force (BallForceNow)
          for (int i = 0; i < nb; i++)
          {
             fNet[i] = (set.g * ball[i].m) + ball[i].fExt;
@@ -2064,6 +2126,9 @@ namespace GroupStep
                   fNet[it.b] = fNet[it.b] - f;
             }
          }
+         if (tpOn)   // touch_predict: each part's own force on a ball now, not through an item (a cord's stretch and grip; design.md 2.7)
+            for (int p = 0; p < np; p++)
+               part[p]->BallForceNow(ball, nb, fNet);
          for (int k = 0; k < ni; k++)
          {
             const Item &it = item[k];
@@ -2092,7 +2157,7 @@ namespace GroupStep
                const double qRate = terms ? part[shape[it.s]->part]->Coord(hp.c[0].coord).rate : 0.0;
                const auto termDot = [&](const HitTerm &ht) { return -A.v.Dot(ht.n) + ht.slope * qRate; };
                // the reach over the longest step along normal n: distance under a steady acceleration, s = v h + a h^2 / 2, a the closing part of the net acceleration
-               // now (fNet: gravity with the nudge, external, fields, touching contacts; a surface's own acceleration is not in it). Only a closing a widens the reach,
+               // now (fNet: gravity with the nudge, external, fields, touching contacts, with touch_predict the parts' own forces; a surface's own acceleration is not in it). Only a closing a widens the reach,
                // an opening one is not taken off: the test only decides whether the item is probed; probing one more costs one probe, dropping one that arrives is a fault
                V3 aRelNow = fNet[it.a] * (1.0 / A.m);
                if (it.b >= 0)
@@ -2109,33 +2174,7 @@ namespace GroupStep
                if (invQ > 0.0)
                   L.mRed = 1.0 / (1.0 / A.m + invQ);
                // the depth an approach at closing speed v reaches (all the closing energy into the squash): the stiffness while it lasts
-               const auto reachDepth = [&](const double v) {
-                  const double eC = 0.5 * L.mRed * v * v;
-                  double lo = std::pow(2.5 * eC / L.kH, 0.4);   // the Hertz spring alone; a layer only makes it shallower
-                  if (L.cL > 0.0)
-                  {
-                     double hi = std::min(lo, L.hL);
-                     lo = 0.0;
-                     for (int r = 0; r < 50 && hi - lo > 1e-4 * hi; r++)
-                     {
-                        const double mid = 0.5 * (lo + hi);
-                        (L.V(mid) < eC ? lo : hi) = mid;
-                     }
-                  }
-                  if (L.kb > 0.0)   // springs in series (the bend): the closing energy shared by them, the squash the Hertz part of it
-                  {
-                     const double cS = 1.0 / L.kb;
-                     double uLo = 0.0, uHi = lo;
-                     for (int r = 0; r < 30 && uHi - uLo > 1e-3 * uHi; r++)
-                     {
-                        const double u = 0.5 * (uLo + uHi), f = L.kH * u * std::sqrt(u);
-                        (0.4 * f * u + 0.5 * f * f * cS < eC ? uLo : uHi) = u;
-                     }
-                     const double fE = L.kH * uHi * std::sqrt(uHi);
-                     lo = uHi + (L.kb > 0.0 ? fE / L.kb : 0.0);   // (the bend is in the depth; the part's give is in its solved angle, not in the depth)
-                  }
-                  return lo;
-               };
+               const auto reachDepth = [&](const double v) { return ReachDepth(L, v); };
                const double lo = reachDepth(vc);
                // the bounce's fastest rate at depth dE: m x'' + c x' + k x = 0 (c the law's own damping) decays at most at (c + sqrt(c^2 - 4 m k)) / 2m when overdamped,
                // else swings at omN. The mid-step damping takes a rate v to v (1 - z/2) / (1 + z/2), z = c h / m: on the spring's clock alone a damper past 2.56 times
@@ -2221,12 +2260,44 @@ namespace GroupStep
                      dg.term = -1;
                   }
                };
-               if (delta < 0.0 && dDot > 0.0)   // reached in about two steps, not overshot
+               // touch_predict: an item not touching a fixed surface gets no clock (2.1b, e): its closing speed v, closing acceleration a (the reach test's), arrival speed
+               // va = sqrt(v^2 + 2 a gap) and d the law's squash at va; the step ends at the smallest root t of gap - d/2 = v t + a t^2 / 2, taken closing (the stable form
+               // 2 s / (v + sqrt(v^2 + 2 a s)), or (sqrt(v^2 + 2 a s) - v) / a where that has no positive denominator: a receding item inside d/2 takes the later, closing
+               // crossing; none: no limit). Not an event, today's rule instead: a closing item within d at the start (J5), an arrival slower than vSteady (J7)
+               bool tpDone = false;
+               if (tpOn && !it.touching && it.b < 0 && nq == 0 && it.s >= 0 && shape[it.s] != nullptr && shape[it.s]->part < 0)
+               {
+                  const double gap = -delta, a = -aRelNow.Dot(n), va2 = dDot * dDot + 2.0 * a * gap;
+                  const bool arrives = va2 >= 0.0 && (dDot > 0.0 || a > 0.0);
+                  const double va = arrives ? std::sqrt(va2) : 0.0, d = reachDepth(va);
+                  if ((gap > d || dDot <= 0.0) && (!arrives || va >= set.vSteady))
+                  {
+                     const double s = gap - 0.5 * d, disc = dDot * dDot + 2.0 * a * s;
+                     double t = std::numeric_limits<double>::infinity();
+                     if (disc >= 0.0)
+                     {
+                        const double q = dDot + std::sqrt(disc);
+                        const double tr = q > 0.0 ? 2.0 * s / q : a > 0.0 ? (std::sqrt(disc) - dDot) / a : -1.0;
+                        if (tr > 0.0)
+                           t = tr;
+                     }
+                     const double hToday = delta < 0.0 && dDot > 0.0 ? std::max(set.arrivalShare * -delta / dDot, hs) : hs;
+                     tpList.push_back(TouchPred { k, e, gap, dDot, a, d, t, hToday, n, false });
+                     if (t < h)
+                     {
+                        lim(t, 9);
+                        tpSet = (int)tpList.size() - 1;
+                        tpH = t;
+                     }
+                     tpDone = true;
+                  }
+               }
+               if (!tpDone && delta < 0.0 && dDot > 0.0)   // reached in about two steps, not overshot
                {
                   const double ha = set.arrivalShare * -delta / dDot;
                   lim(std::max(ha, hs), ha > hs ? 3 : 1);
                }
-               else
+               else if (!tpDone)
                   lim(hs, steady ? 7 : 1);
                // termArrival: each term not yet pressing is an approaching contact of its own: the arrival rule with the clock an untouched contact gets there
                // (unsteady, at the depth its own closing speed reaches), not the contact's (a resting contact's clock can be hMax)
@@ -2280,9 +2351,149 @@ namespace GroupStep
             dg.rule = 5;
          if (dg.rule != 5 && dg.rule != 8 && dg.entry >= 0)   // (step pieces counter: an entry set the step)
             pieceStats.set++;
+         if (dg.rule != 9 && dg.rule != 19)   // (touch_predict: a later limit took the step)
+            tpSet = -1;
+         tpStamp = stamp;
          diag = dg;
          nowStamp = stamp;
          return std::max(h, 1e-7);
+      }
+
+      // touch_predict: the first s in (0, h) where the cubic Hermite of a gap's start and end values and rates (r = d gap / dt) reaches target (G(0) > target > G(h)):
+      // its turning points split [0, h] into monotone pieces, the first piece that crosses is bisected to the last representable split. <= 0: none
+      static double HermiteFirst(const double g0, const double r0, const double g1, const double r1, const double h, const double target)
+      {
+         const double c0 = g0 - target, c1 = h * r0, c2 = 3.0 * (g1 - g0) - h * (2.0 * r0 + r1), c3 = 2.0 * (g0 - g1) + h * (r0 + r1);   // on u = s / h
+         const auto G = [&](const double u) { return c0 + u * (c1 + u * (c2 + u * c3)); };
+         double br[4] = { 0.0, 1.0, 1.0, 1.0 };
+         int nbr = 1;
+         const auto turn = [&](const double u) {
+            if (u > 0.0 && u < 1.0)
+               br[nbr++] = u;
+         };
+         if (c3 != 0.0)
+         {
+            const double D = c2 * c2 - 3.0 * c1 * c3;
+            if (D > 0.0)
+            {
+               turn((-c2 - std::sqrt(D)) / (3.0 * c3));
+               turn((-c2 + std::sqrt(D)) / (3.0 * c3));
+            }
+         }
+         else if (c2 != 0.0)
+            turn(-c1 / (2.0 * c2));
+         std::sort(br + 1, br + nbr);
+         br[nbr++] = 1.0;
+         for (int i = 0; i + 1 < nbr; i++)
+         {
+            double lo = br[i], hi = br[i + 1];
+            if (!(G(lo) > 0.0 && G(hi) <= 0.0))
+               continue;
+            for (;;)
+            {
+               const double mid = 0.5 * (lo + hi);
+               if (!(mid > lo && mid < hi))
+                  break;
+               (G(mid) > 0.0 ? lo : hi) = mid;
+            }
+            return lo * h;   // (the short side)
+         }
+         return -1.0;
+      }
+
+      // touch_predict, the step's end (design 2.3), after a solve of length h (the step was asked for hTry). stage 0: the first solve; 1: after the Hermite re-solve; 2: after the net.
+      // A prediction past at the end (touching): one re-solve at the earliest Hermite root of the past ones, aimed d/2 short; still past: the net, a re-solve at today's limit for
+      // that item (counted; WARN and notice: contactsystem.cpp). Not past, the prediction that set the step: taken (end gap in [0, d], d at the end's closing speed, and closing)
+      // or short (end gap > d). Returns the h to solve again, 0 = none. The end's closing speed along the start normal; an entry's end gap the larger of the object's (its
+      // nearest piece, from the solve) and its own face moved along its start normal
+      double TouchEnd(const double h, const double hTry, int &stage)
+      {
+         // VPX_TOUCH_TRACE=<csv> (a diagnostic, read once; off: nothing changes): one row per predicted touch outcome
+         static FILE *const tf = []() -> FILE * {
+            const char *const e = getenv("VPX_TOUCH_TRACE");
+            FILE *const o = e != nullptr && *e ? fopen(e, "w") : nullptr;
+            if (o != nullptr)
+               fprintf(o, "t_ms,object,entry,gap_um,v,a,d_um,tpred_us,h_us,endgap_um,endv,outcome\n");
+            return o;
+         }();
+         const auto row = [&](const TouchPred &p, const double gEnd, const double vEnd, const char *const out) {
+            if (tf == nullptr)
+               return;
+            fprintf(tf, "%u,%s,%d,%.4f,%.5f,%.5g,%.4f,%.4f,%.4f,%.4f,%.5f,%s\n", phaseMs, shape[item[p.k].s]->Name().c_str(), p.e, p.gap * 1e6, p.v, p.a, p.d * 1e6,
+                    std::isfinite(p.t) ? p.t * 1e6 : -1.0, h * 1e6, gEnd * 1e6, vEnd, out);
+         };
+         if (stage >= 3)
+            return 0.0;
+         const bool counting = stage == 0 && !tpCounted && tpSet >= 0 && hTry == tpH;
+         double hHerm = std::numeric_limits<double>::infinity(), hNet = hHerm, setG = 0.0, setV = 0.0, setD = 0.0;
+         bool anyPast = false;
+         for (size_t j = 0; j < tpList.size(); j++)
+         {
+            TouchPred &p = tpList[j];
+            if (p.k >= ni)
+               continue;
+            const Item &it = item[p.k];
+            const V3 dc(x[6 * it.a], x[6 * it.a + 1], x[6 * it.a + 2]);
+            const double vEnd = -EndRate(dc, ball[it.a].v, h).Dot(p.n);
+            const double d1 = farNow[p.k] ? -1.0 : ie[p.k].d1;
+            const double gEnd = p.e < 0 ? -d1 : std::max(-d1, p.gap + dc.Dot(p.n));
+            if (gEnd < 0.0)   // touching at the end: past
+            {
+               anyPast = true;
+               hNet = std::min(hNet, p.hToday);
+               if (stage == 0)
+               {
+                  p.past = true;
+                  const double s = HermiteFirst(p.gap, -p.v, gEnd, -vEnd, h, 0.5 * p.d);
+                  if (s > 0.0)
+                     hHerm = std::min(hHerm, s);
+               }
+               row(p, gEnd, vEnd, stage == 0 ? "past" : stage == 1 ? "hermite_past" : "net_past");
+               continue;
+            }
+            const double dEnd = farNow[p.k] ? p.d : ReachDepth(law[p.k], std::max(vEnd, 0.0));
+            const char *const band = gEnd <= dEnd && vEnd > 0.0 ? "taken" : gEnd > dEnd ? "short" : "open";
+            if (stage > 0 && p.past)
+            {
+               char out[24];
+               snprintf(out, sizeof out, "%s_%s", stage == 1 ? "hermite" : "net", band);
+               row(p, gEnd, vEnd, out);
+            }
+            if ((int)j == tpSet)
+            {
+               setG = gEnd;
+               setV = vEnd;
+               setD = dEnd;
+            }
+         }
+         if (counting)
+         {
+            tpCounted = true;
+            touchStats.predicted++;
+            if (!anyPast)
+            {
+               const bool taken = setG <= setD && setV > 0.0, shortL = setG > setD;
+               touchStats.taken += taken ? 1 : 0;
+               touchStats.shortL += shortL ? 1 : 0;
+               row(tpList[(size_t)tpSet], setG, setV, taken ? "taken" : shortL ? "short" : "open");
+            }
+         }
+         if (stage == 2 || (!anyPast && stage == 1))
+         {
+            stage = 3;
+            return 0.0;
+         }
+         if (!anyPast)
+            return 0.0;
+         if (stage == 0 && hHerm < h)
+         {
+            stage = 1;
+            touchStats.hermite++;
+            return hHerm;
+         }
+         stage = 2;   // (still past after the Hermite re-solve, or no root short of the end: the net)
+         touchStats.net++;
+         return hNet < h ? hNet : 0.0;
       }
 
       static constexpr double kOnStop = 1e-10;   // (rad) a part this close to its hard stop is on it
@@ -2295,6 +2506,9 @@ namespace GroupStep
          for (int p = 0; p < np; p++)   // what a part keeps over one step's attempts starts afresh (PartRecords)
             part[p]->WipeStepWork();
          double h = hTry;
+         int tpStage = 0;   // (touch_predict: TouchEnd's stage)
+         tpCounted = false;
+         const bool tpOn = set.touchPredict && tpStamp == stamp && !tpList.empty() && GroupFixedStepS() <= 0.0;
          nHalveDiag = 0;
          joinRounds = 0;
          lwCuts = 0;
@@ -2315,6 +2529,15 @@ namespace GroupStep
                   continue;
                if (set.linkWindows && LinkOrderCut(h))   // link_windows: the links' time order feeds an end patch less than the union: the step is too long
                   continue;
+               if (tpOn && tpStage < 3)   // touch_predict: the step's end against its predicted touches (design 2.3)
+               {
+                  const double hRe = TouchEnd(h, hTry, tpStage);
+                  if (hRe > 0.0)
+                  {
+                     h = hRe;
+                     continue;
+                  }
+               }
                if (StopExcess() <= 0.0)
                {
                   Accept(h, false);
