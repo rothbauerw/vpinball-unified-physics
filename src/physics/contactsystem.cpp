@@ -2723,7 +2723,7 @@ struct ContactSystemImpl
                   sh.rp = it.rp;
                   sh.layerM = it.hLayer;
                   sh.onlyBall = ib;
-                  sh.heldReff = (ring || mp != nullptr || ContactSettings::Get().cordHeldReff) && it.Surf(sf).touching ? it.Surf(sf).reff : 0.0;   // (cord_held_reff: a cord island holds it too)
+                  sh.heldReff = it.Surf(sf).touching ? it.Surf(sf).reff : 0.0;   // (every island holds a touching surface's radius from touch start: ring, part and cord islands)
                   sh.heldKb = mp != nullptr && it.Surf(sf).touching ? it.Surf(sf).kb : 0.0;
                   sh.heldKtb = mp != nullptr && it.Surf(sf).touching ? it.Surf(sf).ktb : 0.0;
                   sh.patchZero = mp == nullptr ? it.r->MovingPart() == nullptr : mp->GroupPatchZero(sf);   // the per-patch zero: a static mesh or tube, or a target mesh with its face links (GroupStep::Shape::patchZero)
@@ -3568,7 +3568,7 @@ struct ContactSystemImpl
          }
          if (!ring && sh->mp == nullptr)
             it.touching = gi.touching;
-         if (!ring && sh->mp == nullptr && ContactSettings::Get().cordHeldReff)   // cord_held_reff: the radius held for the next cycle, as a ring island's (it.gs.reff above)
+         if (!ring && sh->mp == nullptr)   // a cord island: the radius held for the next cycle, as a ring island's (it.gs.reff above)
             kept.reff = gi.touching ? gi.reff : 0.0;
          kept.touching = gi.touching;
          kept.xi = gi.xi;
