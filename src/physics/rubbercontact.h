@@ -1545,6 +1545,13 @@ namespace RubberContact
       V3 n;          // its normal (surface -> ball centre): the closing speed is -v . n
       bool zeroed;
    };
+   // link_windows (rule T, to-do 1.33; runs/2026-11-23-link-rule brief_code.md, rule_t.py): one link of a static surface pressed during the step's straight move c(t) = c0 + t (c1 - c0):
+   // the pieces it joins (ids as the probe's: face t, tube segment i, tube joint -(j + 1)) and the part of the move [t0, t1] (0 <= t0 <= t1 <= 1) where it is within reach of the centre
+   struct LinkWindow
+   {
+      int a, b;
+      double t0, t1;
+   };
    // VPX_PATCH_CHECK=1 (diagnostics, read once): cut B's pressed faces from the probe's hits are also compared with each face probed alone (BarsTriangles): [0] shortcut calls
    // compared, [1] calls whose pressed set differs; logged on the patch check's totals line
    inline bool PatchCheckEnv()
@@ -1769,6 +1776,83 @@ namespace RubberContact
          return p0;
       const double s = (c - p0).Dot(t) / L2;
       return s <= 0.0 ? p0 : s >= 1.0 ? p1 : p0 + t * s;
+   }
+
+   // link_windows (rule T; runs/2026-11-23-link-rule rule_t.py win_seg, win_pt): the window [t0, t1] of t in [0, 1] where the centre c0 + t m is within r of the segment p -> q (of the
+   // point p), closed form: the squared distance is a quadratic in t on each region (the foot inside, the end p, the end q), the distance is convex in t so the window is one interval.
+   // False: none. A crossing the roots miss at a region's border (rounding) is found by bisection on the distance (both ends known on opposite sides of r)
+   inline int LinkQuadRoots(const double a, const double b, const double c, const double aMin, double *r)
+   {
+      if (a <= aMin)   // (the move along the region's level lines: no crossing inside it; its ends are tested apart)
+         return 0;
+      const double D = b * b - 4.0 * a * c;
+      if (D < 0.0)
+         return 0;
+      const double s = std::sqrt(D);
+      r[0] = (-b - s) / (2.0 * a);
+      r[1] = (-b + s) / (2.0 * a);
+      return 2;
+   }
+   template <class Dist> inline bool LinkWinFinish(const Dist &dist, const double r, const double *cand, const int nc, double &t0, double &t1)
+   {
+      const bool in0 = dist(0.0) < r, in1 = dist(1.0) < r;
+      double lo = 2.0, hi = -1.0;
+      for (int i = 0; i < nc; i++)
+      {
+         lo = std::min(lo, cand[i]);
+         hi = std::max(hi, cand[i]);
+      }
+      if (nc == 0 && !in0 && !in1)
+         return false;
+      const auto bisect = [&](double a, double b) {   // dist(a) < r <= dist(b) or the reverse: the crossing
+         const bool ina = dist(a) < r;
+         for (int it = 0; it < 60; it++)
+         {
+            const double m = 0.5 * (a + b);
+            ((dist(m) < r) == ina ? a : b) = m;
+         }
+         return 0.5 * (a + b);
+      };
+      t0 = in0 ? 0.0 : nc > 0 ? lo : bisect(1.0, 0.0);
+      t1 = in1 ? 1.0 : nc > 0 ? hi : bisect(0.0, 1.0);
+      return t0 <= t1;
+   }
+   inline bool LinkWinPt(const V3 &c0, const V3 &m, const V3 &p, const double r, double &t0, double &t1)
+   {
+      const V3 w = c0 - p;
+      const double mm = m.Dot(m);
+      double rt[2], cand[2];
+      int nc = 0;
+      const int n = LinkQuadRoots(mm, 2.0 * w.Dot(m), w.Dot(w) - r * r, 0.0, rt);
+      for (int i = 0; i < n; i++)
+         if (rt[i] >= 0.0 && rt[i] <= 1.0)
+            cand[nc++] = rt[i];
+      return LinkWinFinish([&](const double t) { return (w + m * t).Length(); }, r, cand, nc, t0, t1);
+   }
+   inline bool LinkWinSeg(const V3 &c0, const V3 &m, const V3 &p, const V3 &q, const double r, double &t0, double &t1)
+   {
+      const V3 u = q - p;
+      const double L2 = u.Dot(u);
+      if (L2 <= 0.0)
+         return LinkWinPt(c0, m, p, r, t0, t1);
+      const V3 w0 = c0 - p, w1 = c0 - q;
+      const double mu = m.Dot(u), w0u = w0.Dot(u), mm = m.Dot(m), aMin = 1e-12 * mm;
+      const auto sOf = [&](const double t) { return (w0u + t * mu) / L2; };
+      double rt[2], cand[6];
+      int nc = 0;
+      int n = LinkQuadRoots(mm - mu * mu / L2, 2.0 * (w0.Dot(m) - w0u * mu / L2), w0.Dot(w0) - w0u * w0u / L2 - r * r, aMin, rt);   // the foot inside
+      for (int i = 0; i < n; i++)
+         if (rt[i] >= 0.0 && rt[i] <= 1.0 && sOf(rt[i]) >= 0.0 && sOf(rt[i]) <= 1.0)
+            cand[nc++] = rt[i];
+      n = LinkQuadRoots(mm, 2.0 * w0.Dot(m), w0.Dot(w0) - r * r, 0.0, rt);   // the end p
+      for (int i = 0; i < n; i++)
+         if (rt[i] >= 0.0 && rt[i] <= 1.0 && sOf(rt[i]) <= 0.0)
+            cand[nc++] = rt[i];
+      n = LinkQuadRoots(mm, 2.0 * w1.Dot(m), w1.Dot(w1) - r * r, 0.0, rt);   // the end q
+      for (int i = 0; i < n; i++)
+         if (rt[i] >= 0.0 && rt[i] <= 1.0 && sOf(rt[i]) >= 1.0)
+            cand[nc++] = rt[i];
+      return LinkWinFinish([&](const double t) { const V3 c = c0 + m * t; return (c - SegNearest(p, q, c)).Length(); }, r, cand, nc, t0, t1);
    }
 
    // A tube (centreline pts, n points; a closed ring repeats its first point at the end, the two are one joint): the pieces are the segments' inside nearest points and the joints.

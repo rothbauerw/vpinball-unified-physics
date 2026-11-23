@@ -2233,6 +2233,99 @@ void ContactSurfaceHost::StepPieces(const RubberContact::BallSI &bs, const Surfa
    flush();
 }
 
+// link_windows (rule T, to-do 1.33; runs/2026-11-23-link-rule brief_code.md 2, rule_t.py): the links among the pieces in reach pressed on the step's straight move c0 -> c1, each with its
+// window. A mesh: each shared edge between two faces of the ball's list (it.Faces, the finder's list the probe uses), from its lower face, both faces with area: BarsTriangles' link
+// for MergeBars (an edge pressed joins its two faces). A tube (3 points or more, as BarsTube): each joint of the list's segments, linked to each segment that meets there (BarsTube
+// joins a pressed joint to a pressed foot of either segment; two pressed joints of one segment are joined through it: BarsTube's joint-joint link). The window: the t in [0, 1] where the
+// piece is within R - zero of the centre (a tube's R + its radius - zero; the probe's depth > 0), closed form (RubberContact::LinkWinSeg, LinkWinPt). A cord band: none.
+// Scratch per thread, capacity reused
+void ContactSurfaceHost::LinkWindows(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c0, const RubberContact::V3 &c1,
+                                     std::vector<RubberContact::LinkWindow> &out) const
+{
+   using RubberContact::V3;
+   out.clear();
+   if (CordModel())
+      return;
+   const V3 m = c1 - c0;
+   thread_local std::vector<uint32_t> mark;   // stamp: a face in the list / a joint done
+   thread_local uint32_t stamp = 0;
+   const auto newStamp = [&](const size_t n) {
+      if (mark.size() < n)
+         mark.resize(n, 0u);
+      if (++stamp == 0)
+      {
+         std::fill(mark.begin(), mark.end(), 0u);
+         stamp = 1;
+      }
+   };
+   double t0, t1;
+   if (m_surface != nullptr)
+   {
+      const RubberSurface &sf = *m_surface;
+      const double r = bs.R - it.gs.zero;
+      if (r <= 0.0 || sf.nb.size() != sf.tris.size())
+         return;
+      const std::vector<int> &L0 = it.Faces(c0), &L1 = it.Faces(c1);
+      const std::vector<int> &L = &L0 == &L1 ? L0 : it.candV;   // (the start's and end's lists differ: the Verlet list holds both)
+      newStamp(sf.tris.size());
+      for (const int i : L)
+         mark[i] = stamp;
+      for (const int t : L)
+      {
+         const RubberContact::SurfaceTri &T = sf.tris[t];
+         if (!T.area)
+            continue;
+         const V3 *v[3] = { &T.a, &T.b, &T.c };
+         for (int e = 0; e < 3; e++)
+         {
+            const int o = sf.nb[t][e];
+            if (o <= t || mark[o] != stamp || !sf.tris[o].area)
+               continue;
+            if (RubberContact::LinkWinSeg(c0, m, *v[e], *v[(e + 1) % 3], r, t0, t1))
+               out.push_back({ t, o, t0, t1 });
+         }
+      }
+      return;
+   }
+   const int n = (int)m_ptsSI.size();
+   if (n < 3)
+      return;
+   const double r = bs.R + m_radiusSI - it.gs.zero;
+   if (r <= 0.0)
+      return;
+   const V3 *const pts = m_ptsSI.data();
+   const bool ring = pts[0].x == pts[n - 1].x && pts[0].y == pts[n - 1].y && pts[0].z == pts[n - 1].z;
+   const int nv = ring ? n - 1 : n;   // joints: point n - 1 of a ring is joint 0
+   thread_local std::vector<int> allSegs;
+   const std::vector<int> *segs;
+   if (SegsOn())   // the ball's query: every segment within reach of the move (as PathReach)
+      segs = &SegsFor(it, c0 + m * 0.5, r + it.gs.zero + 0.5 * m.Length() + 1e-9);
+   else
+   {
+      allSegs.resize((size_t)(n - 1));
+      for (int i = 0; i + 1 < n; i++)
+         allSegs[(size_t)i] = i;
+      segs = &allSegs;
+   }
+   newStamp((size_t)nv);
+   for (const int i : *segs)
+      for (int j : { i, i + 1 })
+      {
+         if (j >= nv)
+            j = 0;
+         if (mark[j] == stamp)
+            continue;
+         mark[j] = stamp;
+         if (!RubberContact::LinkWinPt(c0, m, pts[j], r, t0, t1))
+            continue;
+         const int before = j > 0 ? j - 1 : ring ? n - 2 : -1, after = j < n - 1 ? j : -1;   // the segments that meet at joint j
+         if (before >= 0)
+            out.push_back({ -(j + 1), before, t0, t1 });
+         if (after >= 0)
+            out.push_back({ -(j + 1), after, t0, t1 });
+      }
+}
+
 // ---- Engine-stepped contact ----
 //
 // A ball hitting a static rubber (a post ring, a wall rubber) used to be solved to the end inside the one Collide() call: 900 - 1500 substeps of 5 us

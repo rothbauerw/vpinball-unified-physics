@@ -112,6 +112,10 @@ public:
    // the one its answer comes from (seg) and the pressed ones, each its nearest point's depth and normal; and the ridges of its pressed patches (rs, null none). A surface with none: empty
    virtual void StepPieces(const RubberContact::BallSI & /*bs*/, const SurfaceContact & /*it*/, const RubberContact::V3 & /*c*/, int /*seg*/, const RubberContact::RidgeStart * /*rs*/,
                            std::vector<RubberContact::StepPiece> &out) const { out.clear(); }
+   // link_windows (rule T, to-do 1.33; runs/2026-11-23-link-rule brief_code.md 2): the links among the pieces of the ball's list (a mesh's shared edges, a tube's joints) pressed on the
+   // step's straight move c0 -> c1, each with its window (RubberContact::LinkWindow). A surface with none: empty
+   virtual void LinkWindows(const RubberContact::BallSI & /*bs*/, const SurfaceContact & /*it*/, const RubberContact::V3 & /*c0*/, const RubberContact::V3 & /*c1*/,
+                            std::vector<RubberContact::LinkWindow> &out) const { out.clear(); }
    virtual const RubberObjectSettings *Settings() const { return nullptr; }   // the step and rest settings of a surface that has them (rubber, wall, primitive, ramp, playfield, disc); null = none
    virtual bool IsFloor() const = 0;        // a surface a ball rests on: gravity acts in the contact's substeps while one is in the contact
    virtual bool GroupModel() const { return false; }   // a ball on it goes through the group step ([Rubbers] ring_model, GroupStepDesign 14)

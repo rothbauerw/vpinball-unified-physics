@@ -182,6 +182,7 @@ public:
    // ContactSurface
    void Refresh(SurfaceContact &it, double ballR, double reachM, const RubberContact::V3 &c) const override;   // the faces the ball can reach this cycle
    void StepPieces(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, int seg, const RubberContact::RidgeStart *rs, std::vector<RubberContact::StepPiece> &out) const override;   // step pieces (runs/2026-11-22-ringcap)
+   void LinkWindows(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c0, const RubberContact::V3 &c1, std::vector<RubberContact::LinkWindow> &out) const override;   // link_windows (rule T)
    RubberContact::TubeProbe ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const override;
    RubberContact::TubeProbe ProbePatches(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, std::vector<RubberContact::TubeProbe> &out) const override;   // patch_contacts: the patch list (BarsTriangles / BarsTube)
    RubberContact::TubeProbe ProbeList(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, std::vector<RubberContact::TubeProbe> *out) const;   // ProbePatch's answer; out (optional): the patch list

@@ -2104,6 +2104,13 @@ struct ContactSystemImpl
       ContactMovingPart *mp = nullptr;   // a part on the group: its own surface, which moves with it
       int surface = 0;
       std::string Name() const override { return r != nullptr ? r->Name() : std::string(); }
+      void LinkWindows(const V3 &c0, const V3 &c1, std::vector<RubberContact::LinkWindow> &out) const override   // link_windows (rule T): a static surface's (a part's: none)
+      {
+         if (mp != nullptr)
+            out.clear();
+         else
+            r->LinkWindows(bs, *it, c0, c1, out);
+      }
       bool CycleNear(const V3 &c, const double R, const double reach, std::vector<int> &list, int &n) const override { return mp != nullptr && mp->GroupCycleNear(surface, c, R, reach, list, n); }
       int CycleMisses(const V3 &c, const double R, const double dq, const std::vector<int> &list) const override { return mp != nullptr ? mp->GroupCycleMisses(surface, c, R, dq, list) : 0; }
       int PathReach(const V3 &s, const V3 &d, const double R) const override { return mp != nullptr ? mp->GroupPathReach(surface, s, d, R) : r->PathReach(*it, s, d, R); }

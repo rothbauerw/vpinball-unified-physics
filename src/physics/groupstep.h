@@ -44,6 +44,11 @@
 #include "physics/pairform.h"
 #include "physics/partrecords.h"
 
+namespace ContactSystem
+{
+   void NoticeRetired(const std::string &msg);   // contactsystem.cpp: one WARN and one on-screen notice per table start for each text (link_windows: a link order net)
+}
+
 namespace GroupStep
 {
    using V3 = RubberContact::V3;
@@ -355,6 +360,8 @@ namespace GroupStep
       // the step-start probe (ChooseStep's, only): Probe, and a static surface also lists its other convex pieces and ridges in reach as entries (Hit::en; shared_step_only)
       virtual void ProbeStart(const V3 &c, const double R, Hit &h) const { Probe(c, R, h); }
       virtual std::string Name() const { return std::string(); }   // diagnostics (VPX_GROUP_CLAMP_TRACE): its owner's name
+      // link_windows (rule T, to-do 1.33): a static surface's links pressed on the step's straight move c0 -> c1, each with its window (ContactSurface::LinkWindows); none by default
+      virtual void LinkWindows(const V3 & /*c0*/, const V3 & /*c1*/, std::vector<RubberContact::LinkWindow> &out) const { out.clear(); }
       // the path test: does the ball's centre moving straight from s to s + d come within reach of a piece (depth above 0 anywhere on the path, before the item's zero)?
       // 1 = yes, 0 = no (exact, the path kit in rubbercontact.h; a curved piece by its cover, PathRevolve), -1 = no exact test for this shape: FarStillFar probes the middle and the end as before.
       // (A surface its part carries: PathMotion below, the rigid-body law in FarStillFar.)
@@ -505,6 +512,11 @@ namespace GroupStep
       // levelStiffness ([Contact] level_stiffness, patch_friction only): 1: a friction group's shear, rolling and twist stiffness from the level form over its pieces, averaged over the
       // step with each piece's depth straight between its ends (B-lin, plan runs/2026-11-22-per-peak 2.4b; one peak: today's PatchMeans); 0: from the group's merged depth
       bool levelStiffness = true;
+      // linkWindows ([Contact] link_windows, patch_friction only; rule T, to-do 1.33, runs/2026-11-23-link-rule brief_code.md): 1: a step whose start has 2 or more patches, or a start or
+      // end patch sharing no piece with one at the other end, links its friction groups also through every link (shared edge, tube joint) pressed on the step's straight move (the
+      // union), and a step whose time-ordered feed (rule T's forward sweep) differs from the union's is cut and solved again (at most 4 cuts); 0: start and end patches linked by
+      // shared pieces only
+      bool linkWindows = true;
       // leverRollSlope ([Contact] lever_roll_slope; runs/2026-11-08-lead/slope_terms_design.md): Newton's slope takes two terms of laws the residual already computes.
       // The contact point rA = -n (R - dm / 2) moves with the mid depth (d dm / du = gm / 2): the slip changes by (gm / 4) sum_p wm_p x n and the torque arm by (gm / 4) s_p n, on the
       // balls' force and spin rows. The rolling limit lim = muRr R N (roll_model 1, rolling) changes with N: muRr R (h dN/du) along the torque's direction, on the spin rows.
@@ -2264,6 +2276,7 @@ namespace GroupStep
          double h = hTry;
          nHalveDiag = 0;
          joinRounds = 0;
+         lwCuts = 0;
          failContactBuf.clear();
          for (;;)
          {
@@ -2276,6 +2289,8 @@ namespace GroupStep
                   if (freed)
                      continue;
                }
+               if (set.linkWindows && LinkOrderCut(h))   // link_windows: the links' time order feeds an end patch less than the union: the step is too long
+                  continue;
                if (StopExcess() <= 0.0)
                {
                   Accept(h, false);
@@ -3896,7 +3911,249 @@ namespace GroupStep
       // end's depth (several patches: the level form's one depth (sum d^2.5)^0.4); at the middle the hm patches that share a piece with it, else its reference patch's plane (its
       // deepest end patch, else start patch; a face's depth is linear in the centre: d + grad n . (c - c_ref)); the end gradient from the reference. Returns the count; fgEnd[j],
       // gStart[i] the group of end patch j, start patch i (-1 not pressed). The memory is read by GroupMemory.
-      int FrictionGroups(const Hit &h0, const Hit &h1, const Hit &hm, const V3 &c0, const V3 &c1, const V3 &cm)
+      // link_windows (rule T, to-do 1.33; runs/2026-11-23-link-rule brief_code.md, rule_t.py, check2_out.txt). The gate: windows are needed only when the start has 2 or more
+      // pressed patches, or a pressed start or end patch shares no piece with a pressed patch at the other end
+      static bool LinkGate(const Hit &h0, const Hit &h1)
+      {
+         int p0 = 0;
+         for (int i = 0; i < h0.npat; i++)
+            p0 += h0.pat[i].d > 0.0 ? 1 : 0;
+         if (p0 >= 2)
+            return true;
+         for (int i = 0; i < h0.npat; i++)
+            if (h0.pat[i].d > 0.0)
+            {
+               bool any = false;
+               for (int j = 0; j < h1.npat && !any; j++)
+                  any = h1.pat[j].d > 0.0 && SharePiece(h0, h0.pat[i], h1, h1.pat[j]);
+               if (!any)
+                  return true;
+            }
+         for (int j = 0; j < h1.npat; j++)
+            if (h1.pat[j].d > 0.0)
+            {
+               bool any = false;
+               for (int i = 0; i < h0.npat && !any; i++)
+                  any = h0.pat[i].d > 0.0 && SharePiece(h0, h0.pat[i], h1, h1.pat[j]);
+               if (!any)
+                  return true;
+            }
+         return false;
+      }
+      // the step's pieces (the patches' of h0, h1, hm and the windows' ends; lwIds sorted, unique) and their components (lwPar: union-find); the windows (lwS) with their ends' places
+      // (lwA, lwB). Per item, the last Eval's order check: lwCut[k] the fraction of the step to cut at (> 0), -1 none, -2 rule T's feed differs from the union's with no cut point;
+      // lwAdd[k] the start-end patch links the windows added beyond shared pieces. Scratch of Eval, capacity reused
+      std::vector<int> lwIds, lwPar, lwA, lwB, lwOrd, lwP2;
+      std::vector<RubberContact::LinkWindow> lwS;
+      std::vector<uint64_t> lwSet, lwU, lwFT, lwFU;
+      std::vector<double> lwCut;
+      std::vector<int> lwAdd;
+      int lwCuts = 0;   // the order cuts of this step (Step)
+      static constexpr int kLinkCuts = 4;
+      int LwIx(const int id) const { return (int)(std::lower_bound(lwIds.begin(), lwIds.end(), id) - lwIds.begin()); }
+      int LwFind(int x) { while (lwPar[x] != x) x = lwPar[x] = lwPar[lwPar[x]]; return x; }
+      int LwRoot(const Hit &h, const HitPatch &P) { return P.pn > 0 ? LwFind(LwIx(h.pc[P.p0])) : -1; }   // a patch's component (-1: no pieces)
+      bool LwIn(const Hit &h, const HitPatch &P, const int root)   // a piece of P in the component root
+      {
+         for (int q = 0; root >= 0 && q < P.pn; q++)
+            if (LwFind(LwIx(h.pc[P.p0 + q])) == root)
+               return true;
+         return false;
+      }
+      // the counters (always on; running totals logged at 1, 2, 4, ...: the bench never closes the table)
+      static void LwCount(std::atomic<long long> &n, const long long add, const char *what, const unsigned ms)
+      {
+         if (add <= 0)
+            return;
+         const long long was = n.fetch_add(add), c = was + add;
+         if (was == 0 || (c ^ was) > was)
+            PLOGI << "link_windows: " << c << " " << what << " (table time " << ms << " ms)";
+      }
+      struct LinkStats
+      {
+         std::atomic<long long> gated { 0 }, windows { 0 }, added { 0 }, cuts { 0 }, nets { 0 };
+      };
+      static LinkStats &LinkCounters()
+      {
+         static LinkStats s;
+         return s;
+      }
+      // the union rule (brief 3): the piece components through each pressed start and end patch's own pieces and every windowed link; a start and an end patch in one component are
+      // one group. Then the order check (brief 4): rule T's forward sweep (rule_t.py rule_T: each start patch's pieces seeded with it; at each window's t_in in time order the
+      // component of the links active then takes the union of its pieces' sets); an end patch fed by fewer start patches than the union's: the cut point in its component
+      template <class Join> void LinkUnion(const Hit &h0, const Hit &h1, const Hit &hm, const V3 &c0, const V3 &c1, const int k, const Join &join)
+      {
+         const int n0 = h0.npat, n1 = h1.npat;
+         lwS.clear();
+         const Shape *const sh = shape[item[k].s];
+         if (sh != nullptr)
+            sh->LinkWindows(c0, c1, lwS);
+         LinkStats &ls = LinkCounters();
+         LwCount(ls.gated, 1, "gated Evals", pfMs);
+         LwCount(ls.windows, (long long)lwS.size(), "link windows computed", pfMs);
+         lwIds.clear();
+         for (const Hit *hh : { &h0, &h1, &hm })
+            for (int q = 0; q < hh->npc; q++)
+               lwIds.push_back(hh->pc[q]);
+         for (const RubberContact::LinkWindow &w : lwS)
+         {
+            lwIds.push_back(w.a);
+            lwIds.push_back(w.b);
+         }
+         std::sort(lwIds.begin(), lwIds.end());
+         lwIds.erase(std::unique(lwIds.begin(), lwIds.end()), lwIds.end());
+         const int nPc = (int)lwIds.size();
+         lwPar.resize(nPc);
+         for (int x = 0; x < nPc; x++)
+            lwPar[x] = x;
+         const auto unite = [&](const int a, const int b) { lwPar[LwFind(a)] = LwFind(b); };
+         for (const Hit *hh : { &h0, &h1 })   // a pressed patch's pieces are joined (one patch)
+            for (int p = 0; p < hh->npat; p++)
+            {
+               const HitPatch &P = hh->pat[p];
+               if (P.d > 0.0)
+                  for (int q = 1; q < P.pn; q++)
+                     unite(LwIx(hh->pc[P.p0]), LwIx(hh->pc[P.p0 + q]));
+            }
+         const int nw = (int)lwS.size();
+         lwA.resize(nw);
+         lwB.resize(nw);
+         for (int w = 0; w < nw; w++)
+         {
+            lwA[w] = LwIx(lwS[w].a);
+            lwB[w] = LwIx(lwS[w].b);
+            unite(lwA[w], lwB[w]);
+         }
+         if ((int)lwAdd.size() <= k)
+            lwAdd.resize(k + 1, 0);
+         if ((int)lwCut.size() <= k)
+            lwCut.resize(k + 1, -1.0);
+         lwAdd[k] = 0;
+         for (int i = 0; i < n0; i++)
+            if (h0.pat[i].d > 0.0)
+            {
+               const int ri = LwRoot(h0, h0.pat[i]);
+               for (int j = 0; j < n1; j++)
+                  if (h1.pat[j].d > 0.0 && ri >= 0 && LwRoot(h1, h1.pat[j]) == ri)
+                  {
+                     join(i, n0 + j);
+                     if (!SharePiece(h0, h0.pat[i], h1, h1.pat[j]))
+                        lwAdd[k]++;
+                  }
+            }
+         // the order check: rule T's feed per pressed end patch against the union's (bit i: start patch i)
+         if (n0 == 0 || n1 == 0)
+            return;
+         const int nWd = (n0 + 63) / 64;
+         lwSet.assign((size_t)nPc * nWd, 0u);
+         for (int i = 0; i < n0; i++)
+         {
+            const HitPatch &P = h0.pat[i];
+            if (P.d > 0.0)
+               for (int q = 0; q < P.pn; q++)
+                  lwSet[(size_t)LwIx(h0.pc[P.p0 + q]) * nWd + i / 64] |= 1ull << (i % 64);
+         }
+         lwOrd.resize(nw);
+         for (int w = 0; w < nw; w++)
+            lwOrd[w] = w;
+         std::sort(lwOrd.begin(), lwOrd.end(), [&](const int a, const int b) { return lwS[a].t0 < lwS[b].t0 || (lwS[a].t0 == lwS[b].t0 && a < b); });
+         lwP2.resize(nPc);
+         lwU.resize(nWd);
+         const auto find2 = [&](int x) { while (lwP2[x] != x) x = lwP2[x] = lwP2[lwP2[x]]; return x; };
+         for (const int w : lwOrd)
+         {
+            const double t = lwS[w].t0;
+            for (int x = 0; x < nPc; x++)
+               lwP2[x] = x;
+            for (int v = 0; v < nw; v++)   // the links active at t
+               if (lwS[v].t0 <= t && t <= lwS[v].t1)
+                  lwP2[find2(lwA[v])] = find2(lwB[v]);
+            const int r = find2(lwA[w]);
+            std::fill(lwU.begin(), lwU.end(), 0u);
+            for (int x = 0; x < nPc; x++)
+               if (find2(x) == r)
+                  for (int b = 0; b < nWd; b++)
+                     lwU[b] |= lwSet[(size_t)x * nWd + b];
+            for (int x = 0; x < nPc; x++)
+               if (find2(x) == r)
+                  for (int b = 0; b < nWd; b++)
+                     lwSet[(size_t)x * nWd + b] = lwU[b];
+         }
+         lwFT.resize(nWd);
+         lwFU.resize(nWd);
+         for (int j = 0; j < n1; j++)
+         {
+            const HitPatch &E = h1.pat[j];
+            if (E.d <= 0.0)
+               continue;
+            std::fill(lwFT.begin(), lwFT.end(), 0u);
+            std::fill(lwFU.begin(), lwFU.end(), 0u);
+            for (int q = 0; q < E.pn; q++)
+               for (int b = 0; b < nWd; b++)
+                  lwFT[b] |= lwSet[(size_t)LwIx(h1.pc[E.p0 + q]) * nWd + b];
+            const int rj = LwRoot(h1, E);
+            for (int i = 0; i < n0; i++)
+               if (h0.pat[i].d > 0.0 && rj >= 0 && LwRoot(h0, h0.pat[i]) == rj)
+                  lwFU[i / 64] |= 1ull << (i % 64);
+            if (lwFT == lwFU)
+               continue;
+            // the cut (rule_t.py): in the end patch's union component, the earliest t_out of a link before a later t_in there; the cut point is the middle between that t_out and the
+            // next t_in in the component
+            double tOut = 2.0;
+            for (int w = 0; w < nw; w++)
+               if (LwFind(lwA[w]) == rj)
+                  for (int v = 0; v < nw; v++)
+                     if (LwFind(lwA[v]) == rj && lwS[v].t0 > lwS[w].t1)
+                     {
+                        tOut = std::min(tOut, lwS[w].t1);
+                        break;
+                     }
+            if (tOut > 1.0)
+            {
+               if (lwCut[k] < 0.0)
+                  lwCut[k] = -2.0;
+               continue;
+            }
+            double tNext = 2.0;
+            for (int v = 0; v < nw; v++)
+               if (LwFind(lwA[v]) == rj && lwS[v].t0 > tOut)
+                  tNext = std::min(tNext, lwS[v].t0);
+            const double cut = 0.5 * (tOut + tNext);
+            if (cut > 0.0 && (lwCut[k] < 0.0 || cut < lwCut[k]))
+               lwCut[k] = cut;
+         }
+      }
+      // the order check after a step solves (brief 4; the solve's last Eval is at its answer): the earliest cut of any gated item; true = h cut to it, solve again. Past kLinkCuts cuts,
+      // or a difference with no cut point: the step is taken with the union (its groups only merge: energy can only fall), counted, and told (WARN and a notice once per table start)
+      bool LinkOrderCut(double &h)
+      {
+         double cut = 2.0;
+         int kc = -1, kn = -1;
+         for (int k = 0; k < (int)lwCut.size() && k < ni; k++)
+            if (lwCut[k] > 0.0 && lwCut[k] < cut)
+            {
+               cut = lwCut[k];
+               kc = k;
+            }
+            else if (lwCut[k] == -2.0 && kn < 0)
+               kn = k;
+         if (kc >= 0 && lwCuts < kLinkCuts && cut < 1.0)
+         {
+            h *= cut;
+            lwCuts++;
+            LwCount(LinkCounters().cuts, 1, "order cuts", pfMs);
+            return true;
+         }
+         const int kw = kc >= 0 ? kc : kn;
+         if (kw < 0)
+            return false;
+         LwCount(LinkCounters().nets, 1, "order nets (steps taken with the union)", pfMs);
+         const Shape *const sh = shape[item[kw].s];
+         ContactSystem::NoticeRetired("link order net: " + (sh != nullptr ? sh->Name() : std::string("?"))
+                                      + ": a step's friction groups taken with the union of its links (rule T's order still differed after 4 cuts, or had no cut point; [Contact] link_windows)");
+         return false;
+      }
+      int FrictionGroups(const Hit &h0, const Hit &h1, const Hit &hm, const V3 &c0, const V3 &c1, const V3 &cm, const int k)
       {
          const int n0 = h0.npat, n1 = h1.npat, nn = n0 + n1;
          fgEnd.assign(n1, -1);
@@ -3911,11 +4168,15 @@ namespace GroupStep
             par[x] = x;
          const auto find = [&](int x) { while (par[x] != x) x = par[x] = par[par[x]]; return x; };
          const auto pat = [&](const int x) -> const HitPatch & { return x < n0 ? h0.pat[x] : h1.pat[x - n0]; };
-         for (int i = 0; i < n0; i++)
-            if (h0.pat[i].d > 0.0)
-               for (int j = 0; j < n1; j++)
-                  if (h1.pat[j].d > 0.0 && SharePiece(h0, h0.pat[i], h1, h1.pat[j]))
-                     par[find(n0 + j)] = find(i);
+         const bool lw = set.linkWindows && LinkGate(h0, h1);   // link_windows: the union rule (LinkUnion); else today's shared pieces
+         if (lw)
+            LinkUnion(h0, h1, hm, c0, c1, k, [&](const int a, const int b) { par[find(b)] = find(a); });
+         else
+            for (int i = 0; i < n0; i++)
+               if (h0.pat[i].d > 0.0)
+                  for (int j = 0; j < n1; j++)
+                     if (h1.pat[j].d > 0.0 && SharePiece(h0, h0.pat[i], h1, h1.pat[j]))
+                        par[find(n0 + j)] = find(i);
          int ng = 0;
          for (int x = 0; x < nn; x++)
             if (pat(x).d > 0.0)
@@ -3980,7 +4241,7 @@ namespace GroupStep
                bool hit = false;
                for (int x = 0; x < nn && !hit; x++)
                   if (gid[x] == g)
-                     hit = SharePiece(hm, P, x < n0 ? h0 : h1, pat(x));
+                     hit = lw ? LwIn(hm, P, LwRoot(x < n0 ? h0 : h1, pat(x))) : SharePiece(hm, P, x < n0 ? h0 : h1, pat(x));   // (link_windows: by the same components)
                if (!hit)
                   continue;
                const double d15 = P.d * std::sqrt(P.d);
@@ -4443,6 +4704,11 @@ namespace GroupStep
                impX[i] = ball[i].fExt;
             }
          }
+         if (set.linkWindows)   // link_windows: this Eval's order check and added links per item (LinkUnion writes a gated item's)
+         {
+            lwCut.assign((size_t)ni, -1.0);
+            lwAdd.assign((size_t)ni, 0);
+         }
          if (J)
             for (int r = 0; r < nU; r++)
                for (int c = 0; c < nU; c++)
@@ -4695,7 +4961,7 @@ namespace GroupStep
             // the same arithmetic: the block below runs once per group and keeps its results in fgS for the slope. The push (gd N) stays the merged contact's. Not in this build:
             // the B-lin stiffness average (a group's stiffness is PatchMeans on its own one depth), ridge arrival, turn terms
             const bool pfPath = !pr && nq == 0 && !terms && (h0.npat > 0 || h1.npat > 0);
-            const int ngF = pfPath ? FrictionGroups(h0, h1, hm, A.c, b1[it.a].c, bm[it.a].c) : 0;
+            const int ngF = pfPath ? FrictionGroups(h0, h1, hm, A.c, b1[it.a].c, bm[it.a].c, k) : 0;
             const bool multiF = ngF > 1;
             const int ngLoop = multiF ? ngF : 1;
             if (fgS.empty())
@@ -7281,6 +7547,8 @@ namespace GroupStep
                      PfCount(nJoin, pmEndJoin[k], "joins in accepted steps", pfMs);
                      PfCount(nSplit, pmEndSplit[k], "splits in accepted steps", pfMs);
                      PfCount(nDrop, dropped, "memory pieces dropped unpressed", pfMs);
+                     if (set.linkWindows && k < (int)lwAdd.size())   // link_windows: the start-end patch links its windows added (the accepted Eval's)
+                        LwCount(LinkCounters().added, lwAdd[k], "links added beyond shared pieces in accepted steps", pfMs);
                   }
                   it.pm = pmEnd[k];
                   it.pmMulti = pmEndOn[k] == 2;
