@@ -423,7 +423,7 @@ namespace
       const PatchCheckStats &st = g_patchCheck;
       PLOGI << "Patch check: probes " << st.probes << ", one-patch " << st.one << ", two " << st.two << ", more " << st.more << ", mismatches " << st.mism << ", worst rel diff " << st.worst
             << ", cut B pressed faces compared " << RubberContact::CutBCheck()[0].load() << ", mismatches " << RubberContact::CutBCheck()[1].load()
-            << ", more than one peak " << RubberContact::CutBCheck()[2].load() << "; held vs book: attempts " << RubberContact::HeldCheck()[0].load()
+            << ", more than one peak (full law used) " << RubberContact::CutBCheck()[2].load() << "; held vs book: attempts " << RubberContact::HeldCheck()[0].load()
             << ", mismatches " << RubberContact::HeldCheck()[1].load() << ", book step rises > 1e-9 J " << RubberContact::HeldCheck()[2].load() << ", kind C (k0 vs stored ks) " << RubberContact::HeldCheck()[3].load() << "; B-lin lev1 checked " << RubberContact::HeldCheck()[4].load()
             << ", vs the end probe's level form > 1e-12 rel " << RubberContact::HeldCheck()[5].load();
       if (close)

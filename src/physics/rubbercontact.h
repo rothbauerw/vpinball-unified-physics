@@ -1444,7 +1444,7 @@ namespace RubberContact
       static const bool on = [] { const char *e = std::getenv("VPX_PATCH_CHECK"); return e != nullptr && e[0] == '1'; }();
       return on;
    }
-   inline std::atomic<long long> *CutBCheck()   // [2] calls whose listed pieces (faces and pressed shared edges) give more than one peak through MergeBars (expected 0)
+   inline std::atomic<long long> *CutBCheck()   // [2] calls whose listed pieces (faces and pressed shared edges) give more than one peak through MergeBars: the shortcut fell back to the full law (always counted)
    {
       static std::atomic<long long> c[3] { { 0 }, { 0 }, { 0 } };
       return c;
@@ -2332,7 +2332,7 @@ namespace RubberContact
          ContactProf::CD().bCand += cand.size();
       // cut B (runs/2026-11-12-mc-cutB/brief_build.md): the probe's result is the law's answer (one peak) when the faces within R (the near pass's set, cand) are one set joined through shared
       // edges and no shared edge between two of them is concave toward c (b on c's side of plane A and a on c's side of plane B; fold built at load, RubberSurface::Link). Then the face
-      // pass, edge pass and merge are skipped. Check mode (VPX_FINDER_CHECK=1) runs the full law on every skippable call and counts any that ends with more than one peak.
+      // pass, edge pass and merge are skipped, if the listed pieces give one peak (the one-peak test below). Check mode (VPX_FINDER_CHECK=1) runs the full law on every skippable call and counts any that ends with more than one peak.
       bool cbSkip = false;
       if (zl == nullptr && fold != nullptr && fold->size() == tris.size() && fr != nullptr && fr->t != nullptr && fr->t->useNear && &cand == &fr->t->inI)   // (patch_zero: the full law, each patch's pieces needed for its zero)
       {
@@ -2505,7 +2505,7 @@ namespace RubberContact
       };
       if (cbSkip && !cbCheck)
       {
-         if (patchesOut != nullptr)   // patch_friction (plan 2.1, 3.1): the shortcut still reports its pieces: the near set's PRESSED faces, from the probe's hits (each candidate measured once) by the face pass's depth (one patch, cut B's own test)
+         // (listed on every call: the one-peak test below needs them) patch_friction (plan 2.1, 3.1): the shortcut still reports its pieces: the near set's PRESSED faces, from the probe's hits (each candidate measured once) by the face pass's depth (one patch, cut B's own test)
          {
             thread_local std::vector<int> pressed;
             thread_local std::vector<PieceData> pressedPd;
@@ -2559,7 +2559,9 @@ namespace RubberContact
                   pressedPd.push_back(p);
                }
             }
-            if (PatchCheckEnv())   // VPX_PATCH_CHECK=1: the listed pieces through MergeBars (their depths, adjacency from the neighbour pairs): more than one peak counted (expected 0)
+            // One-peak test: the shortcut's answer is the law's only when its listed pieces give ONE peak through MergeBars (the full law's own nodes and links: faces by
+            // faceNode, shared edges pressed between two pressed faces). A flat joined set can still give two: a ball on a playfield hole's rim polygon presses two rim edges
+            // beside a corner that lies further away (runs/2026-11-23-lead17/cutb: the second peak up to 0.77 of the first's energy, dropped by the shortcut). Then the full law runs.
             {
                thread_local std::vector<BarNode> cn;
                thread_local std::vector<std::pair<int, int>> ca;
@@ -2577,10 +2579,13 @@ namespace RubberContact
                keepTerms = PeakTerms();   // (MergeBars writes the thread's peak list: the probe's own stays as it was)
                FoldSum cs;
                if (MergeBars(cn, ca, cs) > 1)
+               {
                   CutBCheck()[2]++;
+                  cbSkip = false;
+               }
                PeakTerms() = keepTerms;
             }
-            if (PatchCheckEnv())   // VPX_PATCH_CHECK=1: against each near face probed alone (the set, any order)
+            if (cbSkip && patchesOut != nullptr && PatchCheckEnv())   // VPX_PATCH_CHECK=1: against each near face probed alone (the set, any order)
             {
                thread_local std::vector<int> old, one1, a, b;
                old.clear();
@@ -2599,11 +2604,15 @@ namespace RubberContact
                if (a != b)
                   CutBCheck()[1]++;
             }
-            AllPatchPieces(pressed, pressedPd);
-            PatchPieces().geo.assign(1, PieceGeo());
-            pcs = true;
+            if (cbSkip && patchesOut != nullptr)
+            {
+               AllPatchPieces(pressed, pressedPd);
+               PatchPieces().geo.assign(1, PieceGeo());
+               pcs = true;
+            }
          }
-         return one();
+         if (cbSkip)
+            return one();
       }
       thread_local std::vector<BarNode> nodes;   // scratch kept per thread
       thread_local std::vector<std::pair<int, int>> adj;
