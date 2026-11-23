@@ -377,7 +377,7 @@ namespace GroupStep
       double layerM = 0.0;     // the rubber's thickness for the layer term, m (0 = no layer term)
       int onlyBall = -1;       // >= 0: only this ball meets it (a surface's list of near faces is one ball's)
       int part = -1;           // the part that carries it, its place among the group's parts; -1 = fixed. Its Probe fills the same columns, in the same order, every time
-      bool patchZero = false;  // patch_zero: a static mesh or tube (a fixed surface's own shape), or a target mesh on target_patches (P3b piece 4, its part's probe): with Settings::patchZero its item's zero is kept per patch (Item::tZero)
+      bool patchZero = false;  // the per-patch zero: a static mesh or tube (a fixed surface's own shape), or a target mesh with its face links (P3b piece 4, its part's probe): its item's zero is kept per patch (Item::tZero)
       mutable const double *trial = nullptr;   // a carried surface: each of its part's coordinates moved by this for the probe; null = where they are now
       virtual ~Shape() = default;
       virtual void Probe(const V3 &c, double R, Hit &h) const = 0;
@@ -536,20 +536,6 @@ namespace GroupStep
       // forces change, at h dG/du = (I - G g^T) K / fe (K = sum_t h tk_t tg_t tg_t^T, g = G's ball part). Newton's slope then takes fd h dG/du and dd = G . dq's change
       // through G, (kd / h) G dq^T dG/du; N's slope (kv) the latter. The force is unchanged. true (default) = on; false = G held fixed in the slope.
       bool dampDirSlope = true;
-      // peakSlope ([Contact] peak_slope): 1: the elastic push's Newton slope summed per peak, each with its own normal and turn (plan runs/2026-11-22-per-peak 2.5a); 0: today's
-      // slope along the merged normal. A static surface with 2 or more peaks only (Hit::np); the push itself is unchanged.
-      bool peakSlope = true;
-      // levelStiffness ([Contact] level_stiffness, patch_friction only): 1: a friction group's shear, rolling and twist stiffness from the level form over its pieces, averaged over the
-      // step with each piece's depth straight between its ends (B-lin, plan runs/2026-11-22-per-peak 2.4b; one peak: today's PatchMeans); 0: from the group's merged depth
-      bool levelStiffness = true;
-      // linkWindows ([Contact] link_windows, patch_friction only; rule T, to-do 1.33, runs/2026-11-23-link-rule brief_code.md): 1: a step whose start has 2 or more patches, or a start or
-      // end patch sharing no piece with one at the other end, links its friction groups also through every link (shared edge, tube joint) pressed on the step's straight move (the
-      // union), and a step whose time-ordered feed (rule T's forward sweep) differs from the union's is cut and solved again (at most 4 cuts); 0: start and end patches linked by
-      // shared pieces only
-      bool linkWindows = true;
-      // patchZero ([Contact] patch_zero, multi_contact and link_windows; to-do 1.33 piece 2b-3, runs/2026-11-23-zero-patch brief_code.md): 1: a static item with a zero keeps it per patch
-      // (Item::tZero: each raw-pressed piece of a zeroed patch with its patch's zero); its probe gets them (RubberContact::PatchZeros) and returns each patch shifted by its own zero
-      bool patchZero = true;
       // leverRollSlope ([Contact] lever_roll_slope; runs/2026-11-08-lead/slope_terms_design.md): Newton's slope takes two terms of laws the residual already computes.
       // The contact point rA = -n (R - dm / 2) moves with the mid depth (d dm / du = gm / 2): the slip changes by (gm / 4) sum_p wm_p x n and the torque arm by (gm / 4) s_p n, on the
       // balls' force and spin rows. The rolling limit lim = muRr R N (roll_model 1, rolling) changes with N: muRr R (h dN/du) along the torque's direction, on the spin rows.
@@ -1897,7 +1883,7 @@ namespace GroupStep
       bool Touching(int k) const { return item[k].touching; }
       void ProbeItem(const int k, Hit &hp) const { Probe(item[k], ball, hp); }
       // patch_zero (brief_code.md Z2, D2): a static mesh's or tube's item with its zero kept per patch: its probe returns every patch already shifted by its own zero
-      bool PatchZeroItem(const Item &it) const { return set.patchZero && it.b < 0 && shape[it.s]->patchZero && !it.tZero.empty(); }
+      bool PatchZeroItem(const Item &it) const { return it.b < 0 && shape[it.s]->patchZero && !it.tZero.empty(); }
       bool islandRing = false;   // (diagnostics: this use is a ring island, else a cord island; set by the caller)
       const Hit *StartHit(const int k) const { return nowStamp == stamp && k >= 0 && k < ni ? &hNow[k] : nullptr; }   // patch_friction (ridge arrival): item k's probe at the positions now (ChooseStep's), null when stale
       // Steps until dt is covered. capStep: the caller's own bound on a step; afterStep: after each. False: a step failed, and done says how far it got (time is lost, no energy can appear)
@@ -1983,7 +1969,7 @@ namespace GroupStep
          Hit hp;
          it.dZero = 0.0;
          it.tZero.clear();
-         if (!wasTouching && zero <= 0.0 && set.patchZero && shape[it.s]->patchZero)   // patch_zero (Z4): a zero per raw patch
+         if (!wasTouching && zero <= 0.0 && shape[it.s]->patchZero)   // patch_zero (Z4): a zero per raw patch
             FirstSightPatches(it, hp);
          else if (!wasTouching && zero <= 0.0)
          {
@@ -2782,7 +2768,7 @@ namespace GroupStep
                }
                if (MergeBeforeAccept())   // patch_zero (F4, F7): the union joined start patches with different zeros: one zero for them at the start, the same h again
                   continue;
-               if (set.linkWindows && LinkOrderCut(h))   // link_windows: the links' time order feeds an end patch less than the union: the step is too long
+               if (LinkOrderCut(h))   // the link windows: the links' time order feeds an end patch less than the union: the step is too long
                   continue;
                if (tpOn && tpStage < 3)   // touch_predict: the step's end against its predicted touches (design 2.3)
                {
@@ -4177,7 +4163,7 @@ namespace GroupStep
          pzNetS = -1;
       }
       // patch_zero (Z4): first sight of a static mesh or tube: each raw patch's zero = its raw level-form depth (its energy 0), an entry for each of its pieces, dZero the largest.
-      // A probe that names no pieces (patch_friction 0, or a path without ids): the scalar zero as before
+      // A probe that names no pieces (a path without ids): the scalar zero as before
       void FirstSightPatches(Item &it, Hit &hp) const
       {
          static const std::vector<std::pair<int, double>> none;
@@ -4276,7 +4262,7 @@ namespace GroupStep
       // patch_zero (F7): the one call of the start merge, on the final solve of every step before it is accepted (Step: the normal and a halved step's solve, before the link
       // order and stop checks, so no other solve comes between it and their Accept; the stop search's final solve, before its Accept). True: a zero changed, the same step
       // length is solved again. (The energy step has no merge: the net, F2, checks it)
-      bool MergeBeforeAccept() { return set.patchZero && StartMerges(); }   // (patchZero implies linkWindows: ToStep, F9)
+      bool MergeBeforeAccept() { return StartMerges(); }   // (the per-patch zero with the link windows' union, F9)
       bool StartMerges()
       {
          bool any = false;
@@ -5094,7 +5080,7 @@ namespace GroupStep
          LwCount(LinkCounters().nets, 1, "order nets (steps taken with the union)", pfMs);
          const Shape *const sh = shape[item[kw].s];
          ContactSystem::NoticeRetired("link order net: " + (sh != nullptr ? sh->Name() : std::string("?"))
-                                      + ": a step's friction groups taken with the union of its links (rule T's order still differed after 4 cuts, or had no cut point; [Contact] link_windows)");
+                                      + ": a step's friction groups taken with the union of its links (rule T's order still differed after 4 cuts, or had no cut point; the link windows)");
          return false;
       }
       int FrictionGroups(const Hit &h0, const Hit &h1, const Hit &hm, const V3 &c0, const V3 &c1, const V3 &cm, const int k)
@@ -5112,7 +5098,7 @@ namespace GroupStep
             par[x] = x;
          const auto find = [&](int x) { while (par[x] != x) x = par[x] = par[par[x]]; return x; };
          const auto pat = [&](const int x) -> const HitPatch & { return x < n0 ? h0.pat[x] : h1.pat[x - n0]; };
-         const bool lw = set.linkWindows && LinkGate(h0, h1);   // link_windows: the union rule (LinkUnion); else today's shared pieces
+         const bool lw = LinkGate(h0, h1);   // the link windows: the union rule (LinkUnion); else today's shared pieces
          if (lw)
             LinkUnion(h0, h1, hm, c0, c1, k, [&](const int a, const int b) { par[find(b)] = find(a); });
          else
@@ -5231,7 +5217,7 @@ namespace GroupStep
          V3 s05, s025, s15, s075;
       };
       std::vector<BLin> blS;   // (Eval's scratch per friction group, capacity reused)
-      bool LevelOn(const Item &L) const { return set.levelStiffness && set.patchPath && L.ktb <= 0.0; }   // (a bend across in series: Kt is no power of u, today's mean)
+      bool LevelOn(const Item &L) const { return set.patchPath && L.ktb <= 0.0; }   // (a bend across in series: Kt is no power of u, today's mean)
       // the stiffnesses of a level form lev (u^p summed with roles): Kt = ktPerA sqrt(reff) u^0.5, Kr = kH reff u^1.5, Ktw = 16/3 0.35 0.75 Kr (patch_path's ktU, krU, kwU)
       static void LevK(const Item &L, const Item::Pows &lev, double &kt, double &kr, double &kw)
       {
@@ -5656,14 +5642,11 @@ namespace GroupStep
             explicit PzEvalScope(const Group &gs) : g(gs) { g.pzEvalOn = true; g.pzNetS = -1; }
             ~PzEvalScope() { g.pzEvalOn = false; }
          } pzScope(*this);
-         if (set.linkWindows)   // link_windows: this Eval's order check and added links per item (LinkUnion writes a gated item's)
-         {
-            lwCut.assign((size_t)ni, -1.0);
-            pzMg.resize((size_t)ni);   // (patch_zero, F4: LinkUnion fills a gated item's)
-            for (std::vector<std::pair<int, int>> &g : pzMg)
-               g.clear();
-            lwAdd.assign((size_t)ni, 0);
-         }
+         lwCut.assign((size_t)ni, -1.0);   // the link windows: this Eval's order check and added links per item (LinkUnion writes a gated item's)
+         pzMg.resize((size_t)ni);   // (patch_zero, F4: LinkUnion fills a gated item's)
+         for (std::vector<std::pair<int, int>> &g : pzMg)
+            g.clear();
+         lwAdd.assign((size_t)ni, 0);
          if (J)
             for (int r = 0; r < nU; r++)
                for (int c = 0; c < nU; c++)
@@ -5912,7 +5895,7 @@ namespace GroupStep
             const double fd = cD * dd / h;
             const double N = std::max(0.0, fe + fd);   // a contact pushes, it cannot pull (Hertz, no adhesion)
             e.normalLoss = (N - fe) * dd;              // (cD dd^2 / h while it pushes; all the spring's release once damping would make it pull)
-            // [Contact] patch_friction (piece 2b-1; plan runs/2026-11-22-per-peak 2.1, 2.4, 2.5b): a static mesh's or tube's friction, damping, rolling and twist per friction group
+            // The per-patch friction (piece 2b-1; plan runs/2026-11-22-per-peak 2.1, 2.4, 2.5b): a static mesh's or tube's friction, damping, rolling and twist per friction group
             // (FrictionGroups: the start and end patches linked by shared pieces), each with its own normal, depths, load fe + fd and memory (GroupMemory). One group: today's inputs,
             // the same arithmetic: the block below runs once per group and keeps its results in fgS for the slope. The push (gd N) stays the merged contact's. Not in this build:
             // the B-lin stiffness average (a group's stiffness is PatchMeans on its own one depth), ridge arrival, turn terms
@@ -6795,14 +6778,14 @@ namespace GroupStep
                // h dP/du = kn gd g1^T + h N dgd/du, g1 the end depth's gradient on the ball's centre; Gonzalez gd = gm + lam W u, lam = (dd - gm . u) / (u . W u), so
                // dgd/du = H / 2 + lam W + (W u) dlam^T, dlam = (g1 - gm - (H / 2) u - 2 lam W u) / (u . W u); H / 2 alone where Gonzalez left its correction out
                // (H the merged depth's Hessian, PeakHessian; paper check runs/2026-11-22-per-peak/paper/dampslope.py form A3: exact to 2e-5 of |J|)
-               // A carried surface (target_patches: a translating mesh) takes it too when every column is a translation (no spin: a turning column breaks H_cq = -H v):
+               // A carried surface (a translating target mesh) takes it too when every column is a translation (no spin: a turning column breaks H_cq = -H v):
                // its depth is a function of c - sum q_j v_j, so over (c, q) its Hessian is H4 = E^T H E, E's column for the centre the unit vectors, for q_j -v_j
                // (paper runs/2026-11-23-targets-patch/peak2.py: worst 6.8e-11 of |J|)
                double pkH[3][3];
                bool slideCols = true;
                for (int j = 0; j < nq; j++)
                   slideCols = slideCols && hm.c[j].w[0] == 0.0 && hm.c[j].w[1] == 0.0 && hm.c[j].w[2] == 0.0;
-               const bool pkOn = set.peakSlope && hm.np > 0 && !terms && slideCols && !pr && fe > 0.0 && fe + fd > 0.0 && PeakHessian(hm.pk, hm.np, gm, pkH);
+               const bool pkOn = hm.np > 0 && !terms && slideCols && !pr && fe > 0.0 && fe + fd > 0.0 && PeakHessian(hm.pk, hm.np, gm, pkH);
                if (terms)   // each term's own chord slope on its own gradient, the damping's on G
                {
                   if (fe + fd > 0.0)
@@ -8637,7 +8620,7 @@ namespace GroupStep
                      PfCount(nJoin, pmEndJoin[k], "joins in accepted steps", pfMs);
                      PfCount(nSplit, pmEndSplit[k], "splits in accepted steps", pfMs);
                      PfCount(nDrop, dropped, "memory pieces dropped unpressed", pfMs);
-                     if (set.linkWindows && k < (int)lwAdd.size())   // link_windows: the start-end patch links its windows added (the accepted Eval's)
+                     if (k < (int)lwAdd.size())   // the link windows: the start-end patch links its windows added (the accepted Eval's)
                         LwCount(LinkCounters().added, lwAdd[k], "links added beyond shared pieces in accepted steps", pfMs);
                   }
                   it.pm = pmEnd[k];

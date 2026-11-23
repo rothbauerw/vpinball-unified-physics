@@ -86,7 +86,7 @@ struct RubberSurface
    std::vector<RubberContact::SurfaceTri> tris;
    float lo[3] = { 0.f, 0.f, 0.f }, hi[3] = { 0.f, 0.f, 0.f };   // bounding box, VPX units
    void Add(const Vertex3Ds &a, const Vertex3Ds &b, const Vertex3Ds &c);   // one face (VPX units)
-   // multi_contact 1: which faces share an edge (the ball's contacts on two faces joined by a pressed edge are one contact; RubberContact::BarsTriangles)
+   // which faces share an edge (the ball's contacts on two faces joined by a pressed edge are one contact; RubberContact::BarsTriangles)
    std::vector<std::array<int, 3>> vid;   // per face: its welded vertices (vertices equal in all three float bits are one)
    std::vector<std::array<int, 3>> nb;    // per face: the face across edge e = (vertex e, vertex e+1), -1 none; empty until Link
    // cut B (runs/2026-11-12-mc-cutB): per face and shared edge e, which side of this face's plane (by its normal n) the neighbour's third vertex lies on: +1 / -1; 0 when the fold is within
@@ -181,10 +181,10 @@ public:
    bool SurfaceHeightAt(double xU, double yU, double &zU) const override;
    // ContactSurface
    void Refresh(SurfaceContact &it, double ballR, double reachM, const RubberContact::V3 &c) const override;   // the faces the ball can reach this cycle
-   void StepPieces(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, int seg, const RubberContact::RidgeStart *rs, std::vector<RubberContact::StepPiece> &out) const override;   // step pieces (runs/2026-11-22-ringcap)
+   void StepPieces(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, int seg, const RubberContact::RidgeStart &rs, std::vector<RubberContact::StepPiece> &out) const override;   // step pieces (runs/2026-11-22-ringcap)
    void LinkWindows(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c0, const RubberContact::V3 &c1, std::vector<RubberContact::LinkWindow> &out) const override;   // link_windows (rule T)
    RubberContact::TubeProbe ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const override;
-   RubberContact::TubeProbe ProbePatches(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, std::vector<RubberContact::TubeProbe> &out) const override;   // patch_contacts: the patch list (BarsTriangles / BarsTube)
+   RubberContact::TubeProbe ProbePatches(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, std::vector<RubberContact::TubeProbe> &out) const override;   // the patch list (BarsTriangles / BarsTube)
    RubberContact::TubeProbe ProbeList(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, std::vector<RubberContact::TubeProbe> *out) const;   // ProbePatch's answer; out (optional): the patch list
    int PathReach(const SurfaceContact &it, const RubberContact::V3 &s, const RubberContact::V3 &d, double R) const override;   // the path test: a static mesh (its faces) or a static tube
    RubberContact::TubeProbe Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const override;   // the nearest point of one surface contact (tube or faces)
@@ -314,7 +314,7 @@ private:
    static void FinderInsideQ(void *q, const RubberContact::V3 &c, const RubberContact::V3 &move);   // the inside check itself (q: a FinderBallQ), one rule for FinderInside and FinderInsideBall
    static void FinderRun(void *q, double r);   // the query itself (q: a FinderBallQ), radius r around its centre
    std::shared_ptr<RubberSurface> m_surface;   // a wall / primitive host: its faces (m_pts is then empty)
-   int m_linkOver = 0;                         // multi_contact: edges on more than two faces, counted when the faces' shared edges are built at load (Link)
+   int m_linkOver = 0;                         // edges on more than two faces, counted when the faces' shared edges are built at load (Link)
    mutable bool m_linkNoticed = false;        // that count reported (log and screen) at the first ball near the surface, once
    HitObject *m_eventCarrier = nullptr;        // see SetEventCarrier
    std::vector<Vertex3Ds> m_pts; // closed loop, last = first

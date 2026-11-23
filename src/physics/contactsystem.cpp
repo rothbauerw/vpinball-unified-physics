@@ -1833,13 +1833,12 @@ struct ContactSystemImpl
          g_pplayer->m_liveUI->PushNotification(o.str(), 6000);
    }
 
-   // patch_zero (brief_code.md; GroupStep::Settings::patchZero): a static mesh or tube on multi_contact keeps its found-inside zero per patch (SurfaceState::tZero); so does a
-   // translating target mesh on target_patches (P3b piece 4: ContactMovingPart::GroupPatchZero, its zeros keyed by face id in its rest frame)
+   // The per-patch zero (brief_code.md): a static mesh or tube keeps its found-inside zero per patch (SurfaceState::tZero); so does a translating target mesh (P3b piece 4:
+   // ContactMovingPart::GroupPatchZero, its zeros keyed by face id in its rest frame)
    static bool PatchZeroSurface(const SurfaceContact &it)
    {
-      const ContactSettings &s = ContactSettings::Get();
       ContactMovingPart *const mp = it.r->MovingPart();
-      return s.patchZero && s.multiContact && s.linkWindows && (mp == nullptr || (mp->GroupPart() != nullptr && mp->GroupPatchZero(0)));   // (as ToStep: F9, link_windows too)
+      return mp == nullptr || (mp->GroupPart() != nullptr && mp->GroupPatchZero(0));
    }
    // patch_zero: the probe with the given per-piece zeros (none: raw), every patch shifted by its own zero; its patch list and pieces (RubberContact::PatchPieces). One helper for
    // both: a static host's ProbePatches; a target (GroupPatchZero) through its part's own probe at its current pose (GroupProbe, trial null: the mesh at c - s a), its hit's patch
@@ -2209,27 +2208,22 @@ struct ContactSystemImpl
          ProbeSeg(c, R, h, seg);
          if (mp != nullptr)
             return;
-         thread_local RubberContact::RidgeStart rsS;   // (the probe's own patches and passes: the ridges, patch_friction only)
-         const RubberContact::RidgeStart *rs = nullptr;
-         if (ContactSettings::Get().patchFriction)
+         thread_local RubberContact::RidgeStart rsS;   // (the probe's own patches and passes: the ridges)
+         rsS.pieces.Clear();
+         rsS.pieces.off.clear();
+         rsS.pieces.off.push_back(0);
+         for (int p = 0; p < h.npat; p++)
          {
-            rsS.pieces.Clear();
-            rsS.pieces.off.clear();
-            rsS.pieces.off.push_back(0);
-            for (int p = 0; p < h.npat; p++)
-            {
-               const GroupStep::HitPatch &P = h.pat[p];
-               for (int q = 0; q < P.pn; q++)
-                  rsS.pieces.id.push_back(h.pc[P.p0 + q]);
-               rsS.pieces.off.push_back((int)rsS.pieces.id.size());
-            }
-            rsS.passes.clear();
-            for (int j = 0; j < h.np; j++)
-               rsS.passes.push_back(h.pk[j]);
-            rs = &rsS;
+            const GroupStep::HitPatch &P = h.pat[p];
+            for (int q = 0; q < P.pn; q++)
+               rsS.pieces.id.push_back(h.pc[P.p0 + q]);
+            rsS.pieces.off.push_back((int)rsS.pieces.id.size());
          }
+         rsS.passes.clear();
+         for (int j = 0; j < h.np; j++)
+            rsS.passes.push_back(h.pk[j]);
          thread_local std::vector<RubberContact::StepPiece> ent;
-         r->StepPieces(bs, *it, c, seg, rs, ent);
+         r->StepPieces(bs, *it, c, seg, rsS, ent);
          GroupStep::pieceStats.lookups++;
          GroupStep::pieceStats.entries += (long)ent.size();
          h.ne = (int)ent.size();
@@ -2244,7 +2238,7 @@ struct ContactSystemImpl
          seg = -1;
          if (mp != nullptr)
          {
-            h.np = 0;   // (peak_slope: static surfaces only)
+            h.np = 0;   // (the per-peak slope: static surfaces only)
             mp->GroupProbe(surface, c, R, trial, h);
             if (heldReff > 0.0)
             {
@@ -2254,12 +2248,9 @@ struct ContactSystemImpl
             }
             return;
          }
-         const bool peaks = ContactSettings::Get().peakSlope || ContactSettings::Get().patchFriction;   // peak_slope, patch_friction (the ridge arrival's passes): the level form's peaks and passes (RubberContact::PeakTerms, written by MergeBars at 2 or more peaks)
-         if (peaks)
-            RubberContact::PeakTerms().clear();
-         const bool pf = ContactSettings::Get().patchFriction;   // patch_friction: the patch list and each patch's pieces beside the merged answer (ProbePatches)
-         thread_local std::vector<TubeProbe> plist;
-         const TubeProbe pr = pf ? r->ProbePatches(bs, *it, c, plist) : r->ProbePatch(bs, *it, c);
+         RubberContact::PeakTerms().clear();   // the level form's peaks and passes (the per-peak slope; the ridge arrival's passes), written by MergeBars at 2 or more peaks
+         thread_local std::vector<TubeProbe> plist;   // the patch list and each patch's pieces beside the merged answer (ProbePatches)
+         const TubeProbe pr = r->ProbePatches(bs, *it, c, plist);
          seg = pr.seg;
          h.delta = pr.overlap ? pr.delta : (pr.dist > 0.0 ? R + pr.rho - pr.dist : -1.0);
          h.n = pr.normal;
@@ -2267,9 +2258,9 @@ struct ContactSystemImpl
          h.np = 0;
          h.npat = 0;
          h.npc = 0;
-         if (pf && pr.overlap)
+         if (pr.overlap)
             HitPatches(plist, h);   // (one copy: contactmovingpart.h, the translating mesh writes its patches with it)
-         if (peaks && pr.overlap)
+         if (pr.overlap)
          {
             const std::vector<RubberContact::PeakTerm> &pt = RubberContact::PeakTerms();
             h.np = (int)pt.size();
@@ -2735,7 +2726,7 @@ struct ContactSystemImpl
                   sh.heldReff = (ring || mp != nullptr || ContactSettings::Get().cordHeldReff) && it.Surf(sf).touching ? it.Surf(sf).reff : 0.0;   // (cord_held_reff: a cord island holds it too)
                   sh.heldKb = mp != nullptr && it.Surf(sf).touching ? it.Surf(sf).kb : 0.0;
                   sh.heldKtb = mp != nullptr && it.Surf(sf).touching ? it.Surf(sf).ktb : 0.0;
-                  sh.patchZero = mp == nullptr ? it.r->MovingPart() == nullptr : mp->GroupPatchZero(sf);   // patch_zero: a static mesh or tube, or a target mesh on target_patches (GroupStep::Shape::patchZero)
+                  sh.patchZero = mp == nullptr ? it.r->MovingPart() == nullptr : mp->GroupPatchZero(sf);   // the per-patch zero: a static mesh or tube, or a target mesh with its face links (GroupStep::Shape::patchZero)
                   if (hasPart && mp == nullptr && it.r->MovingPart() != nullptr)   // a part still on the old loop is a surface at its present pose in this cycle, its reaction left out, until it moves over (GroupStepDesign 3)
                   {
                      static const void *warned = nullptr;

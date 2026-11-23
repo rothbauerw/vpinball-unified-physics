@@ -61,7 +61,7 @@ namespace StandupFace
          const double t = thicknessIn * in, L = leverIn * in, I = w * t * t * t / 12.0;
          return 3.0 * E * I / (L * L * L);
       }
-      SlideMesh mesh;                                // its probe along n (contactmovingpart.h; [Contact] target_patches)
+      SlideMesh mesh;                                // its probe along n (contactmovingpart.h: the per-patch path)
 
       void Build(const std::vector<RubberContact::SurfaceTri> &faces, const std::vector<std::array<int, 3>> &vid, const V3 &travel, const double kBlade, const double edgeRhoM)
       {
@@ -343,7 +343,7 @@ namespace StandupFace
          return true;
       }
       void GroupLinkWindows(int, const V3 &c0r, const V3 &c1r, const double R, std::vector<RubberContact::LinkWindow> &out) const override { gp.mesh.LinkWindows(c0r, c1r, R, out); }
-      bool GroupPatchZero(int) const override { return gp.mesh.PatchZeroOn(); }   // (patch_zero: per-patch zeros keyed by face id, P3b piece 4)
+      bool GroupPatchZero(int) const override { return gp.mesh.PatchZeroOn(); }   // (the per-patch zero: keyed by face id, P3b piece 4)
       void CycleBegin() override
       {
          idle = false;

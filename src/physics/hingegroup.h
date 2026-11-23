@@ -442,7 +442,7 @@ namespace HingeGroup
          Bend(nb, pb, bestW, h.kb, h.ktb);
          h.npat = 0;
          h.npc = 0;
-         if (PatchFrictionOn() && !faces)
+         if (!faces)
             TermPatches(surface, h, tNb, tWi, dn, fr);
          GroupStep::envStats.terms += h.nt;
          if (ProbeNoteOn())
@@ -455,15 +455,10 @@ namespace HingeGroup
          }
       }
 
-      // [Contact] patch_friction on a wire shape (P3, to-do 1.33; runs/2026-11-23-hinge-patch q0..q4): the pressed terms grouped into patches, terms linked by a pressed joint
+      // The per-patch friction on a wire shape (P3, to-do 1.33; runs/2026-11-23-hinge-patch q0..q4): the pressed terms grouped into patches, terms linked by a pressed joint
       // (its over list: the pieces it corrects), each patch written as a HitPatch: its own union (the probe's sum (sum s d^2.5)^0.4 over its pressed terms, in their order, so one
       // patch is the merged answer bit for bit), its world normal and gradient, its terms' piece ids (pc), and its deepest wire as the segment ga-gb in the body frame (the frame of
-      // RestCentre: FrictionGroups' plane and link windows compare there). A shape with plate faces writes none (plates unchanged). Written by Publish (ContactSettings); the bench: on
-      static bool &PatchFrictionOn()
-      {
-         static bool on = true;
-         return on;
-      }
+      // RestCentre: FrictionGroups' plane and link windows compare there). A shape with plate faces writes none (plates unchanged)
       // the ball's centre in the body frame at angle q + dq (the probe's own cb): the rest frame of the patch geometry (Shape::RestCentre)
       V3 BodyCentre(const V3 &c, const double dq) const
       {

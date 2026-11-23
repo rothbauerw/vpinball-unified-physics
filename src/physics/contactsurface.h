@@ -94,10 +94,10 @@ public:
    virtual int FinderObjIndex() const { return -1; }
    // The nearest point of the surface to a ball at c
    virtual RubberContact::TubeProbe Probe(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const = 0;
-   // The same, as the group step's law reads it: the ball's contact patch has a size, so a fold under it pushes along the patch's average (rubbercontact.h PatchTube, PatchTriangles)
+   // The same, as the group step's law reads it: the ball's contact patch has a size, so a fold under it pushes along the patch's average (a static host: rubbercontact.h BarsTube, BarsTriangles)
    virtual RubberContact::TubeProbe ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const { return Probe(bs, it, c); }
-   // patch_contacts (runs/2026-11-22-per-peak plan 3.1): one entry per pressed patch, each its own depth, normal and gradient over that patch only; one patch: exactly ProbePatch's answer
-   // patch_friction: returns ProbePatch's merged answer and fills the list beside it (RubberContact::PatchPieces: each entry's pieces)
+   // The patch list (runs/2026-11-22-per-peak plan 3.1): one entry per pressed patch, each its own depth, normal and gradient over that patch only; one patch: exactly ProbePatch's
+   // answer. Returns ProbePatch's merged answer and fills the list beside it (RubberContact::PatchPieces: each entry's pieces)
    virtual RubberContact::TubeProbe ProbePatches(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, std::vector<RubberContact::TubeProbe> &out) const
    {
       const RubberContact::TubeProbe pr = ProbePatch(bs, it, c);
@@ -109,8 +109,8 @@ public:
    // 1 = yes, 0 = no (the whole path checked exactly, rubbercontact.h path kit), -1 = this surface has no exact path test (a cord band, no query): the caller probes as before
    virtual int PathReach(const SurfaceContact & /*it*/, const RubberContact::V3 & /*s*/, const RubberContact::V3 & /*d*/, double /*R*/) const { return -1; }
    // step pieces (runs/2026-11-22-ringcap design 2.3-2.7): the step-start lookup's entries for the shared step rule: the surface's convex pieces in the ball's list other than
-   // the one its answer comes from (seg) and the pressed ones, each its nearest point's depth and normal; and the ridges of its pressed patches (rs, null none). A surface with none: empty
-   virtual void StepPieces(const RubberContact::BallSI & /*bs*/, const SurfaceContact & /*it*/, const RubberContact::V3 & /*c*/, int /*seg*/, const RubberContact::RidgeStart * /*rs*/,
+   // the one its answer comes from (seg) and the pressed ones, each its nearest point's depth and normal; and the ridges of its pressed patches (rs). A surface with none: empty
+   virtual void StepPieces(const RubberContact::BallSI & /*bs*/, const SurfaceContact & /*it*/, const RubberContact::V3 & /*c*/, int /*seg*/, const RubberContact::RidgeStart & /*rs*/,
                            std::vector<RubberContact::StepPiece> &out) const { out.clear(); }
    // link_windows (rule T, to-do 1.33; runs/2026-11-23-link-rule brief_code.md 2): the links among the pieces of the ball's list (a mesh's shared edges, a tube's joints) pressed on the
    // step's straight move c0 -> c1, each with its window (RubberContact::LinkWindow). A surface with none: empty
