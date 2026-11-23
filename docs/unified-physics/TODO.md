@@ -12,44 +12,36 @@ G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md);
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-Plunger converted (PlungerDesign; open: section 14). GL exe and main_exe stale: pass -Exe. 1.42: CenterRamp halvings = floor+wall merged in one contact. Fix: one contact per pressed patch (runs/2026-11-22-per-peak/plan.md, Status): P1 844e91d83, P2 next.
-Judge a change by one exe, its setting on vs off; never by an older exe's md5 (ModelStandards trap 112).
-Drop targets: branch drop-axis (wt-drop-axis, not merged). Design v2 (DropTargetDesign 5), plan 6 reviewed. B0, B1, 1.52 and B2 (9c1a50809) committed on drop-axis. PAUSED (user 11-22): hits 15-30x over 30 us. Read DropTargetDesign 6 STATUS first: next decision, events inside one step.
-STOCK OFF done (one switch, runs/2026-11-21-stock-search/design.md): unified runs no stock, one Step per 1 ms. Play-stop-play OK (user). Untested: in-game live editor. G3/G4 met, kept for reference (user).
-N5. One reach rule from physics (speed plus force) for grouping and step length; first built in 1.34 P2. Grouping: Gate001's 81 mm swing as one-cycle travel joins two lanes. Step length: speed only, no force. Check all parts; ball pairs of unequal mass and resting-ball wake (read only).
+Per-patch contacts (1.33): 750-hit bench passed. Still to run: snapshot self-test, stress set, cost per object (rule 5).
+Open (lead 14): cord_held_reff accept or drop (cord-island normal energy unmeasured); 7 cut-B two-peak calls; BodyAxis held energy vs step (stops lead); rewording of 1.17/32/38/39/48 proposed, not agreed (lead log 11-23).
+Drop targets: branch drop-axis (wt-drop-axis, not merged). PAUSED (user 11-22): hits 15-30x over 30 us. To be rewritten on the shared path to ModelStandards; drop-axis code not reused (user 11-22). DropTargetDesign 6 STATUS.
 N7. Stress v2 bench: ball travel energy +2 % at 57 ms; spin not counted. Check total energy in the saved run (no new run).
 N8. Test driver must refuse a ball placed inside any object, unless the file declares the overlap (rule 10b: then judged on recovery, no energy gained).
-N9. Push only on the user's word; check git status -sb against fork/unified-physics for what is unpushed (no commit hash here: it goes stale).
 N12. Physical kicker hole sizes (user 2026-11-17, 'extend at some point'): today fixed at the Sys7 18.93 mm; another size needs a cup that follows it. Paper first.
 N10. Performance tests: not built; review TestMatrixDesign with the user when building them. Includes the stress table driver clock after start-up and the 144 Hz frame budget. Any safety-net trip (e.g. the cord's hold and let-go) fails the run.
 
 ## 1. Contact system (tasks)
-34. One shared finder for every contact (static, moving, tubes, ball pairs): complete, short, local, one index; replaces the per-part finders. Requirements, design: runs/2026-11-11-finder (P1-P9). Snapshot likely misses its state: a retake dropped JewelRamp from a ball's list (aircore-ff/snap_trace)
-36. Release check's fixed 2 mm hold for a closing ball (contactsystem.cpp:707, from the port): no physics behind it; release at the ball's reach instead (mesh hosts already do through the shared finder).
-37. A no-op stock hit that splits a cycle moved S00's bounce spin 3.5 % (stress v2, 2894 ms; finder-P2b S00 trace): step-split sensitivity; check against the 1 us reference. Parked.
 38. Overlap replay with free_flight (every free ball stepped by the contact system, bb3898626): the replay now restores and re-steps every ball; seen only not to crash (19 replays). Judge one replayed hit against the same hit without a replay.
 39. Stress v2 cost over rule 5: worst 7-cycle window 9.6-9.8 ms (limit 3 ms), worst cycle 4.8-5.3 ms, with free_flight 0 and 1 alike (runs/2026-11-12-freeflight timing csv). Cause not traced.
-35. Stress v2 diverter: both diverter walls collide (the script's switch is not run), S09 jams between them and climbs ~3x what its velocity gives (cy 49168; finder/gap/cy49168.py). Check energy (rule 10b).
 10. Sleep (default off): a ball on a flipper never sleeps (bats have no rest check). Whether sleep becomes default: user.
 13. Moving script/animated primitives: details from the user.
 17. Shared-loop cost per cycle (waits until models work). Measured: evaluations per object per cycle median 4, p90 16, worst 598 over 144 steps (750 bench, Hgo2_19; time3/results.txt); cause unknown.
-26. Ball started inside: the solve must never keep a runaway answer. May be handled already: check.
-27. Shared stop piece (gate, spinner, disc, ring, bat, plunger).
+27. Shared stop piece (runs/2026-11-22-stops/design.md): (a) done d408b70ac; (b) on branch stops-wip (ad9578d64), not merged: fix the released-row search first (s4_results 5-6). Then the skirt (1.40), then (c) = 1.52 (user 11-22).
 32. Env switches that change behaviour (rule: diagnostics only): VPX_HINGES (=0 gives the stock kick), VPX_PREVENT, VPX_VISCOELASTIC, VPX_OVERLAP_REPLAY; VPX_BUMPERS only warns. Remove each or make it an ini key.
-33. Several contacts on one object (mesh faces and edges, tube folds, cut rims): each true local minimum of the ball-surface distance its own contact and friction, merged only where patches overlap; replaces the fold-sum fade. Also: sling post cos (cordfixed.h:949). Check: 750-bench rubber hits.
+33. Several contacts on one object: runs/2026-11-22-per-peak/plan.md, built to 2b-1; open: 2b-2..2b-4, P3b targets, P3 gates and switches, P4 deletions. Also: sling post cos (cordfixed.h:949).
 31. After G1: check every converted part (flipper, gates, spinners, bumper, disc, rubbers, cord) against the ModelStandards definition of done (top of the file).
 30. part_guess_accel (default off): design evaluation for all moving parts, then a test plan if kept. After the shared-engine items, unless one of them needs it.
-40. Jet skirt resting on its seat is stepped as a stiff spring and sets short steps whenever the jet is grouped (bumpergroup.h ~283): ModelStandards 3a resting constraint. Gorgar +6 % steps with energy_reach (runs/2026-11-14-reach-p1b).
-42. Step halvings (failed solves, groupstep.h:2190): stress v2 ~560 at 34e4185da (519 near 77 s). Repro: slow ball rocking on a slope below the flippers, 1,269 halvings (runs/2026-11-15-finder-P6b3/drive_burst.txt). Find surface and cause.
+40. Jet bumpers PARKED (user 11-23). Skirt seat round 4 on branch stops-wip (0ee3cd69d). Struck cycles: ring kick ~45 % of steps, seat ~20 % (runs/2026-11-23-struck-skirt).
+42. Step halvings: stress v2 1 to 70.7 s since per-patch (564 before). Recheck the 11-15 repro: slow ball rocking on a slope below the flippers, 1,269 halvings (runs/2026-11-15-finder-P6b3/drive_burst.txt).
 43. After the finder work (1.34): tables/turn table/turn table test 4 (user's worst-case table) runs slower on today's build than on the 11-09 build (user's play). Measure both on one machine and find the cause.
 48. Joint zero floor (joint_zero_floor): at a joint of 3+ wires the raise between cycles could add energy (INFERRED, not seen; 2 wires only lose). Shared-line negative terms get no floor. Check on paper.
 41. Magnet pull in the energy reach is taken at the ball's place, not the largest over its travel: a true bound needs current, saturation, in-winding and per-type terms. Re-looks while a magnet is on (stress C1).
 49. Jacobian: rolling resistance's torque has no slope with depth (Kr ~ a^3, its damper, its turn at the limit); every contact. Measured 1e-4 of the row (runs/2026-11-19-standup-p2/fix2).
 50. Jacobian: a mesh contact's depth slopes come from the mid-step probe; when the end lies on another facet they are wrong (0.36 of the row at a stand-up face crossing, fix2).
-52. Stop search replaced by event prediction on drop-axis (3f6d54f06, [Contact] event_predict; runs/2026-11-21-stop-search-design): open until merged into unified-physics and the old search's 0 path deleted.
+52. Stop search -> event prediction: one predictor for part stops and every ball touch on the shared path (runs/2026-11-22-touch-predict). Design of 11-21 reused, drop-axis code not.
 54. Playfield and turntable damp the bounce by their own alpha law (contacthost.cpp LoadPlayfieldSettings, TurntableSettings); every other hard surface uses the viscoelastic law: use the shared one (user 2026-11-21). Needs a playfield restitution (see 9.7).
 53. One 'on the stop' rule for the engine (design 1.52 Q7): 35 checks and 5+ nearness constants decide it today (runs/2026-11-21-onstop-read/onstop.md). Paper first.
-55. Cost of a ball (rule 5): Gorgar one ball ~90 us/cycle in play vs stock ~6 (user: 1.5 vs 0.1 ms per 16.7 ms frame); bench median 37 us, group steps ~9 of it. Hits 5-17 steps, 78-157 us. Find where it goes, then a hit in ~2 steps. Drop targets wait.
+55. Cost of a ball: 21 us/cycle on the bench (stock 2.5), ~90 in play; worst-cycle steps: bounces 49 %, seats 21 % (1.40), approach 17 % (1.52), steady 11 % (runs/2026-11-22-step-inventory). Bounce: one impulse at touch.
 
 ## 2. Flippers
 1. Rubber separation at the end stop: details from the user.
@@ -84,22 +76,22 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 1. Constant-speed AC motor option.
 
 ## 8. Testing
-1. Accuracy bench, judged by impulse: all 750 pass (worst 0.68 mm at the next contact, limit 1 mm). Step or fault by path error over VPX_STEP_SCALE 1/0.5/0.25: 24 bounce faults, all under 1 mm, parked by the user (judge_RA3); add speed error (arrival timing).
+1. Accuracy bench: add speed error (arrival timing). 24 bounce step faults, all under 1 mm, parked by the user (judge_RA3).
 5. MCP server (later).
 9. 750 bench: 4 energy lines (Hgo1_2, Hgo1_29 87.1 mJ; Hgo2_55 24.9; Hgo2_66 53.4) = ball 2.3-3.8 mm in Rubber4 at first sight; likely replay starting mid-hit (inferred). Confirm, then start earlier or declare (rule 10b).
 8. Build-compare script compiles /fp:precise by default, so a reported difference is logic, not rounding (ModelStandards trap: a byte difference is not a logic difference).
 10. A state carries between replays in one chunk: Hgo5_77 differs only after earlier balls change, identical when run alone; find what carries over (runs/2026-11-10-old-loop/results_piece1.txt).
-12. Snapshot self-test fails on Gorgar: 30 of 8001 steps differ (19 with free_flight), "contacts (3 engaged balls)", before free flight too. Find what the snapshot misses.
+12. Snapshot self-test fails on Gorgar: 30 of 8001 steps differ (19 with free_flight), "contacts (3 engaged balls)", before free flight too. Find what the snapshot misses. Lead: a retake dropped JewelRamp from a ball's list (aircore-ff/snap_trace).
 11. Accuracy bench for moving parts: real hits on flipper bats, jet bumpers, gates, spinners, wire switches and sling plates, judged by impulse against the 1 us reference as the static bench is (today's 750 hits are static surfaces only).
 
 ## 9. Still stock (ask before converting)
-1. Stand-up and drop targets.
-4. Plunger: other tables, auto plunger, mechanical input.
+1. Drop targets (stand-up targets converted: StandupTargetDesign).
 6. Playfield material values unverified: compare with the user's video of a ball rolling on a playfield.
 7. Playfield bounce too high (user 2026-11-19): a falling ball rebounds at 0.77-0.98 of its fall speed at 0.28-0.56 m/s (Gorgar, runs/2026-11-19-laptop-lead/gate run_F1, t 3559-3871). No measured value in PartData; find where the restitution comes from.
 
 ## 10. Branch and housekeeping (release path 3, 5, 10: see ReleasePlan.txt)
-3. unified = 0 against a plain upstream build; plunger fix.5. Stock-file hooks to separate.
+3. unified = 0 against a plain upstream build; plunger fix.
+5. Stock-file hooks to separate.
 6. Editor changes to replace the ini files (panels, settings saved in the .vpx); unified off per table for release.
 7. Old keys in 14 inis.
 10. Review ReleasePlan with the user, then PR to the official repo after 3-5.
@@ -124,3 +116,4 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 5. Extension (user 2026-11-18, later): design 2h, a cabinet plunger on an auto-plunger table acts as the Launch Ball button (pull-and-release or a press past rest).
 6. Auto plunger not rechecked with a clean ball: the tip head, a lower energy (0.64 J), the fork drawing on screen (a3c-clean ran the fork at 1 J only).
 7. Plunger button lost control once (user 2026-11-19): Enter went down/up every 308 ms (tables/logs 183700). VPX drops OS repeats and acts on changes only: source outside VPX (runs/2026-11-19-laptop-lead/plunger_input.md). Rod log lines capped at 40 per load (plunger.cpp:163).
+8. Other tables, auto plunger, mechanical input (moved from 9.4: the plunger is converted).

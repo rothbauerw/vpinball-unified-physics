@@ -161,7 +161,13 @@ Lifted from JetBumperDesign.txt (user, 2026-10-26 unless dated). Part sizes: Par
 6. Hit fires first, when the switch closes, with no speed threshold.
 7. Coil drive: on while the switch is closed, a timed pulse (15 ms to start), or an external signal (ROM-based games); supply voltage set per table.
 8. The script can read the skirt's tilt about x and y (to animate a skirt primitive) and the ring's drop.
-Stated limit: bumpers are never placed so that two balls work one bumper at once (not tested).
+Skirt seat (user 2026-11-22, to-do 1.40; draft runs/2026-11-22-jet-seat/requirements.md):
+9. The seat is rigid: no seat spring or seat squash is stepped.
+10. The skirt is seated, rocking on one lip point, or lifted clear, chosen by the statics of a rigid wafer on its lip circle (net load and its centre of pressure); no tuned threshold.
+11. A change of state happens between steps as an event, never inside a solve.
+12. Landing on the seat, and the rim on the playfield, take the stop impact law and the rest rule; a settling skirt never chatters without end.
+13. Two balls on one skirt at any directions, and a ball rolling round the skirt, are covered (replaces the stated limit 'two balls never work one bumper').
+14. A seated skirt adds no unknowns and no step limit to its group; energy enters only through the spring preload, the coil and gravity.
 
 E. GATES AND SPINNERS
 ---------------------
@@ -304,3 +310,14 @@ I. DROP TARGETS (all items AGREED with the user 2026-11-19; draft runs/2026-11-1
 14. Cost: stated with 1, 2 and 6 balls; 30 us per object in the worst cycle with a ball on it. Light sprung parts cost 54-271 us today (to-do 11.1): the model must avoid that.
 15. Values: from part geometry and published material data (PartData section 12), each labelled ESTIMATED with its source; TUNED only where no data exists
    (the drop spring, from the 15-35 ms fall); replaced when measured.
+
+J. TOUCH PREDICTION (to-do 1.52; all items AGREED with the user 2026-11-23; draft runs/2026-11-22-touch-predict/design.md; part-stop requirements Q1-Q8 there and in
+   runs/2026-11-21-stop-search-design, AGREED 2026-11-21)
+1. One rule for every ball closing on anything (fixed surface, moving part, another ball), stated through the shared interface; no per-part approach rule.
+2. The same predictor serves part stops (Q1-Q8), so stops and touches are one piece of code.
+3. A step ends at the touch, short side, within the touch's own size (the Hertz squash at the closing speed). Several touches in one step: the earliest ends it.
+4. One step per touch in the usual case; a miss costs at most one re-solve. Today's stop search stays only until the prediction is proven never to miss, then it is deleted.
+5. No zero-length or stalled steps: a touch already within its size at a step's start, or one the step cannot reach, is never an event.
+6. Moving surfaces: the prediction uses the surface point's own speed and acceleration.
+7. A settling ball (ever smaller bounces) comes to rest and never turns into an endless chain of touches.
+8. Accuracy: the ball's path after a touch stays within the accuracy bench's limit (750 real hits, under 1 mm at the next contact).

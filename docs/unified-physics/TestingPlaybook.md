@@ -23,8 +23,9 @@ No dates, no "learned", no superseded text. What a test is for, its cap and hand
   Options: `-Trace 1`, `-Vbs file`, `-StopMs N`, `-PreRollMs N` (default 3000). Output: `run_x\out\balls.csv, report.txt, cycles.csv, done.txt`, `run_x\vpinball.log`.
 - The `VPXBench_*` name keeps run.ps1 and wait loops from taking it for a VPX. Many runs at once is fine, except on a table new to `runs\_tables`: run one first (the first runs race on INDEX.csv).
 - Confirm a run started: the log says `Test driver: N actions` with N above 0. Cost on vs off: compare work counts (VPX_GROUP_STATS, finder totals), not wall time.
-- **Patch not in the branch**: one reusable worktree `C:\Pinball\VPX-Physics\wt-bench` (own `build-bgfx`, incremental): check out the commit, patch, build, exe to
-  `Release\VPXBench_<tag>.exe` for `-Exe`, `git checkout -- .`. One at a time; never compile in a run folder.
+- **Patch not in the branch**: a reusable worktree per lead, `C:\Pinball\VPX-Physics\wt-bench` or `wt-bench-2` (own `build-bgfx`, incremental). Claim it first: read
+  `IN_USE.txt` in its root; if absent, write session, task, time; delete it when done. Only the claimant resets or builds there. Check out the commit, patch, build,
+  exe to `Release\VPXBench_<tag>.exe` for `-Exe`. Never compile in a run folder.
 - **Accuracy bench**: `runs\2026-11-01-roll-smooth` (report.md run 1). 750 real hits (stress p1-p3, Gorgar), each replayed alone: `run_replay.py <tag> <exe> <mode>`; the reference is the same with `-env VPX_GROUP_HFIX=1` (1 us steps);
   runs with `-env VPX_TEST_IMPULSES=1`; `judge_hit.py <ref> <ref 0.5 us> <build> <build k 0.5> <build k 0.25>` (VPX_STEP_SCALE) judges each hit by the impulse its surface gave
   (bounce, slide, spin; runs\2026-11-10-hit-judge\design.md): noise floor from the 0.5 us twin, step error or fault by convergence, and pass = the exit
