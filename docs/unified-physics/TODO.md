@@ -13,7 +13,7 @@ G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
 Per-patch contacts (1.33): 750-hit bench passed. Still to run: snapshot self-test, stress set, cost per object (rule 5).
-Open (lead 14): cord_held_reff accept or drop (cord-island normal energy unmeasured); 7 cut-B two-peak calls; BodyAxis held energy vs step (stops lead); rewording of 1.17/32/38/39/48 proposed, not agreed (lead log 11-23).
+Open (lead 14): cord_held_reff accept or drop (cord-island normal energy unmeasured); 7 cut-B two-peak calls; BodyAxis held energy vs step (stops lead).
 Drop targets: branch drop-axis (wt-drop-axis, not merged). PAUSED (user 11-22): hits 15-30x over 30 us. To be rewritten on the shared path to ModelStandards; drop-axis code not reused (user 11-22). DropTargetDesign 6 STATUS.
 N7. Stress v2 bench: ball travel energy +2 % at 57 ms; spin not counted. Check total energy in the saved run (no new run).
 N8. Test driver must refuse a ball placed inside any object, unless the file declares the overlap (rule 10b: then judged on recovery, no energy gained).
@@ -21,27 +21,26 @@ N12. Physical kicker hole sizes (user 2026-11-17, 'extend at some point'): today
 N10. Performance tests: not built; review TestMatrixDesign with the user when building them. Includes the stress table driver clock after start-up and the 144 Hz frame budget. Any safety-net trip (e.g. the cord's hold and let-go) fails the run.
 
 ## 1. Contact system (tasks)
-38. Overlap replay with free_flight (every free ball stepped by the contact system, bb3898626): the replay now restores and re-steps every ball; seen only not to crash (19 replays). Judge one replayed hit against the same hit without a replay.
-39. Stress v2 cost over rule 5: worst 7-cycle window 9.6-9.8 ms (limit 3 ms), worst cycle 4.8-5.3 ms, with free_flight 0 and 1 alike (runs/2026-11-12-freeflight timing csv). Cause not traced.
+38. Overlap replay (CheckOverlaps, PhysicsEngine.cpp:1099): count how often it trips on stress v2 and Gorgar; never: delete it; else judge a replayed hit against the same hit without.
+39. Stress v2 cost over rule 5: worst 7-cycle window 6.95-7.69 ms focused (limit 3 ms), worst cycle 2.4-2.6 ms (runs/2026-11-22-ringcap/cost). Cause not traced.
 10. Sleep (default off): a ball on a flipper never sleeps (bats have no rest check). Whether sleep becomes default: user.
 13. Moving script/animated primitives: details from the user.
-17. Shared-loop cost per cycle (waits until models work). Measured: evaluations per object per cycle median 4, p90 16, worst 598 over 144 steps (750 bench, Hgo2_19; time3/results.txt); cause unknown.
 27. Shared stop piece (runs/2026-11-22-stops/design.md): (a) done d408b70ac; (b) on branch stops-wip (ad9578d64), not merged: fix the released-row search first (s4_results 5-6). Then the skirt (1.40), then (c) = 1.52 (user 11-22).
-32. Env switches that change behaviour (rule: diagnostics only): VPX_HINGES (=0 gives the stock kick), VPX_PREVENT, VPX_VISCOELASTIC, VPX_OVERLAP_REPLAY; VPX_BUMPERS only warns. Remove each or make it an ini key.
+32. Env switches that change behaviour (rule: diagnostics only): VPX_PREVENT, VPX_VISCOELASTIC, VPX_OVERLAP_REPLAY. Remove each or make it an ini key.
 33. Several contacts on one object: runs/2026-11-22-per-peak/plan.md, built to 2b-1; open: 2b-2..2b-4, P3b targets, P3 gates and switches, P4 deletions. Also: sling post cos (cordfixed.h:949).
 31. After G1: check every converted part (flipper, gates, spinners, bumper, disc, rubbers, cord) against the ModelStandards definition of done (top of the file).
 30. part_guess_accel (default off): design evaluation for all moving parts, then a test plan if kept. After the shared-engine items, unless one of them needs it.
 40. Jet bumpers PARKED (user 11-23). Skirt seat round 4 on branch stops-wip (0ee3cd69d). Struck cycles: ring kick ~45 % of steps, seat ~20 % (runs/2026-11-23-struck-skirt).
 42. Step halvings: stress v2 1 to 70.7 s since per-patch (564 before). Recheck the 11-15 repro: slow ball rocking on a slope below the flippers, 1,269 halvings (runs/2026-11-15-finder-P6b3/drive_burst.txt).
 43. After the finder work (1.34): tables/turn table/turn table test 4 (user's worst-case table) runs slower on today's build than on the 11-09 build (user's play). Measure both on one machine and find the cause.
-48. Joint zero floor (joint_zero_floor): at a joint of 3+ wires the raise between cycles could add energy (INFERRED, not seen; 2 wires only lose). Shared-line negative terms get no floor. Check on paper.
+48. Joint zero floor (built f1397fb66): paper check that a joint of 3+ wires never adds energy at the raise between cycles; shared-line negative terms get no floor.
 41. Magnet pull in the energy reach is taken at the ball's place, not the largest over its travel: a true bound needs current, saturation, in-winding and per-type terms. Re-looks while a magnet is on (stress C1).
 49. Jacobian: rolling resistance's torque has no slope with depth (Kr ~ a^3, its damper, its turn at the limit); every contact. Measured 1e-4 of the row (runs/2026-11-19-standup-p2/fix2).
 50. Jacobian: a mesh contact's depth slopes come from the mid-step probe; when the end lies on another facet they are wrong (0.36 of the row at a stand-up face crossing, fix2).
 52. Stop search -> event prediction: one predictor for part stops and every ball touch on the shared path (runs/2026-11-22-touch-predict). Design of 11-21 reused, drop-axis code not.
 54. Playfield and turntable damp the bounce by their own alpha law (contacthost.cpp LoadPlayfieldSettings, TurntableSettings); every other hard surface uses the viscoelastic law: use the shared one (user 2026-11-21). Needs a playfield restitution (see 9.7).
 53. One 'on the stop' rule for the engine (design 1.52 Q7): 35 checks and 5+ nearness constants decide it today (runs/2026-11-21-onstop-read/onstop.md). Paper first.
-55. Cost of a ball: 21 us/cycle on the bench (stock 2.5), ~90 in play; worst-cycle steps: bounces 49 %, seats 21 % (1.40), approach 17 % (1.52), steady 11 % (runs/2026-11-22-step-inventory). Bounce: one impulse at touch.
+55. Cost of a ball: 21 us/cycle on the bench (stock 2.5), ~90 in play; worst-cycle steps: bounces 49 %, seats 21 % (1.40), approach 17 % (1.52), steady 11 % (step-inventory). Bounce: one impulse at touch. Evaluations per object per cycle up to 598 (Hgo2_19, time3).
 
 ## 2. Flippers
 1. Rubber separation at the end stop: details from the user.
