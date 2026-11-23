@@ -47,7 +47,6 @@ namespace StandupFace
 
       // ---- shape and settings (not state) ----
       std::vector<RubberContact::SurfaceTri> tris;   // the target's own mesh at rest (world, m): piece 1's faces
-      std::vector<int> cand;                         // all of them (ProbeTriangles' list)
       V3 n;                                          // the travel direction, unit: the face's normal pointing away from the ball's side
       V3 origin;                                     // the mesh's centre at rest (m)
       double k = 888.0;                              // the blade's spring, N/m (3 E I / L^3)
@@ -62,12 +61,12 @@ namespace StandupFace
          const double t = thicknessIn * in, L = leverIn * in, I = w * t * t * t / 12.0;
          return 3.0 * E * I / (L * L * L);
       }
-      void Build(const std::vector<RubberContact::SurfaceTri> &faces, const V3 &travel, const double kBlade, const double edgeRhoM)
+      SlideMesh mesh;                                // its probe along n (contactmovingpart.h; [Contact] target_patches)
+
+      void Build(const std::vector<RubberContact::SurfaceTri> &faces, const std::vector<std::array<int, 3>> &vid, const V3 &travel, const double kBlade, const double edgeRhoM)
       {
          tris = faces;
-         cand.resize(tris.size());
-         for (size_t i = 0; i < tris.size(); i++)
-            cand[i] = (int)i;
+         mesh.Build(faces, vid, travel, travel / travel.Length() * -1.0, edgeRhoM);
          n = travel / travel.Length();
          k = kBlade;
          edgeRho = edgeRhoM;
@@ -93,27 +92,7 @@ namespace StandupFace
       // translation leaves the normal as it is. One column: the depth's slope along x is n_contact . n (d/dx of R - dist(c - x n)), the point's speed n per unit rate, no spin
       void ProbeAt(const V3 &c, const double R, const double dx, Hit &h) const
       {
-         RubberContact::BallSI b;
-         b.R = R;
-         const V3 cr = c - n * (x + dx);
-         const RubberContact::TubeProbe pr = RubberContact::ProbeTriangles(b, tris, cand, edgeRho, cr);
-         h.nc = 1;
-         if (pr.seg < 0)
-         {
-            h.delta = -1.0;
-            h.n = n * -1.0;
-            h.reff = R;
-            h.curvDist = 0.0;
-            h.grad = 1.0;
-            h.c[0].Set(0, -1.0, n, V3());
-            return;
-         }
-         h.delta = pr.delta;
-         h.n = pr.normal;
-         h.grad = pr.grad;
-         h.reff = pr.reff > 0.0 ? pr.reff : R;
-         h.curvDist = pr.reff > 0.0 && pr.reff < 0.999 * R ? pr.dist : 0.0;   // (as the fixed mesh of piece 1: an edge the ball rolls round)
-         h.c[0].Set(0, pr.normal.Dot(n), n, V3());
+         mesh.Probe(c, R, x + dx, h);
       }
 
       // ---- the group's interface ----
@@ -255,9 +234,10 @@ namespace StandupFace
       double travelReach = 0.0;        // the farthest the face can travel, for its box and reach: a ball at kMaxSpeed on the blade, v sqrt(m / k) (m)
       static constexpr double kMaxSpeed = 8.0;   // m/s: the fast-ball limit (VPX_SPEED_WATCH's and the driver's default)
 
-      void Build(const std::vector<RubberContact::SurfaceTri> &faces, const V3 &travel, const double kBlade, const double edgeRhoM, const RubberContact::BallSI &b)
+      void Build(const std::vector<RubberContact::SurfaceTri> &faces, const std::vector<std::array<int, 3>> &vid, const V3 &travel, const double kBlade, const double edgeRhoM,
+                 const RubberContact::BallSI &b)
       {
-         gp.Build(faces, travel, kBlade, edgeRhoM);
+         gp.Build(faces, vid, travel, kBlade, edgeRhoM);
          ball = b;
          travelReach = kMaxSpeed * std::sqrt(b.m / kBlade);
       }
@@ -351,8 +331,19 @@ namespace StandupFace
       {
          gp.ProbeAt(c, R, trial != nullptr ? trial[0] : 0.0, h);
          if (!collidable)
+         {
             h.delta = -1.0;
+            h.npat = 0;   // (no depth and no patches: no friction group either)
+            h.npc = 0;
+         }
       }
+      bool GroupRestCentre(int, const V3 &c, const double *const move, V3 &out) const override   // (SlideMesh: the probe's own centre, c - (x + dx) n)
+      {
+         out = c - gp.mesh.a * (gp.x + (move != nullptr ? move[0] : 0.0));
+         return true;
+      }
+      void GroupLinkWindows(int, const V3 &c0r, const V3 &c1r, const double R, std::vector<RubberContact::LinkWindow> &out) const override { gp.mesh.LinkWindows(c0r, c1r, R, out); }
+      bool GroupPatchZero(int) const override { return gp.mesh.PatchZeroOn(); }   // (patch_zero: per-patch zeros keyed by face id, P3b piece 4)
       void CycleBegin() override
       {
          idle = false;

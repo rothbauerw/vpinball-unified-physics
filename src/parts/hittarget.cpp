@@ -404,7 +404,7 @@ void HitTarget::PhysicSetup(PhysicsEngine* physics, const bool isUI)
             for (const Vertex3Ds &v : m_hitUIVertices)
                topU = std::max(topU, v.z - m_d.m_vPosition.z);
             auto model = std::make_shared<DropSimple::Engine>();
-            model->Build(faces->tris, back, topU * U, dropSettings.edgeRadiusMm * 1e-3, m_d.m_isDropped, RubberContact::BallSI());
+            model->Build(faces->tris, faces->vid, back, topU * U, dropSettings.edgeRadiusMm * 1e-3, m_d.m_isDropped, RubberContact::BallSI());   // (vid: the static weld rule, RubberSurface::Add)
             model->SetCollidable(m_d.m_collidable);
             model->SetSpeed(m_d.m_dropSpeed * U * 1000.0);
             std::shared_ptr<DropHiddenNotice> hidden;
@@ -576,7 +576,7 @@ void HitTarget::PhysicSetup(PhysicsEngine* physics, const bool isUI)
             const RubberContact::V3 travel(std::sin(rz), -std::cos(rz), 0.0);
             const double kBlade = StandupFace::Part::BladeK(faceSet.bladeThicknessIn, faceSet.bladeLeverIn);
             auto model = std::make_shared<StandupFace::Engine>();
-            model->Build(rubberFaces->tris, travel, kBlade, rubberSettings.edgeRadiusMm * 1e-3, RubberContact::BallSI());
+            model->Build(rubberFaces->tris, rubberFaces->vid, travel, kBlade, rubberSettings.edgeRadiusMm * 1e-3, RubberContact::BallSI());   // (vid: the static weld rule, RubberSurface::Add)
             model->SetCollidable(m_d.m_collidable);
             constexpr double U = ContactSystem::kMetresPerUnit;
             const RubberContact::V3 &o = model->Origin();

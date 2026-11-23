@@ -795,108 +795,7 @@ void RubberSurface::Add(const Vertex3Ds &a, const Vertex3Ds &b, const Vertex3Ds 
 
 int RubberSurface::Link()
 {
-   nb.assign(tris.size(), { -1, -1, -1 });
-   std::map<std::pair<int, int>, std::vector<std::pair<int, int>>> edges;   // (lower id, higher id) -> every (face, edge) on it, in face order
-   for (int t = 0; t < (int)tris.size(); t++)
-      for (int e = 0; e < 3; e++)
-      {
-         const int a = vid[t][e], b = vid[t][(e + 1) % 3];
-         if (a != b)
-            edges[std::make_pair(std::min(a, b), std::max(a, b))].emplace_back(t, e);
-      }
-   // An edge on two faces joins them. On three or more (a flat surface running on past a wall's foot, user 2026-11-16): the two faces that continue each other most nearly
-   // flat are joined, greedily (the in-face directions away from the edge most nearly opposite), so the surface a ball rolls over stays one; the others stay unlinked
-   const auto away = [this](int t, int e) {   // unit direction in face t, square to its edge e, from the edge into the face
-      using RubberContact::V3;
-      const V3 *v[3] = { &tris[t].a, &tris[t].b, &tris[t].c };
-      const V3 p = *v[e], d = *v[(e + 1) % 3] - p, w = *v[(e + 2) % 3] - p;
-      const double dd = d.Dot(d);
-      const V3 s = dd > 0.0 ? w - d * (w.Dot(d) / dd) : w;
-      const double l = std::sqrt(s.Dot(s));
-      return l > 0.0 ? s / l : s;
-   };
-   int over = 0;
-   for (const auto &[key, list] : edges)
-   {
-      if (list.size() == 2)
-      {
-         if (list[0].first != list[1].first)
-         {
-            nb[list[0].first][list[0].second] = list[1].first;
-            nb[list[1].first][list[1].second] = list[0].first;
-         }
-         else
-            over++;   // one face twice
-         continue;
-      }
-      if (list.size() < 2)
-         continue;
-      std::vector<bool> used(list.size(), false);
-      for (;;)
-      {
-         int bi = -1, bj = -1;
-         double best = 2.0;
-         for (size_t i = 0; i < list.size(); i++)
-            for (size_t j = i + 1; j < list.size(); j++)
-               if (!used[i] && !used[j] && list[i].first != list[j].first)
-                  if (const double c = away(list[i].first, list[i].second).Dot(away(list[j].first, list[j].second)); c < best)
-                  {
-                     best = c;
-                     bi = (int)i;
-                     bj = (int)j;
-                  }
-         if (bi < 0)
-            break;
-         used[bi] = used[bj] = true;
-         nb[list[bi].first][list[bi].second] = list[bj].first;
-         nb[list[bj].first][list[bj].second] = list[bi].first;
-      }
-      for (size_t i = 0; i < list.size(); i++)
-         over += !used[i];   // a face left unlinked on an edge of three or more
-   }
-   // cut B: each shared edge's fold, from both faces. Flat band (derived, not tuned): every stored coordinate is a float32, rounded by at most 2^-24 of its size, so each vertex is off by
-   // at most dv = sqrt(3) 2^-24 M (M the largest coordinate size of the four vertices; the SI scale adds 2^-53, neglected); the height of a point above a plane through three such vertices
-   // is then off by at most dv (1 + |l0| + |l1| + |l2|), l the point's barycentric coordinates in the face. A fold whose two heights are both inside their bounds is flat.
-   using RubberContact::V3;
-   fold.assign(tris.size(), { 0, 0, 0 });
-   const auto height = [](const RubberContact::SurfaceTri &A, const V3 &p, double &band) {
-      double M = 0.0;
-      for (const V3 *q : { &A.a, &A.b, &A.c, &p })
-         M = std::max({ M, std::abs(q->x), std::abs(q->y), std::abs(q->z) });
-      const V3 v0 = A.b - A.a, v1 = A.c - A.a, v2 = p - A.a;
-      const double d00 = v0.Dot(v0), d01 = v0.Dot(v1), d11 = v1.Dot(v1), d20 = v2.Dot(v0), d21 = v2.Dot(v1), den = d00 * d11 - d01 * d01;
-      const double l1 = den != 0.0 ? (d11 * d20 - d01 * d21) / den : INFINITY, l2 = den != 0.0 ? (d00 * d21 - d01 * d20) / den : INFINITY, l0 = 1.0 - l1 - l2;
-      band = std::sqrt(3.0) * std::ldexp(M, -24) * (1.0 + std::abs(l0) + std::abs(l1) + std::abs(l2));
-      return (p - A.a).Dot(A.n);
-   };
-   for (int t = 0; t < (int)tris.size(); t++)
-      for (int e = 0; e < 3; e++)
-      {
-         const int o = nb[t][e];
-         if (o < t)   // each shared edge once, from its lower face
-            continue;
-         int f = -1;
-         for (int k = 0; k < 3; k++)
-            if (nb[o][k] == t)
-               f = k;
-         if (f < 0)
-            continue;
-         const RubberContact::SurfaceTri &A = tris[t], &B = tris[o];
-         if (!A.area || !B.area)
-         {
-            fold[t][e] = fold[o][f] = 2;
-            continue;
-         }
-         const V3 *va[3] = { &A.a, &A.b, &A.c }, *vb[3] = { &B.a, &B.b, &B.c };
-         double bandA, bandB;
-         const double hB = height(A, *vb[(f + 2) % 3], bandB);   // B's third vertex above A's plane
-         const double hA = height(B, *va[(e + 2) % 3], bandA);   // A's third vertex above B's plane
-         if (std::abs(hB) <= bandB && std::abs(hA) <= bandA)
-            continue;   // flat
-         fold[t][e] = hB > 0.0 ? 1 : hB < 0.0 ? -1 : 2;
-         fold[o][f] = hA > 0.0 ? 1 : hA < 0.0 ? -1 : 2;
-      }
-   return over;
+   return RubberContact::LinkFaces(tris, vid, nb, fold);   // (shared with the translating meshes: SlideMesh, contactmovingpart.h)
 }
 
 ContactSurfaceHost::ContactSurfaceHost(IEditable *editable, std::shared_ptr<RubberSurface> surface, const RubberObjectSettings &settings, const std::filesystem::path &iniPath, const std::string &name,
@@ -2406,24 +2305,7 @@ void ContactSurfaceHost::LinkWindows(const RubberContact::BallSI &bs, const Surf
          return;
       const std::vector<int> &L0 = it.Faces(c0), &L1 = it.Faces(c1);
       const std::vector<int> &L = &L0 == &L1 ? L0 : it.candV;   // (the start's and end's lists differ: the Verlet list holds both)
-      newStamp(sf.tris.size());
-      for (const int i : L)
-         mark[i] = stamp;
-      for (const int t : L)
-      {
-         const RubberContact::SurfaceTri &T = sf.tris[t];
-         if (!T.area)
-            continue;
-         const V3 *v[3] = { &T.a, &T.b, &T.c };
-         for (int e = 0; e < 3; e++)
-         {
-            const int o = sf.nb[t][e];
-            if (o <= t || mark[o] != stamp || !sf.tris[o].area)
-               continue;
-            if (RubberContact::LinkWinSeg(c0, m, *v[e], *v[(e + 1) % 3], r, t0, t1))
-               out.push_back({ t, o, t0, t1 });
-         }
-      }
+      RubberContact::LinkWindowsMesh(sf.tris, sf.nb, L, c0, c1, r, out);   // (the shared mesh kit)
       return;
    }
    const int n = (int)m_ptsSI.size();

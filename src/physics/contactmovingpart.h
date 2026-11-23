@@ -25,6 +25,222 @@
 #include "physics/groupstep.h"
 #include "physics/partrecords.h"
 
+// [Contact] target_patches (P3b piece 1, to-do 1.33; runs/2026-11-23-targets-patch): a mesh that translates along one unit axis a by s (a drop target's z, a stand-up's travel),
+// probed in the mesh's rest frame: the ball's centre moved by -s a and the fixed mesh probed there. A pressed place: the shared static mesh path (BarsTriangles), so every pressed
+// place of a non-convex mesh pushes (the merged contact over its patches, the level form's peaks for peak_slope). Nothing pressed (or target_patches 0): the nearest face
+// (ProbeTriangles over every face), its true gap and normal, which approach, arrival and the touch prediction read. A pure translation leaves the normal as it is: one column, the
+// depth's slope along s is n . a (times Hit::grad, the group's rule), the point's speed a per unit rate, no spin. Links and folds built once at load (RubberContact::LinkFaces). Pure SI
+// patch_friction: a pressed probe's patch list (plist, the probe's BarsTriangles / BarsTube patchesOut) and each patch's pieces (RubberContact::PatchPieces) into the hit (npat, pat,
+// npc, pc, pd). One copy: the static surfaces (ContactSystem's SurfaceShape::ProbeSeg) and the translating mesh (SlideMesh::Probe)
+inline void HitPatches(const std::vector<RubberContact::TubeProbe> &plist, GroupStep::Hit &h)
+{
+   const RubberContact::PatchPieceList &pl = RubberContact::PatchPieces();
+   const bool withIds = pl.off.size() == plist.size() + 1;   // (a path that names no pieces: the patches carry none)
+   h.npat = (int)plist.size();
+   h.pat.Fit(h.npat);
+   h.npc = withIds ? (int)pl.id.size() : 0;
+   h.pc.Fit(h.npc);
+   h.pd.Fit(h.npc);
+   const bool withPd = pl.pd.size() == pl.id.size();   // (level_stiffness: each piece's data; a path without it: none, depth -1)
+   for (int j = 0; j < h.npc; j++)
+   {
+      h.pc[j] = pl.id[j];
+      h.pd[j] = withPd ? pl.pd[j] : RubberContact::PieceData();
+   }
+   for (int j = 0; j < h.npat; j++)
+   {
+      GroupStep::HitPatch &q = h.pat[j];
+      const RubberContact::TubeProbe &t = plist[j];
+      q.d = t.overlap ? t.delta : -1.0;
+      q.n = t.normal;
+      q.grad = t.grad;
+      q.p0 = withIds ? pl.off[j] : 0;
+      q.pn = withIds ? pl.off[j + 1] - pl.off[j] : 0;
+      const bool withGeo = withIds && pl.geo.size() == plist.size();
+      q.gk = withGeo ? pl.geo[j].kind : 0;
+      q.ga = withGeo ? pl.geo[j].a : GroupStep::V3();
+      q.gb = withGeo ? pl.geo[j].b : GroupStep::V3();
+   }
+}
+
+struct SlideMesh
+{
+   using V3 = RubberContact::V3;
+   // [Contact] target_patches, written by ContactSettings' Publish (play start and every live reload), read by every probe
+   static bool &PatchesOn()
+   {
+      static bool on = true;
+      return on;
+   }
+   // [Contact] patch_friction (P3b piece 2) with target_patches: a pressed probe also writes its patch list (Hit::npat, pat, pc, pd), so the group step takes the target's friction per
+   // patch group. Its geometry (HitPatch ga, gb; PieceData's points) is in the mesh's rest frame, as the probe's centre cr = c - s a: the group step hands its consumers (FrictionGroups'
+   // plane, BLinGroup's piece depths, the link windows) the ball's centres in the same frame (GroupStep::Shape::RestCentre). Written by Publish beside PatchesOn
+   static bool &PatchFrictionOn()
+   {
+      static bool on = true;
+      return on;
+   }
+   // patch_zero (P3b piece 4): the mesh's probe takes per-patch zeros (RubberContact::PatchZeros, read by BarsTriangles) only on the patch path: target_patches and the links
+   // built. The face ids are rest-frame ids, fixed in the mesh under its translation (report.md: patch depths at (c, s) = the static mesh's at c - s a)
+   bool PatchZeroOn() const { return PatchesOn() && nb.size() == tris.size(); }
+   std::vector<RubberContact::SurfaceTri> tris;    // the mesh at its rest pose (world, m)
+   std::vector<std::array<int, 3>> vid;            // per face: its welded vertex ids (the static weld rule, RubberSurface::Add)
+   std::vector<std::array<int, 3>> nb;             // per face: the face across each edge, -1 none (LinkFaces)
+   std::vector<std::array<int8_t, 3>> fold;        // per face: each shared edge's fold (LinkFaces)
+   std::vector<V3> lo, hi;                         // per face: its box (the near pass)
+   std::vector<int> all;                           // every face (ProbeTriangles' list)
+   V3 a;                                           // the translation axis, unit
+   V3 nFar;                                        // the normal written with no face at all (as the target's own probe did)
+   double edgeRho = 1e-3;                          // the mesh edges' radius for the contact, m
+
+   void Build(const std::vector<RubberContact::SurfaceTri> &faces, const std::vector<std::array<int, 3>> &ids, const V3 &axis, const V3 &farNormal, const double edgeRhoM)
+   {
+      tris = faces;
+      vid = ids;
+      a = axis / axis.Length();
+      nFar = farNormal;
+      edgeRho = edgeRhoM;
+      all.resize(tris.size());
+      for (size_t i = 0; i < tris.size(); i++)
+         all[i] = (int)i;
+      if (vid.size() == tris.size())
+         RubberContact::LinkFaces(tris, vid, nb, fold);
+      lo.resize(tris.size());
+      hi.resize(tris.size());
+      for (size_t i = 0; i < tris.size(); i++)
+      {
+         const RubberContact::SurfaceTri &t = tris[i];
+         lo[i] = V3(std::min({ t.a.x, t.b.x, t.c.x }), std::min({ t.a.y, t.b.y, t.c.y }), std::min({ t.a.z, t.b.z, t.c.z }));
+         hi[i] = V3(std::max({ t.a.x, t.b.x, t.c.x }), std::max({ t.a.y, t.b.y, t.c.y }), std::max({ t.a.z, t.b.z, t.c.z }));
+      }
+   }
+
+   // The probe at shift s. Near pass: the faces whose box is within R + edgeRho of the shifted centre cr. Exact: BarsTriangles reads only faces within R of the centre (kind 0 and
+   // plane distance below R - zero, zero 0 here: the static path passes it only its near pass, contactsurfacehost.cpp ProbePatches); every point of a face lies in its box, so a face
+   // left out is farther than R + edgeRho from cr. Pressed: the merged answer, the level form's peaks always (Hit::np, pk: the solver's peak_slope decides their use)
+   void Probe(const V3 &c, const double R, const double s, GroupStep::Hit &h) const
+   {
+      const V3 cr = c - a * s;
+      if (PatchesOn() && nb.size() == tris.size())
+      {
+         const double reach = R + edgeRho, reach2 = reach * reach;
+         thread_local std::vector<int> cand;   // (capacity reused: no allocation in the probe)
+         cand.clear();
+         for (int i = 0; i < (int)tris.size(); i++)
+         {
+            const double dx = std::max({ lo[i].x - cr.x, 0.0, cr.x - hi[i].x }), dy = std::max({ lo[i].y - cr.y, 0.0, cr.y - hi[i].y }),
+                         dz = std::max({ lo[i].z - cr.z, 0.0, cr.z - hi[i].z });
+            if (dx * dx + dy * dy + dz * dz <= reach2)
+               cand.push_back(i);
+         }
+         if (!cand.empty())
+         {
+            RubberContact::BallSI b;
+            b.R = R;
+            RubberContact::PeakTerms().clear();
+            const bool pf = PatchFrictionOn();
+            thread_local std::vector<RubberContact::TubeProbe> plist;   // (patch_friction: the patch list; capacity reused)
+            if (pf)
+               RubberContact::PatchPieces().Clear();   // (as the static ProbePatches: a path that writes no pieces leaves the list short; HitPatches checks)
+            // (zero 0: no scalar zero in the probe, ZeroHit takes it off after. patch_zero: PatchZeros() set, BarsTriangles shifts each raw patch by its own zero; a place
+            // raw-pressed with nothing past its zero still returns overlap with its shifted depth (<= 0) and its patches, so the answer below is the static ProbeSeg's; Nearest
+            // only when nothing is raw-pressed)
+            const RubberContact::TubeProbe pr = RubberContact::BarsTriangles(b, tris, vid, nb, cand, edgeRho, cr, 0.0, nullptr, &fold, pf ? &plist : nullptr);
+            if (pr.seg >= 0 && pr.overlap)
+            {
+               h.nc = 1;
+               h.npat = 0;
+               h.npc = 0;
+               if (pf)
+                  HitPatches(plist, h);   // (rest-frame geometry: see PatchFrictionOn)
+               h.delta = pr.delta;
+               h.n = pr.normal;
+               h.grad = pr.grad;
+               h.reff = pr.reff > 0.0 ? pr.reff : R;
+               h.curvDist = pr.reff > 0.0 && pr.reff < 0.999 * R ? pr.dist : 0.0;   // (as the fixed mesh: an edge the ball rolls round)
+               h.c[0].Set(0, pr.normal.Dot(a), a, V3());
+               const std::vector<RubberContact::PeakTerm> &pt = RubberContact::PeakTerms();   // (as ContactSystem's ProbeSeg for a static surface)
+               h.np = (int)pt.size();
+               h.pk.Fit(h.np);
+               for (int j = 0; j < h.np; j++)
+                  h.pk[j] = pt[j];
+               if (h.np <= 1 && GroupStep::PeakSlopeCheckEnv() && RubberContact::PatchZeros() == nullptr)   // (raw answers only: Nearest takes no zeros)
+                  CheckOnePeak(cr, R, h);
+               return;
+            }
+         }
+      }
+      Nearest(cr, R, h);
+   }
+
+   // link_windows (rule T, P3b piece 3) on the relative segment: c0r -> c1r the ball's centre in the rest frame at the step's start and end (GroupStep::Shape::RestCentre; a straight
+   // segment, the part's move uniform over the step: runs/2026-11-23-targets-patch report.md Q2). The shared mesh kit (RubberContact::LinkWindowsMesh) on the faces whose box is within
+   // R + |c1r - c0r| / 2 of the segment's middle: exact (an edge point within R of a point of the segment is within R + half its length of the middle; the box holds the face), reach R
+   // (no zero, as the probe). Window times are fractions of the step: no shift back. Scratch per thread
+   void LinkWindows(const V3 &c0r, const V3 &c1r, const double R, std::vector<RubberContact::LinkWindow> &out) const
+   {
+      out.clear();
+      if (!PatchesOn() || nb.size() != tris.size() || R <= 0.0)
+         return;
+      const V3 mid = (c0r + c1r) * 0.5;
+      const double reach = R + 0.5 * (c1r - c0r).Length(), reach2 = reach * reach;
+      thread_local std::vector<int> cand;
+      cand.clear();
+      for (int i = 0; i < (int)tris.size(); i++)
+      {
+         const double dx = std::max({ lo[i].x - mid.x, 0.0, mid.x - hi[i].x }), dy = std::max({ lo[i].y - mid.y, 0.0, mid.y - hi[i].y }),
+                      dz = std::max({ lo[i].z - mid.z, 0.0, mid.z - hi[i].z });
+         if (dx * dx + dy * dy + dz * dz <= reach2)
+            cand.push_back(i);
+      }
+      RubberContact::LinkWindowsMesh(tris, nb, cand, c0r, c1r, R, out);
+   }
+
+   // Today's target probe (one copy): the nearest face over every face at cr
+   void Nearest(const V3 &cr, const double R, GroupStep::Hit &h) const
+   {
+      RubberContact::BallSI b;
+      b.R = R;
+      const RubberContact::TubeProbe pr = RubberContact::ProbeTriangles(b, tris, all, edgeRho, cr);
+      h.nc = 1;
+      h.npat = 0;   // (nothing pressed: no patches)
+      h.npc = 0;
+      if (pr.seg < 0)
+      {
+         h.delta = -1.0;
+         h.n = nFar;
+         h.reff = R;
+         h.curvDist = 0.0;
+         h.grad = 1.0;
+         h.c[0].Set(0, -1.0, a, V3());
+         return;
+      }
+      h.delta = pr.delta;
+      h.n = pr.normal;
+      h.grad = pr.grad;
+      h.reff = pr.reff > 0.0 ? pr.reff : R;
+      h.curvDist = pr.reff > 0.0 && pr.reff < 0.999 * R ? pr.dist : 0.0;   // (as the fixed mesh: an edge the ball rolls round)
+      h.c[0].Set(0, pr.normal.Dot(a), a, V3());
+   }
+
+   // check mode (VPX_PATCH_CHECK=1, diagnostics only; no result changes): a pressed answer with one peak or none against today's nearest face at the same cr. Mismatch: delta off by
+   // more than 1e-12 R, a normal component or grad by more than 1e-12, reff by more than 1e-12 R. Running totals at 1, 2, 4, ... calls and mismatches, the first 5 mismatches' values
+   void CheckOnePeak(const V3 &cr, const double R, const GroupStep::Hit &h) const
+   {
+      static std::atomic<long long> nChk { 0 }, nBad { 0 };
+      GroupStep::Hit t;
+      Nearest(cr, R, t);
+      const bool bad = std::abs(h.delta - t.delta) > 1e-12 * R || std::abs(h.n.x - t.n.x) > 1e-12 || std::abs(h.n.y - t.n.y) > 1e-12 || std::abs(h.n.z - t.n.z) > 1e-12
+                    || std::abs(h.grad - t.grad) > 1e-12 || std::abs(h.reff - t.reff) > 1e-12 * R;
+      const long long c = ++nChk, b = bad ? ++nBad : nBad.load();
+      if ((c & (c - 1)) == 0)
+         PLOGI << "target_patches check: " << c << " pressed probes with one peak or none, " << b << " not today's nearest face";
+      if (bad && b <= 5)
+         PLOGI << "target_patches check miss " << b << ": delta " << h.delta * 1e6 << " / " << t.delta * 1e6 << " um, n (" << h.n.x << ", " << h.n.y << ", " << h.n.z << ") / ("
+               << t.n.x << ", " << t.n.y << ", " << t.n.z << "), grad " << h.grad << " / " << t.grad << ", reff " << h.reff * 1e3 << " / " << t.reff * 1e3 << " mm";
+   }
+};
+
 // What the engine keeps of every moving part between its calls (PartRecords: part of its state)
 struct MovingPartState
 {
@@ -129,6 +345,13 @@ public:
    virtual GroupStep::Part *GroupPart() { return nullptr; }
    virtual int GroupSurfaces() const { return 1; }                                                   // its surfaces a ball can meet: one shape per ball and surface, each with its own contact and state
    virtual void GroupProbe(int, const V3 &, double, const double *, GroupStep::Hit &) const {}       // a surface for a ball centre and radius, its coordinates moved by trial (null = where they are); fills the hit's columns
+   // a translating mesh (P3b pieces 2-3, SlideMesh): the ball's centre c in the surface's rest frame with the part's coordinates moved by move (null = where they are): c - s a; false =
+   // no rest frame (the surface turns, or the part has none): its patches and windows stay world. And the link windows on the rest-frame segment c0r -> c1r (SlideMesh::LinkWindows)
+   virtual bool GroupRestCentre(int, const V3 &, const double *, V3 &) const { return false; }
+   virtual void GroupLinkWindows(int, const V3 &, const V3 &, double, std::vector<RubberContact::LinkWindow> &out) const { out.clear(); }
+   // patch_zero on a translating mesh (P3b piece 4, SlideMesh::PatchZeroOn): true = the surface keeps its found-inside zero per patch, keyed by face id in its rest frame (the
+   // patches move with the mesh); false = one scalar zero (every other part)
+   virtual bool GroupPatchZero(int) const { return false; }
    virtual bool GroupCycleNear(int, const V3 &, double, double, std::vector<int> &, int &) const { return false; }              // the part finder: the cycle's list (GroupStep::Shape::CycleNear)
    virtual int GroupCycleMisses(int, const V3 &, double, double, const std::vector<int> &) const { return 0; }                // (GroupStep::Shape::CycleMisses, check mode)
    // the part finder, the overlap check of free balls (ContactSystem CheckOverlaps): a lower bound on the distance from c to the part where it is now; each part its bounding

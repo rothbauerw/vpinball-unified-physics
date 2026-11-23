@@ -138,7 +138,26 @@ namespace HingeModel
       {
          gp.ProbeSurface(surface, c, R, trial != nullptr ? trial[0] : 0.0, h);
          if (!collidable)
+         {
             h.delta = -1.0;
+            h.npat = 0;   // (no depth and no patches: no friction group either)
+            h.npc = 0;
+         }
+      }
+      // patch_friction (P3): a wire shape's patch geometry is in the body frame (HingeGroup::Part::TermPatches): the ball's centre there at the part's angle moved by move
+      bool GroupRestCentre(int, const V3 &c, const double *const move, V3 &out) const override
+      {
+         if (!gp.pieceSum)
+            return false;
+         out = gp.BodyCentre(c, move != nullptr ? move[0] : 0.0);
+         return true;
+      }
+      // link_windows on a wire shape (P3 code 2): the body-frame segment c0b -> c1b (GroupRestCentre at the step's start and end), HingeGroup::Part::LinkWindows (the tubes' kit)
+      void GroupLinkWindows(const int surface, const V3 &c0b, const V3 &c1b, const double R, std::vector<RubberContact::LinkWindow> &out) const override
+      {
+         out.clear();
+         if (gp.pieceSum && collidable)
+            gp.LinkWindows(surface, c0b, c1b, R, out);
       }
       bool GroupCycleNear(const int surface, const V3 &c, const double R, const double reach, std::vector<int> &list, int &n) const override
       {

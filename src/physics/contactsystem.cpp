@@ -1833,17 +1833,45 @@ struct ContactSystemImpl
          g_pplayer->m_liveUI->PushNotification(o.str(), 6000);
    }
 
-   // patch_zero (brief_code.md; GroupStep::Settings::patchZero): a static mesh or tube on multi_contact keeps its found-inside zero per patch (SurfaceState::tZero)
+   // patch_zero (brief_code.md; GroupStep::Settings::patchZero): a static mesh or tube on multi_contact keeps its found-inside zero per patch (SurfaceState::tZero); so does a
+   // translating target mesh on target_patches (P3b piece 4: ContactMovingPart::GroupPatchZero, its zeros keyed by face id in its rest frame)
    static bool PatchZeroSurface(const SurfaceContact &it)
    {
       const ContactSettings &s = ContactSettings::Get();
-      return s.patchZero && s.multiContact && s.linkWindows && it.r->MovingPart() == nullptr;   // (as ToStep: F9, link_windows too)
+      ContactMovingPart *const mp = it.r->MovingPart();
+      return s.patchZero && s.multiContact && s.linkWindows && (mp == nullptr || (mp->GroupPart() != nullptr && mp->GroupPatchZero(0)));   // (as ToStep: F9, link_windows too)
    }
-   // patch_zero: the static probe with the given per-piece zeros (none: raw), every patch shifted by its own zero; its patch list and pieces (RubberContact::PatchPieces)
+   // patch_zero: the probe with the given per-piece zeros (none: raw), every patch shifted by its own zero; its patch list and pieces (RubberContact::PatchPieces). One helper for
+   // both: a static host's ProbePatches; a target (GroupPatchZero) through its part's own probe at its current pose (GroupProbe, trial null: the mesh at c - s a), its hit's patch
+   // list read back (HitPatches lists only a pressed answer's patches, each overlapping, d its depth) and the pieces BarsTriangles left (cleared first: a probe that writes none
+   // leaves the list short, the callers check)
    static TubeProbe PatchZeroProbe(const SurfaceContact &it, const BallSI &bs, const V3 &c, const std::vector<std::pair<int, double>> &zl, std::vector<TubeProbe> &plist)
    {
       RubberContact::PatchZeros() = &zl;
-      const TubeProbe pr = it.r->ProbePatches(bs, it, c, plist);
+      TubeProbe pr;
+      if (const ContactMovingPart *const mp = it.r->MovingPart())
+      {
+         RubberContact::PatchPieces().Clear();
+         GroupStep::Hit h;
+         mp->GroupProbe(0, c, bs.R, nullptr, h);
+         plist.clear();
+         for (int p = 0; p < h.npat; p++)
+         {
+            TubeProbe q;
+            q.overlap = true;
+            q.delta = h.pat[p].d;
+            q.normal = h.pat[p].n;
+            q.grad = h.pat[p].grad;
+            plist.push_back(q);
+         }
+         pr.overlap = h.npat > 0;   // (a pressed answer: its patch list; else the nearest face, nothing raw-pressed)
+         pr.delta = h.delta;
+         pr.normal = h.n;
+         pr.grad = h.grad;
+         pr.reff = h.reff;
+      }
+      else
+         pr = it.r->ProbePatches(bs, it, c, plist);
       RubberContact::PatchZeros() = nullptr;
       return pr;
    }
@@ -2154,13 +2182,14 @@ struct ContactSystemImpl
       ContactMovingPart *mp = nullptr;   // a part on the group: its own surface, which moves with it
       int surface = 0;
       std::string Name() const override { return r != nullptr ? r->Name() : std::string(); }
-      void LinkWindows(const V3 &c0, const V3 &c1, std::vector<RubberContact::LinkWindow> &out) const override   // link_windows (rule T): a static surface's (a part's: none)
+      void LinkWindows(const V3 &c0, const V3 &c1, std::vector<RubberContact::LinkWindow> &out) const override   // link_windows (rule T): a static surface's; a part's on its rest-frame segment (RestCentre; none without one)
       {
          if (mp != nullptr)
-            out.clear();
+            mp->GroupLinkWindows(surface, c0, c1, bs.R, out);
          else
             r->LinkWindows(bs, *it, c0, c1, out);
       }
+      bool RestCentre(const V3 &c, const double *move, V3 &out) const override { return mp != nullptr && mp->GroupRestCentre(surface, c, move, out); }
       bool CycleNear(const V3 &c, const double R, const double reach, std::vector<int> &list, int &n) const override { return mp != nullptr && mp->GroupCycleNear(surface, c, R, reach, list, n); }
       int CycleMisses(const V3 &c, const double R, const double dq, const std::vector<int> &list) const override { return mp != nullptr ? mp->GroupCycleMisses(surface, c, R, dq, list) : 0; }
       int PathReach(const V3 &s, const V3 &d, const double R) const override { return mp != nullptr ? mp->GroupPathReach(surface, s, d, R) : r->PathReach(*it, s, d, R); }
@@ -2239,35 +2268,7 @@ struct ContactSystemImpl
          h.npat = 0;
          h.npc = 0;
          if (pf && pr.overlap)
-         {
-            const RubberContact::PatchPieceList &pl = RubberContact::PatchPieces();
-            const bool withIds = pl.off.size() == plist.size() + 1;   // (a path that names no pieces: the patches carry none)
-            h.npat = (int)plist.size();
-            h.pat.Fit(h.npat);
-            h.npc = withIds ? (int)pl.id.size() : 0;
-            h.pc.Fit(h.npc);
-            h.pd.Fit(h.npc);
-            const bool withPd = pl.pd.size() == pl.id.size();   // (level_stiffness: each piece's data; a path without it: none, depth -1)
-            for (int j = 0; j < h.npc; j++)
-            {
-               h.pc[j] = pl.id[j];
-               h.pd[j] = withPd ? pl.pd[j] : RubberContact::PieceData();
-            }
-            for (int j = 0; j < h.npat; j++)
-            {
-               GroupStep::HitPatch &q = h.pat[j];
-               const TubeProbe &t = plist[j];
-               q.d = t.overlap ? t.delta : -1.0;
-               q.n = t.normal;
-               q.grad = t.grad;
-               q.p0 = withIds ? pl.off[j] : 0;
-               q.pn = withIds ? pl.off[j + 1] - pl.off[j] : 0;
-               const bool withGeo = withIds && pl.geo.size() == plist.size();
-               q.gk = withGeo ? pl.geo[j].kind : 0;
-               q.ga = withGeo ? pl.geo[j].a : GroupStep::V3();
-               q.gb = withGeo ? pl.geo[j].b : GroupStep::V3();
-            }
-         }
+            HitPatches(plist, h);   // (one copy: contactmovingpart.h, the translating mesh writes its patches with it)
          if (peaks && pr.overlap)
          {
             const std::vector<RubberContact::PeakTerm> &pt = RubberContact::PeakTerms();
@@ -2734,7 +2735,7 @@ struct ContactSystemImpl
                   sh.heldReff = (ring || mp != nullptr || ContactSettings::Get().cordHeldReff) && it.Surf(sf).touching ? it.Surf(sf).reff : 0.0;   // (cord_held_reff: a cord island holds it too)
                   sh.heldKb = mp != nullptr && it.Surf(sf).touching ? it.Surf(sf).kb : 0.0;
                   sh.heldKtb = mp != nullptr && it.Surf(sf).touching ? it.Surf(sf).ktb : 0.0;
-                  sh.patchZero = mp == nullptr && it.r->MovingPart() == nullptr;   // patch_zero: a static mesh or tube (GroupStep::Shape::patchZero)
+                  sh.patchZero = mp == nullptr ? it.r->MovingPart() == nullptr : mp->GroupPatchZero(sf);   // patch_zero: a static mesh or tube, or a target mesh on target_patches (GroupStep::Shape::patchZero)
                   if (hasPart && mp == nullptr && it.r->MovingPart() != nullptr)   // a part still on the old loop is a surface at its present pose in this cycle, its reaction left out, until it moves over (GroupStepDesign 3)
                   {
                      static const void *warned = nullptr;

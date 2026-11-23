@@ -377,7 +377,7 @@ namespace GroupStep
       double layerM = 0.0;     // the rubber's thickness for the layer term, m (0 = no layer term)
       int onlyBall = -1;       // >= 0: only this ball meets it (a surface's list of near faces is one ball's)
       int part = -1;           // the part that carries it, its place among the group's parts; -1 = fixed. Its Probe fills the same columns, in the same order, every time
-      bool patchZero = false;  // patch_zero: a static mesh or tube (a fixed surface's own shape): with Settings::patchZero its item's zero is kept per patch (Item::tZero)
+      bool patchZero = false;  // patch_zero: a static mesh or tube (a fixed surface's own shape), or a target mesh on target_patches (P3b piece 4, its part's probe): with Settings::patchZero its item's zero is kept per patch (Item::tZero)
       mutable const double *trial = nullptr;   // a carried surface: each of its part's coordinates moved by this for the probe; null = where they are now
       virtual ~Shape() = default;
       virtual void Probe(const V3 &c, double R, Hit &h) const = 0;
@@ -386,6 +386,9 @@ namespace GroupStep
       virtual std::string Name() const { return std::string(); }   // diagnostics (VPX_GROUP_CLAMP_TRACE): its owner's name
       // link_windows (rule T, to-do 1.33): a static surface's links pressed on the step's straight move c0 -> c1, each with its window (ContactSurface::LinkWindows); none by default
       virtual void LinkWindows(const V3 & /*c0*/, const V3 & /*c1*/, std::vector<RubberContact::LinkWindow> &out) const { out.clear(); }
+      // P3b pieces 2-3: a surface its part translates (SlideMesh): the ball's centre c in the surface's rest frame, its part's coordinates moved by move (the part's own, from its first;
+      // null = where they are). Its patch geometry is in that frame, so FrictionGroups, BLinGroup and LinkWindows take the centres there (LinkWindows: the relative segment). False: none
+      virtual bool RestCentre(const V3 & /*c*/, const double * /*move*/, V3 & /*out*/) const { return false; }
       // the path test: does the ball's centre moving straight from s to s + d come within reach of a piece (depth above 0 anywhere on the path, before the item's zero)?
       // 1 = yes, 0 = no (exact, the path kit in rubbercontact.h; a curved piece by its cover, PathRevolve), -1 = no exact test for this shape: FarStillFar probes the middle and the end as before.
       // (A surface its part carries: PathMotion below, the rigid-body law in FarStillFar.)
@@ -1086,7 +1089,7 @@ namespace GroupStep
       // the force fe along gd and, asked for, its slope kc. Defined after Group (it takes Group's Gonzalez). Scratch: the hinge terms' rows (Group's tgS ...).
       ElasticEnd Elastic(const Hit &h0, const Hit &h1, const Hit &hm, double d0, const double *dq, const double *iM, int na, int nq, double noiseD, const Settings &set, bool trace, bool wantKc,
                          double *gm, double *gd, std::vector<std::array<double, 4>> &tg, std::vector<double> &tk, std::vector<char> &tOn, std::vector<std::array<double, 4>> &tgE,
-                         std::vector<std::array<double, 4>> &tgF) const;
+                         std::vector<std::array<double, 4>> &tgF, std::vector<std::array<double, 4>> &tFv) const;
       double F(double d) const
       {
          if (d <= 0.0)
@@ -1459,6 +1462,7 @@ namespace GroupStep
          WipeEachUse(&tOnS);
          WipeEachUse(&tgES);
          WipeEachUse(&tgFS);
+         WipeEachUse(&tFvS);
          WipeEachUse(&crossS);
          WipeEachUse(&szRec);
          WipeEachUse(&szCand);
@@ -3416,7 +3420,7 @@ namespace GroupStep
       {
          V3 n, nD, xi;
          RubberContact::RollAngle ra;
-         double d0 = 0.0, d1 = 0.0, dm = 0.0, fe = 0.0, fd = 0.0, N = 0.0, aE = 0.0, dadfE = 0.0, kc = 0.0, kn = 0.0, gm[3] = {};
+         double d0 = 0.0, d1 = 0.0, dm = 0.0, fe = 0.0, fd = 0.0, N = 0.0, aE = 0.0, dadfE = 0.0, kc = 0.0, kn = 0.0, gm[3 + 7] = {};   // (gm: on the ball's centre, then a carried surface's columns: P3b piece 2)
          bool touching = false;
          int trCmn = -1, trFound = -1;   // (VPX_PATCH_TRACE: hm patches sharing a piece with the group (0: its reference plane); GroupMemory's start patches found in it.pm (-1 not called, -2 not touching))
          // results
@@ -3431,6 +3435,8 @@ namespace GroupStep
          V3 kSpV, ctSpV, twD1V;           // dkS/dc1, dct/dc1, dMw/dc1 (sticking twist) (B-lin: per piece, MeanSlope times its end gradient -n_i)
          double kr1L = 0.0, kw1L = 0.0;   // B-lin: the rolling and twist stiffness at the end (the level form's; k1 the shear's)
          double ks = 0.0, krs = 0.0, kws = 0.0;      // plan 2.4: the stiffness its memory was stored at (shared at a split, summed at a join), 0 none
+         V3 Vg;                                      // P3: a rotating column's point speed at the group's own point, V_m + W x (x_g - x_m) (several groups only)
+         double kv[4] = {}, kvE[4] = {};             // P3: a terms contact's h dN_g/du and h dfe_g/du from the group's own terms (several groups only)
          double k0p = 0.0, kr0p = 0.0, kw0p = 0.0;   // (its start stiffness, as the block takes it: for the split's shares)
          double heldS = 0.0, heldR = 0.0;   // (VPX_PATCH_CHECK: the shear and rolling + twist springs' held energy at the step's start, as the block takes it, J)
       };
@@ -3536,6 +3542,7 @@ namespace GroupStep
       std::vector<char> tOnS;
       std::vector<std::array<double, 4>> tgES;   // (... each term's END gradient, the column side of its slope: endGradSlope)
       std::vector<std::array<double, 4>> tgFS;   // (... each term's force direction gdT, the row side of its slope: termForceRows)
+      std::vector<std::array<double, 4>> tFvS;   // (... each term's elastic force s fT gdT: patch_friction's per-group load on a wire shape, P3)
       struct NearOff { bool &f; explicit NearOff(bool &b) : f(b) { f = false; } ~NearOff() { f = false; } };   // a step's lists end with it (Step, EnergyStep)
       static bool NearAllOn() { static const bool on = []() { const char *const e = getenv("VPX_HINGE_NEAR_ALL"); return e != nullptr && atoi(e) != 0; }(); return on; }   // diagnostics: every list = all pieces (A/B)
       // the lists of this attempt: each contact's cycle list (CycleList). The far test's second solve (farOff), an explicit move (nearAll) and the
@@ -3953,7 +3960,15 @@ namespace GroupStep
             sh.trial = (const double *)qMid + coordOff[sh.part];
             if (nearOn && it.nearK >= 0)
                pp->nearNow = &nearL[(size_t)it.nearK];
+            const bool pz = PatchZeroItem(it);   // patch_zero (a target mesh, P3b piece 4): the item's per-patch zeros in the probe, as Probe; ZeroHit then takes nothing off
+            if (pz)
+               RubberContact::PatchZeros() = &it.tZero;
             sh.Probe(P, Rr, lawHit);
+            if (pz)
+            {
+               RubberContact::PatchZeros() = nullptr;
+               RubberContact::PatchZeroNet() = false;   // (a net is told only from an Eval's item probes)
+            }
             pp->nearNow = nullptr;
             ZeroHit(it, lawHit);
             r = lawHit.delta + sh.PathSlope() * (0.5 * dLen + 0.5 * m) > 0.0 ? 1 : 0;
@@ -3976,7 +3991,15 @@ namespace GroupStep
             sh.trial = (const double *)(w == 0 ? qEnd : qMid) + coordOff[sh.part];
             if (nearOn && it.nearK >= 0)
                pp->nearNow = &nearL[(size_t)it.nearK];
+            const bool pz = PatchZeroItem(it);   // (patch_zero: the zeroed probe the law reads, SweptLaw)
+            if (pz)
+               RubberContact::PatchZeros() = &it.tZero;
             sh.Probe(e, R, h);
+            if (pz)
+            {
+               RubberContact::PatchZeros() = nullptr;
+               RubberContact::PatchZeroNet() = false;
+            }
             pp->nearNow = nullptr;
             sh.trial = nullptr;
             if (h.delta <= -1.0)
@@ -4419,6 +4442,51 @@ namespace GroupStep
                hp.grad = gl;
             }
          }
+         // patch_friction on a wire shape (P3): each patch from its own terms' zeros (Item::tZero by term id, read above), by the same arithmetic in the same order, so one patch is
+         // the merged answer; the probe's partition and its deepest wire's geometry kept (a term not past its zero adds nothing, as above)
+         for (int j = 0; j < hp.npc; j++)   // (level_stiffness, P3 code 2: each piece from its own term's zero, as its term)
+            hp.pd[j].d -= it.TermZero(hp.pc[j]);
+         for (int p = 0; p < hp.npat; p++)
+         {
+            HitPatch &P = hp.pat[p];
+            double s25p = 0.0, bestP = -INFINITY;
+            V3 gp, bNP = P.n;
+            for (int t = 0; t < hp.nt; t++)
+            {
+               const HitTerm &ht = hp.t[t];
+               bool in = false;
+               for (int q = 0; q < P.pn && !in; q++)
+                  in = hp.pc[P.p0 + q] == ht.id;
+               if (!in)
+                  continue;
+               if (ht.d > 0.0)
+               {
+                  const double d15 = ht.d * std::sqrt(ht.d);
+                  s25p += ht.s * ht.d * d15;
+                  gp = gp + ht.n * (ht.s * d15);
+               }
+               if (ht.s > 0.0 && ht.d > bestP)
+               {
+                  bestP = ht.d;
+                  bNP = ht.n;
+               }
+            }
+            P.d = bestP;
+            P.n = bNP;
+            P.grad = 1.0;
+            if (s25p > 0.0)
+            {
+               const double d = std::pow(s25p, 0.4);
+               const V3 gr = gp / (d * std::sqrt(d));
+               const double gl = gr.Length();
+               P.d = d;
+               if (gl > 1e-6)
+               {
+                  P.n = gr / gl;
+                  P.grad = gl;
+               }
+            }
+         }
       }
       // start: the step-start probe (ChooseStep): a shape's ProbeStart, which may write entries; every other probe writes none
       void Probe(const Item &it, const Ball *bs, Hit &hp, const bool start = false) const
@@ -4626,11 +4694,12 @@ namespace GroupStep
       // Forces of the step at the unknowns xv: the residual R (and the approximate Jacobian J when given), the contacts' end values into ie[]
       // patch_friction (piece 2b-1): a group's load from its own depths, the same laws as the merged contact's (Item::Elastic's chord, the damping above Eval's friction):
       // fe the chord of F over d0 .. d1, kc its slope, fd the damping on d1 - d0, kn Newton's normal stiffness (as Eval's kn)
-      void GroupLoad(const Item &L, const double h, FG &G) const
+      // feIn >= 0 (P3, a terms contact): the group's elastic load from its own terms (|sum s fT gdT| over them), the damping by the same rule on the group's depths
+      void GroupLoad(const Item &L, const double h, FG &G, const double feIn = -1.0) const
       {
          const double d0 = G.d0, d1 = G.d1, dm = G.dm;
          const bool di = set.dampingIntegral;
-         const double fe = L.Chord(d0, d1);
+         const double fe = feIn >= 0.0 ? feIn : L.Chord(d0, d1);
          const double kc = std::fabs(d1 - d0) > 1e-13 ? (L.F(d1) - fe) / (d1 - d0) : 0.5 * L.K(std::max(std::max(dm, d1), 0.0));
          double cD, kkJac = 0.0, cDs = 0.0;
          bool hcChord = false;
@@ -4677,6 +4746,21 @@ namespace GroupStep
          const double cDp = L.gammaKK > 0.0 ? (dm > 0.0 ? 0.5 * L.gammaKK * 0.5 * std::sqrt(L.reff / dm) : 0.0) : 1.5 * L.alpha * kc;
          const double dSl = cDs + (hcChord ? 1.5 * L.alpha * (fe + kc * dd) : 0.0);
          G.kn = fe + fd <= 0.0 ? 0.0 : di ? h * kc + dSl : L.gammaKK > 0.0 ? h * kc + kkJac : h * kc + cD + cDp * dd;
+      }
+      // P3: is piece id in a patch of group g (FrictionGroups' gStart, fgEnd) at the step's start or end?
+      bool TermInGroup(const Hit &h0, const Hit &h1, const int id, const int g) const
+      {
+         for (int i = 0; i < h0.npat && i < (int)gStart.size(); i++)
+            if (gStart[i] == g)
+               for (int q = 0; q < h0.pat[i].pn; q++)
+                  if (h0.pc[h0.pat[i].p0 + q] == id)
+                     return true;
+         for (int j = 0; j < h1.npat && j < (int)fgEnd.size(); j++)
+            if (fgEnd[j] == g)
+               for (int q = 0; q < h1.pat[j].pn; q++)
+                  if (h1.pc[h1.pat[j].p0 + q] == id)
+                     return true;
+         return false;
       }
       static bool SharePiece(const Hit &a, const HitPatch &pa, const Hit &b, const HitPatch &pb)
       {
@@ -5131,6 +5215,8 @@ namespace GroupStep
             G.gm[0] = -G.nD.x;
             G.gm[1] = -G.nD.y;
             G.gm[2] = -G.nD.z;
+            for (int j = 0; j < hm.nc && j < 7; j++)   // P3b piece 2: a translating column's depth slope, the group's own (nD . V: peak3.py; slope x grad is the merged contact's)
+               G.gm[3 + j] = G.nD.Dot(hm.c[j].V());
          }
          return ng;
       }
@@ -5775,7 +5861,8 @@ namespace GroupStep
             std::vector<char> &tOn = tOnS;
             std::vector<std::array<double, 4>> &tgE = tgES;   // each term's end gradient (endGradSlope; else = tg): the column side of its slope
             std::vector<std::array<double, 4>> &tgF = tgFS;   // each term's force direction gdT (termForceRows; else = tg): the row side of its slope
-            const Item::ElasticEnd el = L.Elastic(h0, h1, hm, d0, dq, iM, na, nq, noiseD, set, clampDump, J ? true : false, gm, gd, tg, tk, tOn, tgE, tgF);
+            std::vector<std::array<double, 4>> &tFv = tFvS;   // each term's elastic force (patch_friction on a wire shape: the groups' loads)
+            const Item::ElasticEnd el = L.Elastic(h0, h1, hm, d0, dq, iM, na, nq, noiseD, set, clampDump, J ? true : false, gm, gd, tg, tk, tOn, tgE, tgF, tFv);
             const bool terms = el.terms, cf0U = el.cf0U;
             const uint64_t tCf0 = el.tCf0;
             const double dd = el.dd, feT = el.feT, fe = el.fe;
@@ -5829,8 +5916,26 @@ namespace GroupStep
             // (FrictionGroups: the start and end patches linked by shared pieces), each with its own normal, depths, load fe + fd and memory (GroupMemory). One group: today's inputs,
             // the same arithmetic: the block below runs once per group and keeps its results in fgS for the slope. The push (gd N) stays the merged contact's. Not in this build:
             // the B-lin stiffness average (a group's stiffness is PatchMeans on its own one depth), ridge arrival, turn terms
-            const bool pfPath = !pr && nq == 0 && !terms && (h0.npat > 0 || h1.npat > 0);
-            const int ngF = pfPath ? FrictionGroups(h0, h1, hm, A.c, b1[it.a].c, bm[it.a].c, k) : 0;
+            // P3b piece 2 (runs/2026-11-23-targets-patch peak3.py): also a surface its part translates along one column (no spin, W = 0: SlideMesh), its patch geometry in the
+            // mesh's rest frame, so the groups' centres are taken there (Shape::RestCentre: start, end and middle at the part's move qEnd, qMid; the probes' own shifts)
+            const bool slideCol = nq == 1 && hm.c[0].w[0] == 0.0 && hm.c[0].w[1] == 0.0 && hm.c[0].w[2] == 0.0;
+            // P3 (runs/2026-11-23-hinge-patch q0..q4): also a terms contact (a wire shape, one rotating column), its patches from the terms (HingeGroup TermPatches), its geometry in
+            // the body frame (RestCentre); each group's point speed V_g, load N_g and slope kv_g its own (below); one group: today's arithmetic
+            const bool pfPath = !pr && (terms ? nq == 1 : nq == 0 || slideCol) && (h0.npat > 0 || h1.npat > 0);
+            V3 fc0 = A.c, fc1 = b1[it.a].c, fcm = bm[it.a].c;   // (a static surface: the world centres)
+            if (pfPath && nq > 0)
+            {
+               const Shape *const shR = shape[it.s];
+               const int pR = shR->part;
+               if (!shR->RestCentre(A.c, nullptr, fc0) || !shR->RestCentre(b1[it.a].c, (const double *)qEnd + coordOff[pR], fc1)
+                   || !shR->RestCentre(bm[it.a].c, (const double *)qMid + coordOff[pR], fcm))
+               {
+                  fc0 = A.c;   // (no rest frame: world, as before; no part writes patches without one today)
+                  fc1 = b1[it.a].c;
+                  fcm = bm[it.a].c;
+               }
+            }
+            const int ngF = pfPath ? FrictionGroups(h0, h1, hm, fc0, fc1, fcm, k) : 0;
             const bool multiF = ngF > 1;
             const int ngLoop = multiF ? ngF : 1;
             if (fgS.empty())
@@ -5841,7 +5946,35 @@ namespace GroupStep
                blS[g].on = false;
             if (ngF > 0 && LevelOn(L))
                for (int g = 0; g < ngF; g++)
-                  BLinGroup(L, h0, h1, g, A.c, b1[it.a].c, blS[g]);
+                  BLinGroup(L, h0, h1, g, fc0, fc1, blS[g]);
+            if (ngF > 0 && LevelOn(L) && terms && nq > 0)   // P3 code 2: a wire shape's pieces are in the body frame (TermPatches), so B-lin's slopes are too: turned to world at the
+            {                                               // end angle, v_j = s . (RestCentre(c1 + e_j) - RestCentre(c1)) (the frame's rows; no slope on the angle's column, as SlideMesh)
+               const Shape *const shR = shape[it.s];
+               const double *const mvE = (const double *)qEnd + coordOff[shR->part];
+               V3 ex[3];
+               bool ok = true;
+               for (int j = 0; j < 3; j++)
+               {
+                  const V3 cj = b1[it.a].c + V3(j == 0 ? 1.0 : 0.0, j == 1 ? 1.0 : 0.0, j == 2 ? 1.0 : 0.0);
+                  ok = ok && shR->RestCentre(cj, mvE, ex[j]);
+                  ex[j] = ex[j] - fc1;
+               }
+               const auto toW = [&ex](const V3 &s) { return V3(s.Dot(ex[0]), s.Dot(ex[1]), s.Dot(ex[2])); };
+               for (int g = 0; g < ngF && ok; g++)
+                  if (blS[g].on)
+                  {
+                     blS[g].s05 = toW(blS[g].s05);
+                     blS[g].s025 = toW(blS[g].s025);
+                     blS[g].s15 = toW(blS[g].s15);
+                     blS[g].s075 = toW(blS[g].s075);
+                  }
+            }
+            if (terms && pfPath)   // P3 code 2 counters (always on)
+            {
+               static std::atomic<long long> nHingePf { 0 }, nHingeMulti { 0 };
+               PfCount(nHingePf, 1, "hinge contacts on the per-patch path (per Eval)", pfMs);
+               PfCount(nHingeMulti, multiF ? 1 : 0, "hinge Evals with 2 or more friction groups", pfMs);
+            }
             gmRead.clear();
             if (!multiF)
             {
@@ -5866,8 +5999,38 @@ namespace GroupStep
             else
                for (int g = 0; g < ngF; g++)
                {
-                  GroupLoad(L, h, fgS[g]);
-                  GroupMemory(it, L, h0, g, fgS[g], k);
+                  FG &Gg = fgS[g];
+                  if (!terms)
+                     GroupLoad(L, h, Gg);
+                  else   // P3 (q4_terms): the group's load from its own terms (the terms of its start and end patches), the damping by the static rule on its depths
+                  {
+                     double Fg[4] = { 0.0, 0.0, 0.0, 0.0 };
+                     for (int t = 0; t < hm.nt; t++)
+                        if (tOn[t] && TermInGroup(h0, h1, hm.t[t].id, g))
+                           for (int j = 0; j < 4; j++)
+                              Fg[j] += tFv[t][j];
+                     const double feg = std::sqrt(Fg[0] * Fg[0] + Fg[1] * Fg[1] + Fg[2] * Fg[2]);
+                     double gdg[4];
+                     for (int j = 0; j < 4; j++)
+                        gdg[j] = feg > 1e-300 ? Fg[j] / feg : Gg.gm[j];   // (no elastic force: the group's own gradient carries the damping)
+                     GroupLoad(L, h, Gg, feg);
+                     // h dN_g/du: each of its pressing terms' chord slope on its end gradient, projected on the group's force direction, and the damper's slope kd on that
+                     // direction (today's mid-gradient form; kd = kn - h kc, GroupLoad's); h dfe_g/du the same without the damper (damping_integral, rolling_patch)
+                     const double kd = Gg.kn - h * Gg.kc;
+                     for (int u = 0; u < 4; u++)
+                        Gg.kv[u] = Gg.kvE[u] = 0.0;
+                     for (int t = 0; t < hm.nt; t++)
+                        if (tOn[t] && TermInGroup(h0, h1, hm.t[t].id, g))
+                        {
+                           const double w = h * tk[t] * (gdg[0] * tgF[t][0] + gdg[1] * tgF[t][1] + gdg[2] * tgF[t][2]);
+                           for (int u = 0; u < 4; u++)
+                              Gg.kvE[u] += w * tgE[t][u];
+                        }
+                     if (Gg.fe + Gg.fd > 0.0)
+                        for (int u = 0; u < 4; u++)
+                           Gg.kv[u] = Gg.kvE[u] + kd * gdg[u];
+                  }
+                  GroupMemory(it, L, h0, g, Gg, k);
                }
             if (pfPath && ngF > 0)   // plan 2.4's memory rule: each group's stored stiffness ks (the patch rule from ks to its start stiffness k0 runs in the block below)
             {
@@ -5913,7 +6076,11 @@ namespace GroupStep
             if (pr)
                F[it.b] = F[it.b] - V3(gd[3], gd[4], gd[5]) * N;
             double accSlip = 0.0, accShear = 0.0, accRoll = 0.0, accTwist = 0.0;
-            double qf[7];   // (a carried surface's coordinates: one group only)
+            double qf[7];   // (a carried surface's coordinates: the push once, then each group's friction and moments, P3b piece 2)
+            for (int j = 0; j < nq; j++)
+               qf[j] = -gd[3 + j] * N;
+            if (nq > 0)
+               loadF[shape[it.s]->part] = loadF[shape[it.s]->part] + V3(gd[0], gd[1], gd[2]) * N;
             for (int gF = 0; gF < ngLoop; gF++)
             {
             FG &GF = fgS[gF];
@@ -5926,11 +6093,23 @@ namespace GroupStep
             const double dmp = std::max(dm, 0.0);
             const V3 rA = nm * (-(A.R - 0.5 * dmp));
             const V3 rB = pr ? nm * (ball[it.b].R - 0.5 * dmp) : V3();
+            // P3 (q2_power, q3_jac): several groups on a rotating column: each group's own point speed V_g = V_m + W x (x_g - x_m), x_m the column's point (the merged probe's
+            // pb), x_g the group's (rA); its depth slope nD . V_g. One group, or no spin: V_m (bit for bit)
+            GF.Vg = nq > 0 ? hm.c[0].V() : V3();
+            if (multiF && nq == 1)
+            {
+               const V3 W = hm.c[0].W();
+               if (W.x != 0.0 || W.y != 0.0 || W.z != 0.0)
+               {
+                  GF.Vg = GF.Vg + W.Cross(rA - hm.n * (-(A.R - 0.5 * std::max(hm.delta, 0.0))));
+                  GF.gm[3] = GF.nD.Dot(GF.Vg);
+               }
+            }
             V3 u = dc[it.a] * (1.0 / h) + wm[it.a].Cross(rA);
             if (pr)
                u = u - (dc[it.b] * (1.0 / h) + wm[it.b].Cross(rB));
             for (int j = 0; j < nq; j++)
-               u = u - hm.c[j].V() * (dq[3 + j] / h);
+               u = u - (multiF && nq == 1 ? GF.Vg : hm.c[j].V()) * (dq[3 + j] / h);
             const V3 ut = u - nm * u.Dot(nm);
             // the shear spring: its stretch turned into the contact plane (length kept), the midpoint force, the Coulomb limit
             V3 xi0 = GF.touching ? GF.xi : V3();
@@ -6030,9 +6209,9 @@ namespace GroupStep
             }
             // on a carried surface's coordinates: the same work with the other sign
             for (int j = 0; j < nq; j++)
-               qf[j] = -gd[3 + j] * N + Ft.Dot(hm.c[j].V());
+               qf[j] += Ft.Dot(multiF && nq == 1 ? GF.Vg : hm.c[j].V());   // (P3: the group's own point speed)
             if (nq > 0)
-               loadF[shape[it.s]->part] = loadF[shape[it.s]->part] + V3(gd[0], gd[1], gd[2]) * N + Ft;
+               loadF[shape[it.s]->part] = loadF[shape[it.s]->part] + Ft;
             if (ContactTraceNow() || HistoryTraceOn())   // (diagnostics: copies only)
             {
                if ((int)cDiag.size() < ni)
@@ -6529,7 +6708,17 @@ namespace GroupStep
                   // work the step's mean reaction does on it is kept for the energy correction (MasslessEnergy)
                   mlCol[j] = true;
                   mlWork[shape[it.s]->part] += qf[j] * dq[3 + j];
-                  qF[cj] += MasslessPush(L, h1, j, d0, d1, h, Ft, mlSlope[j]);
+                  V3 FtAll = Ft;   // P3b piece 2: the friction of every group (one: its own)
+                  for (int g = 1; multiF && g < ngLoop; g++)
+                     FtAll = FtAll + fgS[g].Ft;
+                  qF[cj] += MasslessPush(L, h1, j, d0, d1, h, FtAll, mlSlope[j]);
+                  if (multiF && nq == 1)   // P3: a rotating column's lever per group at the end column: sum Ft_g . W x (x_g - x_m1) (no spin: 0)
+                  {
+                     const V3 W1 = h1.c[j].W(), rM1 = h1.n * (-(A.R - 0.5 * std::max(h1.delta, 0.0)));
+                     if (W1.x != 0.0 || W1.y != 0.0 || W1.z != 0.0)
+                        for (int g = 0; g < ngLoop; g++)
+                           qF[cj] += fgS[g].Ft.Dot(W1.Cross(fgS[g].rA - rM1));
+                  }
                }
                else
                   qF[cj] += qf[j];
@@ -6606,8 +6795,14 @@ namespace GroupStep
                // h dP/du = kn gd g1^T + h N dgd/du, g1 the end depth's gradient on the ball's centre; Gonzalez gd = gm + lam W u, lam = (dd - gm . u) / (u . W u), so
                // dgd/du = H / 2 + lam W + (W u) dlam^T, dlam = (g1 - gm - (H / 2) u - 2 lam W u) / (u . W u); H / 2 alone where Gonzalez left its correction out
                // (H the merged depth's Hessian, PeakHessian; paper check runs/2026-11-22-per-peak/paper/dampslope.py form A3: exact to 2e-5 of |J|)
+               // A carried surface (target_patches: a translating mesh) takes it too when every column is a translation (no spin: a turning column breaks H_cq = -H v):
+               // its depth is a function of c - sum q_j v_j, so over (c, q) its Hessian is H4 = E^T H E, E's column for the centre the unit vectors, for q_j -v_j
+               // (paper runs/2026-11-23-targets-patch/peak2.py: worst 6.8e-11 of |J|)
                double pkH[3][3];
-               const bool pkOn = set.peakSlope && hm.np > 0 && nq == 0 && !pr && fe > 0.0 && fe + fd > 0.0 && PeakHessian(hm.pk, hm.np, gm, pkH);
+               bool slideCols = true;
+               for (int j = 0; j < nq; j++)
+                  slideCols = slideCols && hm.c[j].w[0] == 0.0 && hm.c[j].w[1] == 0.0 && hm.c[j].w[2] == 0.0;
+               const bool pkOn = set.peakSlope && hm.np > 0 && !terms && slideCols && !pr && fe > 0.0 && fe + fd > 0.0 && PeakHessian(hm.pk, hm.np, gm, pkH);
                if (terms)   // each term's own chord slope on its own gradient, the damping's on G
                {
                   if (fe + fd > 0.0)
@@ -6637,26 +6832,48 @@ namespace GroupStep
                // peak_slope: the push's product-rule slope (above); hm is the middle probe: it moves half the move. Friction, rolling and twist unchanged.
                if (pkOn)
                {
-                  const double g1[3] = { -h1.n.x * h1.grad, -h1.n.y * h1.grad, -h1.n.z * h1.grad }, N = fe + fd;
-                  double W[3], Wu[3], Hu[3], uWu = 0.0, gu = 0.0;
-                  for (int a = 0; a < 3; a++)
+                  // (na 3 here: !pr. Entries 3 + j: the columns, g1 their end slope x grad, W from their inverse mass by the same rule, u their move; nq 0: today's arithmetic)
+                  const int nt = na + nq;
+                  const double N = fe + fd;
+                  double g1[kGradMax], W[kGradMax], Wu[kGradMax], Hu[kGradMax], uWu = 0.0, gu = 0.0;
+                  g1[0] = -h1.n.x * h1.grad;
+                  g1[1] = -h1.n.y * h1.grad;
+                  g1[2] = -h1.n.z * h1.grad;
+                  for (int j = 0; j < nq; j++)
+                     g1[3 + j] = h1.c[j].slope * h1.grad;
+                  double ur[3] = { dq[0], dq[1], dq[2] };   // the centre's move relative to the mesh: u_c - sum v_j u_qj
+                  for (int j = 0; j < nq; j++)
+                     for (int a = 0; a < 3; a++)
+                        ur[a] -= hm.c[j].v[a] * dq[3 + j];
+                  for (int a = 0; a < nt; a++)
                   {
                      W[a] = !set.gonzalezMass ? iM[a] : iM[a] > 0.0 ? iM[0] / iM[a] : 0.0;   // (Gonzalez's weights)
                      Wu[a] = W[a] * dq[a];
                      gu += gm[a] * dq[a];
                      uWu += dq[a] * W[a] * dq[a];
-                     Hu[a] = pkH[a][0] * dq[0] + pkH[a][1] * dq[1] + pkH[a][2] * dq[2];
+                     if (a < 3)
+                        Hu[a] = pkH[a][0] * ur[0] + pkH[a][1] * ur[1] + pkH[a][2] * ur[2];   // Hu_c = H (u_c - v u_q)
                   }
+                  for (int j = 0; j < nq; j++)   // Hu_q = -v^T H u_c + (v^T H v) u_q = -v^T (Hu_c)
+                     Hu[3 + j] = -(hm.c[j].v[0] * Hu[0] + hm.c[j].v[1] * Hu[1] + hm.c[j].v[2] * Hu[2]);
+                  const auto H4 = [&](const int p, const int q) {   // [[H, -H v], [-v^T H, v^T H v]]
+                     if (p < 3 && q < 3)
+                        return pkH[p][q];
+                     double hq[3];
+                     for (int r = 0; r < 3; r++)
+                        hq[r] = q < 3 ? pkH[r][q] : -(pkH[r][0] * hm.c[q - 3].v[0] + pkH[r][1] * hm.c[q - 3].v[1] + pkH[r][2] * hm.c[q - 3].v[2]);
+                     return p < 3 ? hq[p] : -(hm.c[p - 3].v[0] * hq[0] + hm.c[p - 3].v[1] * hq[1] + hm.c[p - 3].v[2] * hq[2]);
+                  };
                   const double lam = uWu > 1e-300 && std::fabs(d1 - d0 - gu) > noiseD ? (d1 - d0 - gu) / uWu : 0.0;   // (Gonzalez's cf, its noise test)
-                  double dlam[3] = {};
+                  double dlam[kGradMax] = {};
                   if (lam != 0.0)
-                     for (int q = 0; q < 3; q++)
+                     for (int q = 0; q < nt; q++)
                         dlam[q] = (g1[q] - gm[q] - 0.5 * Hu[q] - 2.0 * lam * Wu[q]) / uWu;
-                  for (int p = 0; p < 3; p++)
-                     if (ix[p] >= 0)
-                        for (int q = 0; q < 3; q++)
+                  for (int p = 0; p < nt; p++)
+                     if (ix[p] >= 0 && !(p >= na && mlCol[p - na]))   // (a massless row: its slope below)
+                        for (int q = 0; q < nt; q++)
                            if (ix[q] >= 0)
-                              J[ix[p]][ix[q]] += kn * gd[p] * g1[q] + h * N * (0.5 * pkH[p][q] + (p == q ? lam * W[p] : 0.0) + Wu[p] * dlam[q]);
+                              J[ix[p]][ix[q]] += kn * gd[p] * g1[q] + h * N * (0.5 * H4(p, q) + (p == q ? lam * W[p] : 0.0) + Wu[p] * dlam[q]);
                   if (PeakSlopeCheckEnv())   // check mode (VPX_PATCH_CHECK=1): the list's first peak alone, unturned, gives today's slope (H = 0 to rounding)
                   {
                      static std::atomic<long long> nChk { 0 }, nBad { 0 };
@@ -6756,10 +6973,12 @@ namespace GroupStep
                            kvE[u] += w * tgE[t][u];
                      }
                const double knO = kn, kcO = kc;
-               const double *const gmO = gm;
+               const double *const gmO = gm, *const kvO = kv, *const kvEO = kvE;
                for (int gF = 0; gF < ngLoop; gF++)   // patch_friction: the friction's slope per group (one: today's inputs)
                {
                const FG &GF = fgS[gF];
+               const double *const kv = multiF && terms ? GF.kv : kvO, *const kvE = multiF && terms ? GF.kvE : kvEO;   // (P3: a terms contact's group, its own load slopes)
+               const bool ownV = multiF && nq == 1;   // (P3: each group's own point speed V_g; no spin: V_m)
                const V3 &nm = GF.n, &nD = GF.nD, &Ft = GF.Ft, &xi0 = GF.xi0, &ut = GF.ut, &FsTr = GF.FsTr, &rA = GF.rA, &rB = GF.rB, &wr = GF.wr, &wtR = GF.wtR, &mhR = GF.mhR;
                const M3 &RmS = GF.RmS;
                const double dm = GF.dm, d1 = GF.d1, N = GF.N, kn = multiF ? GF.kn : knO, kc = multiF ? GF.kc : kcO;
@@ -6896,17 +7115,17 @@ namespace GroupStep
                   for (int i = 0; i < nq; i++)
                   {
                      const int qi = cUnk[qc0 + hm.c[i].coord];
-                     const V3 vi = hm.c[i].V();
+                     const V3 vi = ownV ? GF.Vg : hm.c[i].V();
                      if (qi >= 0)   // its row against the ball: -vi^T Cm + h (vi . fd1) n^T; against the spin: -1/2 h vi^T Cm Skew(r)^T
                      {
                         const V3 cTv = MulV(Cm.T(), vi);
-                        const V3 rc = cTv * -1.0 + nm * (h * vi.Dot(fd1)) - (terms ? V3(kv[0], kv[1], kv[2]) * vi.Dot(fN) : V3());
+                        const V3 rc = cTv * -1.0 + nD * (h * vi.Dot(fd1)) - (terms ? V3(kv[0], kv[1], kv[2]) * vi.Dot(fN) : V3());   // (nD: the group's end gradient, peak3.py; one group: nm)
                         const V3 rw = MulV(M3::Skew(rA), cTv) * (-0.5 * h);
                         const int ia = 6 * it.a;
                         J[qi][ia] += rc.x; J[qi][ia + 1] += rc.y; J[qi][ia + 2] += rc.z;
                         J[qi][ia + 3] += rw.x; J[qi][ia + 4] += rw.y; J[qi][ia + 5] += rw.z;
                      }
-                     const double li = hm.c[i].slope * hm.grad;
+                     const double li = multiF ? nD.Dot(vi) : hm.c[i].slope * hm.grad;   // (P3b piece 2: several groups, each its own depth slope nD . v, peak3.py)
                      if (qi >= 0)   // the ball's rows against it: h dFt / dq = -Cm v + h slope fd1
                      {
                         const V3 dFq = MulV(Cm, vi) * -1.0 + fd1 * (h * li) + (terms ? fN * kv[3] : V3());
@@ -6919,7 +7138,8 @@ namespace GroupStep
                      {
                         const int qj = cUnk[qc0 + hm.c[j].coord];
                         if (qj >= 0)
-                           J[qi][qj] += vi.Dot(MulV(Cm, hm.c[j].V())) - h * vi.Dot(fd1) * hm.c[j].slope * hm.grad - (terms ? vi.Dot(fN) * kv[3] : 0.0);
+                           J[qi][qj] += vi.Dot(MulV(Cm, ownV ? GF.Vg : hm.c[j].V())) - (multiF ? h * vi.Dot(fd1) * nD.Dot(ownV ? GF.Vg : hm.c[j].V()) : h * vi.Dot(fd1) * hm.c[j].slope * hm.grad)
+                                        - (terms ? vi.Dot(fN) * kv[3] : 0.0);   // (several groups: each its own depth slope nD . v)
                      }
                   }
                   // leverRollSlope: the contact point moves with the mid depth, d rr_p / du_j = s_p (gm_j / 4) n (dm moves half the depth's change), so the slip takes
@@ -8518,7 +8738,8 @@ namespace GroupStep
    // over the move (ball a's centre, then ball b's, or the columns' coordinates); a union of hinge terms: each term by its own chord and its own exact gradient (hinge_piece_sum).
    inline Item::ElasticEnd Item::Elastic(const Hit &h0, const Hit &h1, const Hit &hm, const double d0, const double *dq, const double *iM, const int na, const int nq, const double noiseD,
                                          const Settings &set, const bool trace, const bool wantKc, double *gm, double *gd, std::vector<std::array<double, 4>> &tg, std::vector<double> &tk,
-                                         std::vector<char> &tOn, std::vector<std::array<double, 4>> &tgE, std::vector<std::array<double, 4>> &tgF) const
+                                         std::vector<char> &tOn, std::vector<std::array<double, 4>> &tgE, std::vector<std::array<double, 4>> &tgF,
+                                         std::vector<std::array<double, 4>> &tFv) const
    {
       ElasticEnd o;
       const double d1 = h1.delta, dm = hm.delta;
@@ -8541,6 +8762,7 @@ namespace GroupStep
             tg.resize((size_t)hm.nt);
             tgE.resize((size_t)hm.nt);
             tgF.resize((size_t)hm.nt);
+            tFv.resize((size_t)hm.nt);
             tk.resize((size_t)hm.nt);
             tOn.resize((size_t)hm.nt);
          }
@@ -8569,7 +8791,10 @@ namespace GroupStep
                tgF[t][j] = set.termForceRows ? gdT[j] : tg[t][j];
             const double fT = Chord(a0, a1);
             for (int j = 0; j < 4; j++)
+            {
+               tFv[t][j] = s * fT * gdT[j];   // (each term's own share: patch_friction's per-group load, P3)
                Fel[j] += s * fT * gdT[j];
+            }
             tk[t] = s * (std::fabs(a1 - a0) > 1e-13 ? (F(a1) - fT) / (a1 - a0) : 0.5 * K(std::max(std::max(am, a1), 0.0)));
          }
          const double nEl = std::sqrt(Fel[0] * Fel[0] + Fel[1] * Fel[1] + Fel[2] * Fel[2]);

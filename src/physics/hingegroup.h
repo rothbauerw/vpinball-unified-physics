@@ -10,6 +10,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -349,8 +350,15 @@ namespace HingeGroup
          double bestD = -INFINITY, bestReff = 0.0;
          int bestW = -1;   // the deepest piece's wire (-1: a face), for its bend
          int pieceId = -1;   // the piece being added: its index in the surface's list, the same in every list (a term's zero is kept under it)
+         thread_local std::vector<V3> tNb;   // patch_friction (P3): each term's normal in the body frame and its wire (-1 none), for TermPatches; capacity reused
+         thread_local std::vector<int> tWi;
+         tNb.clear();
+         tWi.clear();
+         bool faces = false;   // (a plate's quads or shared lines: no patches, P3 brief: plates unchanged)
          const auto add = [&](const double d, const V3 &nb, const double s, const double reff, const int wi) {
             const V3 pb = cb - nb * (R - 0.5 * std::max(d, 0.0));
+            tNb.push_back(nb);
+            tWi.push_back(wi);
             GroupStep::HitTerm &t = h.t[h.nt++];
             t.id = pieceId;
             t.over = nullptr;
@@ -401,11 +409,13 @@ namespace HingeGroup
             }
             else if (pc.kind == 2)   // each flat quad by its own two triangles (convex and flat: its nearest point is exact)
             {
+               faces = true;
                const TubeProbe pr = RubberContact::ProbeTriangles(b, tris, quads[(size_t)pc.i].cand, halfT, cb, halfT);
                add(pr.seg >= 0 ? pr.delta : -S, pr.seg >= 0 ? pr.normal : bestN, 1.0, pr.seg >= 0 ? pr.reff : 0.0, -1);
             }
             else   // a shared line, taken back once: where both nearest points are on it, the smaller element's depth is its own and cancels
             {
+               faces = true;
                const Line &l = lines[(size_t)pc.i];
                const V3 pts[2] = { l.a, l.b };
                GroupStep::envStats.capsules++;
@@ -430,6 +440,10 @@ namespace HingeGroup
          h.nc = 1;
          h.c[0].Set(0, nb.z * pb.y - nb.y * pb.z, fr * pb.y - dn * pb.z, E);
          Bend(nb, pb, bestW, h.kb, h.ktb);
+         h.npat = 0;
+         h.npc = 0;
+         if (PatchFrictionOn() && !faces)
+            TermPatches(surface, h, tNb, tWi, dn, fr);
          GroupStep::envStats.terms += h.nt;
          if (ProbeNoteOn())
          {
@@ -438,6 +452,143 @@ namespace HingeGroup
                on += h.t[t].d > 0.0 ? 1 : 0;
             snprintf(probeNote, sizeof probeNote, "terms %d pressing %d deepest piece %.4g um -> depth %.4g um n (%.3f %.3f %.3f) slope %.4g summed %d", h.nt, on, bestD * 1e6,
                      h.delta * 1e6, nb.x, nb.y, nb.z, h.c[0].slope * h.grad, summed ? 1 : 0);
+         }
+      }
+
+      // [Contact] patch_friction on a wire shape (P3, to-do 1.33; runs/2026-11-23-hinge-patch q0..q4): the pressed terms grouped into patches, terms linked by a pressed joint
+      // (its over list: the pieces it corrects), each patch written as a HitPatch: its own union (the probe's sum (sum s d^2.5)^0.4 over its pressed terms, in their order, so one
+      // patch is the merged answer bit for bit), its world normal and gradient, its terms' piece ids (pc), and its deepest wire as the segment ga-gb in the body frame (the frame of
+      // RestCentre: FrictionGroups' plane and link windows compare there). A shape with plate faces writes none (plates unchanged). Written by Publish (ContactSettings); the bench: on
+      static bool &PatchFrictionOn()
+      {
+         static bool on = true;
+         return on;
+      }
+      // the ball's centre in the body frame at angle q + dq (the probe's own cb): the rest frame of the patch geometry (Shape::RestCentre)
+      V3 BodyCentre(const V3 &c, const double dq) const
+      {
+         const double th = q + dq;
+         const V3 dn = Down(th), fr = Front(th), rel = c - A;
+         return V3(rel.Dot(E), rel.Dot(dn), rel.Dot(fr));
+      }
+      // link_windows (rule T) on a wire shape (P3 code 2): c0b -> c1b the ball's centre in the body frame at the step's start and end (RestCentre), taken straight between (the chord
+      // of the true body-frame path, which the turn bends). The static tubes' kit: each joint within reach R + rho (the wire's radius; no zero: the patches are found on raw depths,
+      // TermPatches) of the segment links it to each wire it joins (RubberContact::LinkWinPt), ids as the probe's (piece index in the side's list)
+      void LinkWindows(const int surface, const V3 &c0b, const V3 &c1b, const double R, std::vector<RubberContact::LinkWindow> &out) const
+      {
+         out.clear();
+         BuildJoints();
+         if (surface < 0 || surface >= (int)pieces.size() || R <= 0.0)
+            return;
+         const std::vector<Piece> &ps = pieces[(size_t)surface];
+         const V3 m = c1b - c0b;
+         for (int id = 0; id < (int)ps.size(); id++)
+         {
+            if (ps[(size_t)id].kind != 1)
+               continue;
+            const Joint &j = joints[(size_t)ps[(size_t)id].i];
+            double t0, t1;
+            if (!RubberContact::LinkWinPt(c0b, m, j.v, R + rho, t0, t1))
+               continue;
+            for (const int w : j.over)
+               out.push_back({ id, w, t0, t1 });
+         }
+      }
+      // level_stiffness (B-lin) on a wire shape (P3 code 2): each pressed term's PieceData beside its id (h.pd, as the static patch list's): its raw depth (the probe's t.d, the
+      // zero added back by ZeroHit as for statics), its normal in the body frame (the frame of its geometry and of RestCentre), its geometry (a wire: kind 1, its segment a-b; a
+      // joint: kind 2, its point) and its merge-tree neighbours (a wire: the joints at its ends; a joint: the first two wires it joins, the rest found from their side: PieceAdj is
+      // either-way). B-lin's slopes come out in the body frame; the group step turns them to world (Eval)
+      void TermPatches(const int surface, Hit &h, const std::vector<V3> &tNb, const std::vector<int> &tWi, const V3 &dn, const V3 &fr) const
+      {
+         const std::vector<Piece> &ps = pieces[(size_t)surface];
+         const std::vector<std::array<int, 2>> &pnb = pieceNb[(size_t)surface];
+         thread_local std::vector<int> par, pid;
+         const int nt = h.nt;
+         par.resize((size_t)nt);
+         pid.assign((size_t)nt, -1);
+         for (int t = 0; t < nt; t++)
+            par[(size_t)t] = t;
+         const auto find = [&](int x) { while (par[(size_t)x] != x) x = par[(size_t)x] = par[(size_t)par[(size_t)x]]; return x; };
+         for (int t = 0; t < nt; t++)   // a pressed joint joins the pressed pieces it corrects (a pressed joint's pieces are pressed: each is at least as deep)
+            if (h.t[t].d > 0.0 && h.t[t].over != nullptr)
+               for (const int id : *h.t[t].over)
+                  for (int u = 0; u < nt; u++)
+                     if (h.t[u].id == id && h.t[u].d > 0.0)
+                        par[(size_t)find(u)] = find(t);
+         int np = 0;
+         for (int t = 0; t < nt; t++)
+            if (h.t[t].d > 0.0)
+            {
+               const int r = find(t);
+               if (pid[(size_t)r] < 0)
+                  pid[(size_t)r] = np++;
+               pid[(size_t)t] = pid[(size_t)r];
+            }
+         int npc = 0;
+         for (int t = 0; t < nt; t++)
+            npc += h.t[t].d > 0.0 ? 1 : 0;
+         h.npat = np;
+         h.pat.Fit(np);
+         h.npc = npc;
+         h.pc.Fit(npc);
+         h.pd.Fit(npc);
+         int o = 0;
+         for (int p = 0; p < np; p++)
+         {
+            RubberContact::FoldSum sum;
+            double bD = -INFINITY;
+            V3 bN(0.0, 1.0, 0.0);
+            int bW = -1;
+            GroupStep::HitPatch &P = h.pat[p];
+            P.p0 = o;
+            for (int t = 0; t < nt; t++)
+            {
+               if (pid[(size_t)t] != p)
+                  continue;
+               const double d = h.t[t].d, s = h.t[t].s;
+               const double d15 = d * std::sqrt(d);   // (as the probe's add: d > 0 here)
+               sum.s25 += s * d * d15;
+               sum.g = sum.g + tNb[(size_t)t] * (s * d15);
+               if (s > 0.0 && d > bD)
+               {
+                  bD = d;
+                  bN = tNb[(size_t)t];
+                  bW = tWi[(size_t)t];
+               }
+               h.pc[o] = h.t[t].id;
+               RubberContact::PieceData &pd = h.pd[o];
+               pd = RubberContact::PieceData();
+               pd.d = d;
+               pd.n = tNb[(size_t)t];
+               const Piece &pc = ps[(size_t)h.t[t].id];
+               if (pc.kind == 0)
+               {
+                  pd.g.kind = 1;
+                  pd.g.a = wires[(size_t)pc.i].a;
+                  pd.g.b = wires[(size_t)pc.i].b;
+               }
+               else   // (a joint: TermPatches runs only on a shape of wires and joints)
+               {
+                  pd.g.kind = 2;
+                  pd.g.a = joints[(size_t)pc.i].v;
+               }
+               pd.nbA = pnb[(size_t)h.t[t].id][0];
+               pd.nbB = pnb[(size_t)h.t[t].id][1];
+               o++;
+            }
+            P.pn = o - P.p0;
+            TubeProbe u;
+            u.delta = bD;
+            u.normal = bN;
+            u.grad = 1.0;
+            if (sum.s25 > 0.0)
+               sum.Finish(u, 0.0);
+            P.d = u.delta;
+            P.n = E * u.normal.x + dn * u.normal.y + fr * u.normal.z;
+            P.grad = sum.s25 > 0.0 ? u.grad : 1.0;
+            P.gk = bW >= 0 ? 1 : 2;   // its deepest wire, body frame (a patch always has one: a joint presses only with its pieces)
+            P.ga = bW >= 0 ? wires[(size_t)bW].a : V3();
+            P.gb = bW >= 0 ? wires[(size_t)bW].b : V3();
          }
       }
 
@@ -747,6 +898,25 @@ namespace HingeGroup
             for (int i = 0; i < (int)lines.size(); i++)
                ps.push_back({ 3, i, (lines[i].a + lines[i].b) * 0.5, 0.5 * (lines[i].b - lines[i].a).Length(), lines[i].r });
          }
+         // level_stiffness (P3 code 2): each piece's merge-tree neighbours from the joints' over lists (a wire: the joints at its ends; a joint: its first two wires; kNoPiece none)
+         pieceNb.assign(pieces.size(), std::vector<std::array<int, 2>>());
+         for (size_t sf = 0; sf < pieces.size(); sf++)
+         {
+            const std::vector<Piece> &ps = pieces[sf];
+            std::vector<std::array<int, 2>> &nbs = pieceNb[sf];
+            nbs.assign(ps.size(), { RubberContact::PatchPieceList::kNoPiece, RubberContact::PatchPieceList::kNoPiece });
+            for (int id = 0; id < (int)ps.size(); id++)
+               if (ps[(size_t)id].kind == 1)
+                  for (const int w : joints[(size_t)ps[(size_t)id].i].over)
+                  {
+                     std::array<int, 2> &a = nbs[(size_t)w], &b = nbs[(size_t)id];
+                     (a[0] == RubberContact::PatchPieceList::kNoPiece ? a[0] : a[1]) = id;
+                     if (b[0] == RubberContact::PatchPieceList::kNoPiece)
+                        b[0] = w;
+                     else if (b[1] == RubberContact::PatchPieceList::kNoPiece)
+                        b[1] = w;
+                  }
+         }
          // part finder: the bounding radius about A (body coordinates are about A), from each piece's core as built
          boundR = 0.0;
          for (size_t sf = 0; sf < pieces.size(); sf++)
@@ -767,6 +937,7 @@ namespace HingeGroup
       }
       struct Piece { int kind, i; V3 m; double half, rr; };   // kind 0 wire, 1 joint, 2 quad, 3 shared line
       mutable std::vector<std::vector<Piece>> pieces;
+      mutable std::vector<std::vector<std::array<int, 2>>> pieceNb;   // per side, per piece: its merge-tree neighbours (BuildJoints; TermPatches' PieceData)
       mutable double boundR = 0.0;   // part finder: the bounding radius about A (BuildJoints), for the overlap check
       double cycQ0 = 0.0, cycLo = 0.0, cycHi = 0.0;   // part finder: the angle at the cycle's start and the ends of its turn range over the cycle (CycleTurn; set every cycle, not kept state)
       static double SegDist(const V3 &a, const V3 &b, const V3 &p)   // point to segment
@@ -835,6 +1006,13 @@ namespace HingeGroup
       const Part *owner = nullptr;
       int surface = 0;
       void Probe(const V3 &c, const double R, Hit &h) const override { owner->ProbeSurface(surface, c, R, trial != nullptr ? trial[0] : 0.0, h); }
+      bool RestCentre(const V3 &c, const double *const move, V3 &out) const override   // (patch_friction, P3: the body frame, as the engine's GroupRestCentre)
+      {
+         if (!owner->pieceSum)
+            return false;
+         out = owner->BodyCentre(c, move != nullptr ? move[0] : 0.0);
+         return true;
+      }
       bool CycleNear(const V3 &c, const double R, const double reach, std::vector<int> &list, int &n) const override
       {
          if (!owner->pieceSum)

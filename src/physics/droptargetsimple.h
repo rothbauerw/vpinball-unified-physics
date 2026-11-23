@@ -46,7 +46,6 @@ namespace DropSimple
 
       // ---- shape and settings (not state) ----
       std::vector<RubberContact::SurfaceTri> tris;   // the drawn mesh at the up pose (world, m)
-      std::vector<int> cand;                         // all of them (ProbeTriangles' list)
       V3 origin;                                     // the mesh's centre at the up pose (m)
       double edgeRho = 1e-3;                         // the mesh edges' radius for the contact (the host's hard-surface edge_radius_mm), m
       double meshR = 0.0;                            // the farthest mesh point from origin (m)
@@ -54,13 +53,12 @@ namespace DropSimple
       double zDown = 0.0;                            // the full travel down (m): stock's DROP_TARGET_LIMIT, 52 VPX units
       double speed = 0.0;                            // the drop speed (m/s): VPX DropSpeed, read live by the adapter
       std::vector<ContactMovingPart::Event> *events = nullptr;   // the engine's queue (Dropped, Raised)
+      SlideMesh mesh;                                // its probe along world z (contactmovingpart.h; [Contact] target_patches)
 
-      void Build(const std::vector<RubberContact::SurfaceTri> &faces, const double zDownM, const double edgeRhoM, const bool startDown)
+      void Build(const std::vector<RubberContact::SurfaceTri> &faces, const std::vector<std::array<int, 3>> &vid, const double zDownM, const double edgeRhoM, const bool startDown)
       {
          tris = faces;
-         cand.resize(tris.size());
-         for (size_t i = 0; i < tris.size(); i++)
-            cand[i] = (int)i;
+         mesh.Build(faces, vid, V3(0.0, 0.0, 1.0), V3(0.0, 0.0, 1.0), edgeRhoM);
          zDown = zDownM;
          edgeRho = edgeRhoM;
          V3 lo(INFINITY, INFINITY, INFINITY), hi(-INFINITY, -INFINITY, -INFINITY);
@@ -141,28 +139,7 @@ namespace DropSimple
       // it is. One column: the depth's slope along z is n_contact . ez, the point's speed ez per unit rate, no spin (as StandupFace::Part::ProbeAt along its travel)
       void ProbeAt(const V3 &c, const double R, const double dz, Hit &h) const
       {
-         RubberContact::BallSI b;
-         b.R = R;
-         const V3 ez(0.0, 0.0, 1.0);
-         const V3 cr = c - ez * (z + dz);
-         const RubberContact::TubeProbe pr = RubberContact::ProbeTriangles(b, tris, cand, edgeRho, cr);
-         h.nc = 1;
-         if (pr.seg < 0)
-         {
-            h.delta = -1.0;
-            h.n = ez;
-            h.reff = R;
-            h.curvDist = 0.0;
-            h.grad = 1.0;
-            h.c[0].Set(0, -1.0, ez, V3());
-            return;
-         }
-         h.delta = pr.delta;
-         h.n = pr.normal;
-         h.grad = pr.grad;
-         h.reff = pr.reff > 0.0 ? pr.reff : R;
-         h.curvDist = pr.reff > 0.0 && pr.reff < 0.999 * R ? pr.dist : 0.0;   // (as the fixed mesh: an edge the ball rolls round)
-         h.c[0].Set(0, pr.normal.Dot(ez), ez, V3());
+         mesh.Probe(c, R, z + dz, h);
       }
 
       // ---- the group's interface: one coordinate, no unknown, a given move ----
@@ -241,9 +218,10 @@ namespace DropSimple
       RubberContact::BallSI ball;
       V3 back;   // the target's back (unit, horizontal): away from the ball's side; a touch whose normal points against it is on the front
 
-      void Build(const std::vector<RubberContact::SurfaceTri> &faces, const V3 &backDir, const double zDownM, const double edgeRhoM, const bool startDown, const RubberContact::BallSI &b)
+      void Build(const std::vector<RubberContact::SurfaceTri> &faces, const std::vector<std::array<int, 3>> &vid, const V3 &backDir, const double zDownM, const double edgeRhoM,
+                 const bool startDown, const RubberContact::BallSI &b)
       {
-         gp.Build(faces, zDownM, edgeRhoM, startDown);
+         gp.Build(faces, vid, zDownM, edgeRhoM, startDown);
          back = backDir / backDir.Length();
          ball = b;
       }
@@ -355,8 +333,19 @@ namespace DropSimple
       {
          gp.ProbeAt(c, R, trial != nullptr ? trial[0] : 0.0, h);
          if (!collidable || !gp.Solid())
+         {
             h.delta = -1.0;
+            h.npat = 0;   // (no depth and no patches: no friction group either)
+            h.npc = 0;
+         }
       }
+      bool GroupRestCentre(int, const V3 &c, const double *const move, V3 &out) const override   // (SlideMesh: the probe's own centre, c - (z + dz) a)
+      {
+         out = c - gp.mesh.a * (gp.z + (move != nullptr ? move[0] : 0.0));
+         return true;
+      }
+      void GroupLinkWindows(int, const V3 &c0r, const V3 &c1r, const double R, std::vector<RubberContact::LinkWindow> &out) const override { gp.mesh.LinkWindows(c0r, c1r, R, out); }
+      bool GroupPatchZero(int) const override { return gp.mesh.PatchZeroOn(); }   // (patch_zero: per-patch zeros keyed by face id, P3b piece 4)
       void CycleBegin() override { idle = false; }
       // Hit: a touch begins on the front (the touch's normal, toward the ball, against the back: drop-axis's test) while it is solid; the event carries the ball's own id.
       // The threshold and the drop are the adapter's, after the step
