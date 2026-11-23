@@ -1830,6 +1830,47 @@ struct ContactSystemImpl
          g_pplayer->m_liveUI->PushNotification(o.str(), 6000);
    }
 
+   // patch_zero (brief_code.md; GroupStep::Settings::patchZero): a static mesh or tube on multi_contact keeps its found-inside zero per patch (SurfaceState::tZero)
+   static bool PatchZeroSurface(const SurfaceContact &it)
+   {
+      const ContactSettings &s = ContactSettings::Get();
+      return s.patchZero && s.multiContact && s.linkWindows && it.r->MovingPart() == nullptr;   // (as ToStep: F9, link_windows too)
+   }
+   // patch_zero: the static probe with the given per-piece zeros (none: raw), every patch shifted by its own zero; its patch list and pieces (RubberContact::PatchPieces)
+   static TubeProbe PatchZeroProbe(const SurfaceContact &it, const BallSI &bs, const V3 &c, const std::vector<std::pair<int, double>> &zl, std::vector<TubeProbe> &plist)
+   {
+      RubberContact::PatchZeros() = &zl;
+      const TubeProbe pr = it.r->ProbePatches(bs, it, c, plist);
+      RubberContact::PatchZeros() = nullptr;
+      return pr;
+   }
+   // patch_zero (Z4): first sight: each raw patch's zero = its raw level-form depth (its energy 0), an entry for each of its pieces; the item's zero the largest.
+   // A probe naming no pieces: the scalar zero the caller set is kept
+   static void FirstSightPatchZeros(SurfaceContact &it, const BallSI &bs, const V3 &c)
+   {
+      it.gs.tZero.clear();
+      if (!PatchZeroSurface(it))
+         return;
+      static const std::vector<std::pair<int, double>> none;
+      thread_local std::vector<TubeProbe> plist;
+      const TubeProbe pr = PatchZeroProbe(it, bs, c, none, plist);
+      const RubberContact::PatchPieceList &pl = RubberContact::PatchPieces();
+      if (!pr.overlap || pl.off.size() != plist.size() + 1)
+         return;
+      double zmax = 0.0;
+      for (size_t p = 0; p < plist.size(); p++)
+         if (plist[p].overlap && plist[p].delta > 0.0)
+         {
+            for (int q = pl.off[p]; q < pl.off[p + 1]; q++)
+               if (pl.id[q] != RubberContact::PatchPieceList::kNoPiece)
+                  it.gs.tZero.emplace_back(pl.id[q], plist[p].delta);
+            zmax = std::max(zmax, plist[p].delta);
+            GroupStep::PzCount(GroupStep::PzStats()[1], "first-sight patches");
+         }
+      if (!it.gs.tZero.empty())
+         it.gs.zero = zmax;
+   }
+
    // what one contact holds, by the law its loop uses; depth: the depth it counts
    static double ContactHolds(const SurfaceContact &it, const BallSI &bs, const V3 &c, const bool group, double &depth)
    {
@@ -1837,10 +1878,15 @@ struct ContactSystemImpl
       depth = 0.0;
       if (it.r->MovingPart() != nullptr || it.NoFaces(c))
          return 0.0;
+      const bool pz = group && PatchZeroSurface(it) && !it.gs.tZero.empty();   // patch_zero (D2): the probe returns every patch already shifted by its own zero
+      if (pz)
+         RubberContact::PatchZeros() = &it.gs.tZero;
       const TubeProbe pr = group ? it.r->ProbePatch(bs, it, c) : it.r->Probe(bs, it, c);
+      if (pz)
+         RubberContact::PatchZeros() = nullptr;
       if (!pr.overlap)
          return 0.0;
-      depth = group ? pr.delta - it.gs.zero : pr.delta;
+      depth = group ? pr.delta - (pz ? 0.0 : it.gs.zero) : pr.delta;
       if (depth <= 0.0)
          return 0.0;
       const double reff = group && it.gs.reff > 0.0 ? it.gs.reff : pr.reff > 0.0 ? pr.reff : bs.R;
@@ -1960,6 +2006,7 @@ struct ContactSystemImpl
                   if (pr.overlap && pr.delta > 0.0)
                   {
                      it.gs.zero = pr.delta;
+                     FirstSightPatchZeros(it, w.bs, w.c);   // (patch_zero: a zero per raw patch)
                      g_qe.firstSightZero++;
                      FoundInside(w.pb, it.r->Name(), pr.delta);
                   }
@@ -2317,6 +2364,7 @@ struct ContactSystemImpl
          it.gs.pmLev = false;
          it.gs.kStored = false;
          it.gs.zero = it.gs.reff = 0.0;
+         it.gs.tZero.clear();   // (patch_zero)
          // one entry per ball: an item not touching that the ball is found inside has stored nothing (rule 10b: the overlap came from no drive): its zero is its depth, by the
          // group's own probe of a fixed surface (SurfaceShape::Probe, ProbePatch); a moving part's surfaces take the same rule in SetShapeItem
          if (!it.gs.touching && it.r->MovingPart() == nullptr && !it.NoFaces(c))
@@ -2325,6 +2373,7 @@ struct ContactSystemImpl
             if (pr.overlap && pr.delta > 0.0)
             {
                it.gs.zero = pr.delta;
+               FirstSightPatchZeros(it, bs, c);   // (patch_zero: a zero per raw patch)
                g_qe.firstSightZero++;
                if (e.ball != nullptr)
                   FoundInside(e.ball, it.r->Name(), pr.delta);
@@ -2348,6 +2397,50 @@ struct ContactSystemImpl
          law.kH = kH;
          law.cL = cL;
          law.hL = hL;
+         if (PatchZeroSurface(it))   // patch_zero (D1): one zero z on every raw patch (all their pieces), the item's level form V(D(z)) equal to the old loop's held energy
+         {                            // (a uniform zero lowers every patch's energy: D(z) falls as z rises, the bisection is monotone)
+            static const std::vector<std::pair<int, double>> none;
+            thread_local std::vector<TubeProbe> plist;
+            thread_local std::vector<std::pair<int, double>> zz;
+            thread_local std::vector<int> ids;
+            const TubeProbe p0 = PatchZeroProbe(it, bs, c, none, plist);
+            const RubberContact::PatchPieceList &pl = RubberContact::PatchPieces();
+            ids.clear();
+            double deep = 0.0;
+            if (p0.overlap && pl.off.size() == plist.size() + 1)
+               for (size_t p = 0; p < plist.size(); p++)
+                  if (plist[p].overlap && plist[p].delta > 0.0)
+                     for (int q = pl.off[p]; q < pl.off[p + 1]; q++)
+                        if (pl.id[q] != RubberContact::PatchPieceList::kNoPiece)
+                        {
+                           ids.push_back(pl.id[q]);
+                           deep = std::max(deep, q < (int)pl.pd.size() ? pl.pd[q].d : plist[p].delta);
+                        }
+            if (!ids.empty())
+            {
+               const auto Dz = [&](const double z) {
+                  zz.clear();
+                  for (const int id : ids)
+                     zz.emplace_back(id, z);
+                  const TubeProbe q = PatchZeroProbe(it, bs, c, zz, plist);
+                  return q.overlap ? std::max(q.delta, 0.0) : 0.0;
+               };
+               if (law.V(std::min(Dz(0.0), 0.999 * hL)) <= heldOld && Dz(0.0) < 0.999 * hL)
+                  continue;
+               double lo = 0.0, hi = deep;
+               for (int r = 0; r < 50; r++)
+               {
+                  const double mid = 0.5 * (lo + hi);
+                  const double D = Dz(mid);
+                  (D >= 0.999 * hL || law.V(D) > heldOld ? lo : hi) = mid;
+               }
+               it.gs.zero = hi;
+               it.gs.tZero.clear();
+               for (const int id : ids)
+                  it.gs.tZero.emplace_back(id, hi);
+               continue;
+            }
+         }
          if (d < 0.999 * hL && law.V(d) <= heldOld)
             continue;
          double lo = 0.0, hi = std::min(d, 0.999 * hL);
@@ -2614,6 +2707,7 @@ struct ContactSystemImpl
                   it.gs.pmLev = false;
                   it.gs.kStored = false;
                   it.gs.zero = it.gs.reff = 0.0;
+                  it.gs.tZero.clear();   // (patch_zero)
                   continue;
                }
                if (it.partOut)   // (island reach: a part out of this ball's reach is solved elsewhere)
@@ -2637,6 +2731,7 @@ struct ContactSystemImpl
                   sh.heldReff = (ring || mp != nullptr || ContactSettings::Get().cordHeldReff) && it.Surf(sf).touching ? it.Surf(sf).reff : 0.0;   // (cord_held_reff: a cord island holds it too)
                   sh.heldKb = mp != nullptr && it.Surf(sf).touching ? it.Surf(sf).kb : 0.0;
                   sh.heldKtb = mp != nullptr && it.Surf(sf).touching ? it.Surf(sf).ktb : 0.0;
+                  sh.patchZero = mp == nullptr && it.r->MovingPart() == nullptr;   // patch_zero: a static mesh or tube (GroupStep::Shape::patchZero)
                   if (hasPart && mp == nullptr && it.r->MovingPart() != nullptr)   // a part still on the old loop is a surface at its present pose in this cycle, its reaction left out, until it moves over (GroupStepDesign 3)
                   {
                      static const void *warned = nullptr;
@@ -2787,12 +2882,48 @@ struct ContactSystemImpl
             continue;
          const SurfaceShape *const sh = static_cast<const SurfaceShape *>((const GroupStep::Shape *)g.shape[it.s]);
          const SurfaceState &kept = sh->it->Surf(sh->surface);
+         if (g.PatchZeroItem(it))
+            GroupStep::PzCount(GroupStep::PzStats()[0], "items on the per-patch zero path at a cycle's start");
          if (ring && it.touching && g_contactKeptEnd(balls[it.a]))
          {
             GroupStep::Hit hp;
             g.ProbeItem(k, hp);
             const double was = sh->mp != nullptr ? kept.endDepth : sh->it->endDepth;
-            if (hp.nt > 0 && sh->mp != nullptr)   // a union of terms: each term by the same rule, its depth now (raw less its own zero) against its own end depth; the excess goes
+            if (g.PatchZeroItem(it))   // patch_zero (Z6): per patch, its depth now (from its zero) against its end depth (its pieces' tEnd; none: 0); the excess into its zero, all its pieces
+            {
+               for (int p = 0; p < hp.npat; p++)
+               {
+                  const GroupStep::HitPatch &P = hp.pat[p];
+                  double end = 0.0, z = 0.0;
+                  for (int q = 0; q < P.pn; q++)
+                  {
+                     const int id = hp.pc[P.p0 + q];
+                     for (const std::pair<int, double> &e : kept.tEnd)
+                        if (e.first == id)
+                        {
+                           end = std::max(end, e.second);
+                           break;
+                        }
+                     z = std::max(z, it.TermZero(id));
+                  }
+                  if (P.d <= end + 1e-9)
+                     continue;
+                  z += P.d - end;
+                  for (int q = 0; q < P.pn; q++)
+                  {
+                     const int id = hp.pc[P.p0 + q];
+                     size_t j = 0;
+                     while (j < it.tZero.size() && it.tZero[j].first != id)
+                        j++;
+                     if (j == it.tZero.size())
+                        it.tZero.emplace_back(id, z);
+                     else
+                        it.tZero[j].second = z;
+                     it.dZero = std::max(it.dZero, z);
+                  }
+               }
+            }
+            else if (hp.nt > 0 && sh->mp != nullptr)   // a union of terms: each term by the same rule, its depth now (raw less its own zero) against its own end depth; the excess goes
             {                                     // into that term's zero, so force (the terms) and book (the union of the zeroed terms) read one U = sum_t s_t V(a_t - z_t)
                for (int t = 0; t < hp.nt; t++)
                {
@@ -3444,6 +3575,31 @@ struct ContactSystemImpl
          kept.kr1 = gi.kr1;
          kept.kw1 = gi.kw1;
          kept.pmC = g.ball[gi.a].c;
+         thread_local std::vector<std::pair<int, double>> pzKeep;   // patch_zero (Z6, Z7): each patch's depth from its zero under each of its pieces (tEnd); the zeros of raw-pressed pieces
+         const bool pzItem = g.PatchZeroItem(gi);
+         if (pzItem)
+         {
+            GroupStep::Hit he;
+            g.ProbeItem(k, he);
+            kept.tEnd.clear();
+            pzKeep.clear();
+            for (int p = 0; p < he.npat; p++)
+            {
+               const GroupStep::HitPatch &P = he.pat[p];
+               double z = 0.0;
+               for (int q = 0; q < P.pn; q++)
+                  z = std::max(z, gi.TermZero(he.pc[P.p0 + q]));
+               for (int q = 0; q < P.pn; q++)
+               {
+                  const int id = he.pc[P.p0 + q];
+                  kept.tEnd.emplace_back(id, P.d);
+                  if (gi.TermZero(id) > 0.0 && he.pd[P.p0 + q].d + z > 0.0)   // (raw-pressed: the piece's depth is from its patch's zero)
+                     pzKeep.emplace_back(id, gi.TermZero(id));
+               }
+            }
+         }
+         else if (sh->mp == nullptr)
+            kept.tEnd.clear();
          // one entry per ball: an item not touching keeps its zero while the ball is still inside it (the zero follows the ball out, groupstep BackOut); zero 0 only once the ball is
          // clear: its raw depth at the cycle's end <= 0. Raw depth: ProbeItem is the shape's own probe less the item's zero, so adding gi.dZero back gives the geometric depth
          double zeroKept = gi.dZero;
@@ -3460,7 +3616,14 @@ struct ContactSystemImpl
          }
          kept.zero = zeroKept;
          kept.tZero.clear();
-         if (zeroKept > 0.0)
+         if (pzItem)   // patch_zero (Z7): entries of pieces not raw-pressed dropped, zero 0 once none is left
+         {
+            kept.tZero.assign(pzKeep.begin(), pzKeep.end());
+            kept.zero = 0.0;
+            for (const std::pair<int, double> &e : kept.tZero)
+               kept.zero = std::max(kept.zero, e.second);
+         }
+         else if (zeroKept > 0.0)
             kept.tZero = gi.tZero;
       }
       for (ContactSurfaceHost *const c : cords)

@@ -1847,8 +1847,9 @@ RubberContact::TubeProbe ContactSurfaceHost::ProbeList(const RubberContact::Ball
    const RubberContact::FaceRead *const pIn = ft != nullptr ? &frIn : nullptr, *const pPr = ft != nullptr ? &frPr : nullptr;
    if (ContactSettings::Get().multiContact)   // every pressed part its own Hertz bar (rubbercontact.h BarsTube / BarsTriangles); the playfield too (its holes are in its faces: meshholes.h)
    {
+      const double z0 = RubberContact::PatchZeros() != nullptr ? 0.0 : it.gs.zero;   // patch_zero (Z2): the group step's per-patch zeros set: raw patches, each shifted in the bars
       if (m_surface != nullptr)
-         return RubberContact::BarsTriangles(bs, m_surface->tris, m_surface->vid, m_surface->nb, *prL, m_set.edgeRadiusMm * 1e-3, c, it.gs.zero, pPr, &m_surface->fold, out);   // P3b: the near pass's faces (bars only use faces within R)
+         return RubberContact::BarsTriangles(bs, m_surface->tris, m_surface->vid, m_surface->nb, *prL, m_set.edgeRadiusMm * 1e-3, c, z0, pPr, &m_surface->fold, out);   // P3b: the near pass's faces (bars only use faces within R)
       const bool prof = SegProfOn() && !CordModel();   // P5 counters (static tubes; diagnostics only)
       const uint64_t t0 = prof ? __rdtsc() : 0;
       const int n = (int)m_ptsSI.size();
@@ -1856,12 +1857,12 @@ RubberContact::TubeProbe ContactSurfaceHost::ProbeList(const RubberContact::Ball
       RubberContact::TubeProbe pr;
       if (SegsOn())   // P5: every bar and joint presses within S - zero of the ball's centre, so every segment holding one is in the list
       {
-         const double need = bs.R + m_radiusSI - it.gs.zero;
+         const double need = bs.R + m_radiusSI - z0;
          const RubberContact::TubeProbe p0 = ProbeSegs(bs, it, c, need, segs);
-         pr = RubberContact::BarsTube(bs, m_ptsSI.data(), n, m_radiusSI, c, m_tubePre, it.gs.zero, segs, &p0, out);
+         pr = RubberContact::BarsTube(bs, m_ptsSI.data(), n, m_radiusSI, c, m_tubePre, z0, segs, &p0, out);
          if (FinderCheckOn())   // check mode: the whole tube's answer
          {
-            const RubberContact::TubeProbe w = RubberContact::BarsTube(bs, m_ptsSI.data(), n, m_radiusSI, c, m_tubePre, it.gs.zero);
+            const RubberContact::TubeProbe w = RubberContact::BarsTube(bs, m_ptsSI.data(), n, m_radiusSI, c, m_tubePre, z0);
             g_segStats.checks[1]++;
             if (!SameProbe(w, pr))
                g_segStats.mismatch[1]++;
@@ -1869,7 +1870,7 @@ RubberContact::TubeProbe ContactSurfaceHost::ProbeList(const RubberContact::Ball
          }
       }
       else
-         pr = RubberContact::BarsTube(bs, m_ptsSI.data(), n, m_radiusSI, c, m_tubePre, it.gs.zero, nullptr, nullptr, out);
+         pr = RubberContact::BarsTube(bs, m_ptsSI.data(), n, m_radiusSI, c, m_tubePre, z0, nullptr, nullptr, out);
       if (prof)
       {
          g_segStats.calls[1]++;
@@ -2117,20 +2118,26 @@ void ContactSurfaceHost::StepPieces(const RubberContact::BallSI &bs, const Surfa
             bestN[p] = t.n;
          }
       }
+      const std::vector<std::pair<int, double>> *const zl = RubberContact::PatchZeros();   // patch_zero (D3): each piece from its own patch's zero (its faces' entries; none: 0), final
+      thread_local std::vector<double> pz;
+      pz.assign(npc, 0.0);
+      if (zl != nullptr)
+         for (int j = 0; j < nL; j++)
+            pz[pid[j]] = std::max(pz[pid[j]], RubberContact::PieceZero(*zl, L[j]));
       for (int p = 0; p < npc; p++)
       {
          if (hasSeg[p] || !(bestD2[p] < INFINITY))
             continue;
          const double d = std::sqrt(bestD2[p]);
-         const double raw = bs.R - d;
-         if (raw > it.gs.zero || d <= 1e-12)
+         const double raw = bs.R - d - pz[p];   // (patch_zero: from its patch's zero; else before the item's zero, ZeroHit takes it off)
+         if (raw > (zl != nullptr ? 0.0 : it.gs.zero) || d <= 1e-12)
             continue;   // pressed: in the probe's answer (its patches)
          V3 n = bestN[p];
          if ((c - bestP[p]).Dot(n) < 0.0)
             n = n * -1.0;
          if (bestK[p] != 0)
             n = (c - bestP[p]) / d;
-         out.push_back({ raw, n, false });
+         out.push_back({ raw, n, zl != nullptr });
       }
       if (rs != nullptr)   // the ridges (a ridge about to press, a pass about to let go)
       {
@@ -2147,7 +2154,7 @@ void ContactSurfaceHost::StepPieces(const RubberContact::BallSI &bs, const Surfa
                for (int q = pp.off[p]; q < pp.off[p + 1]; q++)
                   if (pp.id[q] >= 0 && pp.id[q] != RubberContact::PatchPieceList::kNoPiece)
                      fp.emplace_back(pp.id[q], p);
-            const double S = bs.R - it.gs.zero;
+            const double S = bs.R - (zl != nullptr ? 0.0 : it.gs.zero);   // (patch_zero: an edge between two patches is in neither: zero 0)
             for (const auto &f : fp)
                for (int e = 0; e < 3; e++)
                {
@@ -2190,6 +2197,8 @@ void ContactSurfaceHost::StepPieces(const RubberContact::BallSI &bs, const Surfa
       segs = &allSegs;
    }
    const RubberContact::TubePre &pre = m_tubePre;
+   const std::vector<std::pair<int, double>> *const zl = RubberContact::PatchZeros();   // patch_zero (D3): each run from its own patch's zero (its segments' and joints' entries; none: 0), final
+   double zr = 0.0;
    bool open = false, holds = false;
    double b2 = INFINITY;
    V3 bp;
@@ -2198,13 +2207,14 @@ void ContactSurfaceHost::StepPieces(const RubberContact::BallSI &bs, const Surfa
       if (open && !holds && b2 < INFINITY)
       {
          const double d = std::sqrt(b2);
-         const double raw = bs.R + m_radiusSI - d;
-         if (raw <= it.gs.zero && d > 1e-12)   // (a pressed piece is in the probe's answer)
-            out.push_back({ raw, (c - bp) / d, false });
+         const double raw = bs.R + m_radiusSI - d - zr;
+         if (raw <= (zl != nullptr ? 0.0 : it.gs.zero) && d > 1e-12)   // (a pressed piece is in the probe's answer)
+            out.push_back({ raw, (c - bp) / d, zl != nullptr });
       }
       open = false;
       holds = false;
       b2 = INFINITY;
+      zr = 0.0;
    };
    for (const int i : *segs)   // (index order)
    {
@@ -2215,6 +2225,8 @@ void ContactSurfaceHost::StepPieces(const RubberContact::BallSI &bs, const Surfa
          flush();
       open = true;
       prev = i;
+      if (zl != nullptr)
+         zr = std::max(zr, std::max(RubberContact::PieceZero(*zl, i), std::max(RubberContact::PieceZero(*zl, -(i + 1)), RubberContact::PieceZero(*zl, -(i + 2)))));
       if (i == seg)
          holds = true;
       const double L2 = pre.L2[i];
@@ -2262,7 +2274,7 @@ void ContactSurfaceHost::LinkWindows(const RubberContact::BallSI &bs, const Surf
    if (m_surface != nullptr)
    {
       const RubberSurface &sf = *m_surface;
-      const double r = bs.R - it.gs.zero;
+      const double r = bs.R - (RubberContact::PatchZeros() != nullptr ? 0.0 : it.gs.zero);   // (patch_zero, D4: reach with no zero)
       if (r <= 0.0 || sf.nb.size() != sf.tris.size())
          return;
       const std::vector<int> &L0 = it.Faces(c0), &L1 = it.Faces(c1);
@@ -2290,7 +2302,8 @@ void ContactSurfaceHost::LinkWindows(const RubberContact::BallSI &bs, const Surf
    const int n = (int)m_ptsSI.size();
    if (n < 3)
       return;
-   const double r = bs.R + m_radiusSI - it.gs.zero;
+   const double zLw = RubberContact::PatchZeros() != nullptr ? 0.0 : it.gs.zero;   // (patch_zero, D4: reach with no zero)
+   const double r = bs.R + m_radiusSI - zLw;
    if (r <= 0.0)
       return;
    const V3 *const pts = m_ptsSI.data();
@@ -2299,7 +2312,7 @@ void ContactSurfaceHost::LinkWindows(const RubberContact::BallSI &bs, const Surf
    thread_local std::vector<int> allSegs;
    const std::vector<int> *segs;
    if (SegsOn())   // the ball's query: every segment within reach of the move (as PathReach)
-      segs = &SegsFor(it, c0 + m * 0.5, r + it.gs.zero + 0.5 * m.Length() + 1e-9);
+      segs = &SegsFor(it, c0 + m * 0.5, r + zLw + 0.5 * m.Length() + 1e-9);
    else
    {
       allSegs.resize((size_t)(n - 1));

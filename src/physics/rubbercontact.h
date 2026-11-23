@@ -1767,6 +1767,111 @@ namespace RubberContact
       return peaks;
    }
 
+   // patch_zero (to-do 1.33 piece 2b-3; runs/2026-11-23-zero-patch brief_code.md Z1, Z2, D6): the live found-inside zeros of the static item being probed, (piece id, its patch's
+   // zero) (GroupStep::Item::tZero), set by the group step around its probe of that item; null: the probe takes the scalar zero it is given. Set (even empty): the caller passes
+   // zero 0, the patches are found on raw depth and each is shifted by its own zero (a patch with no entry: 0)
+   inline const std::vector<std::pair<int, double>> *&PatchZeros()
+   {
+      thread_local const std::vector<std::pair<int, double>> *p = nullptr;
+      return p;
+   }
+   // patch_zero (rule 5, brief_code.md Z5): true: each node takes its own piece's entry (none: 0) instead of its patch's largest: a joined patch's parts with the zeros they carried
+   inline bool &PatchZerosPerPiece()
+   {
+      thread_local bool on = false;
+      return on;
+   }
+   // patch_zero (F2): set by ShiftedBars when a raw patch's pieces carry different entries (its largest taken: a net); the group step clears and reads it around its probe
+   inline bool &PatchZeroNet()
+   {
+      thread_local bool on = false;
+      return on;
+   }
+   inline double PieceZero(const std::vector<std::pair<int, double>> &zl, const int id)
+   {
+      for (const std::pair<int, double> &z : zl)
+         if (z.first == id)
+            return z.second;
+      return 0.0;
+   }
+   // patch_zero (Z2): one raw patch's shifted answer: its fold sum over its shifted nodes, its deepest node (raw and shifted alike: one zero per patch) and that node's shifted depth
+   struct ZeroPatch
+   {
+      FoldSum sum;
+      int deep = -1;
+      double top = 0.0;
+      double z = 0.0;
+   };
+   // patch_zero (Z2): nodes, adj RAW (the probe's zero 0), piece each node's id. The raw patches (MergeBars), each one's zero = the largest entry of zl among its pieces, then the
+   // level form of every patch on its own nodes shifted by its zero (d - z_p; a node at or below 0 drops out), all in one MergeBars: no link joins two raw patches, so the sums add.
+   // Returns the shifted peaks; sum the shifted fold sum; zp one entry per raw patch (MergeBars' order); nodeZ each node's patch zero. NodePatch() is left the RAW one; PeakTerms()
+   // as MergeBars on the shifted nodes leaves it (2 or more shifted peaks: the list)
+   inline int ShiftedBars(const std::vector<BarNode> &nodes, const std::vector<std::pair<int, int>> &adj, const std::vector<int> &piece, const std::vector<std::pair<int, double>> &zl,
+                          FoldSum &sum, std::vector<ZeroPatch> &zp, std::vector<double> &nodeZ)
+   {
+      thread_local std::vector<PatchSum> rawP, shP;
+      thread_local std::vector<int> npRaw, shOf, orig;
+      thread_local std::vector<BarNode> sn;
+      thread_local std::vector<std::pair<int, int>> sa;
+      FoldSum rawSum;
+      MergeBars(nodes, adj, rawSum, &rawP);
+      npRaw = NodePatch();
+      const int m = (int)nodes.size(), np = (int)rawP.size();
+      zp.assign(np, ZeroPatch());
+      for (int x = 0; x < m; x++)
+         if (npRaw[x] >= 0)
+            zp[npRaw[x]].z = std::max(zp[npRaw[x]].z, PieceZero(zl, piece[x]));
+      if (!PatchZerosPerPiece())   // F2: an entry below its patch's largest (pieces with no entry are not counted)
+         for (int x = 0; x < m; x++)
+            if (npRaw[x] >= 0)
+            {
+               const double e = PieceZero(zl, piece[x]);
+               if (e > 0.0 && e < zp[npRaw[x]].z)
+                  PatchZeroNet() = true;
+            }
+      nodeZ.assign(m, 0.0);
+      sn.clear();
+      orig.clear();
+      shOf.assign(m, -1);
+      for (int x = 0; x < m; x++)
+      {
+         const double z = PatchZerosPerPiece() ? PieceZero(zl, piece[x]) : npRaw[x] >= 0 ? zp[npRaw[x]].z : 0.0;
+         nodeZ[x] = z;
+         if (nodes[x].d - z > 0.0)
+         {
+            shOf[x] = (int)sn.size();
+            BarNode b = nodes[x];
+            b.d -= z;
+            sn.push_back(b);
+            orig.push_back(x);
+         }
+      }
+      for (int p = 0; p < np; p++)
+      {
+         zp[p].deep = rawP[p].deep;
+         zp[p].top = nodes[rawP[p].deep].d - zp[p].z;
+      }
+      sa.clear();
+      for (const std::pair<int, int> &e : adj)
+         if (shOf[e.first] >= 0 && shOf[e.second] >= 0)
+            sa.emplace_back(shOf[e.first], shOf[e.second]);
+      int peaks = 0;
+      if (sn.empty())
+         PeakTerms().clear();
+      else
+      {
+         peaks = MergeBars(sn, sa, sum, &shP);
+         for (const PatchSum &q : shP)   // each shifted patch into the raw patch it lies in
+         {
+            const int p = npRaw[orig[q.deep]];
+            zp[p].sum.s25 += q.sum.s25;
+            zp[p].sum.g = zp[p].sum.g + q.sum.g;
+         }
+      }
+      NodePatch() = npRaw;
+      return peaks;
+   }
+
    // The nearest point of segment p0 -> p1 (the ends exactly at a clamp, so two pieces that meet at a corner report the same bits there)
    inline V3 SegNearest(const V3 &p0, const V3 &p1, const V3 &c)
    {
@@ -1873,8 +1978,13 @@ namespace RubberContact
          }
          return pr;
       };
+      const std::vector<std::pair<int, double>> *const zl = PatchZeros();   // patch_zero: set, the caller passed zero 0 (Z2)
       if (!pr.overlap || pr.seg < 0 || pr.reff <= 0.0 || pr.delta <= zero || n < 3)
+      {
+         if (zl != nullptr && pr.overlap && pr.seg >= 0)   // patch_zero: the one piece, shifted by its patch's zero
+            pr.delta -= PieceZero(*zl, pr.seg);
          return one();
+      }
       const double S = ball.R + rho;
       const bool ring = pts[0].x == pts[n - 1].x && pts[0].y == pts[n - 1].y && pts[0].z == pts[n - 1].z;
       const int nv = ring ? n - 1 : n;   // joints: point n-1 of a ring is joint 0
@@ -1979,6 +2089,80 @@ namespace RubberContact
             }
          }
       };
+      if (zl != nullptr)   // patch_zero (Z2): the raw patches, each shifted by its own zero; the merged answer and the patch list from the shifted level form
+      {
+         if (nodes.empty())
+         {
+            pr.delta -= PieceZero(*zl, pr.seg);
+            return one();
+         }
+         thread_local std::vector<ZeroPatch> zp;
+         thread_local std::vector<double> nodeZ;
+         const int peaks = ShiftedBars(nodes, adj, nodeSeg, *zl, sum, zp, nodeZ);
+         const int rawTop = DeepestNode(nodes);
+         const TubeProbe base = pr;   // the raw deepest piece's probe
+         const auto alone = [&](const int x) {   // a node's piece probed alone: a segment, or a joint as the segments that meet there (index order)
+            if (x == rawTop)
+               return base;
+            thread_local std::vector<int> one2;
+            const int s = nodeSeg[x];
+            one2.clear();
+            if (s >= 0)
+               one2.push_back(s);
+            else
+            {
+               const int j = -s - 1;
+               if (j > 0)
+                  one2.push_back(j - 1);
+               if (j < n - 1)
+                  one2.push_back(j);
+               if (ring && j == 0)
+                  one2.push_back(n - 2);
+            }
+            const int hint = pre.hint;
+            const TubeProbe q = ProbeTube(ball, pts, n, rho, c, &pre, &one2);
+            pre.hint = hint;
+            return q;
+         };
+         int best = 0;   // the patch whose deepest node is deepest after the shift: the merged answer keeps its reff, point and seg
+         for (int p = 1; p < (int)zp.size(); p++)
+            if (zp[p].top > zp[best].top)
+               best = p;
+         pr = alone(zp[best].deep);
+         if (peaks > 0)
+            sum.Finish(pr, 0.0);
+         else   // no node above its zero: the gap is the deepest shifted node's
+         {
+            pr.delta = zp[best].top;
+            pr.normal = nodes[zp[best].deep].n;
+            pr.grad = 1.0;
+         }
+         if (patchesOut != nullptr)
+         {
+            patchesOut->clear();
+            for (const ZeroPatch &p : zp)
+            {
+               TubeProbe q = alone(p.deep);
+               if (p.sum.s25 > 0.0)
+                  p.sum.Finish(q, 0.0);
+               else
+               {
+                  q.delta = p.top;
+                  q.normal = nodes[p.deep].n;
+                  q.grad = 1.0;
+               }
+               patchesOut->push_back(q);
+            }
+            tubePd();
+            for (size_t x = 0; x < nodes.size(); x++)   // (B-lin: each piece's depth from its patch's zero)
+               nodePd[x].d -= nodeZ[x];
+            FillPatchPieces(nodeSeg, nodePd, (int)zp.size());
+            for (const ZeroPatch &p : zp)
+               PatchPieces().geo.push_back(tubeGeo(p.deep));
+            pcs = true;
+         }
+         return pr;
+      }
       if (MergeBars(nodes, adj, sum, patchesOut != nullptr ? &patches : nullptr) <= 1)
       {
          if (patchesOut != nullptr)
@@ -2107,10 +2291,13 @@ namespace RubberContact
          to += t - profT;
          profT = t;
       };
+      const std::vector<std::pair<int, double>> *const zl = PatchZeros();   // patch_zero: set, the caller passed zero 0 (Z2)
       if (!pr.overlap || pr.seg < 0 || pr.reff <= 0.0 || pr.delta <= zero || cand.size() < 2 || nb.size() != tris.size())
       {
          if (profS)
             ContactProf::CD().bRetProbe++;
+         if (zl != nullptr && pr.overlap && pr.seg >= 0)   // patch_zero: the one piece, shifted by its patch's zero
+            pr.delta -= PieceZero(*zl, pr.seg);
          return one();
       }
       if (profS)
@@ -2119,7 +2306,7 @@ namespace RubberContact
       // edges and no shared edge between two of them is concave toward c (b on c's side of plane A and a on c's side of plane B; fold built at load, RubberSurface::Link). Then the face
       // pass, edge pass and merge are skipped. Check mode (VPX_FINDER_CHECK=1) runs the full law on every skippable call and counts any that ends with more than one peak.
       bool cbSkip = false;
-      if (fold != nullptr && fold->size() == tris.size() && fr != nullptr && fr->t != nullptr && fr->t->useNear && &cand == &fr->t->inI)
+      if (zl == nullptr && fold != nullptr && fold->size() == tris.size() && fr != nullptr && fr->t != nullptr && fr->t->useNear && &cand == &fr->t->inI)   // (patch_zero: the full law, each patch's pieces needed for its zero)
       {
          thread_local std::vector<uint32_t> mark;   // stamp: in the set; stamp + 1: reached
          thread_local std::vector<int> st;
@@ -2465,8 +2652,10 @@ namespace RubberContact
             }
          }
       };
-      if (nodes.size() < 2)
+      if (nodes.size() < 2 && (zl == nullptr || nodes.empty()))   // (patch_zero: one node goes on to the shifted law)
       {
+         if (zl != nullptr)   // patch_zero: no face pressed: the probe's piece, shifted by its patch's zero
+            pr.delta -= PieceZero(*zl, pr.seg);
          if (patchesOut != nullptr)
          {
             meshPd();
@@ -2507,6 +2696,60 @@ namespace RubberContact
       if (profS)
          ContactProf::CD().bNodes += nodes.size();
       FoldSum sum;
+      if (zl != nullptr)   // patch_zero (Z2): the raw patches, each shifted by its own zero; the merged answer and the patch list from the shifted level form
+      {
+         thread_local std::vector<ZeroPatch> zp;
+         thread_local std::vector<double> nodeZ;
+         const int peaks = ShiftedBars(nodes, adj, nodePc, *zl, sum, zp, nodeZ);
+         profStamp(ContactProf::CD().bMerge);
+         const int rawTop = DeepestNode(nodes);
+         const TubeProbe base = pr;   // the raw deepest piece's probe
+         const auto alone = [&](const int x) {   // a node's piece probed alone (its triangle)
+            if (x == rawTop)
+               return base;
+            thread_local std::vector<int> one2;
+            one2.assign(1, nodeTri[x]);
+            return ProbeTriangles(ball, tris, one2, edgeRho, c);
+         };
+         int best = 0;   // the patch whose deepest node is deepest after the shift: the merged answer keeps its reff, point and seg
+         for (int p = 1; p < (int)zp.size(); p++)
+            if (zp[p].top > zp[best].top)
+               best = p;
+         pr = alone(zp[best].deep);
+         if (peaks > 0)
+            sum.Finish(pr, 0.0);
+         else   // no node above its zero: the gap is the deepest shifted node's
+         {
+            pr.delta = zp[best].top;
+            pr.normal = nodes[zp[best].deep].n;
+            pr.grad = 1.0;
+         }
+         if (patchesOut != nullptr)
+         {
+            patchesOut->clear();
+            for (const ZeroPatch &p : zp)
+            {
+               TubeProbe q = alone(p.deep);
+               if (p.sum.s25 > 0.0)
+                  p.sum.Finish(q, 0.0);
+               else
+               {
+                  q.delta = p.top;
+                  q.normal = nodes[p.deep].n;
+                  q.grad = 1.0;
+               }
+               patchesOut->push_back(q);
+            }
+            meshPd();
+            for (size_t x = 0; x < nodes.size(); x++)   // (B-lin: each piece's depth from its patch's zero)
+               nodePd[x].d -= nodeZ[x];
+            FillPatchPieces(nodePc, nodePd, (int)zp.size());
+            for (const ZeroPatch &p : zp)
+               PatchPieces().geo.push_back(meshGeo(p.deep));
+            pcs = true;
+         }
+         return pr;
+      }
       thread_local std::vector<PatchSum> patches;
       const int profPeaks = MergeBars(nodes, adj, sum, patchesOut != nullptr ? &patches : nullptr);
       profStamp(ContactProf::CD().bMerge);

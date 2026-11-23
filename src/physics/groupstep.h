@@ -258,6 +258,19 @@ namespace GroupStep
       long lookups = 0, entries = 0, set = 0;
    };
    inline PieceStats pieceStats;
+   // patch_zero counters (running totals logged at 1, 2, 4, ...): items on the per-patch path at a cycle's start, first-sight patches, rule-5 joins at Accept, start merges
+   // (F4), nets (a probe's raw patch with different zeros, F2)
+   inline void PzCount(std::atomic<long long> &n, const char *what)
+   {
+      const long long was = n.fetch_add(1), c = was + 1;
+      if (was == 0 || (c ^ was) > was)   // a power of 2 crossed
+         PLOGI << "patch_zero: " << c << " " << what;
+   }
+   inline std::atomic<long long> *PzStats()   // [0] items per cycle, [1] first-sight patches, [2] rule-5 joins, [3] F4 start merges, [4] F2 nets
+   {
+      static std::atomic<long long> c[5] { { 0 }, { 0 }, { 0 }, { 0 }, { 0 } };
+      return c;
+   }
    struct Hit
    {
       double delta = -1.0;
@@ -354,6 +367,7 @@ namespace GroupStep
       double layerM = 0.0;     // the rubber's thickness for the layer term, m (0 = no layer term)
       int onlyBall = -1;       // >= 0: only this ball meets it (a surface's list of near faces is one ball's)
       int part = -1;           // the part that carries it, its place among the group's parts; -1 = fixed. Its Probe fills the same columns, in the same order, every time
+      bool patchZero = false;  // patch_zero: a static mesh or tube (a fixed surface's own shape): with Settings::patchZero its item's zero is kept per patch (Item::tZero)
       mutable const double *trial = nullptr;   // a carried surface: each of its part's coordinates moved by this for the probe; null = where they are now
       virtual ~Shape() = default;
       virtual void Probe(const V3 &c, double R, Hit &h) const = 0;
@@ -517,6 +531,9 @@ namespace GroupStep
       // union), and a step whose time-ordered feed (rule T's forward sweep) differs from the union's is cut and solved again (at most 4 cuts); 0: start and end patches linked by
       // shared pieces only
       bool linkWindows = true;
+      // patchZero ([Contact] patch_zero, multi_contact and link_windows; to-do 1.33 piece 2b-3, runs/2026-11-23-zero-patch brief_code.md): 1: a static item with a zero keeps it per patch
+      // (Item::tZero: each raw-pressed piece of a zeroed patch with its patch's zero); its probe gets them (RubberContact::PatchZeros) and returns each patch shifted by its own zero
+      bool patchZero = true;
       // leverRollSlope ([Contact] lever_roll_slope; runs/2026-11-08-lead/slope_terms_design.md): Newton's slope takes two terms of laws the residual already computes.
       // The contact point rA = -n (R - dm / 2) moves with the mid depth (d dm / du = gm / 2): the slip changes by (gm / 4) sum_p wm_p x n and the torque arm by (gm / 4) s_p n, on the
       // balls' force and spin rows. The rolling limit lim = muRr R N (roll_model 1, rolling) changes with N: muRr R (h dN/du) along the torque's direction, on the spin rows.
@@ -1847,6 +1864,8 @@ namespace GroupStep
       }
       bool Touching(int k) const { return item[k].touching; }
       void ProbeItem(const int k, Hit &hp) const { Probe(item[k], ball, hp); }
+      // patch_zero (brief_code.md Z2, D2): a static mesh's or tube's item with its zero kept per patch: its probe returns every patch already shifted by its own zero
+      bool PatchZeroItem(const Item &it) const { return set.patchZero && it.b < 0 && shape[it.s]->patchZero && !it.tZero.empty(); }
       bool islandRing = false;   // (diagnostics: this use is a ring island, else a cord island; set by the caller)
       const Hit *StartHit(const int k) const { return nowStamp == stamp && k >= 0 && k < ni ? &hNow[k] : nullptr; }   // patch_friction (ridge arrival): item k's probe at the positions now (ChooseStep's), null when stale
       // Steps until dt is covered. capStep: the caller's own bound on a step; afterStep: after each. False: a step failed, and done says how far it got (time is lost, no energy can appear)
@@ -1932,7 +1951,9 @@ namespace GroupStep
          Hit hp;
          it.dZero = 0.0;
          it.tZero.clear();
-         if (!wasTouching && zero <= 0.0)
+         if (!wasTouching && zero <= 0.0 && set.patchZero && shape[it.s]->patchZero)   // patch_zero (Z4): a zero per raw patch
+            FirstSightPatches(it, hp);
+         else if (!wasTouching && zero <= 0.0)
          {
             Probe(it, ball, hp);
             it.dZero = std::max(hp.delta, 0.0);
@@ -2277,6 +2298,7 @@ namespace GroupStep
          nHalveDiag = 0;
          joinRounds = 0;
          lwCuts = 0;
+         pzMerged.clear();
          failContactBuf.clear();
          for (;;)
          {
@@ -2289,6 +2311,8 @@ namespace GroupStep
                   if (freed)
                      continue;
                }
+               if (MergeBeforeAccept())   // patch_zero (F4, F7): the union joined start patches with different zeros: one zero for them at the start, the same h again
+                  continue;
                if (set.linkWindows && LinkOrderCut(h))   // link_windows: the links' time order feeds an end patch less than the union: the step is too long
                   continue;
                if (StopExcess() <= 0.0)
@@ -2297,6 +2321,7 @@ namespace GroupStep
                   return h;
                }
                // the step that ends on the stop (Illinois false position on the step length), then solved again there (its end state is the one taken)
+            stopSearch:   // (patch_zero, F8: a merge's re-solve at hBelow that passes a stop searches again from that solve)
                const double *const zero = zeroS;
                // each stop on its own (one rule for every part): only the stops this step's move carries a body past count. A stop the body is on and leaving is none of
                // them: taken with the others it held the search's start at 0 and every step ended after ~1e-29 s (bench F4: 3000 steps, the cycle lost)
@@ -2387,6 +2412,20 @@ namespace GroupStep
                }
                if (!endOk)
                   return EnergyStep(hTry);
+               {
+                  bool merged = false;
+                  while (MergeBeforeAccept())   // patch_zero (F7): the stop search's final solve merged at its start: hBelow solved again (a patch pair merges once per step)
+                  {
+                     merged = true;
+                     if (!Solve(hBelow))
+                        return EnergyStep(hTry);
+                  }
+                  if (merged && StopExcess() > 0.0)   // patch_zero (F8): the re-solved step passes a stop: no Accept past it, the stop search again from this solve (h = hBelow)
+                  {
+                     h = hBelow;
+                     goto stopSearch;
+                  }
+               }
                Accept(hBelow, true);
                books.stopSteps++;
                return hBelow;
@@ -3604,8 +3643,263 @@ namespace GroupStep
       // A shape's raw hit less the item's zero. A union of terms with term zeros: each term's depth less its own zero (a_t - z_t), the union rebuilt from the zeroed terms as
       // the probe builds it from raw ones (hingegroup ProbeTerms: (sum_t s_t d_t^2.5)^0.4 over the pressing terms, else the deepest + term), so force (the terms' chords),
       // book (V of the union) and gating read the one potential sum_t s_t V(a_t - z_t)
+      // patch_zero: a static item's own probe with the given per-piece zeros (the item's or a trial list), every patch shifted by its own zero; nothing to take off after
+      void ProbeWithZeros(const Item &it, const std::vector<std::pair<int, double>> &zl, Hit &h) const
+      {
+         h.ne = 0;
+         h.kb = 0.0;
+         h.ktb = 0.0;
+         h.nc = 0;
+         h.npat = 0;
+         RubberContact::PatchZeros() = &zl;
+         RubberContact::PatchZeroNet() = false;
+         shape[it.s]->Probe(ball[it.a].c, ball[it.a].R, h);
+         RubberContact::PatchZeros() = nullptr;
+         PzNetCheck(it);
+      }
+      // patch_zero (F2, F6): a probe that found a raw patch whose pieces carry different zeros (the largest-entry rule is only a net: F4's start merge keeps a patch's zeros equal
+      // within a step). Only an Eval's probes are kept (pzNetS: the first such shape of this Eval; Eval clears it), and only the accepted solve's final Eval is told (PzNetTell,
+      // at Accept): counted, WARN and a notice once per table start; the next Accept gives that patch the parts' energy (rule 5). A solve's iterates are not counted
+      mutable bool pzEvalOn = false;
+      mutable int pzNetS = -1;
+      void PzNetCheck(const Item &it) const
+      {
+         if (!RubberContact::PatchZeroNet())
+            return;
+         RubberContact::PatchZeroNet() = false;
+         if (pzEvalOn && pzNetS < 0)
+            pzNetS = it.s;
+      }
+      void PzNetTell()
+      {
+         if (pzNetS < 0)
+            return;
+         PzCount(PzStats()[4], "nets (an accepted solve's final Eval: a raw patch with different zeros, F2)");
+         const Shape *const sh = shape[pzNetS];
+         ContactSystem::NoticeRetired("patch zero net: " + (sh != nullptr ? sh->Name() : std::string("?")));
+         pzNetS = -1;
+      }
+      // patch_zero (Z4): first sight of a static mesh or tube: each raw patch's zero = its raw level-form depth (its energy 0), an entry for each of its pieces, dZero the largest.
+      // A probe that names no pieces (patch_friction 0, or a path without ids): the scalar zero as before
+      void FirstSightPatches(Item &it, Hit &hp) const
+      {
+         static const std::vector<std::pair<int, double>> none;
+         ProbeWithZeros(it, none, hp);
+         it.tZero.clear();
+         it.dZero = 0.0;
+         for (int p = 0; p < hp.npat; p++)
+            if (hp.pat[p].d > 0.0)
+            {
+               for (int q = 0; q < hp.pat[p].pn; q++)
+                  if (hp.pc[hp.pat[p].p0 + q] != RubberContact::PatchPieceList::kNoPiece)
+                     it.tZero.emplace_back(hp.pc[hp.pat[p].p0 + q], hp.pat[p].d);
+               it.dZero = std::max(it.dZero, hp.pat[p].d);
+               PzCount(PzStats()[1], "first-sight patches");
+            }
+         if (it.tZero.empty())
+            it.dZero = std::max(hp.delta, 0.0);
+      }
+      // patch_zero (Z5, rule 5): at Accept, per patch of the end probe (raw patches, each shifted by its zero z, the largest entry of its pieces): d' its shifted depth (its level
+      // form's; no node above z: its deepest raw node less z), z = max(0, min(z, z + d')); every raw-pressed piece of the patch takes it (pieces that joined in the step included),
+      // entries of pieces not raw-pressed dropped. A patch whose entries differ (a join at the step's end): one zero by bisection, the joined patch's level-form sum (s25) equal
+      // to its parts' with the zeros they carried (zero_rule.md rule 5): only a net with F4 (a raw join inside a step with mixed zeros, F2).
+      void BackOutPatches(Item &it) const
+      {
+         Hit hr;
+         ProbeWithZeros(it, it.tZero, hr);
+         thread_local std::vector<std::pair<int, double>> nz, trial;
+         nz.clear();
+         const auto s25 = [](const Hit &h, const int k) { return k < h.npat && h.pat[k].d > 0.0 ? std::pow(h.pat[k].d, 2.5) : 0.0; };
+         for (int p = 0; p < hr.npat; p++)
+         {
+            const HitPatch &P = hr.pat[p];
+            double zlo = INFINITY, zhi = 0.0, deep = -INFINITY;
+            for (int q = 0; q < P.pn; q++)
+            {
+               const int id = hr.pc[P.p0 + q];
+               for (const std::pair<int, double> &e : it.tZero)
+                  if (e.first == id)
+                  {
+                     zlo = std::min(zlo, e.second);
+                     zhi = std::max(zhi, e.second);
+                     break;
+                  }
+            }
+            if (zhi <= 0.0)
+               continue;   // a patch with no zero: none kept
+            for (int q = 0; q < P.pn; q++)
+               deep = std::max(deep, hr.pd[P.p0 + q].d + zhi);   // (each piece's raw depth: the probe's is from the patch's zero)
+            double z = std::max(0.0, std::min(zhi, zhi + P.d));
+            if (zlo < zhi)   // rule 5
+            {
+               Hit hj;
+               RubberContact::PatchZerosPerPiece() = true;
+               ProbeWithZeros(it, it.tZero, hj);
+               RubberContact::PatchZerosPerPiece() = false;
+               const double target = s25(hj, p);
+               double lo = 0.0, hi = std::max(deep, 0.0);
+               for (int r = 0; r < 60; r++)
+               {
+                  const double mid = 0.5 * (lo + hi);
+                  trial.assign(it.tZero.begin(), it.tZero.end());
+                  for (int q = 0; q < P.pn; q++)
+                  {
+                     const int id = hr.pc[P.p0 + q];
+                     size_t j = 0;
+                     while (j < trial.size() && trial[j].first != id)
+                        j++;
+                     if (j == trial.size())
+                        trial.emplace_back(id, mid);
+                     else
+                        trial[j].second = mid;
+                  }
+                  Hit ht;
+                  ProbeWithZeros(it, trial, ht);
+                  (s25(ht, p) > target ? lo : hi) = mid;
+               }
+               z = hi;
+               PzCount(PzStats()[2], "rule-5 joins at Accept");
+            }
+            if (z <= 0.0)
+               continue;
+            for (int q = 0; q < P.pn; q++)
+               if (hr.pd[P.p0 + q].d + zhi > 0.0 && hr.pc[P.p0 + q] != RubberContact::PatchPieceList::kNoPiece)   // raw-pressed
+                  nz.emplace_back(hr.pc[P.p0 + q], z);
+         }
+         it.tZero.assign(nz.begin(), nz.end());
+         it.dZero = 0.0;
+         for (const std::pair<int, double> &e : it.tZero)
+            it.dZero = std::max(it.dZero, e.second);
+      }
+      // patch_zero (F4, start merge): the solve's last Eval (at its answer) found its union joining pressed start patches whose zeros differ (LinkUnion, pzMg). Before the same h
+      // is solved again, each such group's patches take ONE zero at the step's start position: bisection (60 halvings) on z with their summed level-form sums (s25) on the
+      // start probe equal to the sum with their own zeros (zero_rule.md rule 5: the start energy kept); every piece of them that has an entry or is raw-pressed gets it.
+      // Zeros change only here, between solves; the join then happens with equal zeros. A patch pair (their first pieces) merges at most once per step (pzMerged): a group
+      // whose differing pairs all merged already is left to the net (F2). True: a zero changed, solve again
+      // patch_zero (F7): the one call of the start merge, on the final solve of every step before it is accepted (Step: the normal and a halved step's solve, before the link
+      // order and stop checks, so no other solve comes between it and their Accept; the stop search's final solve, before its Accept). True: a zero changed, the same step
+      // length is solved again. (The energy step has no merge: the net, F2, checks it)
+      bool MergeBeforeAccept() { return set.patchZero && StartMerges(); }   // (patchZero implies linkWindows: ToStep, F9)
+      bool StartMerges()
+      {
+         bool any = false;
+         thread_local std::vector<int> jp;
+         thread_local std::vector<std::pair<int, double>> trial;
+         const auto s25 = [](const Hit &h, const int k) { return k < h.npat && h.pat[k].d > 0.0 ? std::pow(h.pat[k].d, 2.5) : 0.0; };
+         for (int k = 0; k < (int)pzMg.size() && k < ni; k++)
+         {
+            if (pzMg[k].empty() || !PatchZeroItem(item[k]))
+               continue;
+            Item &it = item[k];
+            const std::vector<std::pair<int, int>> &mg = pzMg[k];
+            Hit hr;
+            ProbeWithZeros(it, it.tZero, hr);   // (the balls are where the step starts)
+            const auto patchZ = [&](const HitPatch &P) {   // a patch's zero in hr: the largest entry of its pieces
+               double z = 0.0;
+               for (int q = 0; q < P.pn; q++)
+                  z = std::max(z, RubberContact::PieceZero(it.tZero, hr.pc[P.p0 + q]));
+               return z;
+            };
+            bool changed = false;
+            for (size_t g0 = 0; g0 < mg.size();)
+            {
+               size_t g1 = g0;
+               while (g1 < mg.size() && mg[g1].first == mg[g0].first)
+                  g1++;
+               jp.clear();
+               for (int p = 0; p < hr.npat; p++)   // the group's patches in hr: those holding one of its pieces
+               {
+                  const HitPatch &P = hr.pat[p];
+                  bool in = false;
+                  for (int q = 0; q < P.pn && !in; q++)
+                     for (size_t m = g0; m < g1 && !in; m++)
+                        in = hr.pc[P.p0 + q] == mg[m].second;
+                  if (in && P.pn > 0)
+                     jp.push_back(p);
+               }
+               g0 = g1;
+               bool fresh = false;
+               for (size_t a = 0; a < jp.size(); a++)
+                  for (size_t b = a + 1; b < jp.size(); b++)
+                  {
+                     const HitPatch &A = hr.pat[jp[a]], &B = hr.pat[jp[b]];
+                     const std::pair<int, int> pr(std::min(hr.pc[A.p0], hr.pc[B.p0]), std::max(hr.pc[A.p0], hr.pc[B.p0]));
+                     fresh = fresh || (patchZ(A) != patchZ(B) && std::find(pzMerged.begin(), pzMerged.end(), pr) == pzMerged.end());
+                  }
+               if (!fresh)
+                  continue;
+               double target = 0.0, deep = 0.0;
+               for (const int p : jp)
+               {
+                  const HitPatch &P = hr.pat[p];
+                  const double zp = patchZ(P);
+                  target += s25(hr, p);
+                  for (int q = 0; q < P.pn; q++)
+                     deep = std::max(deep, hr.pd[P.p0 + q].d + zp);   // (each piece's raw depth)
+               }
+               const auto withZero = [&](const double z) {   // trial = the item's zeros with z on every piece of the group that has an entry or is raw-pressed
+                  trial.assign(it.tZero.begin(), it.tZero.end());
+                  for (const int p : jp)
+                  {
+                     const HitPatch &P = hr.pat[p];
+                     const double zp = patchZ(P);
+                     for (int q = 0; q < P.pn; q++)
+                     {
+                        const int id = hr.pc[P.p0 + q];
+                        if (id == RubberContact::PatchPieceList::kNoPiece)
+                           continue;
+                        size_t j = 0;
+                        while (j < trial.size() && trial[j].first != id)
+                           j++;
+                        if (j < trial.size())
+                           trial[j].second = z;
+                        else if (hr.pd[P.p0 + q].d + zp > 0.0)
+                           trial.emplace_back(id, z);
+                     }
+                  }
+               };
+               double lo = 0.0, hi = deep;
+               for (int r = 0; r < 60; r++)
+               {
+                  const double mid = 0.5 * (lo + hi);
+                  withZero(mid);
+                  Hit ht;
+                  ProbeWithZeros(it, trial, ht);
+                  double s = 0.0;
+                  for (const int p : jp)
+                     s += s25(ht, p);
+                  (s > target ? lo : hi) = mid;
+               }
+               withZero(hi);
+               trial.erase(std::remove_if(trial.begin(), trial.end(), [](const std::pair<int, double> &e) { return e.second <= 0.0; }), trial.end());
+               it.tZero.assign(trial.begin(), trial.end());
+               for (size_t a = 0; a < jp.size(); a++)
+                  for (size_t b = a + 1; b < jp.size(); b++)
+                  {
+                     const int pa = hr.pc[hr.pat[jp[a]].p0], pb = hr.pc[hr.pat[jp[b]].p0];
+                     pzMerged.emplace_back(std::min(pa, pb), std::max(pa, pb));
+                  }
+               PzCount(PzStats()[3], "start merges (F4: start patches with different zeros joined by a step's union, one zero at the start)");
+               changed = true;
+               if (it.tZero.empty())
+                  break;
+               ProbeWithZeros(it, it.tZero, hr);   // (the next group's zeros from the item's new ones)
+            }
+            if (!changed)
+               continue;
+            it.dZero = 0.0;
+            for (const std::pair<int, double> &e : it.tZero)
+               it.dZero = std::max(it.dZero, e.second);
+            if (nowStamp == stamp)   // the step's start probe kept for the next attempt (BeginAttempt) reads the new zeros
+               Probe(it, ball, hNow[k], true);
+            any = true;
+         }
+         return any;
+      }
       void ZeroHit(const Item &it, Hit &hp) const
       {
+         if (PatchZeroItem(it))   // patch_zero: nothing to take off (the step pieces' entries too: each from its own patch's zero, StepPieces, D3)
+            return;
          for (int j = 0; j < hp.ne; j++)   // step pieces: each piece entry from the object's zero, as the merged depth (a ridge's is already)
             if (!hp.en[j].zeroed)
                hp.en[j].d -= it.dZero;
@@ -3667,10 +3961,21 @@ namespace GroupStep
             const bool listed = nearOn && it.nearK >= 0 && sh->part >= 0;
             if (listed)
                part[sh->part]->nearNow = &nearL[(size_t)it.nearK];
+            const bool pz = PatchZeroItem(it);   // patch_zero (D6): the item's live per-patch zeros to the probe, around its call
+            if (pz)
+            {
+               RubberContact::PatchZeros() = &it.tZero;
+               RubberContact::PatchZeroNet() = false;
+            }
             if (start)
                sh->ProbeStart(A.c, A.R, hp);
             else
                sh->Probe(A.c, A.R, hp);
+            if (pz)
+            {
+               RubberContact::PatchZeros() = nullptr;
+               PzNetCheck(it);
+            }
             if (listed)
                part[sh->part]->nearNow = nullptr;
             ZeroHit(it, hp);
@@ -3949,6 +4254,9 @@ namespace GroupStep
       std::vector<double> lwCut;
       std::vector<int> lwAdd;
       int lwCuts = 0;   // the order cuts of this step (Step)
+      // patch_zero (F4): per item, the last Eval's start patches to merge (group number, piece id; LinkUnion); the patch pairs merged in this step (their first pieces; StartMerges)
+      std::vector<std::vector<std::pair<int, int>>> pzMg;
+      std::vector<std::pair<int, int>> pzMerged;
       static constexpr int kLinkCuts = 4;
       int LwIx(const int id) const { return (int)(std::lower_bound(lwIds.begin(), lwIds.end(), id) - lwIds.begin()); }
       int LwFind(int x) { while (lwPar[x] != x) x = lwPar[x] = lwPar[lwPar[x]]; return x; }
@@ -3987,7 +4295,15 @@ namespace GroupStep
          lwS.clear();
          const Shape *const sh = shape[item[k].s];
          if (sh != nullptr)
+         {
+            static const std::vector<std::pair<int, double>> none;
+            const bool pz = PatchZeroItem(item[k]);   // patch_zero (D4): the links' reach with no zero (the patches are found on raw depth)
+            if (pz)
+               RubberContact::PatchZeros() = &none;
             sh->LinkWindows(c0, c1, lwS);
+            if (pz)
+               RubberContact::PatchZeros() = nullptr;
+         }
          LinkStats &ls = LinkCounters();
          LwCount(ls.gated, 1, "gated Evals", pfMs);
          LwCount(ls.windows, (long long)lwS.size(), "link windows computed", pfMs);
@@ -4041,6 +4357,76 @@ namespace GroupStep
                         lwAdd[k]++;
                   }
             }
+         if (PatchZeroItem(item[k]))   // patch_zero (F4, F5): the RAW-pressed start patches (a piece's raw depth > 0, whatever the patch's shifted depth) that share a union
+         {                             // component through any of their pieces, zeros differing: one group (group number, each piece id) in pzMg[k], for StartMerges (one zero at the step's start)
+            const Item &it = item[k];
+            const auto zeroOf = [&](const HitPatch &P) {
+               double z = 0.0;
+               for (int q = 0; q < P.pn; q++)
+                  z = std::max(z, it.TermZero(h0.pc[P.p0 + q]));
+               return z;
+            };
+            const auto rawPressed = [&](const HitPatch &P) {   // (a piece's raw depth: its probe depth, from the patch's zero, plus that zero)
+               const double z = zeroOf(P);
+               for (int q = 0; q < P.pn; q++)
+                  if (h0.pd[P.p0 + q].d + z > 0.0)
+                     return true;
+               return false;
+            };
+            if ((int)pzMg.size() <= k)
+               pzMg.resize(k + 1);
+            pzMg[k].clear();
+            thread_local std::vector<char> taken;
+            thread_local std::vector<int> grp, pp, owner;
+            taken.assign((size_t)n0, 0);
+            pp.resize((size_t)n0);
+            owner.assign((size_t)nPc, -1);
+            const auto findP = [&](int a) { while (pp[a] != a) a = pp[a] = pp[pp[a]]; return a; };
+            for (int i = 0; i < n0; i++)   // the patches joined through any piece's component (a raw-pressed patch at its zero need not have its pieces united above)
+            {
+               pp[i] = i;
+               if (!rawPressed(h0.pat[i]))
+               {
+                  taken[i] = 1;
+                  continue;
+               }
+               for (int q = 0; q < h0.pat[i].pn; q++)
+               {
+                  if (h0.pc[h0.pat[i].p0 + q] == RubberContact::PatchPieceList::kNoPiece)
+                     continue;
+                  const int r = LwFind(LwIx(h0.pc[h0.pat[i].p0 + q]));
+                  if (owner[r] < 0)
+                     owner[r] = i;
+                  else
+                     pp[findP(i)] = findP(owner[r]);
+               }
+            }
+            int ng = 0;
+            for (int i = 0; i < n0; i++)
+            {
+               if (taken[i] || h0.pat[i].pn <= 0)
+                  continue;
+               const int ri = findP(i);
+               const double zi = zeroOf(h0.pat[i]);
+               bool differ = false;
+               grp.assign(1, i);
+               for (int i2 = i + 1; i2 < n0; i2++)
+                  if (!taken[i2] && findP(i2) == ri)
+                  {
+                     grp.push_back(i2);
+                     differ = differ || zeroOf(h0.pat[i2]) != zi;
+                  }
+               for (const int g : grp)
+                  taken[g] = 1;
+               if (!differ)
+                  continue;
+               for (const int g : grp)
+                  for (int q = 0; q < h0.pat[g].pn; q++)
+                     if (h0.pc[h0.pat[g].p0 + q] != RubberContact::PatchPieceList::kNoPiece)
+                        pzMg[k].emplace_back(ng, h0.pc[h0.pat[g].p0 + q]);
+               ng++;
+            }
+         }
          // the order check: rule T's feed per pressed end patch against the union's (bit i: start patch i)
          if (n0 == 0 || n1 == 0)
             return;
@@ -4704,9 +5090,18 @@ namespace GroupStep
                impX[i] = ball[i].fExt;
             }
          }
+         struct PzEvalScope   // patch_zero (F6): this Eval's probes keep a net (PzNetCheck); none from an earlier Eval
+         {
+            const Group &g;
+            explicit PzEvalScope(const Group &gs) : g(gs) { g.pzEvalOn = true; g.pzNetS = -1; }
+            ~PzEvalScope() { g.pzEvalOn = false; }
+         } pzScope(*this);
          if (set.linkWindows)   // link_windows: this Eval's order check and added links per item (LinkUnion writes a gated item's)
          {
             lwCut.assign((size_t)ni, -1.0);
+            pzMg.resize((size_t)ni);   // (patch_zero, F4: LinkUnion fills a gated item's)
+            for (std::vector<std::pair<int, int>> &g : pzMg)
+               g.clear();
             lwAdd.assign((size_t)ni, 0);
          }
          if (J)
@@ -7479,6 +7874,7 @@ namespace GroupStep
 
       void Accept(double h, bool onStop)
       {
+         PzNetTell();   // patch_zero (F6): the net of the Eval this step is accepted on (every Accept: Step's, the energy step's)
          nearOn = false;   // (from here the balls are at the step's end: the probes take every piece)
          const bool hist = np > 0 && HistoryTraceOn();   // (diagnostics, read only)
          const HistE histS0 = hist ? HistEnergy() : HistE();
@@ -7586,7 +7982,9 @@ namespace GroupStep
                it.pmLev = false;
                it.kStored = false;
             }
-            if (!it.tZero.empty())   // a union of terms: each term's zero follows its term out (its raw depth at the step's end), dropped once the term is clear
+            if (PatchZeroItem(it))   // patch_zero (Z5): each patch's zero follows it out
+               BackOutPatches(it);
+            else if (!it.tZero.empty())   // a union of terms: each term's zero follows its term out (its raw depth at the step's end), dropped once the term is clear
             {
                Hit hr;
                Probe(it, ball, hr);
