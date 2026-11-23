@@ -74,8 +74,6 @@ namespace
    std::vector<double> g_cullCap, g_cullA, g_cullAH;   // one-pass bound: each cull part's EnergyCap this cycle (J; -1 = off), its aLin (J^0.5) and aHertz (J^0.6); sized once per table start (CullPrepare)
    uint64_t g_cullLeftOut = 0, g_cullCapTests = 0;   // part caps left out of E (no body reaches the part at Efull) of those tested
    double g_cullBoundUs = 0.0;   // check mode: the bound's own time (us, summed)
-   uint64_t g_hertzNoBound = 0;   // one-pass bound: closed forms with no bound (the Hertz tangent's slope 0.4 aHertz c^-0.6 >= 1) this table start; the notice is raised at the first (CullPrepare)
-   bool g_hertzNoticed = false;
    // one-pass bound: E = E0 + aL sqrt(E) closed in one step (the larger root): sqrt(E) = (aL + sqrt(aL^2 + 4 E0)) / 2; aL = 0: E0
    inline double SqrtClosedE(const double E0, const double aL)
    {
@@ -85,19 +83,19 @@ namespace
       return r * r;
    }
    // one-pass bound (design.md AGREED items 5, 5b): E <= E0 + aL sqrt(E) + aH E^0.4 (aL: linear stops' squash, aH: Hertz stops'), one pass. E^0.4 is concave, so its tangent at c lies
-   // above it: E^0.4 <= 0.6 c^0.4 + 0.4 c^-0.6 E; with s = 0.4 aH c^-0.6 < 1, (1 - s) E <= E0 + 0.6 aH c^0.4 + aL sqrt(E), closed as above. c = the sqrt form's E (aH = 0: E0, as
-   // item 5b states; it is <= E, so a nearer tangent). s >= 1 (or c 0): no bound (INFINITY: the caller's no-bound path), counted in g_hertzNoBound
+   // above it: E^0.4 <= 0.6 c^0.4 + 0.4 c^-0.6 E; with s = 0.4 aH c^-0.6 < 1, (1 - s) E <= E0 + 0.6 aH c^0.4 + aL sqrt(E), closed as above. c = the larger of the sqrt form's E
+   // (aH = 0: E0, as item 5b states) and aH^(5/3): the root E satisfies E >= aH E^0.4, so E >= aH^(5/3), and both are <= E (a nearer tangent, still above). Then s <= 0.4: a bound always
+   // exists, at a table start with E0 ~ 0 too (the sqrt form alone gave s >= 1 there: no bound). Paper: runs/2026-11-23-lead17/hertzbound/onepass.py (200 000 cases: never below the
+   // exact root, at most 1.29 x it, never above the sqrt-form tangent's bound)
    inline double OnePassE(const double E0, const double aL, const double aH)
    {
-      const double c = SqrtClosedE(E0, aL);
+      double c = SqrtClosedE(E0, aL);
       if (!(aH > 0.0))
          return c;
+      c = std::max(c, std::pow(aH, 5.0 / 3.0));
       const double s = c > 0.0 ? 0.4 * aH * std::pow(c, -0.6) : INFINITY;
       if (!(s < 1.0))
-      {
-         g_hertzNoBound++;
-         return INFINITY;
-      }
+         return INFINITY;   // (only if aH^(5/3) underflows to 0 with E0 = 0: the caller's no-bound path)
       return SqrtClosedE((E0 + 0.6 * aH * std::pow(c, 0.4)) / (1.0 - s), aL / (1.0 - s));
    }
    // a ball's travel bound over T (the part cull's, CullPrepare, and the grouping's, ReachEnergy): EnergyReach(0, E, m, a, T) + hv T = sqrt(0*0 + 2E/m) T + 0.5 a T T + hv T, rounded up by
@@ -156,8 +154,6 @@ namespace ContactSystem
       g_cullCap.clear();
       g_cullA.clear();
       g_cullAH.clear();
-      g_hertzNoBound = 0;
-      g_hertzNoticed = false;
       g_cullLeftOut = g_cullCapTests = 0;
       g_cullBoundUs = 0.0;
       GroupStep::partFinderProf = ContactProf::CheckOn() || GroupStep::FinderCheckEnv();   // (its counters: diagnostics only)
@@ -803,15 +799,6 @@ struct ContactSystemImpl
          PLOGI << o.str();
       }
       g_cullTravel.clear();
-      if (g_hertzNoBound > 0 && !g_hertzNoticed)   // (one-pass bound: the first closed form with no bound this table start, here or in last cycle's grouping; rule 8, once)
-      {
-         g_hertzNoticed = true;
-         std::ostringstream o;
-         o << "Energy bound: a Hertz stop's squash term (plunger, auto plunger or button cap pressed on its stop) has no one-pass bound at t=" << g_pplayer->m_time_msec
-           << " ms (0.4 aHertz E0^-0.6 >= 1): every moving part is a candidate that cycle. Report the table and vpinball.log";
-         PLOGW << o.str();
-         g_pplayer->m_liveUI->PushNotification(o.str(), 6000);
-      }
       if (!(E >= 0.0) || !std::isfinite(E))
       {
          if (g_cullNoBound++ == 0)
