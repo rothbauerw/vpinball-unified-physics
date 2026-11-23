@@ -264,7 +264,10 @@ namespace BatGroup
             if (phi <= 0.0)
                f.Stiffness(omR, still, 1);
             else if (omega < 0.0)
-               f.Approach(phi, -omega, omR, 2);
+               f.Approach(phi, -omega, omR, 2, [&] {   // (touch_predict: closing acceleration -alpha, PartAccel)
+                  const double *const acc = f.Accel();
+                  return acc != nullptr ? -acc[kPhi] : 0.0;
+               }, GroupStep::SpringCols(kPhi, -1.0));
             if (std::fabs(omega) > 1e-9)
                f.Turn(1.0, std::fabs(omega), 5);
          }
@@ -275,7 +278,11 @@ namespace BatGroup
             if (m < 0.0 || m > slop)
                f.Stiffness(omL, still, 3);
             else if (std::fabs(rate) > 1e-9)
-               f.Approach(rate > 0.0 ? slop - m : m, std::fabs(rate), omL, 4);
+               f.Approach(rate > 0.0 ? slop - m : m, std::fabs(rate), omL, 4, [&] {   // (touch_predict: the slack's closing acceleration, d/dt of rate = vp + lever omega: ap + lever alpha + dLever omega^2)
+                  const double *const acc = f.Accel();
+                  const double mdd = acc != nullptr ? acc[kX] + lever * acc[kPhi] + k.dLever * 1e-3 * omega * omega : 0.0;
+                  return rate > 0.0 ? mdd : -mdd;
+               }, GroupStep::SpringCols(kX, rate > 0.0 ? 1.0 : -1.0, kPhi, rate > 0.0 ? lever : -lever));
          }
          if (solenoid && phi < p.eosDeg * FM::DEG && omega > 1e-3)
             f.Arrival(p.eosDeg * FM::DEG - phi, omega, 0.0, 6);
@@ -487,6 +494,33 @@ namespace BatGroup
          }
          return -INFINITY;
       }
+      // touch_predict piece 3 (design 3.2a): the same stops at the step's start (bit 0 the up-stop: phi, the bat's inertia, the contact at the plunger's lever; bits 1, 2 the
+      // plunger's ends: xp, its mass). No stiffness of their own: the ASSUMED steel stop (AssumedStopK) sets d only
+      int StopsNow(const double *acc, GroupStep::StopNow *out, const int max) const override
+      {
+         int n = 0;
+         const auto add = [&](const double gap, const double v, const double a, const double mAt, const double k, const int coord, const int side, const unsigned id) {
+            if (!(gap > 0.0) || n >= max)
+               return;
+            GroupStep::StopNow &o = out[n++];
+            o.gap = gap, o.v = v, o.a = a, o.vs = 0.0, o.m = mAt, o.k = k, o.coord = coord, o.side = side, o.id = id;
+         };
+         const int nd = NumDof();   // (the state now, as the step will solve it: nDof is BeginStep's, stale in ChooseStep after a coil switch)
+         if (nd == 0)
+            return 0;
+         if (rigid)
+         {
+            add(phiStop - phi, omega, acc != nullptr ? acc[kPhi] : 0.0, Inertia(phi), GroupStep::AssumedStopK(Kin(phi).lever * 1e-3), kPhi, 1, 1u);
+            return n;
+         }
+         if (nd == 2)
+         {
+            const double ax = acc != nullptr ? acc[kX] : 0.0, kS = GroupStep::AssumedStopK(1.0);
+            add(xp - std::min(xMin, xp), -vp, -ax, mp, kS, kX, -1, 2u);
+            add(std::max(xMax, xp) - xp, vp, ax, mp, kS, kX, 1, 4u);
+         }
+         return n;
+      }
       unsigned CrossingStops(const double *x, const int off) const override
       {
          unsigned m = 0u;
@@ -496,18 +530,21 @@ namespace BatGroup
          return m;
       }
       // The body is on its stop (the group's test) and the free step presses it in: it stays on the stop for this step (a contact's complementarity, decided per step: no time is lost and nothing chatters); inelastic, as the stop's law
+      // Stop rule 2 (dead), runs/2026-11-22-touch-predict/design.md 3.2d: pinned at an arrival (Accept); within d at the start (touch_predict: stopNear > 0) on the stop
+      // whatever its start rate
       bool PinOnStop(const double *, int) override
       {
+         const bool nearIt = stopNear > 0.0;
          if (rigid)
          {
-            if (phiPinned || omega < 0.0)
+            if (phiPinned || (!nearIt && omega < 0.0))
                return false;
             pendingStopJ += 0.5 * Inertia(phi) * omega * omega;
             omega = 0.0;
             phiPinned = true;
             return true;
          }
-         if (plungerPinned || (xp < 0.5 * (xMin + xMax) ? vp > 0.0 : vp < 0.0))
+         if (plungerPinned || (!nearIt && (xp < 0.5 * (xMin + xMax) ? vp > 0.0 : vp < 0.0)))
             return false;
          pendingStopJ += 0.5 * mp * vp * vp;
          vp = 0.0;
@@ -814,7 +851,7 @@ namespace BatGroup
          else
             T = -cFree * rate;
          const double net = -Fc + T;
-         const double tol = GroupStep::Group::kOnStop;
+         const double tol = stopNear > 0.0 ? stopNear : GroupStep::Group::kOnStop;   // (touch_predict: the taken stop's d, design 2.4)
          if ((xp <= xMin + tol && net <= 0.0 && vp <= 1e-9) || (xp >= xMax - tol && net >= 0.0 && vp >= -1e-9))   // a body moving off its stop is not held by it
          {
             plungerPinned = true;

@@ -311,7 +311,10 @@ namespace PlungerRod
          const double kNow = km + (q < c0 ? ko : 0.0);
          f.Stiffness(std::sqrt(kNow / mass), std::fabs(rate) <= gs.vSteady, 2);
          if (q > c0 && rate < 0.0)
-            f.Approach(q - c0, -rate, std::sqrt((km + ko) / mass), 3);
+            f.Approach(q - c0, -rate, std::sqrt((km + ko) / mass), 3, [&] {   // (touch_predict: closing acceleration -a_q, PartAccel; sign as its rate)
+               const double *const acc = f.Accel();
+               return acc != nullptr ? -acc[0] : 0.0;
+            }, GroupStep::SpringCols(0, -1.0));
       }
    };
 }

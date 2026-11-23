@@ -27,9 +27,6 @@
 
 namespace GroupStep
 {
-   // Steel on steel (E 200 GPa, nu 0.3, both bodies): E* = E / (2 (1 - nu^2))
-   constexpr double kSteelEstar = 200e9 / (2.0 * (1.0 - 0.3 * 0.3));
-
    // A stop: side +1 blocks q above at, side -1 blocks q below it; touched at a lever from the axis (1 for a body that slides). A driven stop moves at toward target at rate. Part of the body's state (plain bytes);
    // its restitution table is a setting the body keeps beside it (BodyStopLaw)
    struct BodyStop
@@ -313,6 +310,45 @@ namespace GroupStep
          gExcessLast = e;
          return e;
       }
+      // touch_predict piece 3 (design 3.2a): its armed stops at the step's start (StopNow, its own units: m or rad): gap > 0, closing rate side (rate - the stop's speed), the
+      // closing acceleration side acc (acc: its coordinate's start acceleration, PartAccel), mass at the stop its own (mass or inertia), k the stop's Hertz k at the lever as the
+      // coordinate takes it (k lever^2.5), id its StopBit in the part's mask (shift: 8 x the axis). None with no unknown (on a stop: pinned)
+      int AxisStopsNow(const double acc, const int coord, const unsigned shift, StopNow *out, const int max) const
+      {
+         int n = 0;
+         if (AxisDof() == 0)
+            return 0;
+         for (int i = 0; i < (int)stops.size() && i <= 7 && n < max; i++)
+         {
+            const BodyStop &s = stops[i];
+            const double gap = -s.side * (q - s.at);
+            if (!s.enabled || !s.armed || !(gap > 0.0))
+               continue;
+            StopNow &o = out[n++];
+            o.gap = gap;
+            o.vs = s.side * s.SpeedNow();
+            o.v = s.side * rate - o.vs;
+            o.a = s.side * acc;
+            o.m = mass;
+            o.k = s.k * std::pow(s.lever, 2.5);
+            o.coord = coord;
+            o.side = s.side;
+            o.id = StopBit(i) << shift;
+         }
+         return n;
+      }
+      // touch_predict piece 3 (design 3.5, P7): a driven stop of a body with an unknown reaches its target in this time (its place has a kink there): the earliest, inf none
+      double AxisDrivenArrival() const
+      {
+         double t = INFINITY;
+         if (AxisDof() == 0)
+            return t;
+         for (const BodyStop &s : stops)
+            if (s.enabled && s.armed && s.rate > 0.0 && s.at != s.target)
+               t = std::min(t, std::fabs(s.target - s.at) / s.rate);
+         return t;
+      }
+      double tpNear = 0.0;   // touch_predict: > 0 only while its part accepts a step that ended within d of a predicted stop, or pins on a crossed stop it started within d of: that d, read for 'at the stop' (StopOrTurn, UpdateStops, AxisPinOnStop) instead of -1e-8 and kNearStop (design 2.4)
       unsigned AxisCrossingStops(const double *x, const int d) const
       {
          const int stop = gExcessStop;   // (what the last StopExcess found stays for ArrivingAtStop and PinOnStop)
@@ -343,14 +379,14 @@ namespace GroupStep
          if (gExcessStop < 0)
             return false;
          BodyStop &s = stops[gExcessStop];
-         if (s.side * (q - s.at) < -kNearStop)
+         if (s.side * (q - s.at) < -(tpNear > 0.0 ? tpNear : kNearStop))   // (touch_predict: the stop's d at the step's start, design 2.4)
             return false;
          if (!s.touching)
             stopEvents.push_back({ gExcessStop, std::fabs(rate), axisIndex });
          s.touching = true;
          const double r1 = EndRate(gDqLast, rate, gH), f = mass * (r1 - rate) / gH;
          const double vRel = std::fabs(rate - s.speed) * s.lever, F = s.side * f > 0.0 ? std::fabs(f) / s.lever : 0.0;
-         if (0.5 * s.EffMass(mass) * vRel * vRel > s.HeldEnergy(F))
+         if (tpNear > 0.0 || 0.5 * s.EffMass(mass) * vRel * vRel > s.HeldEnergy(F))   // (touch_predict: rule 1, design 3.2d: the impact law decides, its rebound's rise against d)
          {
             // on the stop and closing on it: the impact law at once (a rebound, or a rest), as DrivenTouch takes it between steps
             Impact(gExcessStop, F, pendDrive, pendLoss);
@@ -510,7 +546,7 @@ namespace GroupStep
             const double gap = s.side * (q - s.at);
             if (!s.armed && gap <= 0.0)
                s.armed = true;
-            if (s.touching && gap < -kNearStop)
+            if (s.touching && gap < -(tpNear > 0.0 ? tpNear : kNearStop))
                s.touching = false;
          }
       }
@@ -518,7 +554,7 @@ namespace GroupStep
       void StopOrTurn(const double r0, const double h, double &driveJ, double &lossJ)
       {
          int hit = -1;
-         double best = -1e-8;
+         double best = tpNear > 0.0 ? -tpNear : -1e-8;
          for (int i = 0; i < (int)stops.size(); i++)
          {
             const BodyStop &s = stops[i];
@@ -555,7 +591,11 @@ namespace GroupStep
          for (const BodyStop &o : stops)
             if (s.speed == 0.0 && o.enabled && o.armed && o.side == -s.side && o.speed == 0.0 && std::fabs(o.at - s.at) <= kNearStop)
                closed = true;
-         if (closed || 0.5 * s.EffMass(mass) * vOut * vOut <= s.HeldEnergy(F))
+         // stop rule 1 (bounce), runs/2026-11-22-touch-predict/design.md 3.2d (touch_predict: tpNear > 0, the stop's d): a rebound whose rise against the force pressing it
+         // back, rOut^2 / (2 aIn), is within d stays on the stop; aIn = F lever / mass, the axis's acceleration toward the stop (no pressing force: aIn 0, it leaves)
+         const double rOut = e * std::fabs(vr), aIn = F * s.lever / mass;
+         const bool rests = tpNear > 0.0 ? rOut * rOut <= 2.0 * aIn * tpNear : 0.5 * s.EffMass(mass) * vOut * vOut <= s.HeldEnergy(F);
+         if (closed || rests)
          {
             rNew = s.speed;
             pinStop = i;
@@ -688,6 +728,25 @@ namespace GroupStep
             d += ax[k]->AxisDof();
          }
          return e;
+      }
+      int StopsNow(const double *acc, StopNow *out, const int max) const
+      {
+         int cnt = 0;
+         for (int k = 0; k < n; k++)
+            cnt += ax[k]->AxisStopsNow(acc != nullptr ? acc[k] : 0.0, k, 8u * (unsigned)k, out + cnt, max - cnt);
+         return cnt;
+      }
+      double DrivenArrival() const
+      {
+         double t = INFINITY;
+         for (int k = 0; k < n; k++)
+            t = std::min(t, ax[k]->AxisDrivenArrival());
+         return t;
+      }
+      void SetNear(const double d)
+      {
+         for (int k = 0; k < n; k++)
+            ax[k]->tpNear = d;
       }
       unsigned CrossingStops(const double *x, const int off) const
       {
@@ -826,6 +885,9 @@ namespace GroupStep
       {
          if (std::fabs(rate) > 1e-9)
             f.Turn(1.0, std::fabs(rate), 1);   // at most the group's turn limit per step
+         if (f.predictOn)   // touch_predict piece 3 (design 3.5): a driven stop reaches its target (its place's kink) at the step's end, known exactly
+            if (const double t = axes.DrivenArrival(); t < INFINITY)
+               f.TimeLeft(t, 8);
       }
       bool BeginStep(const Ball *, int, const double h, double *x, const int off) override
       {
@@ -841,11 +903,22 @@ namespace GroupStep
       double StopExcess(const double *x, const int off, const unsigned mask = ~0u) const override { return axes.StopExcess(x, off, mask); }
       unsigned CrossingStops(const double *x, const int off) const override { return axes.CrossingStops(x, off); }
       bool ArrivingAtStop() const override { return axes.ArrivingAtStop(); }
-      bool PinOnStop(const double *, int) override { return axes.PinOnStop(); }
+      // stop rule 1 (bounce), runs/2026-11-22-touch-predict/design.md 3.2d: within d at the start it is on the stop (AxisPinOnStop, no start-rate test); an arrival
+      // rebounds by its stop's law and stays when the rebound's rise is within d (Impact)
+      bool PinOnStop(const double *, int) override
+      {
+         axes.SetNear(stopNear);   // (touch_predict: the crossed stop's d, 0 otherwise)
+         const bool pinned = axes.PinOnStop();
+         axes.SetNear(0.0);
+         return pinned;
+      }
       bool FreedByStep() override { return axes.FreedByStep(); }
+      int StopsNow(const double *acc, StopNow *out, const int max) const override { return axes.StopsNow(acc, out, max); }
       void Accept(const double *x, const int off, const double h, const bool onStop, double &driveJ, double &lossJ, bool &through) override
       {
+         axes.SetNear(stopNear);   // (touch_predict: the taken stop's d, 0 otherwise)
          axes.Accept(x, off, h, onStop, driveJ, lossJ, through);
+         axes.SetNear(0.0);
          AfterMove();
       }
       // after an energy step: the state it saved at the step's start, full precision (for an exact replay; rad, rad/s, the ball load in N m and N). The books are left out (counted, never read by a step).

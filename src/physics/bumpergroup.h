@@ -306,15 +306,28 @@ namespace BumperGroup
       {
          const Pose q = PoseAt(nullptr);
          const double tw = std::sqrt(wx * wx + wy * wy), b = std::sqrt(q.A2);
-         const auto seat = [&](const double a, const double r, const double om, const int whyIn, const int whyGap) {
+         const auto seat = [&](const bool lip, const double a, const double r, const double om, const int whyIn, const int whyGap) {
             const double rate = std::fabs(vz) + r * tw;
             if (a > -r * b)
                f.Stiffness(om, rate <= gs.vSteady, whyIn);
+            else if (f.predictOn)   // (touch_predict K2/K3: the seat's signed gap, closing rate and acceleration, and its touch on the exact gap's free path)
+            {
+               const double *const acc = f.Accel();   // (PartAccel; none: the free path at constant rates)
+               const double v3[3] = { vz, wx, wy }, a3[3] = { acc != nullptr ? acc[kZ] : 0.0, acc != nullptr ? acc[kThx] : 0.0, acc != nullptr ? acc[kThy] : 0.0 };
+               double vc, ac;
+               SeatClosing(q, lip, v3, a3, vc, ac);
+               f.ApproachPath(SeatGap(q, lip), vc, ac, om, whyGap, [&](const double t) {   // the exact gap at q0 + qdot t + qddot t^2 / 2
+                  double dq[4] = {};
+                  for (int k = 0; k < 3; k++)
+                     dq[k] = v3[k] * t + 0.5 * a3[k] * t * t;
+                  return SeatGap(PoseAt(dq), lip);
+               }, GroupStep::SpringCols::PartGap());
+            }
             else if (rate > 1e-9)
-               f.Approach(-a - r * b, rate, om, whyGap);
+               f.Approach(-a - r * b, rate, om, whyGap);   // (touch_predict 0: today's bound)
          };
-         seat(ALip(q), rLip, omLip, 1, 2);
-         seat(-z, rRim, omRim, 3, 4);
+         seat(true, ALip(q), rLip, omLip, 1, 2);
+         seat(false, -z, rRim, omRim, 3, 4);
          if (tw > 1e-6)
             f.Turn(kTurnRadius, tw, 5);
          // the coil: the pulse's end, the current's own time, the steep field on a moving ring
@@ -539,6 +552,24 @@ namespace BumperGroup
             e = std::max(e, x1 - stroke);
          return e;
       }
+      // touch_predict piece 3 (design 3.2a): the same stops at the step's start (bit 0 the rest, bit 1 the stroke's end) on dr, the ring's mass, each stop's own Hertz k
+      // (contactbumper.h: cfg.kRest the rest's rubber, cfg.kCoil the stroke end's steel; the values its contact time takes) for d. None while on a stop (no unknown)
+      int StopsNow(const double *acc, GroupStep::StopNow *out, const int max) const override
+      {
+         if (ringStop != 0 || max < 2)
+            return 0;
+         int n = 0;
+         const double ar = acc != nullptr ? acc[kR] : 0.0;
+         const auto add = [&](const double gap, const double v, const double a, const double k, const int side, const unsigned id) {
+            if (!(gap > 0.0))
+               return;
+            GroupStep::StopNow &o = out[n++];
+            o.gap = gap, o.v = v, o.a = a, o.vs = 0.0, o.m = mR, o.k = k, o.coord = kR, o.side = side, o.id = id;
+         };
+         add(dr, -vr, -ar, cfg.kRest, -1, 1u);
+         add(stroke - dr, vr, ar, cfg.kCoil, 1, 2u);
+         return n;
+      }
       unsigned CrossingStops(const double *x, const int off) const override
       {
          const bool arriving = gArriving;   // (what the last StopExcess found stays for ArrivingAtStop)
@@ -550,13 +581,14 @@ namespace BumperGroup
          return m;
       }
       bool ArrivingAtStop() const override { return gArriving; }
-      // On its stop and the move just solved would take it past: it stays, the small speed it had goes
+      // On its stop and the move just solved would take it past: it stays, the small speed it had goes. Stop rule 1 (bounce), runs/2026-11-22-touch-predict/design.md 3.2d:
+      // within d at the start (touch_predict: stopNear > 0) it is on the stop whatever its start rate
       bool PinOnStop(const double *x, const int off) override
       {
          if (ringStop != 0)
             return false;
          const bool rest = dr + x[off + kR] < 0.5 * stroke;
-         if (!gTriedFree && (rest ? vr > 0.0 : vr < 0.0))
+         if (!(stopNear > 0.0) && !gTriedFree && (rest ? vr > 0.0 : vr < 0.0))
             return false;
          gPendingStopJ += 0.5 * mR * vr * vr;
          vr = 0.0;
@@ -600,12 +632,15 @@ namespace BumperGroup
             double v1 = GroupStep::EndRate(dx, vr, h);
             dr += dx;
             const bool rest = dr < 0.5 * stroke;
-            if (onStop && (rest ? dr : stroke - dr) < 1e-7)   // the impact: the rate reverses by the restitution; a rebound that would be back within the stop's own contact time never left it
+            if (onStop && (rest ? dr : stroke - dr) < (stopNear > 0.0 ? stopNear : 1e-7))   // (touch_predict: the taken stop's d, design 2.4)   // the impact: the rate reverses by the restitution; a rebound that would be back within the stop's own contact time never left it
             {
                const double vimp = std::fabs(v1), e = rest ? cfg.p.ringRestE : cfg.p.ringCoilE, vAfter = e * vimp;
                const double net = RingNetDown(), aIn = (rest ? -net : net) / mR;
                const double kStop = rest ? cfg.kRest : cfg.kCoil;
-               const bool stays = aIn > 0.0 && (vAfter <= 1e-12 || 2.0 * vAfter / aIn < 2.94 * std::pow(1.25 * mR / kStop, 0.4) * std::pow(vAfter, -0.2));
+               // stop rule 1 (bounce), runs/2026-11-22-touch-predict/design.md 3.2d (touch_predict: stopNear > 0, the taken stop's d): a rebound whose rise against the
+               // ring's net force toward the stop, vAfter^2 / (2 aIn), is within d stays on it
+               const bool stays = aIn > 0.0 && (stopNear > 0.0 ? vAfter * vAfter <= 2.0 * aIn * stopNear
+                                                               : vAfter <= 1e-12 || 2.0 * vAfter / aIn < 2.94 * std::pow(1.25 * mR / kStop, 0.4) * std::pow(vAfter, -0.2));
                stopJ += 0.5 * mR * (stays ? vimp * vimp : vimp * vimp - vAfter * vAfter);
                if (rest)
                {
@@ -741,6 +776,47 @@ namespace BumperGroup
          return q;
       }
       double ALip(const Pose &q) const { return q.z + q.Cz * tIn - zBase; }
+      // touch_predict (K2-K4, runs/2026-11-23-touch-p3paper/s_paper.py): a seat's gap (m, > 0 open), lip: -ALip - rLip b, rim: z - rRim b, b = sqrt(A2) (StepFacts' own form)
+      double SeatGap(const Pose &q, const bool lip) const { return lip ? -ALip(q) - rLip * std::sqrt(q.A2) : q.z - rRim * std::sqrt(q.A2); }
+      // its signed closing rate vc = -(grad g . qdot) and closing acceleration ac = -(grad g . qddot + qdot' H qdot) in the coordinates (z, thx, thy); v, a: qdot, qddot.
+      // g = -sz z - tL Cz - r b (+ const), sz +1 lip / -1 rim, tL = tIn lip / 0 rim; Cz = cx cy, b = sqrt(1 - Cz^2) (A2 = 1 - Cz^2 identically). With c_k = dCz/dth_k:
+      // b_k = -Cz c_k / b, b_kl = -(c_k c_l + Cz c_kl) / b - Cz^2 c_k c_l / b^3 (the tilt cone's curvature r (|w|^2 - (u.w)^2) / b, paper S1)
+      void SeatClosing(const Pose &q, const bool lip, const double v[3], const double a[3], double &vc, double &ac) const
+      {
+         const double sz = lip ? 1.0 : -1.0, tL = lip ? tIn : 0.0, r = lip ? rLip : rRim, b = std::sqrt(q.A2), c = q.Cz;
+         if (!(b > 0.0))   // the cone point (no tilt): one-sided, b' = |w| (never the central 0, paper S2), b'' = w.alpha / |w| (|alpha| at w = 0), Cz'' = -|w|^2
+         {
+            const double tw = std::sqrt(v[1] * v[1] + v[2] * v[2]), ta = std::sqrt(a[1] * a[1] + a[2] * a[2]);
+            vc = sz * v[0] + r * tw;
+            ac = sz * a[0] - tL * tw * tw + r * (tw > 0.0 ? (v[1] * a[1] + v[2] * a[2]) / tw : ta);
+            return;
+         }
+         const double ck[2] = { -q.sx * q.cy, -q.cx * q.sy };                               // dCz/dthx, dCz/dthy
+         const double ckl[2][2] = { { -c, q.sx * q.sy }, { q.sx * q.sy, -c } };              // d2Cz
+         double gk[2], vHv = 0.0;
+         for (int k = 0; k < 2; k++)
+            gk[k] = -tL * ck[k] + r * c * ck[k] / b;                                         // dg/dth_k = -tL c_k - r b_k
+         for (int k = 0; k < 2; k++)
+            for (int l = 0; l < 2; l++)
+            {
+               const double bkl = -(ck[k] * ck[l] + c * ckl[k][l]) / b - c * c * ck[k] * ck[l] / (b * b * b);
+               vHv += v[1 + k] * (-tL * ckl[k][l] - r * bkl) * v[1 + l];                    // H_kl = -tL c_kl - r b_kl (z enters g linearly: no H row)
+            }
+         vc = sz * v[0] - gk[0] * v[1] - gk[1] * v[2];                                       // -(grad g . qdot), dg/dz = -sz
+         ac = sz * a[0] - gk[0] * a[1] - gk[1] * a[2] - vHv;                                 // -(grad g . qddot + qdot' H qdot)
+      }
+      // K4: the seat's exact gap and signed closing rate at the solved end (why 2 lip, 4 rim: StepFacts' whyGap)
+      bool SpringGapEnd(const int why, const double *const dq, const double *const rate, double &gap, double &closing) const override
+      {
+         if (why != 2 && why != 4)
+            return false;
+         const Pose q = PoseAt(dq);
+         const double v3[3] = { rate[kZ], rate[kThx], rate[kThy] }, a3[3] = {};
+         double ac;
+         gap = SeatGap(q, why == 2);
+         SeatClosing(q, why == 2, v3, a3, closing, ac);
+         return true;
+      }
       // The seat: a flat ring on an elastic rim, integrated exactly round the circle (design section 5). a: pressing depth at the centre, b: radius x tilt. Va = dV/da, VbB = (dV/db) / b
       struct SeatE { double V, Va, VbB; };
       SeatE Seat(const double a, const double b) const { return SeatAt(kSeat, a, a + b, b); }

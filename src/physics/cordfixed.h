@@ -617,14 +617,35 @@ public:
          e = std::max(e, -(phi + x[off]));
       return e;
    }
+   // touch_predict piece 3 (design 3.2a): the same stops at the step's start (bit 0 the coil stop, bit 1 the rest) on phi, the plate's inertia with the plunger's. No stiffness
+   // of their own: the ASSUMED steel stop (AssumedStopK) at the plunger's lever sets d only (the rest stop's contact point is not modelled: the same lever, ASSUMED)
+   int StopsNow(const double *acc, GroupStep::StopNow *out, int max) const override
+   {
+      if (!pl.on || pinned || max < 2)
+         return 0;
+      int n = 0;
+      const double a0 = acc != nullptr ? acc[0] : 0.0, I = Inertia(phi);
+      const double k = GroupStep::AssumedStopK(FlipperModel::Kinematics(sl.mech, der, der.theta0 + phi).lever * 1e-3);
+      const auto add = [&](const double gap, const double v, const double a, const int side, const unsigned id) {
+         if (!(gap > 0.0))
+            return;
+         GroupStep::StopNow &o = out[n++];
+         o.gap = gap, o.v = v, o.a = a, o.vs = 0.0, o.m = I, o.k = k, o.coord = 0, o.side = side, o.id = id;
+      };
+      add(PhiStop() - phi, omega, a0, 1, 1u);
+      add(phi, -omega, -a0, -1, 2u);
+      return n;
+   }
    unsigned CrossingStops(const double *x, int off) const override
    {
       return (StopExcess(x, off, 1u) > 0.0 ? 1u : 0u) | (StopExcess(x, off, 2u) > 0.0 ? 2u : 0u);
    }
+   // Stop rule 2 (dead), runs/2026-11-22-touch-predict/design.md 3.2d: pinned at an arrival; within d at the start (touch_predict: stopNear > 0) on the stop whatever
+   // its start rate
    bool PinOnStop(const double *, int) override
    {
       const bool low = phi < 0.5 * PhiStop();
-      if (pinned || (low ? omega > 0.0 : omega < 0.0))
+      if (pinned || (!(stopNear > 0.0) && (low ? omega > 0.0 : omega < 0.0)))
          return false;
       pinned = true;
       atRest = low;
@@ -705,7 +726,7 @@ public:
             {
                const double rate = -o.ohat.Dot(b[i].v);
                if (rate > 1e-6 && o.gap < 0.05)
-                  f.Approach(std::max(o.gap, 0.0), rate, omega, 102);
+                  f.Approach(std::max(o.gap, 0.0), rate, omega, 102, [&] { return -o.ohat.Dot(f.BallF(i)) / b[i].m; }, GroupStep::SpringCols::Ball(i, o.ohat * -1.0));   // (touch_predict: the ball's closing acceleration from its net force now, fNet)
             }
          }
       }

@@ -120,6 +120,7 @@ namespace ContactSystem
    static bool s_aircoreInStep = false;     // [Features] aircore_in_step of this table (physicsini.h), read likewise: 1 = an air-core coil's pull is read at each step's midpoint (AircorePullForce, CordIsland); 0 = held for the cycle as before
    static std::set<std::string> s_retiredTold;   // the retired-setting notices told since this table started (NoticeRetired: one WARN and one notice each per table start)
    static long s_touchNetTold = 0;   // touch_predict: the nets told this table start (GroupStep::touchStats.net; reset with it at SetTable)
+   static long s_stopNetTold = 0;    // touch_predict piece 3: the stop nets told this table start (GroupStep::touchStats.stop[kNet])
 
    void SetTable(const std::filesystem::path &tableFile)
    {
@@ -145,6 +146,7 @@ namespace ContactSystem
       s_retiredTold.clear();
       GroupStep::touchStats = GroupStep::TouchStats();   // (touch_predict counters: one play)
       s_touchNetTold = 0;
+      s_stopNetTold = 0;
       g_cullListed = g_cullNamed = false;   // (the part cull: its lists, told misses and counters per table start)
       g_cullParts.clear();
       g_cullBands.clear();
@@ -3379,6 +3381,11 @@ struct ContactSystemImpl
          ContactSystem::s_touchNetTold = GroupStep::TouchStats::Sum(GroupStep::touchStats.net);
          ContactSystem::NoticeRetired("touch_predict: a step ended past a predicted touch after its Hermite re-solve; the net (today's limit) took it (counts: VPX_GROUP_STATS, rows: VPX_TOUCH_TRACE)");
       }
+      if (GroupStep::touchStats.stop[GroupStep::TouchStats::kNet] > ContactSystem::s_stopNetTold)   // touch_predict piece 3: a stop search taken as the net (rule 8: one WARN and one notice per table start)
+      {
+         ContactSystem::s_stopNetTold = GroupStep::touchStats.stop[GroupStep::TouchStats::kNet];
+         ContactSystem::NoticeRetired("touch_predict: a part's step passed a hard stop with no prediction left (after its Hermite re-solve, or unpredicted); today's stop search (the net) took it (counts: VPX_GROUP_STATS, rows: VPX_TOUCH_TRACE)");
+      }
       if (statsPath != nullptr)
       {
          static long n = 0, steps = 0, rounds = 0, eSteps = 0, fails = 0, halv = 0;
@@ -3408,6 +3415,9 @@ struct ContactSystemImpl
                   for (int c = 0; c < 3; c++)
                      fprintf(f, "touch %s predicted %ld taken %ld short %ld hermite %ld net %ld\n", kKind[c], ts.predicted[c], ts.taken[c], ts.shortL[c], ts.hermite[c], ts.net[c]);
                   fprintf(f, "touch partaccel %ld\n", ts.partEvals);
+                  fprintf(f, "touch stop predicted %ld taken %ld short %ld hermite %ld net %ld partaccel %ld\n", ts.stop[TS::kPred], ts.stop[TS::kTaken], ts.stop[TS::kShort], ts.stop[TS::kHerm], ts.stop[TS::kNet], ts.stop[TS::kAcc]);
+                  fprintf(f, "touch spring predicted %ld taken %ld short %ld hermite %ld net %ld partaccel %ld\n", ts.spring[TS::kPred], ts.spring[TS::kTaken], ts.spring[TS::kShort], ts.spring[TS::kHerm], ts.spring[TS::kNet], ts.spring[TS::kAcc]);
+                  fprintf(f, "touch spring past %ld\n", ts.spring[TS::kPast]);
                }
                const long *const rc = GroupStep::RestWatch::Counts();   // (parts alone: bumper, hinge part, disc, flipper, sling plate)
                fprintf(f, "alone calls %ld %ld %ld %ld %ld asleep after %ld %ld %ld %ld %ld\n", rc[0], rc[1], rc[2], rc[3], rc[4], rc[5], rc[6], rc[7], rc[8], rc[9]);
