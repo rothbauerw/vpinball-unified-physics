@@ -70,7 +70,7 @@ namespace ContactSystem
    void SaveStart();
    void RestoreStart();
    unsigned LastSaveUs();
-   // Test mode (env VPX_SNAPSHOT_TEST=1; =2 is the negative control that leaves the parts out of the restore): after every Step the snapshot is restored and the step is taken again; any difference in the result is logged. Islands with a bat or a band are skipped
+   // Test mode (env VPX_SNAPSHOT_TEST=1; =2 is the negative control that leaves the parts out of the restore; =3 the one that keeps the per-patch memory the step left): after every Step the snapshot is restored and the step is taken again; any difference in the result is logged. Islands with a bat or a band are skipped
    // (their state is not saved yet).
    bool SnapshotTestOn();
    void SnapshotTest(double hS);   // hS: the cycle in seconds, as Step

@@ -118,14 +118,14 @@ VPX_PATCH_CHECK=1          patch lists vs the merged (s25, g); one peak = today'
 VPX_PATCH_TRACE=t0-t1      patch_friction, engine ms: per Eval each friction group (PTEV), start patches not in memory (PTMISS); 400 lines.
 VPX_PAIR_CHECK=1           ball pairs: the every-pair test beside the sorted list; counts any pair the list missed (log).
 VPX_HINGE_NEAR_ALL=1       every near-piece list takes all pieces (A/B of the short list, same result expected).
-VPX_SNAPSHOT_TEST=1        after each contact step: restore the snapshot, step again, log any difference (=2: see below).
+VPX_SNAPSHOT_TEST=1        after each contact step: restore the snapshot, step again, log any difference (=2, =3: see below).
 ```
 
 **Change the result** (test only; each is removed or made an ini key: to-do 1.32)
 ```
 VPX_GROUP_HFIX=<us>        every group step this long; 1 = the accuracy bench's reference. A step may halve to 1 ns and a cycle may pass 3000 steps.
 VPX_GROUP_JAC_MODE=2       solves with the difference Jacobian instead of the analytic one.
-VPX_SNAPSHOT_TEST=2        negative control of the snapshot test: the parts are not put back, so a difference must show wherever a part moved.
+VPX_SNAPSHOT_TEST=2        snapshot test control: parts not put back (=3: the per-patch memory the step left kept); a difference must show where it changed.
 VPX_STEP_SCALE=<k>         every accuracy step limit times k (epsRest k^2); bench convergence k 0.5 / 0.25. k >= 0.25; HFIX wins.
 VPX_VISCOELASTIC=0         hard-surface damping by the old alpha law.
 VPX_OVERLAP_REPLAY=0       no overlap replay.        VPX_PREVENT=0   no overlap prevention (overlap standard point 1).

@@ -5156,6 +5156,7 @@ namespace
    };
    StartSnap g_snap;
    bool g_snapSkipParts = false;   // test control (VPX_SNAPSHOT_TEST=2): the parts are not put back; the test must then see a difference wherever a part moved
+   bool g_snapKeepMemory = false;  // test control (VPX_SNAPSHOT_TEST=3): the step taken again starts from the per-patch memory the step left (SurfaceState pm .. tEnd), not the snapshot's; the test must then see a memory difference wherever a step changed it
 }
 
 void ContactSystem::SaveStart()
@@ -5297,6 +5298,7 @@ bool ContactSystem::SnapshotTestOn()
 {
    static const int level = []() { const char *const e = getenv("VPX_SNAPSHOT_TEST"); return e != nullptr ? atoi(e) : 0; }();
    g_snapSkipParts = level == 2;
+   g_snapKeepMemory = level == 3;
    return level != 0;
 }
 
@@ -5305,6 +5307,7 @@ namespace
    struct Fp
    {
       uint64_t balls = 14695981039346656037ull, contacts = 14695981039346656037ull, pairs = 14695981039346656037ull, parts = 14695981039346656037ull;
+      uint64_t memory = 14695981039346656037ull;   // per item: endDepth, endHeld, and each surface's per-patch memory and patch zeros (gs, then gsMore in order)
    };
    uint64_t Fnv(uint64_t h, const void *p, const size_t n)
    {
@@ -5317,6 +5320,46 @@ namespace
       return h;
    }
    template <class T> uint64_t FnvV(uint64_t h, const T &v) { return Fnv(h, &v, sizeof(T)); }
+   // a surface's per-cycle memory, field by field (never a whole struct: padding)
+   uint64_t FnvPairs(uint64_t h, const std::vector<std::pair<int, double>> &v)
+   {
+      h = FnvV(h, v.size());
+      for (const auto &p : v)
+      {
+         h = FnvV(h, p.first);
+         h = FnvV(h, p.second);
+      }
+      return h;
+   }
+   uint64_t FnvSurfMemory(uint64_t h, const SurfaceState &s)
+   {
+      h = FnvV(h, s.endDepth);
+      h = FnvPairs(h, s.tZero);
+      h = FnvPairs(h, s.tEnd);
+      h = FnvV(h, s.pm.size());
+      for (const RubberContact::PieceMem &m : s.pm)
+      {
+         h = FnvV(h, m.id);
+         h = FnvV(h, m.xi);
+         h = FnvV(h, m.ra.th);
+         h = FnvV(h, m.ra.tw);
+         h = FnvV(h, m.kt);
+         h = FnvV(h, m.kr);
+         h = FnvV(h, m.kw);
+         h = FnvV(h, m.sg);
+      }
+      h = FnvV(h, s.pmMulti);
+      h = FnvV(h, s.pmEs);
+      h = FnvV(h, s.pmEr);
+      h = FnvV(h, s.kStored);
+      h = FnvV(h, s.kt1);
+      h = FnvV(h, s.kr1);
+      h = FnvV(h, s.kw1);
+      h = FnvV(h, s.kReff);
+      h = FnvV(h, s.pmLev);
+      h = FnvV(h, s.pmC);
+      return h;
+   }
    Fp Fingerprint()
    {
       Fp f;
@@ -5355,6 +5398,25 @@ namespace
             f.contacts = FnvV(f.contacts, it.touching);
             f.contacts = FnvV(f.contacts, it.partTouching);
             f.contacts = FnvV(f.contacts, it.fnLast);
+            f.memory = FnvV(f.memory, it.endDepth);
+            f.memory = FnvV(f.memory, it.endHeld);
+            for (const SurfaceState &s : it.gsMore)   // what the contacts hash takes of gs, for the other surfaces (the same ra rule)
+            {
+               f.memory = FnvV(f.memory, s.touching);
+               f.memory = FnvV(f.memory, s.xi);
+               if (s.ra.th.Dot(s.ra.th) + s.ra.tw * s.ra.tw > 0.0)
+               {
+                  f.memory = FnvV(f.memory, s.ra.th);
+                  f.memory = FnvV(f.memory, s.ra.tw);
+               }
+               f.memory = FnvV(f.memory, s.zero);
+               f.memory = FnvV(f.memory, s.reff);
+               f.memory = FnvV(f.memory, s.kb);
+               f.memory = FnvV(f.memory, s.ktb);
+            }
+            f.memory = FnvSurfMemory(f.memory, it.gs);
+            for (const SurfaceState &s : it.gsMore)
+               f.memory = FnvSurfMemory(f.memory, s);
          }
       }
       for (const BallPairState &p : g_ballPairs)
@@ -5377,11 +5439,91 @@ namespace
          }
       return f;
    }
+   // VPX_SNAPSHOT_TEST=3: a surface's memory fields as the step left them (the Fp memory fields that live in SurfaceState), per (entry, item, surface) in order
+   struct SurfMem
+   {
+      std::vector<RubberContact::PieceMem> pm;
+      bool pmMulti = false;
+      double pmEs = 0.0, pmEr = 0.0;
+      bool kStored = false;
+      double kt1 = 0.0, kr1 = 0.0, kw1 = 0.0, kReff = 0.0;
+      bool pmLev = false;
+      RubberContact::V3 pmC;
+      std::vector<std::pair<int, double>> tZero, tEnd;
+   };
+   void MemTake(SurfMem &m, const SurfaceState &s)
+   {
+      m.pm = s.pm; m.pmMulti = s.pmMulti; m.pmEs = s.pmEs; m.pmEr = s.pmEr; m.kStored = s.kStored; m.kt1 = s.kt1; m.kr1 = s.kr1; m.kw1 = s.kw1; m.kReff = s.kReff;
+      m.pmLev = s.pmLev; m.pmC = s.pmC; m.tZero = s.tZero; m.tEnd = s.tEnd;
+   }
+   void MemPut(SurfaceState &s, const SurfMem &m)
+   {
+      s.pm = m.pm; s.pmMulti = m.pmMulti; s.pmEs = m.pmEs; s.pmEr = m.pmEr; s.kStored = m.kStored; s.kt1 = m.kt1; s.kr1 = m.kr1; s.kw1 = m.kw1; s.kReff = m.kReff;
+      s.pmLev = m.pmLev; s.pmC = m.pmC; s.tZero = m.tZero; s.tEnd = m.tEnd;
+   }
+   struct MemScratch
+   {
+      std::vector<SurfMem> surf;     // every surface's, flat in (entry, item, surface) order
+      std::vector<size_t> items;     // items per entry
+      std::vector<size_t> surfs;     // surfaces per item (1 + gsMore), flat in (entry, item) order
+   };
+   void MemSave(MemScratch &sc)
+   {
+      sc.items.clear();
+      sc.surfs.clear();
+      size_t n = 0;
+      for (const BallContact &e : g_engaged)
+      {
+         sc.items.push_back(e.items.size());
+         for (const SurfaceContact &it : e.items)
+         {
+            sc.surfs.push_back(1 + it.gsMore.size());
+            for (size_t s = 0; s <= it.gsMore.size(); s++)
+            {
+               if (n >= sc.surf.size())
+                  sc.surf.emplace_back();
+               MemTake(sc.surf[n++], it.Surf((int)s));
+            }
+         }
+      }
+   }
+   // writes the saved memory back where the entry, item and gsMore counts match; returns the mismatches (the entry list: 1; an entry's items: 1 each; an item's surfaces: 1 each)
+   long MemRestore(const MemScratch &sc)
+   {
+      if (g_engaged.size() != sc.items.size())
+         return 1;
+      long bad = 0;
+      size_t ei = 0, ii = 0, n = 0;
+      for (BallContact &e : g_engaged)
+      {
+         const size_t ni = sc.items[ei++];
+         if (e.items.size() != ni)
+         {
+            bad++;
+            for (size_t k = 0; k < ni; k++)
+               n += sc.surfs[ii++];
+            continue;
+         }
+         for (SurfaceContact &it : e.items)
+         {
+            const size_t ns = sc.surfs[ii++];
+            if (1 + it.gsMore.size() != ns)
+               bad++;
+            else
+               for (size_t s = 0; s < ns; s++)
+                  MemPut(it.Surf((int)s), sc.surf[n + s]);
+            n += ns;
+         }
+      }
+      return bad;
+   }
 }
 
 void ContactSystem::SnapshotTest(const double hS)
 {
-   static long compared = 0, mismatches = 0, skipped = 0;
+   static long compared = 0, mismatches = 0, skipped = 0, warned = 0, memMismatch = 0;
+   static long nBalls = 0, nContacts = 0, nPairs = 0, nParts = 0, nMemory = 0;   // compared steps different in each
+   static MemScratch scratch;   // VPX_SNAPSHOT_TEST=3 (capacity reused)
    if (!g_snap.valid)
       return;
    for (const BallContact &e : g_engaged)
@@ -5393,18 +5535,31 @@ void ContactSystem::SnapshotTest(const double hS)
    if (g_engaged.empty())
       return;   // nothing the step touched
    const Fp a = Fingerprint();
+   if (g_snapKeepMemory)
+      MemSave(scratch);
    RestoreStart();
+   if (g_snapKeepMemory)
+      memMismatch += MemRestore(scratch);
    Step(hS);
    const Fp b = Fingerprint();
    compared++;
-   if (a.balls != b.balls || a.contacts != b.contacts || a.pairs != b.pairs || a.parts != b.parts)
+   const bool dBalls = a.balls != b.balls, dContacts = a.contacts != b.contacts, dPairs = a.pairs != b.pairs, dParts = a.parts != b.parts, dMemory = a.memory != b.memory;
+   nBalls += dBalls; nContacts += dContacts; nPairs += dPairs; nParts += dParts; nMemory += dMemory;
+   bool warnNow = false;
+   if (dBalls || dContacts || dPairs || dParts || dMemory)
    {
       mismatches++;
-      PLOGW << "SnapshotTest t=" << g_pplayer->m_time_msec << ": the step taken again from the snapshot gave a different result in:" << (a.balls != b.balls ? " balls" : "") << (a.contacts != b.contacts ? " contacts" : "")
-            << (a.pairs != b.pairs ? " pairs" : "") << (a.parts != b.parts ? " parts" : "") << " (" << g_engaged.size() << " engaged balls)";
+      if (warned < 200)   // (the counts go on)
+      {
+         warned++;
+         warnNow = true;
+         PLOGW << "SnapshotTest t=" << g_pplayer->m_time_msec << ": the step taken again from the snapshot gave a different result in:" << (dBalls ? " balls" : "") << (dContacts ? " contacts" : "")
+               << (dPairs ? " pairs" : "") << (dParts ? " parts" : "") << (dMemory ? " memory" : "") << " (" << g_engaged.size() << " engaged balls)";
+      }
    }
-   if (compared % 2000 == 1)
-      PLOGI << "SnapshotTest: " << compared << " steps compared, " << mismatches << " different, " << skipped << " skipped (band)";
+   if (compared % 500 == 1 || warnNow)
+      PLOGI << "SnapshotTest: " << compared << " steps compared, " << mismatches << " different (balls " << nBalls << ", contacts " << nContacts << ", pairs " << nPairs << ", parts " << nParts
+            << ", memory " << nMemory << "), " << skipped << " skipped (band)" << (g_snapKeepMemory ? ", memory write-back count mismatches " : "") << (g_snapKeepMemory ? std::to_string(memMismatch) : std::string());
 }
 
 
