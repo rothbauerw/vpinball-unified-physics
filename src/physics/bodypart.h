@@ -91,6 +91,7 @@ namespace GroupStep
    {
       int stop;
       double speed;   // |rate| at the touch
+      int axis = 0;   // which of its part's axes touched (BodyAxis::axisIndex; 0 for a part with one)
    };
 
    struct BodyBooks
@@ -123,18 +124,33 @@ namespace GroupStep
       double rowT[10] = {};   // the wire row's terms at the last evaluation (pivot_model 1), each as it enters Res (N m s): inertia, stored (spring + gravity), viscous, pin, balls; the pin's K, static limit, holds, s1; dq
       mutable int gExcessStop = -1;   // what the last StopExcess found, for ArrivingAtStop and PinOnStop
       mutable double gDqLast = 0.0;
+      mutable double gExcessLast = -INFINITY;   // how far the last StopExcess found it past that stop (-inf: none): its part picks the axis that is furthest past (BodyAxes)
    };
 
-   class BodyPart : public Part, public BodyState, protected BodyAttemptWork
+   // What an axis asks of the part that holds it: its forces, by its index among the part's axes (the part answers with its other coordinates as they are now)
+   class BodyAxisOwner
    {
    public:
-      BodyPart()
-      {
-         KeepState<BodyState>(this);
-         pinHolds = pinMemory;   // (at rest at the start: holds under pin_memory 1; the owner's SetPinMemory sets it from the setting)
-         WipeEachAttempt<BodyAttemptWork>(this);
-         KeepQueue(&stopEvents);
-      }
+      virtual double AxisStoredEnergy(int axis, double at) const = 0;   // V with this coordinate at `at`
+      virtual double AxisStoredChord(int axis, double at, double dq, double h, double &slope, double &lossF, double &lossSlope) const = 0;   // as BodyPart::StoredChord
+      virtual double AxisStoredForce(int axis, double at) const = 0;    // -dV / dq
+      virtual double AxisViscous(int axis) const = 0;
+      virtual double AxisDriveForce(int axis) const = 0;               // a held force, its work counted
+      virtual double AxisFrictionLimit(int axis, double at, double r, const V3 &load) const = 0;   // load: the balls' force on the part
+      virtual double AxisPinStiffness(int axis, double at, double r, const V3 &load) const = 0;   // the pin's stick spring, Nm/rad
+
+   protected:
+      ~BodyAxisOwner() = default;
+   };
+
+   // One coordinate with its hard stops: its state, its attempt's work, its settings, and the stop law (impact, rest, pin, freeing, driven stops) and its pin's friction.
+   // Its forces are its owner's (BodyAxisOwner). It is not a part: the part that holds it registers its BodyState, BodyAttemptWork and stopEvents with its own records and
+   // forwards the group's calls (BodyAxes). A BodyPart is one; a part with several coordinates holds several (to-do 1.27).
+   class BodyAxis : public BodyState, public BodyAttemptWork
+   {
+   public:
+      BodyAxisOwner *axisOwner = nullptr;   // who answers its forces: the part that holds it (set in that part's constructor)
+      int axisIndex = 0;                    // its index among its part's axes (BodyAxes::Add sets it): the owner's callbacks and its stop events carry it
       double mass = 1.0;
       double reach = 0.05;      // m: the lever that turns the rate into a speed, for the solver's units
       double maxMove = 0.05;    // a Newton round moves it at most this
@@ -149,17 +165,6 @@ namespace GroupStep
          pinMemory = on;
          pinHolds = on && rate == 0.0;
       }
-
-      // ---- what the derived part supplies ----
-      virtual double StoredEnergy(double at) const = 0;
-      // (V(at + dq) - V(at)) / dq and its slope with dq; lossF: its own dampers over the move (they only remove energy), and their slope
-      virtual double StoredChord(double at, double dq, double h, double &slope, double &lossF, double &lossSlope) const = 0;
-      virtual double StoredForce(double at) const = 0;              // -dV / dq
-      virtual double Viscous() const { return 0.0; }
-      virtual double DriveForce() const { return 0.0; }             // a held force, its work counted
-      virtual double FrictionLimit(double at, double r, const V3 &load) const = 0;   // load: the balls' force on the part
-      virtual double PinStiffness(double, double, const V3 &) const { return 0.0; }   // the pin's stick spring in its hole, Nm/rad
-      virtual void AfterMove() {}                                   // a step was taken: switches
 
       // Between cycles, after the owner moved a driven stop or changed the gravity: who has an unknown now
       void CycleBegin()
@@ -223,21 +228,18 @@ namespace GroupStep
          double a = 0.0;
          for (const BodyStop &s : stops)
             if (s.enabled && s.k > 0.0)
-               if (const double F = s.side * StoredForce(s.at) / s.lever; F > 0.0)
+               if (const double F = s.side * axisOwner->AxisStoredForce(axisIndex, s.at) / s.lever; F > 0.0)
                   a = std::max(a, F * std::pow(2.5 / s.k, 0.4));
          return a;
       }
 
-      // ---- the group's interface ----
-      int NumDof() const override { return pinStop >= 0 ? 0 : 1; }
-      int MaxDof() const override { return 1; }
-      int NumCoords() const override { return 1; }
-      int DofOf(int) const override { return NumDof() - 1; }
-      CoordInfo Coord(int) const override
+      // ---- what its part forwards from the group (BodyAxes); d: its unknown's place in x (read only while it has one) ----
+      int AxisDof() const { return pinStop >= 0 ? 0 : 1; }
+      CoordInfo AxisCoord() const
       {
          CoordInfo c;
          c.rate = rate;
-         c.given = NumDof() == 0 ? gGiven : 0.0;
+         c.given = AxisDof() == 0 ? gGiven : 0.0;
          c.invM = 1.0 / mass;
          c.invMFree = 1.0 / mass;
          c.reach = reach;
@@ -245,62 +247,55 @@ namespace GroupStep
          c.blockedSide = pinStop >= 0 ? stops[pinStop].side : 0;
          return c;
       }
-      double KineticJ() const override { return 0.5 * mass * rate * rate; }
-      double PendingNetJ() const override { return pendDrive - pendLoss; }
-      double Energy(const Ball *, int) const override { return KineticJ() + StoredEnergy(q) + PinSpringJ(); }
-      void StepFacts(const Ball *, int, const Settings &, StepFactList &f) override
-      {
-         if (std::fabs(rate) > 1e-9)
-            f.Turn(1.0, std::fabs(rate), 1);   // at most the group's turn limit per step
-      }
-      bool BeginStep(const Ball *, int, const double h, double *x, const int off) override
+      double AxisKineticJ() const { return 0.5 * mass * rate * rate; }
+      double AxisPendingNetJ() const { return pendDrive - pendLoss; }
+      void AxisBeginStep(const double h, double *x, const int d, const bool guessAccel)
       {
          gH = h;
          for (BodyStop &s : stops)
             s.speed = s.SpeedNow();
          gGiven = pinStop >= 0 ? stops[pinStop].AfterStep(h) - stops[pinStop].at : 0.0;
-         if (NumDof() == 1)
-            x[off] = guessAccel ? (rate + 0.5 * aLast * h) * h : rate * h;   // ([Contact] part_guess_accel: the last step's acceleration carried on, as a ball's guess does)
+         if (AxisDof() == 1)
+            x[d] = guessAccel ? (rate + 0.5 * aLast * h) * h : rate * h;   // ([Contact] part_guess_accel: the last step's acceleration carried on, as a ball's guess does)
          gDrive = gViscous = gFriction = 0.0;
          gBallQ = 0.0;
          gBallF = V3();
-         return true;
       }
-      void Loads(const double *qf, const V3 &F) override
+      void AxisLoads(const double qf, const V3 &F)   // qf: the balls' load on this coordinate; F: their force on the part
       {
-         gBallQ = qf[0];
+         gBallQ = qf;
          gBallF = F;
       }
-      bool Eval(const double *x, const int off, const double h, V3 *, V3 *, double *Res, Jac J) override
+      void AxisEval(const double *x, const int d, const double h, double *Res, Jac J)
       {
          gDrive = gViscous = gFriction = 0.0;
-         if (NumDof() == 0)
-            return true;
-         const double dq = x[off], r = dq / h, qm = q + 0.5 * dq;
+         if (AxisDof() == 0)
+            return;
+         const double dq = x[d], r = dq / h, qm = q + 0.5 * dq;
          double slope = 0.0, lossF = 0.0, lossSlope = 0.0;
-         const double Vp = StoredChord(q, dq, h, slope, lossF, lossSlope);
-         const double cv = Viscous(), Fd = DriveForce();
+         const double Vp = axisOwner->AxisStoredChord(axisIndex, q, dq, h, slope, lossF, lossSlope);
+         const double cv = axisOwner->AxisViscous(axisIndex), Fd = axisOwner->AxisDriveForce(axisIndex);
          const PinMove pm = PinStep(dq, h);
-         Res[off] = InertiaRow(dq, rate, mass, h) - h * (-Vp - lossF - cv * r + Fd + pm.M);
+         Res[d] = InertiaRow(dq, rate, mass, h) - h * (-Vp - lossF - cv * r + Fd + pm.M);
          gQ = -Vp - lossF - cv * r + Fd + pm.M + gBallQ;
-         rowT[0] = InertiaRow(dq, rate, mass, h); rowT[1] = h * (Vp + lossF); rowT[2] = h * cv * r; rowT[3] = -h * pm.M; rowT[4] = -h * gBallQ; rowT[5] = pm.K; rowT[6] = FrictionLimit(qm, r, gBallF); rowT[7] = pm.holds ? 1.0 : 0.0; rowT[8] = pm.s1; rowT[9] = dq;
+         rowT[0] = InertiaRow(dq, rate, mass, h); rowT[1] = h * (Vp + lossF); rowT[2] = h * cv * r; rowT[3] = -h * pm.M; rowT[4] = -h * gBallQ; rowT[5] = pm.K; rowT[6] = axisOwner->AxisFrictionLimit(axisIndex, qm, r, gBallF); rowT[7] = pm.holds ? 1.0 : 0.0; rowT[8] = pm.s1; rowT[9] = dq;
          if (J)
-            J[off][off] += InertiaSlope(mass, h) + h * slope + h * lossSlope + cv + (pm.holds ? h * 0.5 * pm.K + pm.c : 0.0);
+            J[d][d] += InertiaSlope(mass, h) + h * slope + h * lossSlope + cv + (pm.holds ? h * 0.5 * pm.K + pm.c : 0.0);
          gViscous = cv * r * dq + lossF * dq;
          gFriction = pm.loss;
          gDrive = Fd * dq;
-         return true;
       }
       // > 0: the move carries the body past a stop (how far).
       // With no move (the group's test of where the step starts): a body leaving a stop isn't on it, and how far off it counts by its rate, so the search for the next arrival does not start at the stop it left (the jet bumper's ring does the same)
-      // stops: bit i its stop i (the last bit for any beyond)
-      static unsigned StopBit(const int i) { return 1u << std::min(i, 30); }
-      double StopExcess(const double *x, const int off, const unsigned mask = ~0u) const override
+      // stops: bit i its stop i (the last bit for any beyond), within the axis's 8 bits of its part's mask
+      static unsigned StopBit(const int i) { return 1u << std::min(i, 7); }
+      double AxisStopExcess(const double *x, const int d, const unsigned mask) const
       {
          gExcessStop = -1;
-         if (NumDof() == 0)
+         gExcessLast = -INFINITY;
+         if (AxisDof() == 0)
             return -INFINITY;
-         const double dq = x[off], q1 = q + dq;
+         const double dq = x[d], q1 = q + dq;
          double e = -INFINITY;
          for (int i = 0; i < (int)stops.size(); i++)
          {
@@ -315,23 +310,25 @@ namespace GroupStep
             }
          }
          gDqLast = dq;
+         gExcessLast = e;
          return e;
       }
-      unsigned CrossingStops(const double *x, const int off) const override
+      unsigned AxisCrossingStops(const double *x, const int d) const
       {
          const int stop = gExcessStop;   // (what the last StopExcess found stays for ArrivingAtStop and PinOnStop)
-         const double dqLast = gDqLast;
+         const double dqLast = gDqLast, excessLast = gExcessLast;
          unsigned m = 0u;
-         for (int i = 0; i < (int)stops.size() && i <= 30; i++)
+         for (int i = 0; i < (int)stops.size() && i <= 7; i++)
          {
-            if (StopExcess(x, off, StopBit(i)) > 0.0)
+            if (AxisStopExcess(x, d, StopBit(i)) > 0.0)
                m |= StopBit(i);
          }
          gExcessStop = stop;
          gDqLast = dqLast;
+         gExcessLast = excessLast;
          return m;
       }
-      bool ArrivingAtStop() const override
+      bool AxisArriving() const
       {
          if (gExcessStop < 0)
             return true;
@@ -339,9 +336,9 @@ namespace GroupStep
          return s.side * (EndRate(gDqLast, rate, gH) - s.speed) > 0.0;
       }
       // The free step passed a stop, and the body is already there: it stays for this step, and the step is solved again as it is
-      bool PinOnStop(const double *, int) override
+      bool AxisPinOnStop()
       {
-         if (NumDof() == 0)
+         if (AxisDof() == 0)
             return false;
          if (gExcessStop < 0)
             return false;
@@ -349,7 +346,7 @@ namespace GroupStep
          if (s.side * (q - s.at) < -kNearStop)
             return false;
          if (!s.touching)
-            stopEvents.push_back({ gExcessStop, std::fabs(rate) });
+            stopEvents.push_back({ gExcessStop, std::fabs(rate), axisIndex });
          s.touching = true;
          const double r1 = EndRate(gDqLast, rate, gH), f = mass * (r1 - rate) / gH;
          const double vRel = std::fabs(rate - s.speed) * s.lever, F = s.side * f > 0.0 ? std::fabs(f) / s.lever : 0.0;
@@ -381,11 +378,11 @@ namespace GroupStep
          return true;
       }
       // The step just solved left the body with no unknown, and its forces take it off: it moves in this step. (Not a body that the free step has just put there: that answer is already in.)
-      bool FreedByStep() override
+      bool AxisFreedByStep()
       {
-         if (NumDof() == 1 || gPinnedInStep)
+         if (AxisDof() == 1 || gPinnedInStep)
             return false;
-         const double net = NetForce(), lim = FrictionLimit(q, rate, gBallF);
+         const double net = NetForce(), lim = axisOwner->AxisFrictionLimit(axisIndex, q, rate, gBallF);
          const bool leaves = pinStop >= 0 ? stops[pinStop].side * net < -lim : std::fabs(net) > lim;
          if (!leaves)
             return false;
@@ -394,14 +391,14 @@ namespace GroupStep
          gGiven = 0.0;
          return true;
       }
-      void Accept(const double *x, const int off, const double h, const bool onStop, double &driveJ, double &lossJ, bool &through) override
+      // the step taken: its move, its books, its stops (the part's AfterMove is the part's, after all its axes)
+      void AxisAccept(const double *x, const int d, const double h, const bool onStop, double &driveJ, double &lossJ)
       {
          gPinnedInStep = false;
-         through = false;
          PinMove pm;
-         if (NumDof() == 1)
+         if (AxisDof() == 1)
          {
-            pm = PinStep(x[off], h);   // (the solved move's: the spring's end state and its loss)
+            pm = PinStep(x[d], h);   // (the solved move's: the spring's end state and its loss)
             gFriction = pm.loss;
          }
          driveJ = pendDrive + gDrive;
@@ -412,9 +409,9 @@ namespace GroupStep
          bk.driveJ += gDrive;
          const double r0 = rate;
          qAtStepStart = q;
-         if (NumDof() == 1)
+         if (AxisDof() == 1)
          {
-            const double dq = x[off];
+            const double dq = x[d];
             rate = EndRate(dq, rate, h);
             q += dq;
             aLast = gQ / mass;   // the next step's first guess: the force of the move taken (Eval's at it, the balls' load included), not (r1 - r0) / h (the ball's aLast says why)
@@ -424,16 +421,16 @@ namespace GroupStep
          }
          else
             aLast = 0.0;
-         if (NumDof() == 0 && gGiven != 0.0)
+         if (AxisDof() == 0 && gGiven != 0.0)
          {
             // carried by its driven stop: the stop pays for the stored energy and the friction; its work on the balls is the group's book
-            const double dq = gGiven, V0 = StoredEnergy(q);
-            const double lim = FrictionLimit(q + 0.5 * dq, rate, gBallF), cv = Viscous();
+            const double dq = gGiven, V0 = axisOwner->AxisStoredEnergy(axisIndex, q);
+            const double lim = axisOwner->AxisFrictionLimit(axisIndex, q + 0.5 * dq, rate, gBallF), cv = axisOwner->AxisViscous(axisIndex);
             q += dq;
-            const double loss = lim * std::fabs(dq) + cv * rate * dq, d = StoredEnergy(q) - V0 + loss;
-            driveJ += d;
+            const double loss = lim * std::fabs(dq) + cv * rate * dq, dd = axisOwner->AxisStoredEnergy(axisIndex, q) - V0 + loss;
+            driveJ += dd;
             lossJ += loss;
-            bk.driveJ += d;
+            bk.driveJ += dd;
             bk.frictionJ += loss;
          }
          for (BodyStop &s : stops)
@@ -446,37 +443,16 @@ namespace GroupStep
          UpdateStops();
          Decide();
          DrivenTouch(driveJ, lossJ);
-         AfterMove();
       }
-      // after an energy step: the state it saved at the step's start, full precision (for an exact replay; rad, rad/s, the ball load in N m and N). The books are left out (counted, never read by a step).
-      std::string StartNote() const override
+      void AxisScaleSpeeds(const double f) { if (pinStop < 0) rate *= f; }   // a carried body's speed is its stop's (given, as a held ball's)
+      void AxisExplicitMove(const double *Res, const int d, const double h, double *x) const
       {
-         BodyState sv;
-         std::memcpy(&sv, SavedState(), sizeof sv);   // (its first state record)
-         char s[700];
-         snprintf(s, sizeof s, "q %.17g rate %.17g qStart %.17g pendDrive %.17g pendLoss %.17g ballQ %.17g ballF %.17g %.17g %.17g given %.17g pin %d pinnedInStep %d pinHolds %d pinS %.17g pinK %.17g stops %d",
-            sv.q, sv.rate, sv.qAtStepStart, sv.pendDrive, sv.pendLoss, sv.gBallQ, sv.gBallF.x, sv.gBallF.y, sv.gBallF.z, sv.gGiven, sv.pinStop, (int)sv.gPinnedInStep, (int)sv.pinHolds,
-            sv.pinS, sv.pinK, (int)sv.stops.size());
-         std::string msg = s;
-         for (int i = 0; i < sv.stops.size(); i++)
-         {
-            const BodyStop &t = sv.stops[i];
-            snprintf(s, sizeof s, " {stop %d side %d at %.17g target %.17g rate %.17g speed %.17g enabled %d armed %d touching %d}", i, t.side, t.at, t.target, t.rate, t.speed, (int)t.enabled, (int)t.armed, (int)t.touching);
-            msg += s;
-         }
-         return msg;
-      }
-      double EndResidual() const override { return 1e-8; }   // a noise stop can land past a steep onset (a light body's first touch): 0.45 uJ, runs/2026-10-31-gate-spinner-disc
-      void ScaleSpeeds(const double f) override { if (pinStop < 0) rate *= f; }   // a carried body's speed is its stop's (given, as a held ball's)
-      void ExplicitMove(const double *Res, const int off, const double h, double *x) const override
-      {
-         if (NumDof() == 1)
-            x[off] -= Res[off] * h / (2.0 * mass);
+         if (AxisDof() == 1)
+            x[d] -= Res[d] * h / (2.0 * mass);
       }
 
-   protected:
       static constexpr double kNearStop = 1e-9;   // a body this close to a stop's place is at it
-      double NetForce() const { return StoredForce(q) - Viscous() * rate + DriveForce() + gBallQ; }
+      double NetForce() const { return axisOwner->AxisStoredForce(axisIndex, q) - axisOwner->AxisViscous(axisIndex) * rate + axisOwner->AxisDriveForce(axisIndex) + gBallQ; }
       // The pin's stick spring over the move dq (pivot_model 1): the pin's twist s in its hole, Mindlin's patch spring K (the part's PinStiffness) with the contact's
       // damper c = shearTan sqrt(K I) beside it (steel 0.4, as the ball's shear spring), stepped as the rolling spring is (trapezoid torque on the trial s0 + dq, the
       // damper on the mid-step rate). Spring and damper hold while their torque is within the static limit, else they slide at dynRatio times it.
@@ -484,70 +460,17 @@ namespace GroupStep
       // s scaled by K0 / K1) the stored energy it can no longer hold.
       static constexpr double kPinShearTan = 0.4;
       struct PinMove { double M = 0.0, s1 = 0.0, K = 0.0, c = 0.0, loss = 0.0; bool holds = false; };
-      std::string RowNote() const override
-      {
-         char line[300];
-         snprintf(line, sizeof line, "row: inertia %.4g stored %.4g visc %.3g pin %.4g balls %.4g (sum %.3g) | pin K %.4g lim %.4g holds %d s1 %.6g dq %.4g gBallF %.5g",
-                  rowT[0], rowT[1], rowT[2], rowT[3], rowT[4], rowT[0] + rowT[1] + rowT[2] + rowT[3] + rowT[4], rowT[5], rowT[6], (int)rowT[7], rowT[8], rowT[9], gBallF.Length());
-         return line;
-      }
-      // diagnostics (VPX_GROUP_HISTORY_TRACE): after an accepted step (energies in uJ)
-      std::string HistoryNote() const override
-      {
-         char line[300];
-         snprintf(line, sizeof line, "q %.6f deg rate %.5g rad/s KE %.5g stored %.9g pinJ %.5g uJ pinS %.4g holds %d pinStop %d", q * 57.29577951308232, rate, KineticJ() * 1e6, StoredEnergy(q) * 1e6,
-                  PinSpringJ() * 1e6, pinS, pinHolds ? 1 : 0, pinStop);
-         return line;
-      }
-      // diagnostics (VPX_GROUP_CONTACT_TRACE): the move x over h as this round evaluated it (read only; torques in N m, the ball load as the last Loads gave it), its stops, its residual
-      std::string ContactNote(const double *x, const int off, const double h, const double *Res) const override
-      {
-         const int dof = NumDof();
-         const double dq = dof == 1 ? x[off] : 0.0, r = dq / h, qm = q + 0.5 * dq;
-         char line[600];
-         int n = snprintf(line, sizeof line, "q %.6f deg rate %.4g rad/s dq %.4g rad dof %d stuck %d pinStop %d | ballQ %.5g ballF %.4g N", q * 57.29577951308232, rate, dq, dof,
-                          Stuck() ? 1 : 0, pinStop, gBallQ, gBallF.Length());
-         if (dof == 1)
-         {
-            double slope = 0.0, lossF = 0.0, lossSlope = 0.0;
-            const double Vp = StoredChord(q, dq, h, slope, lossF, lossSlope), lim = FrictionLimit(qm, r, gBallF);
-            n += snprintf(line + n, sizeof line - n, " stored %.5g visc %.4g drive %.4g", -Vp - lossF, -Viscous() * r, DriveForce());
-            const PinMove pm = PinStep(dq, h);
-            n += snprintf(line + n, sizeof line - n, " pin %.5g lim %.5g holds %d (K %.4g s0 %.4g s1 %.4g)", pm.M, lim, pm.holds ? 1 : 0, pm.K, pinS, pm.s1);
-            n += snprintf(line + n, sizeof line - n, " | res %.5g N m s (%.4g m/s)", Res[off], Res[off] / mass * reach);
-         }
-         std::string note = line;
-         for (int i = 0; i < stops.size(); i++)
-         {
-            const BodyStop &s = stops[i];
-            snprintf(line, sizeof line, " {stop %d side %d at %.5f deg excess %.4g deg en %d armed %d touching %d}", (int)i, s.side, s.at * 57.29577951308232, s.side * (q + dq - s.at) * 57.29577951308232,
-                     (int)s.enabled, (int)s.armed, (int)s.touching);
-            note += line;
-         }
-         return note;
-      }
-      std::string SearchNote(const double *x, const int off, const double h) const override
-      {
-         if (NumDof() != 1)
-            return std::string();
-         const double dq = x[off];
-         const PinMove pm = PinStep(dq, h);
-         char line[300];
-         snprintf(line, sizeof line, "q0 %.6g deg rate0 %.4g dq %.4g q1 %.6g deg rate1 %.4g pin %d | pin spring s0 %.4g s1 %.4g K %.4g M %.4g holds %d | stop excess %.4g | ball force %.4g N",
-                  q * 57.29577951308232, rate, dq, (q + dq) * 57.29577951308232, EndRate(dq, rate, h), pinStop, pinS, pm.s1, pm.K, pm.M, pm.holds ? 1 : 0, StopExcess(x, off), gBallF.Length());
-         return line;
-      }
       PinMove PinStep(const double dq, const double h) const
       {
          PinMove pm;
          const double qm = q + 0.5 * dq, r = dq / h, held0 = PinSpringJ();
-         pm.K = PinStiffness(qm, r, gBallF);
+         pm.K = axisOwner->AxisPinStiffness(axisIndex, qm, r, gBallF);
          if (pm.K <= 0.0)
          {
             pm.loss = held0;
             return pm;
          }
-         const double lim = FrictionLimit(qm, r, gBallF);
+         const double lim = axisOwner->AxisFrictionLimit(axisIndex, qm, r, gBallF);
          pm.c = kPinShearTan * std::sqrt(pm.K * mass);
          const double s0 = pm.K > pinK ? pinS * (pinK / pm.K) : pinS, sTr = s0 + dq, mTr = -0.5 * pm.K * (s0 + sTr) - pm.c * dq / h;
          pm.loss = held0 - 0.5 * pm.K * s0 * s0;
@@ -622,7 +545,7 @@ namespace GroupStep
          BodyStop &s = stops[i];
          const double vr = rate - s.speed, vClose = std::fabs(vr) * s.lever;
          if (!s.touching)
-            stopEvents.push_back({ i, std::fabs(rate) });
+            stopEvents.push_back({ i, std::fabs(rate), axisIndex });
          s.touching = true;
          const double e = stopLaw[i].Restitution(vClose), vOut = e * vClose;
          double rNew = s.speed - e * vr;
@@ -663,7 +586,7 @@ namespace GroupStep
       // Who has an unknown in the next step, from the forces at the end of this one
       void Decide()
       {
-         const double net = NetForce(), lim = FrictionLimit(q, rate, gBallF);
+         const double net = NetForce(), lim = axisOwner->AxisFrictionLimit(axisIndex, q, rate, gBallF);
          if (pinStop >= 0)
          {
             const BodyStop &s = stops[pinStop];
@@ -675,6 +598,332 @@ namespace GroupStep
                bk.leaves++;
             }
          }
+      }
+   };
+
+   // A part's axes as the group sees them: its unknowns are its free axes' in order from off, its coordinates its axes; its stop mask 8 bits an axis (axis x 8 + stop).
+   // The part forwards the group's calls here (the part keeps its Energy, StepFacts, AfterMove and notes). Holds no state of its own (the axes' records hold it all).
+   class BodyAxes
+   {
+   public:
+      static constexpr int kMaxAxes = 4;   // 4 axes of 8 stop bits fill the 32-bit mask
+      void Add(BodyAxis *a)
+      {
+         assert(n < kMaxAxes);
+         a->axisIndex = n;
+         ax[n++] = a;
+      }
+      int Count() const { return n; }
+      int NumDof() const
+      {
+         int d = 0;
+         for (int k = 0; k < n; k++)
+            d += ax[k]->AxisDof();
+         return d;
+      }
+      int DofOf(const int c) const   // -1: coordinate c has no unknown now
+      {
+         if (ax[c]->AxisDof() == 0)
+            return -1;
+         int d = 0;
+         for (int k = 0; k < c; k++)
+            d += ax[k]->AxisDof();
+         return d;
+      }
+      CoordInfo Coord(const int c) const { return ax[c]->AxisCoord(); }
+      double KineticJ() const
+      {
+         double e = ax[0]->AxisKineticJ();
+         for (int k = 1; k < n; k++)
+            e += ax[k]->AxisKineticJ();
+         return e;
+      }
+      double PendingNetJ() const
+      {
+         double e = ax[0]->AxisPendingNetJ();
+         for (int k = 1; k < n; k++)
+            e += ax[k]->AxisPendingNetJ();
+         return e;
+      }
+      double PinSpringJ() const
+      {
+         double e = ax[0]->PinSpringJ();
+         for (int k = 1; k < n; k++)
+            e += ax[k]->PinSpringJ();
+         return e;
+      }
+      void BeginStep(const double h, double *x, const int off, const bool guessAccel)
+      {
+         int d = off;
+         for (int k = 0; k < n; k++)
+         {
+            ax[k]->AxisBeginStep(h, x, d, guessAccel);
+            d += ax[k]->AxisDof();
+         }
+      }
+      void Loads(const double *qf, const V3 &F)   // qf: one load per coordinate (the group's coordOff)
+      {
+         for (int k = 0; k < n; k++)
+            ax[k]->AxisLoads(qf[k], F);
+      }
+      void Eval(const double *x, const int off, const double h, double *Res, Jac J)
+      {
+         int d = off;
+         for (int k = 0; k < n; k++)
+         {
+            ax[k]->AxisEval(x, d, h, Res, J);
+            d += ax[k]->AxisDof();
+         }
+      }
+      // the largest excess over the axes (the first axis on a tie)
+      double StopExcess(const double *x, const int off, const unsigned mask) const
+      {
+         double e = -INFINITY;
+         int d = off;
+         for (int k = 0; k < n; k++)
+         {
+            const double ek = ax[k]->AxisStopExcess(x, d, (mask >> (8 * k)) & 0xffu);
+            if (ek > e)
+               e = ek;
+            d += ax[k]->AxisDof();
+         }
+         return e;
+      }
+      unsigned CrossingStops(const double *x, const int off) const
+      {
+         unsigned m = 0u;
+         int d = off;
+         for (int k = 0; k < n; k++)
+         {
+            m |= ax[k]->AxisCrossingStops(x, d) << (8 * k);
+            d += ax[k]->AxisDof();
+         }
+         return m;
+      }
+      // the axis the last StopExcess found furthest past (-1: none), as StopExcess chose it
+      int Furthest() const
+      {
+         int w = -1;
+         double e = -INFINITY;
+         for (int k = 0; k < n; k++)
+            if (ax[k]->gExcessLast > e)
+            {
+               e = ax[k]->gExcessLast;
+               w = k;
+            }
+         return w;
+      }
+      bool ArrivingAtStop() const
+      {
+         const int w = Furthest();
+         return w < 0 ? true : ax[w]->AxisArriving();
+      }
+      // every axis the move passes a stop of and that is on it stays there (all before the step is solved again, not the first only: design.md 2.4)
+      bool PinOnStop()
+      {
+         const int w = Furthest();
+         bool any = false;
+         for (int k = 0; k < n; k++)
+            if (k == w || ax[k]->gExcessLast > 0.0)
+               if (ax[k]->AxisPinOnStop())
+                  any = true;
+         return any;
+      }
+      bool FreedByStep()   // each axis at most once a step (its gPinnedInStep)
+      {
+         bool any = false;
+         for (int k = 0; k < n; k++)
+            if (ax[k]->AxisFreedByStep())
+               any = true;
+         return any;
+      }
+      void Accept(const double *x, const int off, const double h, const bool onStop, double &driveJ, double &lossJ, bool &through)
+      {
+         through = false;
+         int d = off;
+         for (int k = 0; k < n; k++)
+         {
+            const int dk = ax[k]->AxisDof();   // (its unknown before the step's stops change it)
+            double dJ = 0.0, lJ = 0.0;
+            ax[k]->AxisAccept(x, d, h, onStop, dJ, lJ);
+            if (k == 0)
+            {
+               driveJ = dJ;
+               lossJ = lJ;
+            }
+            else
+            {
+               driveJ += dJ;
+               lossJ += lJ;
+            }
+            d += dk;
+         }
+      }
+      void ScaleSpeeds(const double f)
+      {
+         for (int k = 0; k < n; k++)
+            ax[k]->AxisScaleSpeeds(f);
+      }
+      void ExplicitMove(const double *Res, const int off, const double h, double *x) const
+      {
+         int d = off;
+         for (int k = 0; k < n; k++)
+         {
+            ax[k]->AxisExplicitMove(Res, d, h, x);
+            d += ax[k]->AxisDof();
+         }
+      }
+
+   private:
+      BodyAxis *ax[kMaxAxes] = {};
+      int n = 0;
+   };
+
+   // One body on one coordinate: a part with one axis (itself), its forces from the derived part's single-coordinate callbacks
+   class BodyPart : public Part, public BodyAxis, public BodyAxisOwner
+   {
+   public:
+      BodyPart()
+      {
+         KeepState<BodyState>(this);
+         pinHolds = pinMemory;   // (at rest at the start: holds under pin_memory 1; the owner's SetPinMemory sets it from the setting)
+         WipeEachAttempt<BodyAttemptWork>(this);
+         KeepQueue(&stopEvents);
+         axisOwner = this;
+         axes.Add(this);
+      }
+
+      // ---- what the derived part supplies ----
+      virtual double StoredEnergy(double at) const = 0;
+      // (V(at + dq) - V(at)) / dq and its slope with dq; lossF: its own dampers over the move (they only remove energy), and their slope
+      virtual double StoredChord(double at, double dq, double h, double &slope, double &lossF, double &lossSlope) const = 0;
+      virtual double StoredForce(double at) const = 0;              // -dV / dq
+      virtual double Viscous() const { return 0.0; }
+      virtual double DriveForce() const { return 0.0; }             // a held force, its work counted
+      virtual double FrictionLimit(double at, double r, const V3 &load) const = 0;   // load: the balls' force on the part
+      virtual double PinStiffness(double, double, const V3 &) const { return 0.0; }   // the pin's stick spring in its hole, Nm/rad
+      virtual void AfterMove() {}                                   // a step was taken: switches
+
+      // ---- its one axis's forces: the callbacks above ----
+      double AxisStoredEnergy(int, const double at) const override { return StoredEnergy(at); }
+      double AxisStoredChord(int, const double at, const double dq, const double h, double &slope, double &lossF, double &lossSlope) const override { return StoredChord(at, dq, h, slope, lossF, lossSlope); }
+      double AxisStoredForce(int, const double at) const override { return StoredForce(at); }
+      double AxisViscous(int) const override { return Viscous(); }
+      double AxisDriveForce(int) const override { return DriveForce(); }
+      double AxisFrictionLimit(int, const double at, const double r, const V3 &load) const override { return FrictionLimit(at, r, load); }
+      double AxisPinStiffness(int, const double at, const double r, const V3 &load) const override { return PinStiffness(at, r, load); }
+
+      // ---- the group's interface ----
+      int NumDof() const override { return axes.NumDof(); }
+      int MaxDof() const override { return axes.Count(); }
+      int NumCoords() const override { return axes.Count(); }
+      int DofOf(const int c) const override { return axes.DofOf(c); }
+      CoordInfo Coord(const int c) const override { return axes.Coord(c); }
+      double KineticJ() const override { return axes.KineticJ(); }
+      double PendingNetJ() const override { return axes.PendingNetJ(); }
+      double Energy(const Ball *, int) const override { return KineticJ() + StoredEnergy(q) + PinSpringJ(); }
+      void StepFacts(const Ball *, int, const Settings &, StepFactList &f) override
+      {
+         if (std::fabs(rate) > 1e-9)
+            f.Turn(1.0, std::fabs(rate), 1);   // at most the group's turn limit per step
+      }
+      bool BeginStep(const Ball *, int, const double h, double *x, const int off) override
+      {
+         axes.BeginStep(h, x, off, guessAccel);
+         return true;
+      }
+      void Loads(const double *qf, const V3 &F) override { axes.Loads(qf, F); }
+      bool Eval(const double *x, const int off, const double h, V3 *, V3 *, double *Res, Jac J) override
+      {
+         axes.Eval(x, off, h, Res, J);
+         return true;
+      }
+      double StopExcess(const double *x, const int off, const unsigned mask = ~0u) const override { return axes.StopExcess(x, off, mask); }
+      unsigned CrossingStops(const double *x, const int off) const override { return axes.CrossingStops(x, off); }
+      bool ArrivingAtStop() const override { return axes.ArrivingAtStop(); }
+      bool PinOnStop(const double *, int) override { return axes.PinOnStop(); }
+      bool FreedByStep() override { return axes.FreedByStep(); }
+      void Accept(const double *x, const int off, const double h, const bool onStop, double &driveJ, double &lossJ, bool &through) override
+      {
+         axes.Accept(x, off, h, onStop, driveJ, lossJ, through);
+         AfterMove();
+      }
+      // after an energy step: the state it saved at the step's start, full precision (for an exact replay; rad, rad/s, the ball load in N m and N). The books are left out (counted, never read by a step).
+      std::string StartNote() const override
+      {
+         BodyState sv;
+         std::memcpy(&sv, SavedState(), sizeof sv);   // (its first state record)
+         char s[700];
+         snprintf(s, sizeof s, "q %.17g rate %.17g qStart %.17g pendDrive %.17g pendLoss %.17g ballQ %.17g ballF %.17g %.17g %.17g given %.17g pin %d pinnedInStep %d pinHolds %d pinS %.17g pinK %.17g stops %d",
+            sv.q, sv.rate, sv.qAtStepStart, sv.pendDrive, sv.pendLoss, sv.gBallQ, sv.gBallF.x, sv.gBallF.y, sv.gBallF.z, sv.gGiven, sv.pinStop, (int)sv.gPinnedInStep, (int)sv.pinHolds,
+            sv.pinS, sv.pinK, (int)sv.stops.size());
+         std::string msg = s;
+         for (int i = 0; i < sv.stops.size(); i++)
+         {
+            const BodyStop &t = sv.stops[i];
+            snprintf(s, sizeof s, " {stop %d side %d at %.17g target %.17g rate %.17g speed %.17g enabled %d armed %d touching %d}", i, t.side, t.at, t.target, t.rate, t.speed, (int)t.enabled, (int)t.armed, (int)t.touching);
+            msg += s;
+         }
+         return msg;
+      }
+      double EndResidual() const override { return 1e-8; }   // a noise stop can land past a steep onset (a light body's first touch): 0.45 uJ, runs/2026-10-31-gate-spinner-disc
+      void ScaleSpeeds(const double f) override { axes.ScaleSpeeds(f); }
+      void ExplicitMove(const double *Res, const int off, const double h, double *x) const override { axes.ExplicitMove(Res, off, h, x); }
+
+   protected:
+      BodyAxes axes;   // its one axis: itself
+      std::string RowNote() const override
+      {
+         char line[300];
+         snprintf(line, sizeof line, "row: inertia %.4g stored %.4g visc %.3g pin %.4g balls %.4g (sum %.3g) | pin K %.4g lim %.4g holds %d s1 %.6g dq %.4g gBallF %.5g",
+                  rowT[0], rowT[1], rowT[2], rowT[3], rowT[4], rowT[0] + rowT[1] + rowT[2] + rowT[3] + rowT[4], rowT[5], rowT[6], (int)rowT[7], rowT[8], rowT[9], gBallF.Length());
+         return line;
+      }
+      // diagnostics (VPX_GROUP_HISTORY_TRACE): after an accepted step (energies in uJ)
+      std::string HistoryNote() const override
+      {
+         char line[300];
+         snprintf(line, sizeof line, "q %.6f deg rate %.5g rad/s KE %.5g stored %.9g pinJ %.5g uJ pinS %.4g holds %d pinStop %d", q * 57.29577951308232, rate, KineticJ() * 1e6, StoredEnergy(q) * 1e6,
+                  PinSpringJ() * 1e6, pinS, pinHolds ? 1 : 0, pinStop);
+         return line;
+      }
+      // diagnostics (VPX_GROUP_CONTACT_TRACE): the move x over h as this round evaluated it (read only; torques in N m, the ball load as the last Loads gave it), its stops, its residual
+      std::string ContactNote(const double *x, const int off, const double h, const double *Res) const override
+      {
+         const int dof = NumDof();
+         const double dq = dof == 1 ? x[off] : 0.0, r = dq / h, qm = q + 0.5 * dq;
+         char line[600];
+         int n = snprintf(line, sizeof line, "q %.6f deg rate %.4g rad/s dq %.4g rad dof %d stuck %d pinStop %d | ballQ %.5g ballF %.4g N", q * 57.29577951308232, rate, dq, dof,
+                          Stuck() ? 1 : 0, pinStop, gBallQ, gBallF.Length());
+         if (dof == 1)
+         {
+            double slope = 0.0, lossF = 0.0, lossSlope = 0.0;
+            const double Vp = StoredChord(q, dq, h, slope, lossF, lossSlope), lim = FrictionLimit(qm, r, gBallF);
+            n += snprintf(line + n, sizeof line - n, " stored %.5g visc %.4g drive %.4g", -Vp - lossF, -Viscous() * r, DriveForce());
+            const PinMove pm = PinStep(dq, h);
+            n += snprintf(line + n, sizeof line - n, " pin %.5g lim %.5g holds %d (K %.4g s0 %.4g s1 %.4g)", pm.M, lim, pm.holds ? 1 : 0, pm.K, pinS, pm.s1);
+            n += snprintf(line + n, sizeof line - n, " | res %.5g N m s (%.4g m/s)", Res[off], Res[off] / mass * reach);
+         }
+         std::string note = line;
+         for (int i = 0; i < stops.size(); i++)
+         {
+            const BodyStop &s = stops[i];
+            snprintf(line, sizeof line, " {stop %d side %d at %.5f deg excess %.4g deg en %d armed %d touching %d}", (int)i, s.side, s.at * 57.29577951308232, s.side * (q + dq - s.at) * 57.29577951308232,
+                     (int)s.enabled, (int)s.armed, (int)s.touching);
+            note += line;
+         }
+         return note;
+      }
+      std::string SearchNote(const double *x, const int off, const double h) const override
+      {
+         if (NumDof() != 1)
+            return std::string();
+         const double dq = x[off];
+         const PinMove pm = PinStep(dq, h);
+         char line[300];
+         snprintf(line, sizeof line, "q0 %.6g deg rate0 %.4g dq %.4g q1 %.6g deg rate1 %.4g pin %d | pin spring s0 %.4g s1 %.4g K %.4g M %.4g holds %d | stop excess %.4g | ball force %.4g N",
+                  q * 57.29577951308232, rate, dq, (q + dq) * 57.29577951308232, EndRate(dq, rate, h), pinStop, pinS, pm.s1, pm.K, pm.M, pm.holds ? 1 : 0, StopExcess(x, off), gBallF.Length());
+         return line;
       }
    };
 }
