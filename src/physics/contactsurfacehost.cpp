@@ -254,7 +254,7 @@ namespace
    // the calling stage of a re-query, one word (ContactProf::StageId; "other": a stage that sets none)
    const char *StageWord(const int s)
    {
-      static const char *const w[ContactProf::StCount] = { "other", "holds", "groupshape", "ringhandin", "ringcap", "loadstate", "engagenear", "seatattouch", "engage", "writeback", "release" };
+      static const char *const w[ContactProf::StCount] = { "other", "holds", "groupshape", "ringhandin", "loadstate", "engagenear", "seatattouch", "engage", "writeback", "release" };
       return s >= 0 && s < ContactProf::StCount ? w[s] : "?";
    }
    // an object recorded for the ball and not taken before its next query: not handled mid-cycle (a ball not on the group step this cycle)
@@ -279,7 +279,7 @@ namespace
       q.pendTested.clear();
    }
 
-   // shared_finder P3a counters: one contact check = one outermost Probe, ProbePatch or ArrivalS of a static mesh host with a measurement table
+   // shared_finder P3a counters: one contact check = one outermost Probe or ProbePatch of a static mesh host with a measurement table
    struct FinderTabStats
    {
       uint64_t checks = 0, fills = 0, reads = 0, mism = 0;          // the whole run
@@ -2005,69 +2005,12 @@ int ContactSurfaceHost::PathReach(const SurfaceContact &it, const RubberContact:
    return 0;
 }
 
-// patch_friction (plan 3.6, brief p2b1b item 2): the arrival rule (ArrivalStep: gap, closing speed, a) also for the ridges between patches: each unpressed shared edge between two pressed
-// faces of different patches (about to press: a join), and each pressed pass of the level form (about to let go: a split). A static mesh only (a tube never gets ArrivalS).
-// The patches at c from the item's step-start probe (rs: its patches' pieces and its level form's passes, the caller's copy of the group step's Hit; null: no ridge bound). Counts each bound that sets h.
-double ContactSurfaceHost::RidgeArrival(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, const RubberContact::V3 &v, const double a, const double hIn,
-                                        const RubberContact::RidgeStart *rs) const
-{
-   if (rs == nullptr)
-      return hIn;
-   thread_local std::vector<std::pair<int, int>> fp;   // (pressed face, its patch)
-   const RubberContact::PatchPieceList &pp = rs->pieces;
-   double h = hIn;
-   for (const RubberContact::PeakTerm &t : rs->passes)   // a pass about to let go: its depth falls at v . n
-      if (t.s < 0.0 && t.d > 0.0)
-         h = RubberContact::ArrivalStep(t.d, std::max(v.Dot(t.n), 0.0), a, h);
-   const int np = (int)pp.off.size() - 1;
-   if (np >= 2)
-   {
-      fp.clear();
-      for (int p = 0; p < np; p++)
-         for (int q = pp.off[p]; q < pp.off[p + 1]; q++)
-            if (pp.id[q] >= 0 && pp.id[q] != RubberContact::PatchPieceList::kNoPiece)
-               fp.emplace_back(pp.id[q], p);
-      const double S = bs.R - it.gs.zero;
-      for (const auto &f : fp)
-         for (int e = 0; e < 3; e++)
-         {
-            const int o = m_surface->nb[f.first][e];
-            if (o <= f.first)   // each shared edge once (from its lower face)
-               continue;
-            int po = -1;
-            for (const auto &g : fp)
-               if (g.first == o)
-                  po = g.second;
-            if (po < 0 || po == f.second)
-               continue;
-            const RubberContact::SurfaceTri &T = m_surface->tris[f.first];
-            const RubberContact::V3 *vt[3] = { &T.a, &T.b, &T.c };
-            const int ea = e, eb = (e + 1) % 3;
-            const bool fwd = m_surface->vid[f.first][ea] < m_surface->vid[f.first][eb];   // (edgeMeasure's order)
-            const RubberContact::V3 q = fwd ? RubberContact::SegNearest(*vt[ea], *vt[eb], c) : RubberContact::SegNearest(*vt[eb], *vt[ea], c);
-            const RubberContact::V3 dv = c - q;
-            const double dist = dv.Length();
-            if (dist <= 1e-12 || dist <= S)
-               continue;   // (pressed: the patches are linked by it)
-            h = RubberContact::ArrivalStep(dist - S, std::max(-v.Dot(dv) / dist, 0.0), a, h);
-         }
-   }
-   if (h < hIn)   // (counter: the ridge bound set the step; running totals at 1, 2, 4, ...)
-   {
-      static std::atomic<long long> nRidge { 0 };
-      const long long was = nRidge.fetch_add(1), cnt = was + 1;
-      if (was == 0 || (cnt ^ was) > was)
-         PLOGI << "patch_friction: " << cnt << " ridge-arrival step bounds (object " << Name() << ")";
-   }
-   return h;
-}
-
-// shared_step_only (runs/2026-11-22-ringcap design 2.3-2.7): the step-start lookup's entries for the shared step rule (GroupStep ChooseStep takes each as an object).
+// step pieces (runs/2026-11-22-ringcap design 2.3-2.7): the step-start lookup's entries for the shared step rule (GroupStep ChooseStep takes each as an object).
 // Pieces: the faces of the ball's list (it.Faces(c), the finder's cull) joined through shared edges (nb) unless the edge is an inside corner toward c (cut B's test, BarsTriangles,
 // on the fold sides built at load; fold 2, unknown, counts as inside: more pieces, never a miss); a tube's segments of its list joined at a joint unless c is on the side the line
 // bends toward ((c - joint) . dn > 0, TubePre; a bend with no horizontal direction, dnOk false, counts as inside; a straight joint joins, as a flat edge). Each piece's nearest point
 // by the probe's own measurement (the ball's table), a face skipped when its box cannot beat the piece's best so far. Not entries: the piece the probe's answer comes from (seg)
-// and a pressed piece (in the answer's patches). Then the ridges, RidgeArrival's two bounds as entries (a static mesh, patch_friction: rs): a pass about to let go (its depth, its
+// and a pressed piece (in the answer's patches). Then the ridges as entries (a static mesh, patch_friction: rs): a pass about to let go (its depth, its
 // normal turned: the depth falls at v . n) and an unpressed shared edge between two pressed patches (its gap from R - zero). A cord band moves with its cord: none.
 void ContactSurfaceHost::StepPieces(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, const int seg, const RubberContact::RidgeStart *rs,
                                     std::vector<RubberContact::StepPiece> &out) const
@@ -2189,7 +2132,7 @@ void ContactSurfaceHost::StepPieces(const RubberContact::BallSI &bs, const Surfa
             n = (c - bestP[p]) / d;
          out.push_back({ raw, n, false });
       }
-      if (rs != nullptr)   // the ridges (RidgeArrival's bounds, moved)
+      if (rs != nullptr)   // the ridges (a ridge about to press, a pass about to let go)
       {
          for (const RubberContact::PeakTerm &t : rs->passes)   // a pass about to let go: its depth falls at v . n
             if (t.s < 0.0 && t.d > 0.0)
@@ -2288,29 +2231,6 @@ void ContactSurfaceHost::StepPieces(const RubberContact::BallSI &bs, const Surfa
       }
    }
    flush();
-}
-
-double ContactSurfaceHost::ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, const int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, const double a, const double hMax, const double touchM, const double arriveM,
-                                    const RubberContact::RidgeStart *rs) const
-{
-   CheckProfScope checkProf(2);   // P3a profile (diagnostics only)
-   const bool finderCheck = m_surface != nullptr && g_finderDepth == 0 && FinderCheckOn();   // check mode (as Probe)
-   if (m_surface != nullptr)
-      FinderInside(it, c);   // shared_finder P2a: the inside check of the ball's query volume (re-query counted; nothing reads the query yet)
-   if (finderCheck)
-      FinderCheck(it, c, bs.R, 2);
-   const FinderGuard finderGuard(finderCheck);
-   RubberContact::FaceTable *const ft = FinderTable(it, c);   // P3a: the ball's measurement table of this object at c (after the inside check, which may re-query)
-   const RubberContact::FaceRead frd { ft, nullptr };
-   const RubberContact::FaceRead *const fr = ft != nullptr ? &frd : nullptr;
-   checkProf.Tab(ft);
-   const TabCheck tabCheck(ft, this, it, c);
-   if (m_surface != nullptr)
-   {
-      const double hF = RubberContact::ArrivalTriangles(bs, m_surface->tris, it.Faces(c), nearestSeg, c, v, a, hMax, touchM, arriveM, fr);
-      return ContactSettings::Get().patchFriction ? RidgeArrival(bs, it, c, v, a, hF, rs) : hF;
-   }
-   return hMax;   // a tube: never called (the one caller, the group step's ringCap, skips an item with no face list, candR < 0, and a tube item never gets one)
 }
 
 // ---- Engine-stepped contact ----
@@ -3690,7 +3610,7 @@ void ContactProf::CheckDump(const uint64_t cycles, const double nsPerTick)
      << ", table begin " << (double)d.begin * k / cyc * 1e-3 << ", face loops in checks " << (double)d.loop * k / cyc * 1e-3 << " (" << (double)d.loops / cyc << " loops, " << (double)d.loopFaces / cyc
      << " faces looped per cycle), loops outside checks " << (double)d.loopOut * k / cyc * 1e-3 << " (" << (double)d.loopFacesOut / cyc << " faces); fills " << (double)d.fills / cyc << ", reads "
      << (double)d.reads / cyc << " per cycle; fit whole ns = " << ta << " + " << tb << " fills + " << tc << " reads; fit loops ns = " << la << " + " << lb << " fills + " << lc << " reads; by stage (probe/patch/arrival checks per cycle, us/cycle):";
-   static const char *const nm[StCount] = { "other", "ContactHolds", "GroupShape", "RingHandIn", "RingCap", "LoadState", "EngageNear", "SeatAtTouch", "EngageImpl", "WriteBack", "ReleaseTest" };
+   static const char *const nm[StCount] = { "other", "ContactHolds", "GroupShape", "RingHandIn", "LoadState", "EngageNear", "SeatAtTouch", "EngageImpl", "WriteBack", "ReleaseTest" };
    for (int st = 0; st < StCount; st++)
       if (d.st[st][0] + d.st[st][1] + d.st[st][2] > 0)
          o << " " << nm[st] << " " << (double)d.st[st][0] / cyc << "/" << (double)d.st[st][1] / cyc << "/" << (double)d.st[st][2] / cyc << " "

@@ -239,7 +239,7 @@ namespace GroupStep
       T in[K];
       std::vector<T> ex;
    };
-   // shared_step_only (runs/2026-11-22-ringcap design 2.4, 2.7): a static object's other convex piece in reach (not the one its own answer comes from), or a ridge of its pressed
+   // step pieces (runs/2026-11-22-ringcap design 2.4, 2.7): a static object's other convex piece in reach (not the one its own answer comes from), or a ridge of its pressed
    // patches, found by the step-start probe (Shape::ProbeStart). For the step rule only: ChooseStep takes it as it takes an object (no force, no state kept)
    struct HitEntry
    {
@@ -247,7 +247,7 @@ namespace GroupStep
       V3 n;          // its normal (surface -> ball centre): the closing speed is -v . n
       bool zeroed;   // true: d is already from the object's zero (a ridge: the pass's depth, or the edge's gap from R - zero)
    };
-   // shared_step_only counters (always on, cheap; written to the VPX_GROUP_STATS file): step-start lookups of a static surface, entries they built, steps an entry set
+   // step pieces counters (always on, cheap; written to the VPX_GROUP_STATS file): step-start lookups of a static surface, entries they built, steps an entry set
    struct PieceStats
    {
       long lookups = 0, entries = 0, set = 0;
@@ -273,7 +273,7 @@ namespace GroupStep
       int npc = 0;
       InList<int, 16> pc;
       InList<RubberContact::PieceData, 16> pd;   // level_stiffness: each piece's depth (from the object's zero, as pat's), normal, geometry and neighbours (parallel to pc)
-      int ne = 0;              // shared_step_only: the step-start probe's entries (en): the object's other convex pieces and ridges for the step rule; 0 from every other probe
+      int ne = 0;              // step pieces: the step-start probe's entries (en): the object's other convex pieces and ridges for the step rule; 0 from every other probe
       InList<HitEntry, 8> en;
       Hit() {}
       Hit(const Hit &o) { *this = o; }
@@ -1994,7 +1994,7 @@ namespace GroupStep
          int unsteady = 0;                   // the steady test the contact failed, the first in order: 0 none (steady, or no test), 1 closing speed, 2 acceleration, 3 slip
          double unsteadyVal = 0.0, unsteadyLim = 0.0;   // that test's value and limit (m/s, m/s^2, m/s)
          int term = -1;                      // >= 0: the contact's term (Hit::t) whose arrival set the step (termArrival); delta and dDot are then that term's
-         int entry = -1;                     // >= 0: the contact's entry (Hit::en, shared_step_only) that set the step; rule is then its own + 10 (11 stiffness, 13 arrival, 17 steady clock); delta and dDot its
+         int entry = -1;                     // >= 0: the contact's entry (Hit::en, step pieces) that set the step; rule is then its own + 10 (11 stiffness, 13 arrival, 17 steady clock); delta and dDot its
       };
       mutable StepDiag diag;
 
@@ -2022,7 +2022,7 @@ namespace GroupStep
          {
             const Item &it = item[k];
             Hit &hp = hNow[k];   // kept: the step's start probes the same positions
-            Probe(it, ball, hp, true);   // (the step-start probe: a static surface's entries, shared_step_only)
+            Probe(it, ball, hp, true);   // (the step-start probe: a static surface's entries, step pieces)
             if (it.touching && hp.delta > 0.0)
             {
                const V3 f = hp.n * it.F(hp.delta) - it.xi * it.Kt(hp.delta);
@@ -2048,7 +2048,7 @@ namespace GroupStep
                vs = vs + hp.c[j].V() * q.rate;
                invQ += sl * sl * (pq.DofOf(hp.c[j].coord) >= 0 ? q.invM : q.blockedSide == 0 || q.blockedSide * sl > 0.0 ? q.invMFree : 0.0);
             }
-            // one object, or one entry of it (shared_step_only: another convex piece or a ridge of a static surface, Hit::en): the same rule. delta, n, curvDist: its depth,
+            // one object, or one entry of it (step pieces: another convex piece or a ridge of a static surface, Hit::en): the same rule. delta, n, curvDist: its depth,
             // normal and turning distance; e: its entry, -1 the object (runs/2026-11-22-ringcap design 2.5)
             const auto one = [&](const double delta, const V3 &n, const double curvDist, const int e) {
                const V3 vr = it.b >= 0 ? A.v - ball[it.b].v : A.v - vs;
@@ -2245,7 +2245,7 @@ namespace GroupStep
          }
          if (h < 1e-7)
             dg.rule = 5;
-         if (dg.rule != 5 && dg.rule != 8 && dg.entry >= 0)   // (shared_step_only counter: an entry set the step)
+         if (dg.rule != 5 && dg.rule != 8 && dg.entry >= 0)   // (step pieces counter: an entry set the step)
             pieceStats.set++;
          diag = dg;
          nowStamp = stamp;
@@ -3591,7 +3591,7 @@ namespace GroupStep
       // book (V of the union) and gating read the one potential sum_t s_t V(a_t - z_t)
       void ZeroHit(const Item &it, Hit &hp) const
       {
-         for (int j = 0; j < hp.ne; j++)   // shared_step_only: each piece entry from the object's zero, as the merged depth (a ridge's is already)
+         for (int j = 0; j < hp.ne; j++)   // step pieces: each piece entry from the object's zero, as the merged depth (a ridge's is already)
             if (!hp.en[j].zeroed)
                hp.en[j].d -= it.dZero;
          if (hp.nt == 0 || it.tZero.empty())
@@ -3641,7 +3641,7 @@ namespace GroupStep
       void Probe(const Item &it, const Ball *bs, Hit &hp, const bool start = false) const
       {
          const Ball &A = bs[it.a];
-         hp.ne = 0;   // (shared_step_only: hits are kept and reused; only ProbeStart writes entries)
+         hp.ne = 0;   // (step pieces: hits are kept and reused; only ProbeStart writes entries)
          hp.kb = 0.0;
          hp.ktb = 0.0;
          hp.nc = 0;   // (hits are kept and reused: a fixed surface writes no columns, and must not inherit a carried one's)
@@ -6496,7 +6496,7 @@ namespace GroupStep
             {
                h0s[k].nt = 0;
                Hit &hs = h0s[k];   // patch_friction: the start's patches and their pieces (the friction groups' start side and memory; without them every group's d0 is a plane's)
-               hs.ne = h0.ne;   // (shared_step_only: the entries, as every copy of a Hit)
+               hs.ne = h0.ne;   // (step pieces: the entries, as every copy of a Hit)
                hs.en.Fit(hs.ne);
                for (int j = 0; j < hs.ne; j++)
                   hs.en[j] = h0.en[j];

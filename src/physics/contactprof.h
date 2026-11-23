@@ -55,7 +55,7 @@ namespace ContactProf
    void ProbeName(const void *surface, const std::string &name);
    void Cycle();                             // one physics cycle began
 }
-// P3a profile (diagnostics only, VPX_CHECK_PROFILE=1; runs/2026-11-12-finder-P3a-profile): where one contact check's time goes. A check is the outermost of ContactSurfaceHost's Probe / ProbePatch / ArrivalS;
+// P3a profile (diagnostics only, VPX_CHECK_PROFILE=1; runs/2026-11-12-finder-P3a-profile): where one contact check's time goes. A check is the outermost of ContactSurfaceHost's Probe / ProbePatch;
 // its time splits into the inside check (FinderInside), the table lookup and Begin (FinderTable), the face loops (each loop timed whole: reads and fills together) and the rest. Per-check sums
 // of time, faces measured (fills) and table reads give a least-squares fit time = a + b fills + c reads. Checks are counted by the calling stage (Stage, set by the callers).
 namespace ContactProf
@@ -65,7 +65,7 @@ namespace ContactProf
       static const bool on = getenv("VPX_CHECK_PROFILE") != nullptr;
       return on;
    }
-   enum StageId { StOther, StHolds, StGroupShape, StRingHandIn, StRingCap, StLoadState, StEngageNear, StSeatAtTouch, StEngageImpl, StWriteBack, StReleaseTest, StCount };
+   enum StageId { StOther, StHolds, StGroupShape, StRingHandIn, StLoadState, StEngageNear, StSeatAtTouch, StEngageImpl, StWriteBack, StReleaseTest, StCount };
    struct CheckData
    {
       uint64_t inside = 0, begin = 0, loop = 0, loopOut = 0, loopFaces = 0, loopFacesOut = 0, loops = 0;

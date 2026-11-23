@@ -108,10 +108,7 @@ public:
    // the path test: can a ball of radius R whose centre moves straight from s to s + d touch the surface on the way (any piece within R plus the piece's radius of the path)?
    // 1 = yes, 0 = no (the whole path checked exactly, rubbercontact.h path kit), -1 = this surface has no exact path test (a cord band, no query): the caller probes as before
    virtual int PathReach(const SurfaceContact & /*it*/, const RubberContact::V3 & /*s*/, const RubberContact::V3 & /*d*/, double /*R*/) const { return -1; }
-   // The longest step, at most hMax, that brings the ball at most to arriveM of a part of the surface other than the probe's nearest (nearestSeg); a nearest-only surface: hMax. a: the acceleration bound.
-   virtual double ArrivalS(const RubberContact::BallSI & /*bs*/, const SurfaceContact & /*it*/, int /*nearestSeg*/, const RubberContact::V3 & /*c*/, const RubberContact::V3 & /*v*/, double /*a*/, double hMax, double /*touchM*/, double /*arriveM*/,
-                           const RubberContact::RidgeStart * /*rs*/) const { return hMax; }   // rs (patch_friction): the item's step-start patches and passes, null none
-   // shared_step_only (runs/2026-11-22-ringcap design 2.3-2.7): the step-start lookup's entries for the shared step rule: the surface's convex pieces in the ball's list other than
+   // step pieces (runs/2026-11-22-ringcap design 2.3-2.7): the step-start lookup's entries for the shared step rule: the surface's convex pieces in the ball's list other than
    // the one its answer comes from (seg) and the pressed ones, each its nearest point's depth and normal; and the ridges of its pressed patches (rs, null none). A surface with none: empty
    virtual void StepPieces(const RubberContact::BallSI & /*bs*/, const SurfaceContact & /*it*/, const RubberContact::V3 & /*c*/, int /*seg*/, const RubberContact::RidgeStart * /*rs*/,
                            std::vector<RubberContact::StepPiece> &out) const { out.clear(); }

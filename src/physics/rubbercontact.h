@@ -1538,7 +1538,7 @@ namespace RubberContact
       PatchPieceList pieces;
       std::vector<PeakTerm> passes;
    };
-   // shared_step_only (runs/2026-11-22-ringcap design 2.4, 2.7): one entry of a static surface's step-start lookup for the shared step rule: another convex piece in reach, or a ridge
+   // step pieces (runs/2026-11-22-ringcap design 2.4, 2.7): one entry of a static surface's step-start lookup for the shared step rule: another convex piece in reach, or a ridge
    struct StepPiece
    {
       double d;      // its depth (> 0 pressed, < 0 the gap): a piece's R (+ a tube's radius) - distance before the item's zero; a ridge's already from the zero (zeroed)
@@ -2481,44 +2481,6 @@ namespace RubberContact
       return pr;
    }
 
-   // A probe reports the surface's nearest point only, so a part of the surface that is not the nearest (a ramp's wall while the ball flies just over its floor) has no say in the step and the
-   // ball can be carried deep into it, with stored energy no work paid for. These give the longest step, at most hMax, that brings the ball no closer than arriveM to any other part of the surface
-   // (the arrival rule, part by part: d <= vc h + a h^2). A part within touchM counts as touching. The nearest part (nearest: the probe's seg) is the caller's.
-   inline double ArrivalStep(const double d, const double vc, const double a, const double h)
-   {
-      if (d > vc * h + a * h * h)
-         return h;
-      const double t = a > 1e-9 ? (-vc + std::sqrt(vc * vc + 4.0 * a * d)) / (2.0 * a) : vc > 1e-12 ? d / vc : h;
-      return std::min(h, t);
-   }
-
-   // a face in the plane of the nearest face has the same gap and closing speed: it is passed over; so is one whose plane the ball cannot reach within the step
-   inline double ArrivalTriangles(const BallSI &ball, const std::vector<SurfaceTri> &tris, const std::vector<int> &cand, const int nearest, const V3 &c, const V3 &v, const double a, const double hMax, const double touchM, const double arriveM,
-                                  const FaceRead *fr = nullptr)
-   {
-      double h = hMax;
-      const double speed = v.Length();
-      const SurfaceTri *const best = nearest >= 0 ? &tris[nearest] : nullptr;
-      const ContactProf::LoopTicks profLoop(cand.size());   // P3a profile (diagnostics only)
-      for (size_t j = 0; j < cand.size(); j++)
-      {
-         const int i = cand[j];
-         if (i == nearest)
-            continue;
-         const SurfaceTri &t = tris[i];
-         if (std::abs((c - t.a).Dot(t.n)) - ball.R - touchM > speed * h + a * h * h)
-            continue;
-         if (best != nullptr && std::abs(t.n.Dot(best->n)) > 0.9999 && std::abs((t.a - best->a).Dot(best->n)) < 1e-5)
-            continue;
-         int kind = 0;
-         const V3 dv = c - (fr != nullptr ? fr->At(j, t, c).p : ClosestOnTriangle(t, c, kind));   // shared_finder P3a: the table's measurement
-         const double dist = dv.Length();
-         if (dist <= 1e-12 || dist - ball.R <= touchM)
-            continue;
-         h = ArrivalStep(dist - ball.R - arriveM, std::max(-v.Dot(dv) / dist, 0.0), a, h);
-      }
-      return h;
-   }
 
    // Static-surface contact for one step. Same law as Evaluate (ContactCore), plus rolling resistance on the tangential part of the
    // ball's spin (the roll axis of a ball running along a post is arbitrary, unlike the flipper's vertical face). h = rubber layer thickness.

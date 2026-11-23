@@ -2115,15 +2115,15 @@ struct ContactSystemImpl
          int seg;
          ProbeSeg(c, R, h, seg);
       }
-      // shared_step_only (runs/2026-11-22-ringcap design 2.3-2.7): the step-start probe: Probe, then a static surface's other convex pieces and its ridges, each with its gap and
-      // normal, as entries for the step rule (no force, no state). Off (0): Probe alone
+      // step pieces (runs/2026-11-22-ringcap design 2.3-2.7): the step-start probe: Probe, then a static surface's other convex pieces and its ridges, each with its gap and
+      // normal, as entries for the step rule (no force, no state)
       void ProbeStart(const V3 &c, const double R, GroupStep::Hit &h) const override
       {
          int seg;
          ProbeSeg(c, R, h, seg);
-         if (mp != nullptr || !ContactSettings::Get().sharedStepOnly)
+         if (mp != nullptr)
             return;
-         thread_local RubberContact::RidgeStart rsS;   // (the probe's own patches and passes: the ridges, patch_friction only; ringCap's RidgeStart from the same Hit)
+         thread_local RubberContact::RidgeStart rsS;   // (the probe's own patches and passes: the ridges, patch_friction only)
          const RubberContact::RidgeStart *rs = nullptr;
          if (ContactSettings::Get().patchFriction)
          {
@@ -2918,56 +2918,6 @@ struct ContactSystemImpl
       const double traceE0 = cordTrace != nullptr ? g.Energy() : 0.0;
       GroupStep::CycleBook book(g);
       double done = 0.0;
-      // The group's step rule sees a surface's nearest face only, as a probe does: the other faces a ball can reach bound the step too (NextStep's rule). Not for energy, which the solve keeps
-      // at any step: so that a hit on a hidden face is resolved, not one long step into it.
-      const auto ringCap = [&](double h) {
-         const ContactProf::Stage profStage(ContactProf::StRingCap);   // P3a profile: the calling stage of the checks here (diagnostics only)
-         if (!ring || ContactSettings::Get().sharedStepOnly)   // shared_step_only: no cut of its own (runs/2026-11-22-ringcap)
-            return h;
-         const double a = g.set.g.Length();
-         for (int s = 0; s < g.ns; s++)
-         {
-            if (!isSurf(s))
-               continue;
-            const SurfaceShape &sh = *static_cast<const SurfaceShape *>(g.shape[s]);
-            if (sh.it->candR < 0.0 || sh.it->NoFaces(g.ball[sh.onlyBall].c))
-               continue;
-            const GroupStep::Ball &b = g.ball[sh.onlyBall];
-            const TubeProbe pr = sh.r->Probe(sh.bs, *sh.it, b.c);
-            const double gap = pr.overlap ? -pr.delta : pr.dist - (b.R + pr.rho);
-            if (gap <= b.v.Length() * h + a * h * h)
-            {
-               // patch_friction (plan 3.6, review R3b/R5): the ridge arrival reads the item's step-start Hit (its patches, pieces, passes), the item found by (shape s, onlyBall), valid
-               // while the positions are those of ChooseStep's probes (nowStamp == stamp); else no ridge bound. No probe here
-               thread_local RubberContact::RidgeStart rsS;
-               const RubberContact::RidgeStart *rs = nullptr;
-               for (int k = 0; k < g.ni && rs == nullptr; k++)
-                  {
-                     const GroupStep::Item &gi = g.item[k];
-                     const GroupStep::Hit *const hsp = gi.s == s && gi.a == sh.onlyBall && gi.b < 0 ? g.StartHit(k) : nullptr;
-                     if (hsp == nullptr)
-                        continue;
-                     const GroupStep::Hit &hs = *hsp;
-                     rsS.pieces.Clear();
-                     rsS.pieces.off.clear();
-                     rsS.pieces.off.push_back(0);
-                     for (int p = 0; p < hs.npat; p++)
-                     {
-                        const GroupStep::HitPatch &P = hs.pat[p];
-                        for (int q = 0; q < P.pn; q++)
-                           rsS.pieces.id.push_back(hs.pc[P.p0 + q]);
-                        rsS.pieces.off.push_back((int)rsS.pieces.id.size());
-                     }
-                     rsS.passes.clear();
-                     for (int j = 0; j < hs.np; j++)
-                        rsS.passes.push_back(hs.pk[j]);
-                     rs = &rsS;
-                  }
-               h = std::max(sh.r->ArrivalS(sh.bs, *sh.it, pr.seg, b.c, b.v, a, h, 1.0e-6, 0.5e-6, rs), std::min(h, 1e-6));
-            }
-         }
-         return h;
-      };
       // for a test run (VPX_CORD_ENERGY): the group's own books over the cycle, stored energy included, told at each new largest rise
       static const bool cordEnergy = std::getenv("VPX_CORD_ENERGY") != nullptr;
       const bool cordEnergyOn = cordEnergy && !cords.empty();
@@ -3156,7 +3106,7 @@ struct ContactSystemImpl
       long ruleRounds = g.books.rounds;
       auto ruleT = std::chrono::steady_clock::now();
       const auto ruleCap = [&](const double h) {
-         const double hc = hFix > 0.0 ? std::min(hFix, cy.dt - done) : ringCap(h);
+         const double hc = hFix > 0.0 ? std::min(hFix, cy.dt - done) : h;
          if (ruleF != nullptr)
          {
             const auto now = std::chrono::steady_clock::now();
