@@ -41,6 +41,7 @@
 #include <cstring>
 #include <cstdint>
 #include <cstdlib>
+#include <atomic>
 #include <string>
 #include "contactprof.h"
 
@@ -1486,13 +1487,39 @@ namespace RubberContact
    {
       int kind = 0;
       V3 a, b;
+      V3 c;   // level_stiffness (fault B2): kind 3, a mesh face's own triangle a-b-c (PieceData only; its depth elsewhere from its closest point, ClosestOnTriangle)
+   };
+   // level_stiffness (B-lin, plan 2.4b): one pressed piece beside its id: its depth (raw, as a probe's delta: the zero added back), its normal (the depth's gradient direction), its own
+   // signed geometry (PieceGeo, as above for the piece itself; a mesh face: kind 3, its triangle) and its two neighbours in the merge tree (static from the ids: a mesh edge -(1 + 3 t + e) joins faces t and
+   // nb[t][e]; a tube segment i joins joints -(i + 1), -(i + 2); a joint -(j + 1) joins segments j - 1 and j (a ring's joint 0: n - 2 and 0); kNoPiece none, a face has none)
+   struct PieceData
+   {
+      double d = -1.0;
+      V3 n;
+      PieceGeo g;
+      int nbA = 0x7fffffff, nbB = 0x7fffffff;
+      int nbC = 0x7fffffff, nbD = 0x7fffffff;   // a tube joint: the joints before and after it (through segments nbA, nbB); MergeBars links two pressed ones when that segment has no pressed foot
    };
    struct PatchPieceList
    {
       std::vector<int> off, id;
       std::vector<PieceGeo> geo;
-      void Clear() { off.assign(1, 0); id.clear(); geo.clear(); }
-      void One(const int piece) { Clear(); if (piece != kNoPiece) id.push_back(piece); off.push_back((int)id.size()); geo.push_back(PieceGeo()); }
+      std::vector<PieceData> pd;   // level_stiffness: per id (parallel to id)
+      void Clear() { off.assign(1, 0); id.clear(); geo.clear(); pd.clear(); }
+      void One(const int piece, const double d, const V3 &n)   // the probe's nearest piece alone (d raw, n its normal)
+      {
+         Clear();
+         if (piece != kNoPiece)
+         {
+            id.push_back(piece);
+            PieceData p;
+            p.d = d;
+            p.n = n;
+            pd.push_back(p);
+         }
+         off.push_back((int)id.size());
+         geo.push_back(PieceGeo());
+      }
       static constexpr int kNoPiece = 0x7fffffff;
    };
    // patch_friction (plan 2.1): one piece's memory, its patch's shear stretch and rolling and twist angles at the last accepted step's end
@@ -1501,7 +1528,35 @@ namespace RubberContact
       int id;
       V3 xi;
       RollAngle ra;
+      double kt = 0.0, kr = 0.0, kw = 0.0;   // plan 2.4's memory rule: its group's end stiffness the stretch and angles were stored at (shear, rolling, twist), 0 none
+      int sg = -1;                           // that group's index at that step (the pieces of one stored group share it)
    };
+   // patch_friction (plan 3.6): the ridge arrival's input, the item's step-start probe (the group step's Hit, valid while its positions are): its patches' pieces (off, id) and its
+   // level form's passes and peaks (PeakTerm); a copy the caller fills (thread-local, capacity reused)
+   struct RidgeStart
+   {
+      PatchPieceList pieces;
+      std::vector<PeakTerm> passes;
+   };
+   // VPX_PATCH_CHECK=1 (diagnostics, read once): cut B's pressed faces from the probe's hits are also compared with each face probed alone (BarsTriangles): [0] shortcut calls
+   // compared, [1] calls whose pressed set differs; logged on the patch check's totals line
+   inline bool PatchCheckEnv()
+   {
+      static const bool on = [] { const char *e = std::getenv("VPX_PATCH_CHECK"); return e != nullptr && e[0] == '1'; }();
+      return on;
+   }
+   inline std::atomic<long long> *CutBCheck()   // [2] calls whose listed pieces (faces and pressed shared edges) give more than one peak through MergeBars (expected 0)
+   {
+      static std::atomic<long long> c[3] { { 0 }, { 0 }, { 0 } };
+      return c;
+   }
+   // VPX_PATCH_CHECK=1 (diagnostics): the friction groups' held spring energy at a step's start (as Eval's friction block takes it) against the item's book energy there
+   // (Group::Energy's ShearE + rolling terms): [0] attempts compared, [1] |difference| > 1e-12 J, [2] book per-step rises > 1e-9 J (VPX_GROUP_BOOK_STEPS); on the patch check's line
+   inline std::atomic<long long> *HeldCheck()
+   {
+      static std::atomic<long long> c[6] { { 0 }, { 0 }, { 0 }, { 0 }, { 0 }, { 0 } };   // [4] B-lin lev1 checked, [5] lev1 vs the end probe's level form, rel > 1e-12   // [3] kind C: a group's start stiffness k0 differs from its stored ks (relative > 1e-9)
+      return c;
+   }
    inline PatchPieceList &PatchPieces()
    {
       thread_local PatchPieceList v;
@@ -1513,28 +1568,43 @@ namespace RubberContact
       thread_local std::vector<int> v;
       return v;
    }
+   // level_stiffness (B2): a mesh face's own geometry, its triangle (kind 3)
+   inline PieceGeo FaceGeo(const SurfaceTri &t)
+   {
+      PieceGeo g;
+      g.kind = 3;
+      g.a = t.a;
+      g.b = t.b;
+      g.c = t.c;
+      return g;
+   }
    // the pieces of each patch from MergeBars' NodePatch (np patches) and each node's piece id
-   inline void FillPatchPieces(const std::vector<int> &nodePiece, const int np)
+   inline void FillPatchPieces(const std::vector<int> &nodePiece, const std::vector<PieceData> &nodePd, const int np)
    {
       PatchPieceList &pl = PatchPieces();
       const std::vector<int> &npch = NodePatch();
       pl.off.assign(np + 1, 0);
       pl.id.clear();
       pl.geo.clear();
+      pl.pd.clear();
       for (int p = 0; p < np; p++)
       {
          for (size_t x = 0; x < nodePiece.size(); x++)
             if (npch[x] == p)
+            {
                pl.id.push_back(nodePiece[x]);
+               pl.pd.push_back(nodePd[x]);
+            }
          pl.off[p + 1] = (int)pl.id.size();
       }
    }
    // one patch holding every node (one peak, or several peaks in one patch)
-   inline void AllPatchPieces(const std::vector<int> &nodePiece)
+   inline void AllPatchPieces(const std::vector<int> &nodePiece, const std::vector<PieceData> &nodePd)
    {
       PatchPieceList &pl = PatchPieces();
       pl.Clear();
       pl.id.assign(nodePiece.begin(), nodePiece.end());
+      pl.pd.assign(nodePd.begin(), nodePd.end());
       pl.off.push_back((int)pl.id.size());
    }
    // the deepest of the nodes (MergeBars' order: depth, then index)
@@ -1708,7 +1778,7 @@ namespace RubberContact
             patchesOut->clear();
             patchesOut->push_back(pr);
             if (!pcs)
-               PatchPieces().One(pr.overlap && pr.seg >= 0 ? pr.seg : PatchPieceList::kNoPiece);
+               PatchPieces().One(pr.overlap && pr.seg >= 0 ? pr.seg : PatchPieceList::kNoPiece, pr.delta, pr.normal);
          }
          return pr;
       };
@@ -1793,11 +1863,37 @@ namespace RubberContact
          }
          return g;
       };
+      thread_local std::vector<PieceData> nodePd;   // level_stiffness: each node's piece data (PieceData), filled where the pieces are written
+      const auto tubePd = [&]() {
+         nodePd.resize(nodes.size());
+         for (size_t x = 0; x < nodes.size(); x++)
+         {
+            PieceData &p = nodePd[x];
+            p.d = nodes[x].d + zero;
+            p.n = nodes[x].n;
+            p.g = tubeGeo((int)x);
+            const int s = nodeSeg[x];
+            if (s >= 0)   // a segment: its two joints (a ring's point n - 1 is joint 0)
+            {
+               p.nbA = -(s + 1);
+               p.nbB = -((s + 1 >= nv ? 0 : s + 1) + 1);
+            }
+            else   // a joint: the segments that meet there
+            {
+               const int j = -s - 1;
+               p.nbA = j > 0 ? j - 1 : ring ? n - 2 : PatchPieceList::kNoPiece;
+               p.nbB = j < n - 1 ? j : PatchPieceList::kNoPiece;
+               p.nbC = j > 0 ? -j : ring ? -nv : PatchPieceList::kNoPiece;                          // (the joint before: j - 1; a ring's joint 0: nv - 1)
+               p.nbD = j < n - 1 ? -((j + 1 >= nv ? 0 : j + 1) + 1) : PatchPieceList::kNoPiece;   // (the joint after: j + 1; a ring's last: joint 0)
+            }
+         }
+      };
       if (MergeBars(nodes, adj, sum, patchesOut != nullptr ? &patches : nullptr) <= 1)
       {
          if (patchesOut != nullptr)
          {
-            AllPatchPieces(nodeSeg);
+            tubePd();
+            AllPatchPieces(nodeSeg, nodePd);
             PatchPieces().geo.assign(1, tubeGeo(DeepestNode(nodes)));
             pcs = true;
          }
@@ -1809,7 +1905,8 @@ namespace RubberContact
       {
          if (patches.size() <= 1)
          {
-            AllPatchPieces(nodeSeg);   // (every node is in the one patch)
+            tubePd();
+            AllPatchPieces(nodeSeg, nodePd);   // (every node is in the one patch)
             PatchPieces().geo.assign(1, tubeGeo(DeepestNode(nodes)));
             pcs = true;
             return one();   // one patch: today's merged answer
@@ -1846,7 +1943,8 @@ namespace RubberContact
             p.sum.Finish(q, zero);
             patchesOut->push_back(q);
          }
-         FillPatchPieces(nodeSeg, (int)patches.size());
+         tubePd();
+         FillPatchPieces(nodeSeg, nodePd, (int)patches.size());
          for (const PatchSum &p : patches)
             PatchPieces().geo.push_back(tubeGeo(p.deep));
       }
@@ -1899,7 +1997,12 @@ namespace RubberContact
             patchesOut->clear();
             patchesOut->push_back(pr);
             if (!pcs)
-               PatchPieces().One(pr.overlap && pr.seg >= 0 ? pr.seg : PatchPieceList::kNoPiece);
+            {
+               PatchPieces().One(pr.overlap && pr.seg >= 0 ? pr.seg : PatchPieceList::kNoPiece, pr.delta, pr.normal);
+               PatchPieceList &pl1 = PatchPieces();
+               if (!pl1.pd.empty() && pr.seg >= 0 && pr.seg < (int)tris.size())   // (level_stiffness, B2: the face's triangle)
+                  pl1.pd[0].g = FaceGeo(tris[pr.seg]);
+            }
          }
          return pr;
       };
@@ -2002,25 +2105,6 @@ namespace RubberContact
                profObj->full++;
          }
       }
-      if (cbSkip && !cbCheck)
-      {
-         if (patchesOut != nullptr)   // patch_friction (plan 2.1, 3.1): the shortcut still reports its pieces: the near set's PRESSED faces (each probed alone, depth above the zero; one patch, cut B's own test)
-         {
-            thread_local std::vector<int> pressed, one1;
-            pressed.clear();
-            for (const int i : cand)
-            {
-               one1.assign(1, i);
-               const TubeProbe q = ProbeTriangles(ball, tris, one1, edgeRho, c);
-               if (q.overlap && q.delta > zero)
-                  pressed.push_back(i);
-            }
-            AllPatchPieces(pressed);
-            PatchPieces().geo.assign(1, PieceGeo());
-            pcs = true;
-         }
-         return one();
-      }
       // an edge's nearest point from its lower-id end, so both triangles on it get the same bits
       const auto edgeMeasure = [&](const int t, const int e, V3 &nOut) {
          const SurfaceTri &T = tris[t];
@@ -2079,6 +2163,142 @@ namespace RubberContact
          }
          return dist > 1e-12 ? ball.R - dist - zero : -1.0;
       };
+      // a probed face's node: its depth above the zero d (<= 0: not pressed), normal nn, and the rim's deepest edge rimE (-1 the face's inside); the face pass and cut B
+      const auto faceNode = [&](const FaceHit &fh, double &d, V3 &nn, int &rimE) {
+         const SurfaceTri &T = tris[fh.i];
+         d = -1.0;
+         rimE = -1;
+         if (std::abs((c - T.a).Dot(T.n)) >= ball.R - zero)
+            return;   // every point of the face and its edges is at least the plane distance away: depth <= 0
+         if (!T.area)
+            return;   // zero area: no face (MakeSurfaceTri)
+         if (fh.kind == 0)
+         {
+            const V3 dv = c - fh.p;
+            const double dist = std::sqrt(fh.d2);   // = dv.Length()
+            if (dist <= 1e-12)
+               return;
+            d = ball.R - dist - zero;
+            nn = dv.Dot(T.n) < 0.0 ? T.n * -1.0 : T.n;
+         }
+         else
+         {
+            d = -1.0;   // the nearest point is on the rim: the deepest of the three edges
+            for (int e = 0; e < 3; e++)
+            {
+               V3 ne;
+               const double de = edgeDepth(fh.i, e, ne);
+               if (de > d)
+               {
+                  d = de;
+                  nn = ne;
+                  rimE = e;
+               }
+            }
+         }
+      };
+      if (cbSkip && !cbCheck)
+      {
+         if (patchesOut != nullptr)   // patch_friction (plan 2.1, 3.1): the shortcut still reports its pieces: the near set's PRESSED faces, from the probe's hits (each candidate measured once) by the face pass's depth (one patch, cut B's own test)
+         {
+            thread_local std::vector<int> pressed;
+            thread_local std::vector<PieceData> pressedPd;
+            pressed.clear();
+            pressedPd.clear();
+            for (const FaceHit &fh : hits)
+            {
+               double d;
+               V3 nn;
+               int rimE;
+               faceNode(fh, d, nn, rimE);
+               if (d <= 0.0)
+                  continue;
+               PieceData p;
+               p.d = d + zero;
+               p.n = nn;
+               p.g = FaceGeo(tris[fh.i]);   // (B2: its triangle)
+               pressed.push_back(fh.i);
+               pressedPd.push_back(p);
+            }
+            // the pressed shared edges between two pressed faces, by the edge pass's own rule and data (edgeDepth: the face table), from the lower face: the merge tree's humps,
+            // so B-lin's adjacency joins the faces (level_stiffness); the same PieceData as meshPd's edge node
+            const size_t nFace = pressed.size();
+            for (size_t x = 0; x < nFace; x++)
+            {
+               const int t = pressed[x];
+               for (int e = 0; e < 3; e++)
+               {
+                  const int o = nb[t][e];
+                  if (o <= t)
+                     continue;
+                  bool oOn = false;
+                  for (size_t y = 0; y < nFace && !oOn; y++)
+                     oOn = pressed[y] == o;
+                  if (!oOn)
+                     continue;
+                  V3 ne;
+                  const double de = edgeDepth(t, e, ne);
+                  if (de <= 0.0)
+                     continue;
+                  const V3 *v[3] = { &tris[t].a, &tris[t].b, &tris[t].c };
+                  PieceData p;
+                  p.d = de + zero;
+                  p.n = ne;
+                  p.g.kind = 1;
+                  p.g.a = *v[e];
+                  p.g.b = *v[(e + 1) % 3];
+                  p.nbA = t;
+                  p.nbB = o;
+                  pressed.push_back(-(1 + 3 * t + e));
+                  pressedPd.push_back(p);
+               }
+            }
+            if (PatchCheckEnv())   // VPX_PATCH_CHECK=1: the listed pieces through MergeBars (their depths, adjacency from the neighbour pairs): more than one peak counted (expected 0)
+            {
+               thread_local std::vector<BarNode> cn;
+               thread_local std::vector<std::pair<int, int>> ca;
+               thread_local std::vector<PeakTerm> keepTerms;
+               cn.clear();
+               ca.clear();
+               for (size_t x = 0; x < pressed.size(); x++)
+               {
+                  const PieceData &p = pressedPd[x];
+                  cn.push_back({ p.d - zero, p.n, x < nFace ? 0 : 1 });
+                  for (size_t y = 0; y < x; y++)
+                     if (p.nbA == pressed[y] || p.nbB == pressed[y] || pressedPd[y].nbA == pressed[x] || pressedPd[y].nbB == pressed[x])
+                        ca.emplace_back((int)x, (int)y);
+               }
+               keepTerms = PeakTerms();   // (MergeBars writes the thread's peak list: the probe's own stays as it was)
+               FoldSum cs;
+               if (MergeBars(cn, ca, cs) > 1)
+                  CutBCheck()[2]++;
+               PeakTerms() = keepTerms;
+            }
+            if (PatchCheckEnv())   // VPX_PATCH_CHECK=1: against each near face probed alone (the set, any order)
+            {
+               thread_local std::vector<int> old, one1, a, b;
+               old.clear();
+               for (const int i : cand)
+               {
+                  one1.assign(1, i);
+                  const TubeProbe q = ProbeTriangles(ball, tris, one1, edgeRho, c);
+                  if (q.overlap && q.delta > zero)
+                     old.push_back(i);
+               }
+               a.assign(pressed.begin(), pressed.begin() + (std::ptrdiff_t)nFace);   // (the faces only)
+               b.assign(old.begin(), old.end());
+               std::sort(a.begin(), a.end());
+               std::sort(b.begin(), b.end());
+               CutBCheck()[0]++;
+               if (a != b)
+                  CutBCheck()[1]++;
+            }
+            AllPatchPieces(pressed, pressedPd);
+            PatchPieces().geo.assign(1, PieceGeo());
+            pcs = true;
+         }
+         return one();
+      }
       thread_local std::vector<BarNode> nodes;   // scratch kept per thread
       thread_local std::vector<std::pair<int, int>> adj;
       thread_local std::vector<std::pair<int, int>> triNode;   // (triangle, node)
@@ -2095,38 +2315,10 @@ namespace RubberContact
       for (const FaceHit &fh : hits)
       {
          const int i = fh.i;
-         const SurfaceTri &T = tris[i];
-         if (std::abs((c - T.a).Dot(T.n)) >= ball.R - zero)
-            continue;   // every point of the face and its edges is at least the plane distance away: depth <= 0
-         if (!T.area)
-            continue;   // zero area: no face (MakeSurfaceTri)
          double d;
          V3 nn;
-         int rimE = -1;   // C4: the rim's deepest edge (its axis)
-         if (fh.kind == 0)
-         {
-            const V3 dv = c - fh.p;
-            const double dist = std::sqrt(fh.d2);   // = dv.Length()
-            if (dist <= 1e-12)
-               continue;
-            d = ball.R - dist - zero;
-            nn = dv.Dot(T.n) < 0.0 ? T.n * -1.0 : T.n;
-         }
-         else
-         {
-            d = -1.0;   // the nearest point is on the rim: the deepest of the three edges
-            for (int e = 0; e < 3; e++)
-            {
-               V3 ne;
-               const double de = edgeDepth(i, e, ne);
-               if (de > d)
-               {
-                  d = de;
-                  nn = ne;
-                  rimE = e;
-               }
-            }
-         }
+         int rimE;   // C4: the rim's deepest edge (its axis)
+         faceNode(fh, d, nn, rimE);
          if (d <= 0.0)
             continue;
          if (triIdx[i] < 0)
@@ -2163,11 +2355,31 @@ namespace RubberContact
          g.b = *v[(e + 1) % 3];
          return g;
       };
+      thread_local std::vector<PieceData> nodePd;   // level_stiffness: each node's piece data (PieceData), filled where the pieces are written
+      const auto meshPd = [&]() {
+         nodePd.resize(nodes.size());
+         for (size_t x = 0; x < nodes.size(); x++)
+         {
+            PieceData &p = nodePd[x];
+            p.d = nodes[x].d + zero;
+            p.n = nodes[x].n;
+            const int q = nodePc[x];
+            p.g = q >= 0 ? FaceGeo(tris[q]) : meshGeo((int)x);   // (B2: a face its triangle; an edge its segment)
+            p.nbA = p.nbB = PatchPieceList::kNoPiece;
+            if (q < 0)   // a shared edge: its two faces
+            {
+               const int t = (-q - 1) / 3, e = (-q - 1) % 3;
+               p.nbA = t;
+               p.nbB = nb[t][e];
+            }
+         }
+      };
       if (nodes.size() < 2)
       {
          if (patchesOut != nullptr)
          {
-            AllPatchPieces(nodePc);
+            meshPd();
+            AllPatchPieces(nodePc, nodePd);
             PatchPieces().geo.assign(1, meshGeo(DeepestNode(nodes)));
             pcs = true;
          }
@@ -2211,7 +2423,8 @@ namespace RubberContact
       {
          if (patchesOut != nullptr)
          {
-            AllPatchPieces(nodePc);
+            meshPd();
+            AllPatchPieces(nodePc, nodePd);
             PatchPieces().geo.assign(1, meshGeo(DeepestNode(nodes)));
             pcs = true;
          }
@@ -2230,7 +2443,8 @@ namespace RubberContact
       {
          if (patches.size() <= 1)
          {
-            AllPatchPieces(nodePc);   // (every node is in the one patch)
+            meshPd();
+            AllPatchPieces(nodePc, nodePd);   // (every node is in the one patch)
             PatchPieces().geo.assign(1, meshGeo(DeepestNode(nodes)));
             pcs = true;
             return one();   // one patch: today's merged answer
@@ -2252,7 +2466,8 @@ namespace RubberContact
             p.sum.Finish(q, zero);
             patchesOut->push_back(q);
          }
-         FillPatchPieces(nodePc, (int)patches.size());
+         meshPd();
+         FillPatchPieces(nodePc, nodePd, (int)patches.size());
          for (const PatchSum &p : patches)
             PatchPieces().geo.push_back(meshGeo(p.deep));
       }

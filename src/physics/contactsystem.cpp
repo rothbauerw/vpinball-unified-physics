@@ -2125,7 +2125,7 @@ struct ContactSystemImpl
             }
             return;
          }
-         const bool peaks = ContactSettings::Get().peakSlope;   // peak_slope: the level form's peaks and passes (RubberContact::PeakTerms, written by MergeBars at 2 or more peaks)
+         const bool peaks = ContactSettings::Get().peakSlope || ContactSettings::Get().patchFriction;   // peak_slope, patch_friction (the ridge arrival's passes): the level form's peaks and passes (RubberContact::PeakTerms, written by MergeBars at 2 or more peaks)
          if (peaks)
             RubberContact::PeakTerms().clear();
          const bool pf = ContactSettings::Get().patchFriction;   // patch_friction: the patch list and each patch's pieces beside the merged answer (ProbePatches)
@@ -2145,8 +2145,13 @@ struct ContactSystemImpl
             h.pat.Fit(h.npat);
             h.npc = withIds ? (int)pl.id.size() : 0;
             h.pc.Fit(h.npc);
+            h.pd.Fit(h.npc);
+            const bool withPd = pl.pd.size() == pl.id.size();   // (level_stiffness: each piece's data; a path without it: none, depth -1)
             for (int j = 0; j < h.npc; j++)
+            {
                h.pc[j] = pl.id[j];
+               h.pd[j] = withPd ? pl.pd[j] : RubberContact::PieceData();
+            }
             for (int j = 0; j < h.npat; j++)
             {
                GroupStep::HitPatch &q = h.pat[j];
@@ -2258,6 +2263,8 @@ struct ContactSystemImpl
          it.gs.ra = it.st.ra;
          it.gs.pm.clear();   // (patch_friction: no piece memory across a hand-over)
          it.gs.pmMulti = false;
+         it.gs.pmLev = false;
+         it.gs.kStored = false;
          it.gs.zero = it.gs.reff = 0.0;
          // one entry per ball: an item not touching that the ball is found inside has stored nothing (rule 10b: the overlap came from no drive): its zero is its depth, by the
          // group's own probe of a fixed surface (SurfaceShape::Probe, ProbePatch); a moving part's surfaces take the same rule in SetShapeItem
@@ -2429,6 +2436,7 @@ struct ContactSystemImpl
       static std::deque<SurfaceShape> shapes;
       shapes.clear();
       g.BeginUse();
+      g.islandRing = ring;   // (VPX_PATCH_CHECK's KINDC line: the island kind)
       g.ImpClear();   // (test tooling: a use whose result was not kept leaves nothing)
       static std::map<int, std::string> impShapeNames, impPartNames;   // (test tooling: names of the shapes and parts with no Name() of their own, by index in this use)
       impShapeNames.clear();
@@ -2552,6 +2560,8 @@ struct ContactSystemImpl
                   it.gs.ra = RubberContact::RollAngle();
                   it.gs.pm.clear();
                   it.gs.pmMulti = false;
+                  it.gs.pmLev = false;
+                  it.gs.kStored = false;
                   it.gs.zero = it.gs.reff = 0.0;
                   continue;
                }
@@ -2573,7 +2583,7 @@ struct ContactSystemImpl
                   sh.rp = it.rp;
                   sh.layerM = it.hLayer;
                   sh.onlyBall = ib;
-                  sh.heldReff = (ring || mp != nullptr) && it.Surf(sf).touching ? it.Surf(sf).reff : 0.0;
+                  sh.heldReff = (ring || mp != nullptr || ContactSettings::Get().cordHeldReff) && it.Surf(sf).touching ? it.Surf(sf).reff : 0.0;   // (cord_held_reff: a cord island holds it too)
                   sh.heldKb = mp != nullptr && it.Surf(sf).touching ? it.Surf(sf).kb : 0.0;
                   sh.heldKtb = mp != nullptr && it.Surf(sf).touching ? it.Surf(sf).ktb : 0.0;
                   if (hasPart && mp == nullptr && it.r->MovingPart() != nullptr)   // a part still on the old loop is a surface at its present pose in this cycle, its reaction left out, until it moves over (GroupStepDesign 3)
@@ -2706,6 +2716,12 @@ struct ContactSystemImpl
          g.SetShapeItem(k, kept.touching, kept.zero, kept.xi, kept.ra, &kept.tZero, pmKeep ? &kept.pm : nullptr, kept.pmMulti);
          it.pmEs = kept.pmEs;   // (patch_friction: read only while pmMulti)
          it.pmEr = kept.pmEr;
+         it.pmLev = pmKeep && kept.pmLev;   // (level_stiffness: with the piece memory)
+         it.kStored = pmKeep && kept.kStored;   // (plan 2.4: the stiffness the memory was stored at)
+         it.kt1 = kept.kt1;
+         it.kReff = kept.kReff;
+         it.kr1 = kept.kr1;
+         it.kw1 = kept.kw1;
          if (sh->mp != nullptr && !kept.touching && kept.zero <= 0.0 && it.dZero > 0.0)   // rule 8 for a moving part: its item took a found-inside zero here
          {
             g_qe.firstSightZero++;
@@ -2876,7 +2892,35 @@ struct ContactSystemImpl
             const TubeProbe pr = sh.r->Probe(sh.bs, *sh.it, b.c);
             const double gap = pr.overlap ? -pr.delta : pr.dist - (b.R + pr.rho);
             if (gap <= b.v.Length() * h + a * h * h)
-               h = std::max(sh.r->ArrivalS(sh.bs, *sh.it, pr.seg, b.c, b.v, a, h, 1.0e-6, 0.5e-6), std::min(h, 1e-6));
+            {
+               // patch_friction (plan 3.6, review R3b/R5): the ridge arrival reads the item's step-start Hit (its patches, pieces, passes), the item found by (shape s, onlyBall), valid
+               // while the positions are those of ChooseStep's probes (nowStamp == stamp); else no ridge bound. No probe here
+               thread_local RubberContact::RidgeStart rsS;
+               const RubberContact::RidgeStart *rs = nullptr;
+               for (int k = 0; k < g.ni && rs == nullptr; k++)
+                  {
+                     const GroupStep::Item &gi = g.item[k];
+                     const GroupStep::Hit *const hsp = gi.s == s && gi.a == sh.onlyBall && gi.b < 0 ? g.StartHit(k) : nullptr;
+                     if (hsp == nullptr)
+                        continue;
+                     const GroupStep::Hit &hs = *hsp;
+                     rsS.pieces.Clear();
+                     rsS.pieces.off.clear();
+                     rsS.pieces.off.push_back(0);
+                     for (int p = 0; p < hs.npat; p++)
+                     {
+                        const GroupStep::HitPatch &P = hs.pat[p];
+                        for (int q = 0; q < P.pn; q++)
+                           rsS.pieces.id.push_back(hs.pc[P.p0 + q]);
+                        rsS.pieces.off.push_back((int)rsS.pieces.id.size());
+                     }
+                     rsS.passes.clear();
+                     for (int j = 0; j < hs.np; j++)
+                        rsS.passes.push_back(hs.pk[j]);
+                     rs = &rsS;
+                  }
+               h = std::max(sh.r->ArrivalS(sh.bs, *sh.it, pr.seg, b.c, b.v, a, h, 1.0e-6, 0.5e-6, rs), std::min(h, 1e-6));
+            }
          }
          return h;
       };
@@ -3382,6 +3426,8 @@ struct ContactSystemImpl
          }
          if (!ring && sh->mp == nullptr)
             it.touching = gi.touching;
+         if (!ring && sh->mp == nullptr && ContactSettings::Get().cordHeldReff)   // cord_held_reff: the radius held for the next cycle, as a ring island's (it.gs.reff above)
+            kept.reff = gi.touching ? gi.reff : 0.0;
          kept.touching = gi.touching;
          kept.xi = gi.xi;
          kept.ra = gi.ra;
@@ -3389,6 +3435,12 @@ struct ContactSystemImpl
          kept.pmMulti = gi.pmMulti;
          kept.pmEs = gi.pmEs;
          kept.pmEr = gi.pmEr;
+         kept.pmLev = gi.pmLev;
+         kept.kStored = gi.kStored;
+         kept.kt1 = gi.kt1;
+         kept.kReff = gi.kReff;
+         kept.kr1 = gi.kr1;
+         kept.kw1 = gi.kw1;
          kept.pmC = g.ball[gi.a].c;
          // one entry per ball: an item not touching keeps its zero while the ball is still inside it (the zero follows the ball out, groupstep BackOut); zero 0 only once the ball is
          // clear: its raw depth at the cycle's end <= 0. Raw depth: ProbeItem is the shape's own probe less the item's zero, so adding gi.dZero back gives the geometric depth

@@ -362,7 +362,7 @@ namespace
       return on;
    }
 
-   // patch_contacts check mode (VPX_PATCH_CHECK=1, diagnostics only; runs/2026-11-22-per-peak P1): at every ProbePatch of a static host, the patch list's summed (s25, g) against
+   // patch check mode (VPX_PATCH_CHECK=1, diagnostics only; runs/2026-11-22-per-peak P1): at every ProbePatch of a static host, the patch list's summed (s25, g) against
    // today's merged answer, both read back from the probes (s25 = (delta - zero)^2.5, g = normal grad (delta - zero)^1.5); relative difference (s25 by s25, g by d^1.5) > 1e-12 is a mismatch
    bool PatchCheckOn()
    {
@@ -421,7 +421,11 @@ namespace
          return;
       const std::lock_guard<std::mutex> lock(g_patchCheckMu);
       const PatchCheckStats &st = g_patchCheck;
-      PLOGI << "Patch check: probes " << st.probes << ", one-patch " << st.one << ", two " << st.two << ", more " << st.more << ", mismatches " << st.mism << ", worst rel diff " << st.worst;
+      PLOGI << "Patch check: probes " << st.probes << ", one-patch " << st.one << ", two " << st.two << ", more " << st.more << ", mismatches " << st.mism << ", worst rel diff " << st.worst
+            << ", cut B pressed faces compared " << RubberContact::CutBCheck()[0].load() << ", mismatches " << RubberContact::CutBCheck()[1].load()
+            << ", more than one peak " << RubberContact::CutBCheck()[2].load() << "; held vs book: attempts " << RubberContact::HeldCheck()[0].load()
+            << ", mismatches " << RubberContact::HeldCheck()[1].load() << ", book step rises > 1e-9 J " << RubberContact::HeldCheck()[2].load() << ", kind C (k0 vs stored ks) " << RubberContact::HeldCheck()[3].load() << "; B-lin lev1 checked " << RubberContact::HeldCheck()[4].load()
+            << ", vs the end probe's level form > 1e-12 rel " << RubberContact::HeldCheck()[5].load();
       if (close)
          g_patchCheck = PatchCheckStats();
    }
@@ -706,7 +710,7 @@ namespace
    {
       if (meshHost && g_finder.built)
       {
-         PatchCheckLog(true);   // patch_contacts check mode totals (VPX_PATCH_CHECK=1)
+         PatchCheckLog(true);   // patch check mode totals (VPX_PATCH_CHECK=1)
          ContactSurfaceHost::FinderTotals(true);
          FinderReport();
          g_finder.Reset();
@@ -1794,7 +1798,7 @@ RubberContact::TubeProbe ContactSurfaceHost::Probe(const RubberContact::BallSI &
 
 RubberContact::TubeProbe ContactSurfaceHost::ProbePatch(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c) const
 {
-   if (!ContactSettings::Get().patchContacts || !PatchCheckOn())
+   if (!PatchCheckOn())
       return ProbeList(bs, it, c, nullptr);
    thread_local std::vector<RubberContact::TubeProbe> list;   // check mode (VPX_PATCH_CHECK=1): the patch list beside today's answer, which is returned unchanged
    const RubberContact::TubeProbe pr = ProbeList(bs, it, c, &list);
@@ -2003,19 +2007,20 @@ int ContactSurfaceHost::PathReach(const SurfaceContact &it, const RubberContact:
 
 // patch_friction (plan 3.6, brief p2b1b item 2): the arrival rule (ArrivalStep: gap, closing speed, a) also for the ridges between patches: each unpressed shared edge between two pressed
 // faces of different patches (about to press: a join), and each pressed pass of the level form (about to let go: a split). A static mesh only (a tube never gets ArrivalS).
-// The patches at c from ProbePatches (its pieces: PatchPieces; its passes: PeakTerms, written when 2 or more peaks); thread-local lists, capacity reused. Counts each bound that sets h.
-double ContactSurfaceHost::RidgeArrival(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, const RubberContact::V3 &v, const double a, const double hIn) const
+// The patches at c from the item's step-start probe (rs: its patches' pieces and its level form's passes, the caller's copy of the group step's Hit; null: no ridge bound). Counts each bound that sets h.
+double ContactSurfaceHost::RidgeArrival(const RubberContact::BallSI &bs, const SurfaceContact &it, const RubberContact::V3 &c, const RubberContact::V3 &v, const double a, const double hIn,
+                                        const RubberContact::RidgeStart *rs) const
 {
-   thread_local std::vector<RubberContact::TubeProbe> pl;
+   if (rs == nullptr)
+      return hIn;
    thread_local std::vector<std::pair<int, int>> fp;   // (pressed face, its patch)
-   ProbePatches(bs, it, c, pl);
-   const RubberContact::PatchPieceList &pp = RubberContact::PatchPieces();
+   const RubberContact::PatchPieceList &pp = rs->pieces;
    double h = hIn;
-   for (const RubberContact::PeakTerm &t : RubberContact::PeakTerms())   // a pass about to let go: its depth falls at v . n
+   for (const RubberContact::PeakTerm &t : rs->passes)   // a pass about to let go: its depth falls at v . n
       if (t.s < 0.0 && t.d > 0.0)
          h = RubberContact::ArrivalStep(t.d, std::max(v.Dot(t.n), 0.0), a, h);
    const int np = (int)pp.off.size() - 1;
-   if (np >= 2 && pl.size() >= 2)
+   if (np >= 2)
    {
       fp.clear();
       for (int p = 0; p < np; p++)
@@ -2057,7 +2062,8 @@ double ContactSurfaceHost::RidgeArrival(const RubberContact::BallSI &bs, const S
    return h;
 }
 
-double ContactSurfaceHost::ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, const int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, const double a, const double hMax, const double touchM, const double arriveM) const
+double ContactSurfaceHost::ArrivalS(const RubberContact::BallSI &bs, const SurfaceContact &it, const int nearestSeg, const RubberContact::V3 &c, const RubberContact::V3 &v, const double a, const double hMax, const double touchM, const double arriveM,
+                                    const RubberContact::RidgeStart *rs) const
 {
    CheckProfScope checkProf(2);   // P3a profile (diagnostics only)
    const bool finderCheck = m_surface != nullptr && g_finderDepth == 0 && FinderCheckOn();   // check mode (as Probe)
@@ -2074,7 +2080,7 @@ double ContactSurfaceHost::ArrivalS(const RubberContact::BallSI &bs, const Surfa
    if (m_surface != nullptr)
    {
       const double hF = RubberContact::ArrivalTriangles(bs, m_surface->tris, it.Faces(c), nearestSeg, c, v, a, hMax, touchM, arriveM, fr);
-      return ContactSettings::Get().patchFriction ? RidgeArrival(bs, it, c, v, a, hF) : hF;
+      return ContactSettings::Get().patchFriction ? RidgeArrival(bs, it, c, v, a, hF, rs) : hF;
    }
    return hMax;   // a tube: never called (the one caller, the group step's ringCap, skips an item with no face list, candR < 0, and a tube item never gets one)
 }
@@ -3180,7 +3186,7 @@ void ContactSurfaceHost::FinderTotals(const bool force)
    if (!force && now < g.nextTotalsMs)
       return;
    g.nextTotalsMs = now + 1000;
-   PatchCheckLog(false);   // patch_contacts check mode (VPX_PATCH_CHECK=1): running totals
+   PatchCheckLog(false);   // patch check mode (VPX_PATCH_CHECK=1): running totals
    if (GroupStep::partFinderProf)   // the part finder's counters, running totals once a second of table time (VPX_CHECK_PROFILE or VPX_FINDER_CHECK)
       PLOGI << GroupStep::PartFinderReport();
    if (g.queries == 0)

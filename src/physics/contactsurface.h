@@ -33,6 +33,9 @@ struct SurfaceState
    std::vector<RubberContact::PieceMem> pm;
    bool pmMulti = false;
    double pmEs = 0.0, pmEr = 0.0;   // pmMulti: the springs' energy summed over the groups (GroupStep::Item::pmEs)
+   bool kStored = false;            // plan 2.4's memory rule: xi, ra stored at kt1, kr1, kw1 (GroupStep::Item::kStored)
+   double kt1 = 0.0, kr1 = 0.0, kw1 = 0.0, kReff = 0.0;
+   bool pmLev = false;              // level_stiffness: pmEs, pmEr hold one group's springs at its level-form end stiffness (GroupStep::Item::pmLev)
    RubberContact::V3 pmC;
 };
 
@@ -99,14 +102,15 @@ public:
    {
       const RubberContact::TubeProbe pr = ProbePatch(bs, it, c);
       out.assign(1, pr);
-      RubberContact::PatchPieces().One(pr.overlap && pr.seg >= 0 ? pr.seg : RubberContact::PatchPieceList::kNoPiece);
+      RubberContact::PatchPieces().One(pr.overlap && pr.seg >= 0 ? pr.seg : RubberContact::PatchPieceList::kNoPiece, pr.delta, pr.normal);
       return pr;
    }
    // the path test: can a ball of radius R whose centre moves straight from s to s + d touch the surface on the way (any piece within R plus the piece's radius of the path)?
    // 1 = yes, 0 = no (the whole path checked exactly, rubbercontact.h path kit), -1 = this surface has no exact path test (a cord band, no query): the caller probes as before
    virtual int PathReach(const SurfaceContact & /*it*/, const RubberContact::V3 & /*s*/, const RubberContact::V3 & /*d*/, double /*R*/) const { return -1; }
    // The longest step, at most hMax, that brings the ball at most to arriveM of a part of the surface other than the probe's nearest (nearestSeg); a nearest-only surface: hMax. a: the acceleration bound.
-   virtual double ArrivalS(const RubberContact::BallSI & /*bs*/, const SurfaceContact & /*it*/, int /*nearestSeg*/, const RubberContact::V3 & /*c*/, const RubberContact::V3 & /*v*/, double /*a*/, double hMax, double /*touchM*/, double /*arriveM*/) const { return hMax; }
+   virtual double ArrivalS(const RubberContact::BallSI & /*bs*/, const SurfaceContact & /*it*/, int /*nearestSeg*/, const RubberContact::V3 & /*c*/, const RubberContact::V3 & /*v*/, double /*a*/, double hMax, double /*touchM*/, double /*arriveM*/,
+                           const RubberContact::RidgeStart * /*rs*/) const { return hMax; }   // rs (patch_friction): the item's step-start patches and passes, null none
    virtual const RubberObjectSettings *Settings() const { return nullptr; }   // the step and rest settings of a surface that has them (rubber, wall, primitive, ramp, playfield, disc); null = none
    virtual bool IsFloor() const = 0;        // a surface a ball rests on: gravity acts in the contact's substeps while one is in the contact
    virtual bool GroupModel() const { return false; }   // a ball on it goes through the group step ([Rubbers] ring_model, GroupStepDesign 14)

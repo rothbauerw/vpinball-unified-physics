@@ -34,6 +34,7 @@
 #include <cstring>
 #include <functional>
 #include <map>
+#include <sstream>
 #include <string>
 #include <typeinfo>
 #include <utility>
@@ -257,6 +258,7 @@ namespace GroupStep
       InList<HitPatch, 4> pat;
       int npc = 0;
       InList<int, 16> pc;
+      InList<RubberContact::PieceData, 16> pd;   // level_stiffness: each piece's depth (from the object's zero, as pat's), normal, geometry and neighbours (parallel to pc)
       Hit() {}
       Hit(const Hit &o) { *this = o; }
       Hit &operator=(const Hit &o)
@@ -267,8 +269,12 @@ namespace GroupStep
             pat[j] = o.pat[j];
          npc = o.npc;
          pc.Fit(npc);
+         pd.Fit(npc);
          for (int j = 0; j < npc; j++)
+         {
             pc[j] = o.pc[j];
+            pd[j] = o.pd[j];
+         }
          np = o.np;
          pk.Fit(np);
          for (int j = 0; j < np; j++)
@@ -474,6 +480,9 @@ namespace GroupStep
       // peakSlope ([Contact] peak_slope): 1: the elastic push's Newton slope summed per peak, each with its own normal and turn (plan runs/2026-11-22-per-peak 2.5a); 0: today's
       // slope along the merged normal. A static surface with 2 or more peaks only (Hit::np); the push itself is unchanged.
       bool peakSlope = true;
+      // levelStiffness ([Contact] level_stiffness, patch_friction only): 1: a friction group's shear, rolling and twist stiffness from the level form over its pieces, averaged over the
+      // step with each piece's depth straight between its ends (B-lin, plan runs/2026-11-22-per-peak 2.4b; one peak: today's PatchMeans); 0: from the group's merged depth
+      bool levelStiffness = true;
       // leverRollSlope ([Contact] lever_roll_slope; runs/2026-11-08-lead/slope_terms_design.md): Newton's slope takes two terms of laws the residual already computes.
       // The contact point rA = -n (R - dm / 2) moves with the mid depth (d dm / du = gm / 2): the slip changes by (gm / 4) sum_p wm_p x n and the torque arm by (gm / 4) s_p n, on the
       // balls' force and spin rows. The rolling limit lim = muRr R N (roll_model 1, rolling) changes with N: muRr R (h dN/du) along the torque's direction, on the spin rows.
@@ -895,8 +904,12 @@ namespace GroupStep
       std::vector<RubberContact::PieceMem> pm;   // patch_friction (plan 2.1): the memory kept on the pieces pressed at the last accepted step's end (each its patch group's)
       bool pmMulti = false;                      // that step had 2 or more friction groups: the next step reads its memory from pm, not xi / ra
       double pmEs = 0.0, pmEr = 0.0;             // pmMulti: the springs' stored energy, the sum over its groups (shear; rolling and twist), J: the book's (ShearE, RollE)
-      double ShearE(const double d) const { return pmMulti ? pmEs : 0.5 * Kt(d) * xi.Dot(xi); }
-      double RollE(const double d) const { return pmMulti ? pmEr : 0.5 * Kr(d) * ra.th.Dot(ra.th) + 0.5 * Ktw(d) * ra.tw * ra.tw; }
+      bool kStored = false;                      // plan 2.4's memory rule: xi, ra were stored at kt1, kr1, kw1 (the last accepted step's one friction group's end stiffness)
+      double kt1 = 0.0, kr1 = 0.0, kw1 = 0.0;
+      double kReff = 0.0;                        // (diagnostics: the contact's reff when kt1 .. were stored)
+      bool pmLev = false;                        // level_stiffness: that step had one friction group on the level form (B-lin): pmEs, pmEr hold its springs at its end stiffness
+      double ShearE(const double d) const { return pmMulti || pmLev ? pmEs : 0.5 * Kt(d) * xi.Dot(xi); }
+      double RollE(const double d) const { return pmMulti || pmLev ? pmEr : 0.5 * Kr(d) * ra.th.Dot(ra.th) + 0.5 * Ktw(d) * ra.tw * ra.tw; }
       double dZero = 0.0;             // the depth its squash counts from: a ball found inside has stored nothing (no energy without the work that stored it; only ever down)
       // a union of terms (hinge_piece_sum) found inside: each term's own zero (piece id, its raw depth then), so force and book read one potential U = sum_t s_t V(a_t - z_t).
       // While it is not empty the terms carry the zeros and dZero is only their largest (the item's "has a zero" mark); each follows its term out (BackOut), dropped once clear
@@ -1745,7 +1758,7 @@ namespace GroupStep
                Probe(item[k], ball, hp);
                e += item[k].Energy(hp, set.termEnergy) + item[k].ShearE(hp.delta);
                if (set.rollModel == 1)
-                  e += 0.5 * item[k].Kr(hp.delta) * item[k].ra.th.Dot(item[k].ra.th) + 0.5 * item[k].Ktw(hp.delta) * item[k].ra.tw * item[k].ra.tw;
+                  e += item[k].RollE(hp.delta);   // (rolling and twist as the step stored them: pmMulti / pmLev, pmEr)
             }
          for (int p = 0; p < np; p++)
             e += part[p]->Energy(ball, nb);
@@ -1777,7 +1790,7 @@ namespace GroupStep
          Probe(item[k], ball, hp);
          double e = item[k].Energy(hp, set.termEnergy) + item[k].ShearE(hp.delta);
          if (set.rollModel == 1)
-            e += 0.5 * item[k].Kr(hp.delta) * item[k].ra.th.Dot(item[k].ra.th) + 0.5 * item[k].Ktw(hp.delta) * item[k].ra.tw * item[k].ra.tw;
+            e += item[k].RollE(hp.delta);   // (as Energy)
          return e;
       }
       // What the ball's place stores in the group's fields; its slopes when wanted
@@ -1800,6 +1813,8 @@ namespace GroupStep
       }
       bool Touching(int k) const { return item[k].touching; }
       void ProbeItem(const int k, Hit &hp) const { Probe(item[k], ball, hp); }
+      bool islandRing = false;   // (diagnostics: this use is a ring island, else a cord island; set by the caller)
+      const Hit *StartHit(const int k) const { return nowStamp == stamp && k >= 0 && k < ni ? &hNow[k] : nullptr; }   // patch_friction (ridge arrival): item k's probe at the positions now (ChooseStep's), null when stale
       // Steps until dt is covered. capStep: the caller's own bound on a step; afterStep: after each. False: a step failed, and done says how far it got (time is lost, no energy can appear)
       template <class CapStep, class AfterStep>
       bool StepsOver(const double dt, double &done, const CapStep &capStep, const AfterStep &afterStep)
@@ -1913,6 +1928,8 @@ namespace GroupStep
          else
             it.pm.clear();
          it.pmMulti = pm != nullptr && pmMulti;
+         it.pmLev = false;   // (level_stiffness: the caller restores it with the piece memory)
+         it.kStored = false;
          Probe(it, ball, hp);
          it.touching = hp.delta > 0.0;
          if (it.touching)
@@ -1923,6 +1940,8 @@ namespace GroupStep
             it.ra = RubberContact::RollAngle();
             it.pm.clear();
             it.pmMulti = false;
+            it.pmLev = false;
+            it.kStored = false;
          }
       }
 
@@ -2592,7 +2611,7 @@ namespace GroupStep
                Probe(item[k], ball, hp);
                s.con += item[k].Energy(hp, set.termEnergy) + item[k].ShearE(hp.delta);
                if (set.rollModel == 1)
-                  s.con += 0.5 * item[k].Kr(hp.delta) * item[k].ra.th.Dot(item[k].ra.th) + 0.5 * item[k].Ktw(hp.delta) * item[k].ra.tw * item[k].ra.tw;
+                  s.con += item[k].RollE(hp.delta);   // (as Energy)
                s.touching++;
             }
          double ep = 0.0;
@@ -2813,6 +2832,10 @@ namespace GroupStep
          RubberContact::RollAngle ra1;   // the rolling and twist springs' end angles (roll_model 1)
          double normalLoss = 0.0, slip = 0.0, shearDamp = 0.0, twist = 0.0, roll = 0.0;
          double pmEs = 0.0, pmEr = 0.0;   // patch_friction, 2 or more groups: the springs' end energy summed over the groups (Item::pmEs)
+         bool kStored = false;            // plan 2.4: one friction group: its end stiffness kt1, kr1, kw1 (Item::kStored)
+         double kt1 = 0.0, kr1 = 0.0, kw1 = 0.0, kReff = 0.0;
+         double memLossS = 0.0, memLossR = 0.0;   // patch_friction: the memory rule's loss booked in e.slip, e.roll (shear; rolling and twist), J
+         bool pmLev = false;              // level_stiffness, one group on the level form: pmEs, pmEr are its springs' end energy at the level form's end stiffness (Item::pmLev)
          double ut2 = 0.0, ftTr = 0.0, lim = 0.0;   // diagnostics, never read by the step: the mid-step slip speed squared (m2/s2), the trial friction force and mu N (N)
       };
       Buf<Item> law;             // the law each contact uses in this step (held, or taken at the step's start)
@@ -2843,7 +2866,14 @@ namespace GroupStep
          double twD1 = 0.0, twA = 0.0, twN = 0.0, twF = 0.0, limN = 0.0, limF = 0.0, twM = 0.0, twLim = 0.0;
          int twSt = 0;
          bool slipping = false, rollS = false;
+         bool blin = false;               // level_stiffness: the group's stiffness from B-lin (blS): its slopes in the end position are the vectors below, kSp, ctSp, twD1 0
+         V3 kSpV, ctSpV, twD1V;           // dkS/dc1, dct/dc1, dMw/dc1 (sticking twist) (B-lin: per piece, MeanSlope times its end gradient -n_i)
+         double kr1L = 0.0, kw1L = 0.0;   // B-lin: the rolling and twist stiffness at the end (the level form's; k1 the shear's)
+         double ks = 0.0, krs = 0.0, kws = 0.0;      // plan 2.4: the stiffness its memory was stored at (shared at a split, summed at a join), 0 none
+         double k0p = 0.0, kr0p = 0.0, kw0p = 0.0;   // (its start stiffness, as the block takes it: for the split's shares)
+         double heldS = 0.0, heldR = 0.0;   // (VPX_PATCH_CHECK: the shear and rolling + twist springs' held energy at the step's start, as the block takes it, J)
       };
+      mutable std::vector<long> chkAtt;   // (VPX_PATCH_CHECK: per item, the attempt last compared held vs book)
       std::vector<FG> fgS;                                   // (Eval's scratch, capacity reused)
       std::vector<int> fgEnd;                                // each end patch's group (-1 not pressed)
       std::vector<std::vector<RubberContact::PieceMem>> pmEnd;   // per item: the last Eval's end pieces with their group's memory (Accept writes it to the item)
@@ -3189,7 +3219,7 @@ namespace GroupStep
                const double d = d0s[k];
                double e = q.V(d) + 0.5 * q.Kt(d) * q.xi.Dot(q.xi);
                if (set.rollModel == 1)
-                  e += 0.5 * q.Kr(d) * q.ra.th.Dot(q.ra.th) + 0.5 * q.Ktw(d) * q.ra.tw * q.ra.tw;
+                  e += q.RollE(d);   // (as Energy)
                es += std::max(e, 0.0);
             }
             skEs[(size_t)it.a] = es;
@@ -3533,6 +3563,8 @@ namespace GroupStep
             hp.delta -= it.dZero;
             for (int j = 0; j < hp.npat; j++)   // patch_friction: each patch from the object's zero, as the merged depth
                hp.pat[j].d -= it.dZero;
+            for (int j = 0; j < hp.npc; j++)   // (level_stiffness: each piece likewise)
+               hp.pd[j].d -= it.dZero;
             return;
          }
          double s25 = 0.0, best = -INFINITY;
@@ -3940,6 +3972,319 @@ namespace GroupStep
          }
          return ng;
       }
+      // level_stiffness (B-lin, plan runs/2026-11-22-per-peak 2.4b; paper/p2b_avg2.py, p2b_avg2_out.txt; levelk.py): a friction group's shear, rolling and twist stiffness from
+      // the level form (the same the elastic energy uses: sum over the peaks of u^p less their passes'), averaged over the step. B: one group's (blS[g]); on false: today's
+      // PatchMeans on the group's d0, d1 (one piece, or one peak with no role change: bit for bit today's). m the means of u^p, lev0 / lev1 the level form at the start / end;
+      // s05 .. s075 the means' slopes in the end position, vectors (each piece's MeanSlope times its end gradient -n_i)
+      struct BLin
+      {
+         bool on = false;
+         Item::Pows m, lev0, lev1;
+         V3 s05, s025, s15, s075;
+      };
+      std::vector<BLin> blS;   // (Eval's scratch per friction group, capacity reused)
+      bool LevelOn(const Item &L) const { return set.levelStiffness && set.patchPath && L.ktb <= 0.0; }   // (a bend across in series: Kt is no power of u, today's mean)
+      // the stiffnesses of a level form lev (u^p summed with roles): Kt = ktPerA sqrt(reff) u^0.5, Kr = kH reff u^1.5, Ktw = 16/3 0.35 0.75 Kr (patch_path's ktU, krU, kwU)
+      static void LevK(const Item &L, const Item::Pows &lev, double &kt, double &kr, double &kw)
+      {
+         const double ktU = L.ktPerA * std::sqrt(L.reff), krU = L.kH * L.reff, kwU = 16.0 / 3.0 * 0.35 * 0.75 * krU;
+         kt = ktU * lev.p05;
+         kr = krU * lev.p15;
+         kw = kwU * lev.p15;
+      }
+      // MergeBars' level form on n pieces (paper/p2b_avg.py roles()): the pressed (d > 0) taken deepest first (ties on index); a piece that touches two groups joins them at its own
+      // depth, the shallower group's peak passing there (a group's peak is its root). role[i]: +1 a peak, -1 per pass, 0 none; a peak passing at its own depth adds nothing.
+      // adj(i, j): the pieces' merge-tree neighbours. Scratch kept per thread (no allocation per step once grown)
+      template <class Adj> static void LevelRoles(const int n, const double *d, const Adj &adj, int *role)
+      {
+         thread_local std::vector<int> ord, parent, passat;
+         thread_local std::vector<unsigned char> onf, passed;
+         ord.clear();
+         for (int i = 0; i < n; i++)
+         {
+            role[i] = 0;
+            if (d[i] > 0.0)
+               ord.push_back(i);
+         }
+         const auto deeper = [d](const int a, const int b) { return d[a] != d[b] ? d[a] > d[b] : a < b; };
+         std::sort(ord.begin(), ord.end(), deeper);
+         parent.resize(n);
+         passat.assign(n, -1);
+         onf.assign(n, 0);
+         passed.assign(n, 0);
+         for (int i = 0; i < n; i++)
+            parent[i] = i;
+         const auto find = [&](int x) {
+            while (parent[x] != x)
+            {
+               parent[x] = parent[parent[x]];
+               x = parent[x];
+            }
+            return x;
+         };
+         for (const int x : ord)
+         {
+            onf[x] = 1;
+            for (int y = 0; y < n; y++)
+            {
+               if (y == x || !onf[y] || !adj(x, y))
+                  continue;
+               const int rx = find(x), ry = find(y);
+               if (rx == ry)
+                  continue;
+               int keep = rx, lose = ry;
+               if (deeper(ry, rx))
+                  std::swap(keep, lose);
+               passed[lose] = 1;
+               passat[lose] = x;
+               parent[lose] = keep;
+            }
+         }
+         for (const int i : ord)
+         {
+            if (passed[i] && d[passat[i]] == d[i])
+               continue;
+            if (!passed[i] && find(i) != i)
+               continue;
+            role[i]++;
+            if (passed[i])
+               role[passat[i]]--;
+         }
+      }
+      // the pieces' merge-tree neighbours from their ids (RubberContact::PieceData's pair)
+      static bool PieceAdj(const int ia, const RubberContact::PieceData &a, const int ib, const RubberContact::PieceData &b)
+      {
+         return a.nbA == ib || a.nbB == ib || b.nbA == ia || b.nbB == ia;
+      }
+      // the level form of one patch P of h over its own pieces at their depths (GroupMemory's weights)
+      Item::Pows PatchLevel(const Item &L, const Hit &h, const HitPatch &P) const
+      {
+         thread_local std::vector<double> dd;
+         thread_local std::vector<int> role;
+         const int n = P.pn;
+         dd.resize(n);
+         role.resize(n);
+         for (int q = 0; q < n; q++)
+            dd[q] = h.pd[P.p0 + q].d;
+         LevelRoles(n, dd.data(), [&](const int x, const int y) { return PieceAdj(h.pc[P.p0 + x], h.pd[P.p0 + x], h.pc[P.p0 + y], h.pd[P.p0 + y]); }, role.data());
+         Item::Pows lev;
+         for (int q = 0; q < n; q++)
+            if (role[q] != 0)
+               lev = lev + (double)role[q] * L.PowRate(dd[q]);
+         return lev;
+      }
+      // B-lin for friction group g (FrictionGroups' gStart, fgEnd): its pieces are those of its start and end patches; each piece's start and end depth (pressed there: its probe's;
+      // not pressed at that end: its own signed geometry there (PieceGeo) from the end where it is pressed), straight between; the step cut at every zero crossing and pairwise
+      // crossing in (0, 1) (paper cuts_of); per segment the roles at its middle (LevelRoles), each piece's MeanOver on its segment weighted by the segment's length; the slope from
+      // MeanSlope at both segment ends (dl/dd1 = tb at the end, ta at the start: MeanOver is symmetric, so the start's is MeanSlope with the ends swapped) times the piece's end
+      // gradient -n_i, no cut-time terms (they cancel: paper/p2b_avg2.py, finite differences to 2e-7). One piece, or every segment one peak on the same piece: off
+      void BLinGroup(const Item &L, const Hit &h0, const Hit &h1, const int g, const V3 &c0, const V3 &c1, BLin &B) const
+      {
+         B = BLin();
+         thread_local std::vector<int> pid, role;
+         thread_local std::vector<double> d0, d1, la, lb, lm, ts;
+         thread_local std::vector<V3> nE;
+         thread_local std::vector<RubberContact::PieceData> pdS, pdE;
+         thread_local std::vector<unsigned char> on0, on1;
+         pid.clear();
+         pdS.clear();
+         pdE.clear();
+         on0.clear();
+         on1.clear();
+         const auto add = [&](const Hit &h, const HitPatch &P, const bool end) {
+            for (int q = 0; q < P.pn; q++)
+            {
+               const int id = h.pc[P.p0 + q];
+               int x = -1;
+               for (int y = 0; y < (int)pid.size() && x < 0; y++)
+                  if (pid[y] == id)
+                     x = y;
+               if (x < 0)
+               {
+                  x = (int)pid.size();
+                  pid.push_back(id);
+                  pdS.push_back(RubberContact::PieceData());
+                  pdE.push_back(RubberContact::PieceData());
+                  on0.push_back(0);
+                  on1.push_back(0);
+               }
+               (end ? pdE : pdS)[x] = h.pd[P.p0 + q];
+               (end ? on1 : on0)[x] = 1;
+            }
+         };
+         for (int i = 0; i < h0.npat; i++)
+            if (gStart[i] == g)
+               add(h0, h0.pat[i], false);
+         for (int j = 0; j < h1.npat; j++)
+            if (fgEnd[j] == g)
+               add(h1, h1.pat[j], true);
+         const int n = (int)pid.size();
+         if (n < 2)
+            return;
+         // a piece's signed depth at c from its depth at cR (its geometry; grad: its normal at c, the direction its depth falls along)
+         // a face (kind 3, B2): its own triangle's closest point (the probe's ClosestOnTriangle), exact also where that point is on its rim; kind 0 (a plane) only for a probe piece with no geometry
+         const auto nearOf = [](const RubberContact::PieceGeo &g, const V3 &c) {
+            if (g.kind == 1)
+               return RubberContact::SegNearest(g.a, g.b, c);
+            if (g.kind == 3)
+            {
+               RubberContact::SurfaceTri t {};
+               t.a = g.a;
+               t.b = g.b;
+               t.c = g.c;
+               int kind;
+               return RubberContact::ClosestOnTriangle(t, c, kind);
+            }
+            return g.a;
+         };
+         const auto geoDepth = [&nearOf](const RubberContact::PieceData &p, const V3 &cR, const V3 &c, V3 &grad) {
+            if (p.g.kind == 0)
+            {
+               grad = p.n;
+               return p.d - p.n.Dot(c - cR);
+            }
+            const V3 qR = nearOf(p.g, cR), q = nearOf(p.g, c);
+            const double lR = (cR - qR).Length(), l = (c - q).Length();
+            grad = l > 0.0 ? (c - q) * (1.0 / l) : p.n;
+            return p.d + lR - l;
+         };
+         d0.resize(n);
+         d1.resize(n);
+         nE.resize(n);
+         for (int x = 0; x < n; x++)
+         {
+            V3 gs;
+            d0[x] = on0[x] ? pdS[x].d : geoDepth(pdE[x], c1, c0, gs);
+            if (on1[x])
+            {
+               d1[x] = pdE[x].d;
+               nE[x] = pdE[x].n;
+            }
+            else
+               d1[x] = geoDepth(pdS[x], c0, c1, nE[x]);
+         }
+         const double *dCur = nullptr;   // (the depths the roles are taken at: a joint-joint link holds only while the segment between has no pressed foot, as BarsTube's)
+         const auto adj = [&](const int x, const int y) {
+            const RubberContact::PieceData &a = on1[x] ? pdE[x] : pdS[x], &b = on1[y] ? pdE[y] : pdS[y];
+            if (PieceAdj(pid[x], a, pid[y], b))
+               return true;
+            int seg = RubberContact::PatchPieceList::kNoPiece;   // two consecutive tube joints: linked when segment seg between them is not pressed now
+            if (a.nbC == pid[y])
+               seg = a.nbA;
+            else if (a.nbD == pid[y])
+               seg = a.nbB;
+            else
+               return false;
+            for (int z = 0; z < n; z++)
+               if (pid[z] == seg && dCur != nullptr && dCur[z] > 0.0)
+                  return false;
+            return true;
+         };
+         ts.clear();   // the cuts (paper cuts_of)
+         ts.push_back(0.0);
+         ts.push_back(1.0);
+         for (int i = 0; i < n; i++)
+         {
+            const double si = d1[i] - d0[i];
+            if (si != 0.0)
+            {
+               const double t = -d0[i] / si;
+               if (t > 0.0 && t < 1.0)
+                  ts.push_back(t);
+            }
+            for (int j = i + 1; j < n; j++)
+            {
+               const double sj = d1[j] - d0[j];
+               if (si != sj)
+               {
+                  const double t = (d0[j] - d0[i]) / (si - sj);
+                  if (t > 0.0 && t < 1.0)
+                     ts.push_back(t);
+               }
+            }
+         }
+         std::sort(ts.begin(), ts.end());
+         const auto lin = [&](std::vector<double> &l, const double t) {
+            l.resize(n);
+            for (int x = 0; x < n; x++)
+               l[x] = t == 1.0 ? d1[x] : t == 0.0 ? d0[x] : d0[x] + t * (d1[x] - d0[x]);
+         };
+         role.resize(n);
+         const auto rate = [&L](const double d) { return L.PowRate(d); };
+         const auto integral = [&L](const double d) { return L.PowIntegral(d); };
+         const auto rateSlope = [&L](const double d) { return L.PowSlope(d); };
+         int onePeak = -1;   // the one peak's piece while every segment has just it (-2: more, or a change)
+         for (size_t s = 0; s + 1 < ts.size(); s++)
+         {
+            const double ta = ts[s], tb = ts[s + 1];
+            if (!(tb > ta))
+               continue;
+            lin(la, ta);
+            lin(lb, tb);
+            lin(lm, 0.5 * (ta + tb));
+            dCur = lm.data();
+            LevelRoles(n, lm.data(), adj, role.data());
+            int cnt = 0, top = -1;
+            for (int x = 0; x < n; x++)
+            {
+               if (role[x] == 0)
+                  continue;
+               cnt++;
+               top = role[x] == 1 ? x : -2;
+               const double v = (double)role[x], w = tb - ta;
+               const Item::Pows mo = Item::MeanOver(la[x], lb[x], rate, integral);
+               B.m = B.m + (w * v) * mo;
+               const Item::Pows sl = tb * Item::MeanSlope(la[x], lb[x], rate, rateSlope, mo) + ta * Item::MeanSlope(lb[x], la[x], rate, rateSlope, mo);
+               const V3 gE = nE[x] * (-w * v);
+               B.s05 = B.s05 + gE * sl.p05;
+               B.s025 = B.s025 + gE * sl.p025;
+               B.s15 = B.s15 + gE * sl.p15;
+               B.s075 = B.s075 + gE * sl.p075;
+            }
+            if (cnt == 0)   // (nothing pressed on this segment: no role)
+               continue;
+            if (cnt != 1 || top < 0 || (onePeak != -1 && onePeak != top))
+               onePeak = -2;
+            else if (onePeak == -1)
+               onePeak = top;
+         }
+         if (trLines < 400 && PatchTraceWin(pfMs))   // (VPX_PATCH_TRACE: PTBL, each group with 2+ pieces: per piece id, pressed at start / end, d0, d1 um, role at t = 0 / 1,
+         {                                          //  and a face unpressed at one end: the old plane depth there beside the exact one; blin 1 B-lin on, 0 today's PatchMeans)
+            trLines++;
+            thread_local std::vector<int> r0, r1;
+            r0.resize(n);
+            r1.resize(n);
+            dCur = d0.data();
+            LevelRoles(n, d0.data(), adj, r0.data());
+            dCur = d1.data();
+            LevelRoles(n, d1.data(), adj, r1.data());
+            std::ostringstream o;
+            o << "PTBL ms " << pfMs << " evc " << evalCount << " g " << g << " blin " << (onePeak == -2 ? 1 : 0) << " |";
+            for (int x = 0; x < n; x++)
+            {
+               o << " [" << pid[x] << " on " << (int)on0[x] << (int)on1[x] << " d " << d0[x] * 1e6 << " " << d1[x] * 1e6 << " role " << r0[x] << " " << r1[x];
+               const RubberContact::PieceData &p = on0[x] ? pdS[x] : pdE[x];
+               if (p.g.kind == 3 && on0[x] != on1[x])
+                  o << " plane " << (on0[x] ? p.d - p.n.Dot(c1 - c0) : p.d - p.n.Dot(c0 - c1)) * 1e6;
+               o << "]";
+            }
+            PLOGI << o.str();
+         }
+         if (onePeak != -2)   // one peak, no role change (or none): today's PatchMeans (FrictionGroups' d0, d1)
+            return;
+         for (int e = 0; e < 2; e++)   // the level form at the start and at the end (t = 0, 1)
+         {
+            const std::vector<double> &l = e == 0 ? d0 : d1;
+            dCur = l.data();
+            LevelRoles(n, l.data(), adj, role.data());
+            Item::Pows lev;
+            for (int x = 0; x < n; x++)
+               if (role[x] != 0)
+                  lev = lev + (double)role[x] * L.PowRate(l[x]);
+            (e == 0 ? B.lev0 : B.lev1) = lev;
+         }
+         B.on = true;
+      }
       // patch_friction: group g's memory from its start patches' pieces (plan 2.1, 2.4): each patch's (the first of its pieces found in it.pm), turned into the group's plane
       // (length kept); several by the parallel rule (k1 x1 + k2 x2) / (k1 + k2) per spring, k at the patch's start depth. None found: no memory
       void GroupMemory(const Item &it, const Item &L, const Hit &h0, const int g, FG &G, const int k) const
@@ -3983,9 +4328,15 @@ namespace GroupStep
                }
                continue;
             }
+            bool seen = false;   // (plan 2.4: one stored group read once, however many of its start patches find it)
+            for (const GmRead &r : gmRead)
+               seen = seen || (r.g == g && r.sg == m->sg);
+            if (seen)
+               continue;
+            gmRead.push_back({ g, m->sg, m->kt, m->kr, m->kw });
             found++;
             one = m;
-            const double kt = L.Kt(P.d), kr = L.Kr(P.d), kw = L.Ktw(P.d);
+            const double kt = m->kt, kr = m->kr, kw = m->kw;   // plan 2.4: the parallel rule's weights are the stiffness each was stored at
             sx = sx + turn(m->xi) * kt;
             sth = sth + turn(m->ra.th) * kr;
             stw += m->ra.tw * kw;
@@ -4008,6 +4359,12 @@ namespace GroupStep
          G.ra.tw = ww > 0.0 ? stw / ww : 0.0;
       }
       std::vector<int> gStart;   // patch_friction: each start patch's group (FrictionGroups)
+      struct GmRead   // plan 2.4: a new friction group g reads stored group sg, stored at kt, kr, kw (GroupMemory)
+      {
+         int g, sg;
+         double kt, kr, kw;
+      };
+      mutable std::vector<GmRead> gmRead;   // (Eval's scratch, capacity reused)
 
       bool Eval(double h, const double *xv, double *Res, const Jac J, bool useCache)
       {
@@ -4302,6 +4659,14 @@ namespace GroupStep
             const int ngLoop = multiF ? ngF : 1;
             if (fgS.empty())
                fgS.resize(1);
+            if ((int)blS.size() < std::max(ngF, 1))
+               blS.resize(std::max(ngF, 1));
+            for (int g = 0; g < std::max(ngF, 1); g++)   // level_stiffness: each group's B-lin (one group too: a split happens inside a one-group step)
+               blS[g].on = false;
+            if (ngF > 0 && LevelOn(L))
+               for (int g = 0; g < ngF; g++)
+                  BLinGroup(L, h0, h1, g, A.c, b1[it.a].c, blS[g]);
+            gmRead.clear();
             if (!multiF)
             {
                FG &G = fgS[0];
@@ -4328,6 +4693,46 @@ namespace GroupStep
                   GroupLoad(L, h, fgS[g]);
                   GroupMemory(it, L, h0, g, fgS[g], k);
                }
+            if (pfPath && ngF > 0)   // plan 2.4's memory rule: each group's stored stiffness ks (the patch rule from ks to its start stiffness k0 runs in the block below)
+            {
+               for (int g = 0; g < ngLoop; g++)
+               {
+                  FG &Gg = fgS[g];
+                  if (blS[g].on)
+                     LevK(L, blS[g].lev0, Gg.k0p, Gg.kr0p, Gg.kw0p);
+                  else
+                  {
+                     Gg.k0p = L.Kt(Gg.d0);
+                     Gg.kr0p = L.Kr(Gg.d0);
+                     Gg.kw0p = L.Ktw(Gg.d0);
+                  }
+               }
+               if (!multiF && !(ngF == 1 && it.pmMulti))   // the item's one stretch: stored at kt1, kr1, kw1
+               {
+                  if (it.kStored && fgS[0].touching)
+                  {
+                     fgS[0].ks = it.kt1;
+                     fgS[0].krs = it.kr1;
+                     fgS[0].kws = it.kw1;
+                  }
+               }
+               else   // read through the pieces: each stored group's k shared among the new groups that read it, in proportion to their k0 (a split); summed over the stored groups (a join)
+                  for (const GmRead &r : gmRead)
+                  {
+                     double s0 = 0.0, s1 = 0.0, s2 = 0.0;
+                     for (const GmRead &q : gmRead)
+                        if (q.sg == r.sg)
+                        {
+                           s0 += fgS[q.g].k0p;
+                           s1 += fgS[q.g].kr0p;
+                           s2 += fgS[q.g].kw0p;
+                        }
+                     FG &Gg = fgS[r.g];
+                     Gg.ks += s0 > 0.0 ? r.kt * Gg.k0p / s0 : 0.0;
+                     Gg.krs += s1 > 0.0 ? r.kr * Gg.kr0p / s1 : 0.0;
+                     Gg.kws += s2 > 0.0 ? r.kw * Gg.kw0p / s2 : 0.0;
+                  }
+            }
             F[it.a] = F[it.a] - V3(gd[0], gd[1], gd[2]) * N;   // the push (a massless part's contact: its spring is in the part's U*, only the damping here)
             if (pr)
                F[it.b] = F[it.b] - V3(gd[3], gd[4], gd[5]) * N;
@@ -4363,11 +4768,24 @@ namespace GroupStep
             // [Contact] patch_path (pp): the step's spring kS and damper ct are their means over the depth path (u^0.5, u^0.25: Item::PatchMeans; kSp, ctSp their slopes in d1);
             // the stretch goes from k0 to kS by the rule here, and from kS to k1 after the move (below). 0: kS = k1 = Kt(d1), the damper from k1
             const bool pp = set.patchPath;
+            const BLin *const BL = blS[gF].on ? &blS[gF] : nullptr;   // level_stiffness: the group's means from B-lin (its slopes are vectors: BL->s05 .., kSp, ctSp, twD1 stay 0)
             Item::Pows pM, pS;
-            if (pp)
+            if (BL != nullptr)
+               pM = BL->m;
+            else if (pp)
                L.PatchMeans(d0, d1, pM, pS);
             const double ktU = pp ? L.ktPerA * std::sqrt(L.reff) : 0.0, ctU = pp ? L.shearTan * std::sqrt(ktU * L.mt) : 0.0;   // Kt and its damper per u^0.5, u^0.25
-            const double k0 = L.Kt(d0), k1 = L.Kt(d1);
+            double k0 = 0.0, k1 = 0.0, kr0L = 0.0, kr1L = 0.0, kw0L = 0.0, kw1L = 0.0;   // (B-lin: the level form's at the start and the end, shear, rolling, twist)
+            if (BL != nullptr)
+            {
+               LevK(L, BL->lev0, k0, kr0L, kw0L);
+               LevK(L, BL->lev1, k1, kr1L, kw1L);
+            }
+            else
+            {
+               k0 = L.Kt(d0);
+               k1 = L.Kt(d1);
+            }
             double kS = pp ? ktU * pM.p05 : k1, kSp = pp ? ktU * pS.p05 : 0.0, ctSp = pp ? ctU * pS.p025 : 0.0;
             // a bend across in series (Item::ktb, a wire switch's bent wire): Kt is no power of u, so its mean over the path is by the quadrature or its integral (Item::MeanOver,
             // KtIntegral) and its slope by MeanSlope; the damper shearTan sqrt(kS mt) on that mean
@@ -4378,7 +4796,10 @@ namespace GroupStep
                kSp = Item::MeanSlope(d0, d1, [&L](const double d) { return L.Kt(d); }, [&L](const double d) { return L.KtSlope(d); }, kS);
                ctSp = kS > 0.0 ? 0.5 * L.shearTan * std::sqrt(L.mt / kS) * kSp : 0.0;
             }
+            if (GF.ks > 0.0 && k0 > GF.ks)   // plan 2.4's memory rule: from the stiffness it was stored at to k0 (grows: holds the force; shrinks: holds the stretch), a loss (booked below)
+               xi0 = xi0 * (GF.ks / k0);
             const double held = 0.5 * k0 * xi0.Dot(xi0);
+            GF.heldS = held;
             if (kS > k0)
                xi0 = xi0 * (k0 / kS);
             e.slip = held - 0.5 * kS * xi0.Dot(xi0);
@@ -4466,6 +4887,7 @@ namespace GroupStep
             // twist (roll_model 1; twistSlope): sticking dMw/dd1 (twD1); at the limit dMw/d dm (twA) and dMw/dN (twN). twSt 0 none, 1 stick, 2 limit; twM, twLim the torque and
             // its limit (diagnostics)
             double twD1 = 0.0, twA = 0.0, twN = 0.0, twM = 0.0, twLim = 0.0;
+            V3 twD1V;   // (B-lin: dMw/dc1 sticking, a vector; twD1 0)
             double twF = 0.0;   // damping_integral: dMw/dfe at the limit (the limit's patch aE), on h dfe/du (h kc gm; a terms contact: kvE)
             int twSt = 0;
             V3 wtR, mhR;
@@ -4485,11 +4907,16 @@ namespace GroupStep
                }
                // patch_path: the step's springs krS, kwS and dampers are their means over the depth path (u^1.5, u^0.75), the patch rule from the start's to them here and
                // from them to the end's after each move; 0: krS = kr1, kwS = kw1, the dampers from them
-               const double kr0 = L.Kr(d0), kr1 = L.Kr(d1), kw0 = L.Ktw(d0), kw1 = L.Ktw(d1);
+               const double kr0 = BL != nullptr ? kr0L : L.Kr(d0), kr1 = BL != nullptr ? kr1L : L.Kr(d1), kw0 = BL != nullptr ? kw0L : L.Ktw(d0), kw1 = BL != nullptr ? kw1L : L.Ktw(d1);   // (B-lin: the level form's)
                const double Ir = L.mRed * A.R * A.R;   // with 1.4: the ball's inertia about its contact point; with 0.4: about its centre (the contact's mass)
                const double krU = pp ? L.kH * L.reff : 0.0, kwU = 16.0 / 3.0 * 0.35 * 0.75 * krU;   // Kr, Ktw per u^1.5 (a^3 = reff^1.5 u^1.5)
                const double krS = pp ? krU * pM.p15 : kr1, kwS = pp ? kwU * pM.p15 : kw1;
+               if (GF.krs > 0.0 && kr0 > GF.krs)   // plan 2.4's memory rule (rolling and twist), as the shear's above
+                  r0.th = r0.th * (GF.krs / kr0);
+               if (GF.kws > 0.0 && kw0 > GF.kws)
+                  r0.tw *= GF.kws / kw0;
                const double held = 0.5 * kr0 * r0.th.Dot(r0.th) + 0.5 * kw0 * r0.tw * r0.tw;
+               GF.heldR = held;
                if (krS > kr0)
                   r0.th = r0.th * (kr0 / krS);
                if (kwS > kw0)
@@ -4534,7 +4961,9 @@ namespace GroupStep
                      twSt = 1;
                      if (set.twistSlope)   // Mw = kwS tw0' + (kwS h / 2 + cw) wn: kwS = Ktw(d1) ~ a^3 (patch_path: its mean), cw ~ sqrt(kwS) (its mean); a growing patch holds kwS tw0' = kw0 tw0
                      {
-                        if (pp)   // the means' exact slopes in d1
+                        if (BL != nullptr)   // level_stiffness: the means' slopes in the end position (B-lin's vectors)
+                           twD1V = BL->s15 * (kwU * ((kwS > kw0 ? 0.0 : r0.tw) + 0.5 * h * wn)) + BL->s075 * (cwU * wn);
+                        else if (pp)   // the means' exact slopes in d1
                            twD1 = kwU * pS.p15 * ((kwS > kw0 ? 0.0 : r0.tw) + 0.5 * h * wn) + cwU * pS.p075 * wn;
                         else
                         {
@@ -4677,6 +5106,12 @@ namespace GroupStep
             GF.rhoR = rhoR;
             GF.wlR = wlR;
             GF.twD1 = twD1;
+            GF.blin = BL != nullptr;
+            GF.kSpV = BL != nullptr ? BL->s05 * ktU : V3();
+            GF.ctSpV = BL != nullptr ? BL->s025 * ctU : V3();
+            GF.twD1V = twD1V;
+            GF.kr1L = kr1L;
+            GF.kw1L = kw1L;
             GF.twA = twA;
             GF.twN = twN;
             GF.twF = twF;
@@ -4734,6 +5169,116 @@ namespace GroupStep
                }
                PLOGI << s;
             }
+            if (ngF > 0 && it.touching)   // patch_friction (plan 2.4): the memory read (the item's or through the pieces, the stored-stiffness rule, a join's parallel rule, a group that is gone) (GroupMemory: a join's parallel rule, a group that is gone): the springs'
+            {                                       // energy the book holds at the start (ShearE, RollE) less what the groups hold after the rule is the rule's loss, booked in this step (>= 0)
+               double hS = 0.0, hR = 0.0;
+               for (int g = 0; g < ngLoop; g++)
+               {
+                  hS += fgS[g].heldS;
+                  hR += fgS[g].heldR;
+               }
+               const double lS = (it.touching ? it.ShearE(d0) : 0.0) - hS, lR = (it.touching && set.rollModel == 1 ? it.RollE(d0) : 0.0) - hR;
+               e.memLossS = lS > 0.0 ? lS : 0.0;   // (a negative one is not booked: it shows in the held check)
+               e.memLossR = lR > 0.0 ? lR : 0.0;
+            }
+            if (pfPath && RubberContact::PatchCheckEnv() && trFd == 0)   // VPX_PATCH_CHECK: the groups' held energy at the start vs the book's (Energy: ShearE, Kr / Ktw at the depth), once per attempt
+            {
+               if ((int)chkAtt.size() < ni)
+                  chkAtt.resize(ni, -1);
+               if (chkAtt[k] != trAtt)
+               {
+                  chkAtt[k] = trAtt;
+                  double heldSum = 0.0;
+                  for (int g = 0; g < ngLoop; g++)
+                     heldSum += fgS[g].heldS + fgS[g].heldR;
+                  const double bookS = it.touching ? it.ShearE(d0) : 0.0;
+                  const double bookR = it.touching && set.rollModel == 1 ? it.RollE(d0) : 0.0;
+                  const double diff = heldSum + e.memLossS + e.memLossR - (bookS + bookR);   // (held plus the memory loss booked in this step)
+                  RubberContact::HeldCheck()[0]++;
+                  if (ngF == 1 && blS[0].on)   // lev1 of the one B-lin group against the end probe's own level form (MergeBars' peaks and passes, Hit::pk; one peak: its depth)
+                  {
+                     double lp = 0.0;
+                     if (h1.np > 0)
+                        for (int j = 0; j < h1.np; j++)
+                           lp += h1.pk[j].s * L.PowRate(h1.pk[j].d).p05;
+                     else
+                        lp = L.PowRate(h1.delta).p05;
+                     const double lb = blS[0].lev1.p05;
+                     RubberContact::HeldCheck()[4]++;
+                     if (std::fabs(lb - lp) > 1e-12 * std::max(std::fabs(lb), std::fabs(lp)))
+                     {
+                        const long long cL = ++RubberContact::HeldCheck()[5];
+                        if (cL <= 20)
+                           PLOGI << "LEV1CHK ms " << pfMs << " item " << k << " s " << it.s << " B-lin lev1 " << lb << " probe " << lp << " (u^0.5, m^0.5) peaks/passes " << h1.np << " d1 " << h1.delta * 1e6 << " um";
+                     }
+                  }
+                  for (int g = 0; g < ngLoop; g++)   // kind C: a group's start stiffness against the stiffness its memory was stored at (plan 2.4)
+                  {
+                     const FG &Gg = fgS[g];
+                     if (Gg.ks <= 0.0 || std::fabs(Gg.k0 - Gg.ks) <= 1e-9 * std::max(Gg.k0, Gg.ks))
+                        continue;
+                     const long long cC = ++RubberContact::HeldCheck()[3];
+                     if (cC > 20)
+                        continue;
+                     std::ostringstream o;
+                     o << "KINDC ms " << pfMs << " item " << k << " s " << it.s << " ngF " << ngF << " g " << g << " blin " << Gg.blin << " pmLev " << it.pmLev << " pmMulti " << it.pmMulti
+                       << " kStored " << it.kStored << " island " << (islandRing ? "ring" : "cord") << " reff " << L.reff << " storedReff " << it.kReff << " firstStep " << (books.steps == 0)
+                       << " | k0 " << Gg.k0 << " ks " << Gg.ks << " kr0 " << Gg.kr0p << " krs " << Gg.krs << " kw0 " << Gg.kw0p << " kws " << Gg.kws << " | start pieces";
+                     for (int i = 0; i < h0.npat; i++)
+                     {
+                        if (ngF > 0 && gStart[i] != g)
+                           continue;
+                        const HitPatch &P = h0.pat[i];
+                        thread_local std::vector<double> dd;
+                        thread_local std::vector<int> rl;
+                        dd.resize(P.pn);
+                        rl.resize(P.pn);
+                        for (int q = 0; q < P.pn; q++)
+                           dd[q] = h0.pd[P.p0 + q].d;
+                        LevelRoles(P.pn, dd.data(), [&](const int x, const int y) { return PieceAdj(h0.pc[P.p0 + x], h0.pd[P.p0 + x], h0.pc[P.p0 + y], h0.pd[P.p0 + y]); }, rl.data());
+                        for (int q = 0; q < P.pn; q++)
+                           o << " [" << h0.pc[P.p0 + q] << " " << dd[q] * 1e6 << " r" << rl[q] << "]";
+                     }
+                     o << " | stored (id sg kt)";
+                     for (const RubberContact::PieceMem &pm : it.pm)
+                        o << " [" << pm.id << " " << pm.sg << " " << pm.kt << "]";
+                     PLOGI << o.str();
+                  }
+                  if (std::fabs(diff) > 1e-12)
+                  {
+                     const long long c = ++RubberContact::HeldCheck()[1];
+                     if (c <= 20)
+                     {
+                        std::ostringstream o;
+                        o << "HELDCHK ms " << pfMs << " item " << k << " s " << it.s << " ball " << it.a << " ngF " << ngF << " pmLev " << it.pmLev << " pmMulti " << it.pmMulti << " memLoss " << (e.memLossS + e.memLossR) * 1e6 << " uJ"
+                          << " d0 " << d0 * 1e6 << " um, Kt(d0) " << L.Kt(d0) << " held " << heldSum * 1e6 << " uJ (shear+roll per group below), book " << (bookS + bookR) * 1e6
+                          << " uJ (ShearE " << bookS * 1e6 << ", rolling " << bookR * 1e6 << ", RollE " << (it.touching ? it.RollE(d0) * 1e6 : 0.0) << "), diff " << diff * 1e6 << " uJ |";
+                        for (int g = 0; g < ngLoop; g++)
+                        {
+                           const FG &Gg = fgS[g];
+                           o << " g" << g << " blin " << Gg.blin << " k0 " << Gg.k0 << " Kt(g d0) " << L.Kt(Gg.d0) << " d0 " << Gg.d0 * 1e6 << " xi0 " << Gg.xi0.Length() * 1e6
+                             << " um heldS " << Gg.heldS * 1e6 << " heldR " << Gg.heldR * 1e6 << " pieces";
+                           for (int i = 0; i < h0.npat; i++)   // (its start patches' pieces: id, depth um; t = 0 roles over each patch's own pieces)
+                           {
+                              if (ngF > 0 && gStart[i] != g)
+                                 continue;
+                              const HitPatch &P = h0.pat[i];
+                              thread_local std::vector<double> dd;
+                              thread_local std::vector<int> rl;
+                              dd.resize(P.pn);
+                              rl.resize(P.pn);
+                              for (int q = 0; q < P.pn; q++)
+                                 dd[q] = h0.pd[P.p0 + q].d;
+                              LevelRoles(P.pn, dd.data(), [&](const int x, const int y) { return PieceAdj(h0.pc[P.p0 + x], h0.pd[P.p0 + x], h0.pc[P.p0 + y], h0.pd[P.p0 + y]); }, rl.data());
+                              for (int q = 0; q < P.pn; q++)
+                                 o << " [" << h0.pc[P.p0 + q] << " " << dd[q] * 1e6 << " r" << rl[q] << "]";
+                           }
+                        }
+                        PLOGI << o.str();
+                     }
+                  }
+               }
+            }
             if (multiF)
             {
                static std::atomic<long long> nEvalMulti { 0 };
@@ -4748,7 +5293,7 @@ namespace GroupStep
                      continue;
                   const HitPatch &P = h1.pat[j];
                   for (int q = 0; q < P.pn; q++)
-                     pmEnd[k].push_back({ h1.pc[P.p0 + q], fgS[g].xi1, fgS[g].ra1 });
+                     pmEnd[k].push_back({ h1.pc[P.p0 + q], fgS[g].xi1, fgS[g].ra1, fgS[g].k1, fgS[g].blin ? fgS[g].kr1L : L.Kr(fgS[g].d1), fgS[g].blin ? fgS[g].kw1L : L.Ktw(fgS[g].d1), g });
                }
                if (multiF)   // the item's one stretch and angles (the energy book, a following one-group step's start): the groups' by the parallel rule at their end stiffness
                {
@@ -4763,7 +5308,7 @@ namespace GroupStep
                      const FG &Gg = fgS[g];
                      if (Gg.d1 <= 0.0)
                         continue;
-                     const double kt = L.Kt(Gg.d1), kr = L.Kr(Gg.d1), kw = L.Ktw(Gg.d1);
+                     const double kt = Gg.blin ? Gg.k1 : L.Kt(Gg.d1), kr = Gg.blin ? Gg.kr1L : L.Kr(Gg.d1), kw = Gg.blin ? Gg.kw1L : L.Ktw(Gg.d1);   // (B-lin: the level form's end stiffness, the next step's start)
                      e.pmEs += 0.5 * kt * Gg.xi1.Dot(Gg.xi1);   // (plan_p2b1 A4: the book's springs, one per group)
                      e.pmEr += 0.5 * kr * Gg.ra1.th.Dot(Gg.ra1.th) + 0.5 * kw * Gg.ra1.tw * Gg.ra1.tw;
                      sx = sx + Gg.xi1 * kt;
@@ -4776,6 +5321,20 @@ namespace GroupStep
                   e.xi1 = wt > 0.0 ? sx * (1.0 / wt) : V3();
                   e.ra1.th = wrS > 0.0 ? sth * (1.0 / wrS) : V3();
                   e.ra1.tw = ww > 0.0 ? stw / ww : 0.0;
+               }
+               e.slip += e.memLossS;   // (the memory rule's loss, above; after the groups' sum)
+               e.roll += e.memLossR;
+               e.kStored = !multiF;   // (plan 2.4: the one group's end stiffness, B-lin's or the merged depth's)
+               e.kt1 = fgS[0].k1;
+               e.kReff = L.reff;
+               e.kr1 = fgS[0].blin ? fgS[0].kr1L : L.Kr(fgS[0].d1);
+               e.kw1 = fgS[0].blin ? fgS[0].kw1L : L.Ktw(fgS[0].d1);
+               e.pmLev = !multiF && fgS[0].blin;   // level_stiffness, one group on B-lin: the book's springs at its level-form end stiffness (Item::pmLev), not Kt(merged depth)
+               if (e.pmLev)
+               {
+                  const FG &G0 = fgS[0];
+                  e.pmEs = 0.5 * G0.k1 * G0.xi1.Dot(G0.xi1);
+                  e.pmEr = 0.5 * G0.kr1L * G0.ra1.th.Dot(G0.ra1.th) + 0.5 * G0.kw1L * G0.ra1.tw * G0.ra1.tw;
                }
             }
             // (one group, or the first: the code below until the slope reads these; the slope runs per group)
@@ -5075,7 +5634,33 @@ namespace GroupStep
                      else
                         fd1 = fh * (L.mu * dN) + Pg * r;
                   }
-                  const M3 Dn = M3::Outer(fd1, nD);   // (patch_friction: the group's end gradient; one group: nm, today's)
+                  M3 Dn = M3::Outer(fd1, nD);   // (patch_friction: the group's end gradient; one group: nm, today's)
+                  if (GF.blin)   // level_stiffness (B-lin): kS and ct change with the end position through each piece (kSpV, ctSpV), h dF/dc1 = a1 kSpV^T + a2 ctSpV^T, on Dn's -h
+                  {
+                     const V3 base = (kS > k0 ? V3() : xi0) + ut * (0.5 * h);
+                     V3 a1, a2;
+                     if (!slipping)
+                     {
+                        a1 = base;
+                        a2 = ut;
+                     }
+                     else if (flTr > 0.0)   // past the limit: the trial's change projected off its direction, times lim / |trial|
+                     {
+                        const V3 fh = FsTr * (1.0 / flTr);
+                        const M3 Q = M3::Outer(fh, fh);
+                        const double r = limS / flTr;
+                        M3 Pf;
+                        for (int i = 0; i < 3; i++)
+                           for (int j = 0; j < 3; j++)
+                              Pf.a[i][j] = Pt.a[i][j] - Q.a[i][j];
+                        a1 = MulV(Pf, base) * r;
+                        a2 = MulV(Pf, ut) * r;
+                     }
+                     const M3 D1 = M3::Outer(a1, GF.kSpV), D2 = M3::Outer(a2, GF.ctSpV);
+                     for (int i = 0; i < 3; i++)
+                        for (int j = 0; j < 3; j++)
+                           Dn.a[i][j] -= D1.a[i][j] + D2.a[i][j];
+                  }
                   if (set.stickZoneTrial && !multiF && slipping && limS > 0.0 && flTr > 0.0)   // (patch_friction: one item's record: one group only)   // stick_zone_trial: the trial force's linear model along a move (kS, ct, stretch, geometry held)
                   {
                      StickRec &sr = szRec[k];
@@ -5212,12 +5797,14 @@ namespace GroupStep
                }
                // twistSlope: the twist torque's change with the depth, h dMw/du_j = h gm_j (twD1 + twA / 2) + twN h dN/du_j (d d1/du = gm, d dm/du = gm / 2; h dN/du = kn gm,
                // a terms contact: kv). Ball p's spin row holds h s_p n Mw, a carried part's row -h (n . W_i) Mw
-               if (set.twistSlope && (twD1 != 0.0 || twA != 0.0 || twN != 0.0 || twF != 0.0))
+               if (set.twistSlope && (twD1 != 0.0 || twA != 0.0 || twN != 0.0 || twF != 0.0 || GF.blin))
                   for (int j = 0; j < na + nq; j++)
                   {
                      if (ix[j] < 0)
                         continue;
                      double c = h * gm[j] * (twD1 + 0.5 * twA) + twN * (terms ? kv[j] : kn * gm[j]);
+                     if (GF.blin && j < 3)   // level_stiffness (B-lin): the sticking twist's change with the ball's end position, its vector slope (a patch_friction contact: one ball, no part)
+                        c += h * (j == 0 ? GF.twD1V.x : j == 1 ? GF.twD1V.y : GF.twD1V.z);
                      if (di)   // damping_integral: dMw/dfe on h dfe/du (h kc gm; a terms contact: kvE)
                         c += twF * (terms ? kvE[j] : h * kc * gm[j]);
                      for (int p = 0; p < nbod; p++)
@@ -5874,8 +6461,12 @@ namespace GroupStep
                   hs.pat[j] = h0.pat[j];
                hs.npc = h0.npc;
                hs.pc.Fit(hs.npc);
+               hs.pd.Fit(hs.npc);
                for (int j = 0; j < hs.npc; j++)
+               {
                   hs.pc[j] = h0.pc[j];
+                  hs.pd[j] = h0.pd[j];   // (level_stiffness: each piece's data)
+               }
             }
             farNow[k] = !farOff && OutOfReach(item[k], h0.delta, h, h0);
             if (farNow[k])
@@ -6650,6 +7241,12 @@ namespace GroupStep
                   it.pmMulti = pmEndOn[k] == 2;
                   it.pmEs = e.pmEs;
                   it.pmEr = e.pmEr;
+                  it.pmLev = e.pmLev;
+                  it.kStored = e.kStored;   // (plan 2.4: one group's end stiffness with its memory)
+                  it.kt1 = e.kt1;
+                  it.kReff = e.kReff;
+                  it.kr1 = e.kr1;
+                  it.kw1 = e.kw1;
                   if (it.pmMulti)   // (VPX_GROUP_STATS-free count: accepted steps with 2 or more friction groups, running totals at 1, 2, 4, ...; the bench never closes the table)
                   {
                      static std::atomic<long long> nMulti { 0 };
@@ -6662,6 +7259,8 @@ namespace GroupStep
                {
                   it.pm.clear();
                   it.pmMulti = false;
+                  it.pmLev = false;
+                  it.kStored = false;
                }
             }
             else
@@ -6671,6 +7270,8 @@ namespace GroupStep
                it.ra = RubberContact::RollAngle();
                it.pm.clear();
                it.pmMulti = false;
+               it.pmLev = false;
+               it.kStored = false;
             }
             if (!it.tZero.empty())   // a union of terms: each term's zero follows its term out (its raw depth at the step's end), dropped once the term is clear
             {
@@ -6848,6 +7449,19 @@ namespace GroupStep
          if (f == nullptr || !perStep)
             return;
          const double now = g.Energy() - e0 + g.books.Losses() - g.books.driveJ, rise = now - last;
+         if (rise > 1e-9 && RubberContact::PatchCheckEnv())   // (VPX_PATCH_CHECK: the first 20 step rises > 1e-9 J, with the touching items' memory kind)
+         {
+            const long long c = ++RubberContact::HeldCheck()[2];
+            if (c <= 20)
+            {
+               std::ostringstream o;
+               o << "BOOKRISE ms " << g.pfMs << " step " << g.books.steps << " rise " << rise * 1e6 << " uJ, items";
+               for (int k = 0; k < g.ni; k++)
+                  if (g.item[k].touching)
+                     o << " [" << k << " s " << g.item[k].s << " pmMulti " << g.item[k].pmMulti << " pmLev " << g.item[k].pmLev << " pm " << g.item[k].pm.size() << "]";
+               PLOGI << o.str();
+            }
+         }
          rises += std::max(rise, 0.0);
          maxRise = std::max(maxRise, rise);
          last = now;

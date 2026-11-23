@@ -112,7 +112,7 @@ VPX_GROUP_JAC_MODE=1       also a central-difference Jacobian, logged; changes l
 VPX_SKIRT_ROW_TRACE=1      with ROUND_TRACE: bumper skirt rows by term per round (m/s), tilt move, each chord's change and mismatch.
 VPX_FINDER_CHECK=1         finder vs the full scan: missed pieces within reach, face-table mismatches, playfield cut lists, static tube readers (log, screen).
 VPX_RELOOK_TRACE=1         energy-reach re-look: each bound term, the move; no cap.
-VPX_PATCH_CHECK=1          patch_contacts 1: static hosts' patch lists summed vs the merged one (s25, g): counts, mismatches (rel > 1e-12, 20 logged); peak_slope 1: one peak = today's slope.
+VPX_PATCH_CHECK=1          patch lists vs the merged (s25, g); one peak = today's slope; cut B faces vs each probed alone; friction held vs book (HELDCHK, KINDC); B-lin lev1 vs probe (LEV1CHK).
 VPX_PATCH_TRACE=t0-t1      patch_friction, engine ms: per Eval each friction group (PTEV), start patches not in memory (PTMISS); 400 lines.
 VPX_PAIR_CHECK=1           ball pairs: the every-pair test beside the sorted list; counts any pair the list missed (log).
 VPX_HINGE_NEAR_ALL=1       every near-piece list takes all pieces (A/B of the short list, same result expected).
