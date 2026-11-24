@@ -14,6 +14,7 @@ G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 ## Now
 Touch prediction (1.52): pieces 1-3 pushed (6244dbce1); no speed gain yet (design 3.7). Design 3.8 (stops and springs: solve, detect, go back) built and benched, not committed (3.9 STATUS); cost runs not yet. Then trace every net trip (Gorgar Ramp2, sw28; stress v2 load 17:20).
 Open (lead 14): BodyAxis held energy vs step (stops lead).
+Step halvings (1.42 = 1.50): stress v2 76690, CenterRamp corner: depth slope from the mid probe's floor normal while the end is on the wall; z row 0.6 of rowmax off FD (halv/results.md). Next: paper check of an end-hit slope, then code. runs/2026-11-23-lead17/log.md.
 Drop targets: branch drop-axis (wt-drop-axis, not merged). PAUSED (user 11-22): hits 15-30x over 30 us. To be rewritten on the shared path to ModelStandards; drop-axis code not reused (user 11-22). DropTargetDesign 6 STATUS.
 N7. Stress v2 bench: ball travel energy +2 % at 57 ms; spin not counted. Check total energy in the saved run (no new run).
 N8. Test driver must refuse a ball placed inside any object, unless the file declares the overlap (rule 10b: then judged on recovery, no energy gained).
