@@ -726,7 +726,7 @@ public:
             {
                const double rate = -o.ohat.Dot(b[i].v);
                if (rate > 1e-6 && o.gap < 0.05)
-                  f.Approach(std::max(o.gap, 0.0), rate, omega, 102, [&] { return -o.ohat.Dot(f.BallF(i)) / b[i].m; }, GroupStep::SpringCols::Ball(i, o.ohat * -1.0));   // (touch_predict: the ball's closing acceleration from its net force now, fNet)
+                  f.Approach(std::max(o.gap, 0.0), rate, omega, 102, [&] { return -o.ohat.Dot(f.BallF(i)) / b[i].m; });   // (touch_predict: the ball's closing acceleration from its net force now, fNet)
             }
          }
       }

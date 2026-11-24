@@ -272,17 +272,27 @@ namespace GroupStep
       return c;
    }
    // touch_predict counters (always on, cheap; written to the VPX_GROUP_STATS file): steps a predicted touch set and ended (predicted), of them landed within d and closing
-   // (taken) or more than d short (shortL); re-solves at the Hermite root of a step that ended past a predicted touch (hermite); re-solves at today's limit after that (net).
-   // Each by kind (piece 2): [0] a fixed surface, [1] a moving part's surface (a union's term with it), [2] a ball pair; a re-solve counts under the kind whose touch set its length
+   // (taken) or more than d short (shortL); go-backs (design 2.3 AMENDED: re-solves at the Hermite root of a step past a predicted touch or whose cubic dipped below 0 inside
+   // it: hermite, of them dip the dips'); re-solves at today's limit when past with no root short of the end (net). Each by kind (piece 2): [0] a fixed surface, [1] a moving
+   // part's surface (a union's term with it), [2] a ball pair; a re-solve counts under the kind whose touch set its length. touchBack[n]: steps that went back n + 1 times
+   // for a touch (the last: 4 or more); touchBackMany: more than 4 (WARN: contactsystem.cpp)
    struct TouchStats
    {
-      long predicted[3] = {}, taken[3] = {}, shortL[3] = {}, hermite[3] = {}, net[3] = {};
+      long predicted[3] = {}, taken[3] = {}, shortL[3] = {}, hermite[3] = {}, net[3] = {}, dip[3] = {};
+      long touchBack[4] = {}, touchBackMany = 0;
       long partEvals = 0;   // the parts' start accelerations formed (ChooseStep, PartAccel: one BeginStep and one Eval each)
-      // piece 3 (design 3): a part's hard stops (stop) and its soft-spring approaches (spring), each [kPred] steps a prediction set and ended, [kTaken] landed within d and
-      // arriving (a stop: accepted on it), [kShort] more than d short, [kHerm] Hermite re-solves, [kNet] today's stop search taken (a stop; with touch_predict any search is
-      // the net), [kAcc] PartAccel formed for it. A spring has no end check in this piece: its taken, short, hermite and net stay 0
-      enum { kPred = 0, kTaken, kShort, kHerm, kNet, kAcc, kPast, kN };   // (kPast: a spring's end past its onset, engaged: scored only)
-      long stop[kN] = {}, spring[kN] = {};
+      // piece 3 (design 3): a part's hard stops, stop[kTaken] landed within d and arriving (accepted on it), [kShort] an ordinary end, [kNet] today's stop search taken
+      // (with touch_predict any search is the net)
+      enum { kPred = 0, kTaken, kShort, kHerm, kNet, kAcc, kN };
+      long stop[kN] = {};
+      // design 3.8f, the parts' soft springs: springEngaged within d at the step's start (ChooseStep: engaged, its own clock); springOut seats left out of a step's solve;
+      // springReSolve the same step solved again with a left-out seat in (within d at the start with the solved step's acceleration, or past with no Hermite root short of
+      // the end: springNoRoot of them); springDip go-backs a seat's Hermite cubic dipping below 0 inside the step caused (the end not past); springBack[n]: steps that went
+      // back n + 1 times for a seat (the last: 4 or more); cordPred: steps the cord-ball's predicted touch set (a ball touch)
+      long springEngaged = 0, springOut = 0, springReSolve = 0, springNoRoot = 0, springDip = 0, springBack[4] = {}, cordPred = 0;
+      // design 3.8 (stops: solve, detect, go back): steps that ended taken on a stop are stop[kTaken], ordinary ends with armed stops stop[kShort]; stopDip: go-backs a stop's
+      // Hermite cubic dipping below 0 inside the step caused (the end not past); stopBack[n]: steps that went back n + 1 times (the last: 4 or more); stopBackMany: more than 4
+      long stopDip = 0, stopBack[4] = {}, stopBackMany = 0;
       static long Sum(const long (&c)[3]) { return c[0] + c[1] + c[2]; }
    };
    inline TouchStats touchStats;
@@ -823,6 +833,14 @@ namespace GroupStep
       unsigned id = 0u;
    };
    constexpr int kMaxStopsNow = 16;   // a part's stops stated at once (BodyAxes: 4 axes x 4 stops)
+   // touch_predict design 3.8f: a soft spring a part leaves out of a step's solve (Part::SpringsOut): its id (the part's StepFacts why), start gap (m, > 0 open), signed
+   // closing rate (m/s, > 0 closing) and the spring's own omega (rad/s)
+   struct SpringOut
+   {
+      int id = 0;
+      double gap = 0.0, v = 0.0, omega = 0.0;
+   };
+   constexpr int kMaxSpringsOut = 4;   // a part's springs left out at once (the jet skirt: lip and rim)
    // ASSUMED (design 3.3, 11-21 decision 3): the bat's, jet ring's and cord plate's stops state no stiffness of their own; a steel-on-steel Hertz stop of this radius (m) sets
    // their d only (not their law). Real data replaces it: docs/unified-physics/PartData.txt (no stop stiffness there for these parts yet)
    constexpr double kAssumedStopR = 5e-3;
@@ -840,40 +858,21 @@ namespace GroupStep
       return std::max(dA, dR);
    }
 
-   // touch_predict piece 3 (G4): a spring approach's closing rate as linear columns, for its scored end check (no re-solve): closing rate = sum slope_j rate_j (the part's
-   // coordinates) + dir . v (a ball's); its end gap gap - sum slope_j dq_j - dir . dc to first order. nc 0 and ball -1: no end check (the ring seats' rate is a bound)
-   struct SpringCols
-   {
-      int nc = 0, coord[2] = {}, ball = -1;
-      double slope[2] = {};
-      V3 dir;
-      bool partGap = false;   // the part scores it from its own exact gap at the solved end (Part::SpringGapEnd; the jet seats: 3 coordinates and a cone point, not linear)
-      SpringCols() = default;
-      SpringCols(const int c0, const double s0) : nc(1) { coord[0] = c0, slope[0] = s0; }
-      SpringCols(const int c0, const double s0, const int c1, const double s1) : nc(2) { coord[0] = c0, slope[0] = s0, coord[1] = c1, slope[1] = s1; }
-      static SpringCols Ball(const int i, const V3 &d) { SpringCols c; c.ball = i; c.dir = d; return c; }
-      static SpringCols PartGap() { SpringCols c; c.partGap = true; return c; }
-   };
-
    class StepFactList
    {
    public:
       explicit StepFactList(const Settings &s) : set(s), h(s.hMax) {}
-      // touch_predict (piece 3, design 3.4): set by the group when the prediction is on; acc: this part's start accelerations (PartAccel, formed on the first Accel()),
-      // ballF: each ball's net force now (ChooseStep's fNet). Off: Accel() and the predicted Approach are today's
+      // touch_predict (design 3.8f): set by the group when the prediction is on; ballF: each ball's net force now (ChooseStep's fNet, the cord-ball's closing acceleration).
+      // Off: Spring and the predicted Approach are today's
       bool predictOn = false;
-      const class Group *grp = nullptr;
-      int partIdx = -1;
       const V3 *ballF = nullptr;
-      inline const double *Accel() const;   // (after Group)
       V3 BallF(const int i) const { return ballF != nullptr ? ballF[i] : V3(); }
       bool springSet = false;   // the predicted approach set the shortest so far (the counters and the trace read it, with its gap, closing rate and acceleration, d and root)
       double sGap = 0.0, sV = 0.0, sA = 0.0, sD = 0.0, sT = 0.0, sOm = 0.0;
-      SpringCols sCols;
-      // closing on a soft spring's engagement at gap and rate, aClose() its closing acceleration (the part's own from Accel(), or a ball's from BallF): with the prediction on, the
-      // step ends at the smallest root of gap - d/2 = rate t + a t^2 / 2, d = max(va / omega, a / omega^2) (the spring's own squash at the arrival speed va, or under a; the code's
-      // own omega); within d or no root: no limit (the spring's clock takes it once engaged). Off: today's Approach
-      template <class A> void Approach(const double gap, const double rate, const double omega, const int why, const A &aClose, const SpringCols &cols = SpringCols())
+      // a ball closing on a soft spring's engagement (the cord-ball, a ball touch: pieces 1-2) at gap and rate, aClose() its closing acceleration (the ball's from BallF): with
+      // the prediction on, the step ends at the smallest root of gap - d/2 = rate t + a t^2 / 2, d = max(va / omega, a / omega^2) (the spring's own squash at the arrival speed
+      // va, or under a; the code's own omega); within d or no root: no limit (the spring's clock takes it once engaged). Off: today's Approach
+      template <class A> void Approach(const double gap, const double rate, const double omega, const int why, const A &aClose)
       {
          if (!predictOn || !(omega > 0.0))
          {
@@ -883,40 +882,22 @@ namespace GroupStep
          const double a = aClose(), d = SpringD(gap, rate, a, omega);
          if (Engaged(gap, rate, omega, why, d))
             return;
-         SetSpring(TouchRoot(gap, rate, a, d), gap, rate, a, d, omega, why, cols);
+         SetSpring(TouchRoot(gap, rate, a, d), gap, rate, a, d, omega, why);
       }
-      // The same with the gap's own path (K3, design 3.4): gapAt(t) the part's EXACT gap on its coordinates' free path q0 + qdot t + qddot t^2 / 2 (a gap that is not a parabola
-      // in t: the jet seat's tilt cone point, runs/2026-11-23-touch-p3paper s_paper.py S2); gap, rate, a its signed value, closing rate and closing acceleration now (for d and
-      // the trace). The step ends at the smallest t in (0, h) where gapAt(t) = d/2: kPathScan equal sub-steps bracket the first crossing, kPathBisect halvings root it (no state
-      // kept; a dip below d/2 and back inside one sub-step is not seen)
-      template <class G> void ApproachPath(const double gap, const double rate, const double a, const double omega, const int why, const G &gapAt, const SpringCols &cols)
+      // design 3.8f (amended): a part's own soft spring (the bat's rest spring, the link slack, the plunger rod's outer spring, the jet skirt's seats) at gap and closing
+      // rate: with the prediction on, no prediction and no acceleration: within d at the start (d = SpringD(gap, rate, 0, omega), the closing rate only) it is engaged (its
+      // own clock, Engaged); else no limit (bat, link, plunger: zero force while open and soft enough that a step starting outside d cannot reach it, paper
+      // runs/2026-11-23-touch-goback/s_springs_out.txt; the seats: left out of the step's solve, Part::SpringsOut, and checked after it). Off: today's Approach
+      void Spring(const double gap, const double rate, const double omega, const int why)
       {
-         if (!(omega > 0.0))
-            return;
-         const double d = SpringD(gap, rate, a, omega);
-         if (Engaged(gap, rate, omega, why, d) || !(d > 0.0))   // (d 0: not closing, no event)
-            return;
-         const double s = 0.5 * d;
-         double t0 = 0.0, t1 = h;
-         bool found = false;
-         for (int k = 1; k <= kPathScan && !found; k++)   // the bracket: the first sub-step whose end is at or past d/2
+         if (!predictOn)
          {
-            t1 = h * k / kPathScan;
-            if (gapAt(t1) <= s)
-               found = true;
-            else
-               t0 = t1;
-         }
-         if (!found)
+            Approach(gap, rate, omega, why);
             return;
-         for (int k = 0; k < kPathBisect; k++)   // the root: gapAt(t0) > d/2 >= gapAt(t1)
-         {
-            const double tm = 0.5 * (t0 + t1);
-            (gapAt(tm) <= s ? t1 : t0) = tm;
          }
-         SetSpring(t1, gap, rate, a, d, omega, why, cols);   // (t1: at or just past the crossing, within h 2^-kPathBisect / kPathScan)
+         if (omega > 0.0 && Engaged(gap, rate, omega, why, SpringD(gap, rate, 0.0, omega)))
+            touchStats.springEngaged++;
       }
-      static constexpr int kPathScan = 16, kPathBisect = 30;
       // d (design 3.3, as StopD for a spring): the spring's own squash at the signed arrival speed va = sqrt(v^2 + 2 a gap) (closing), or under a > 0: max(va / omega, a / omega^2)
       static double SpringD(const double gap, const double rate, const double a, const double omega)
       {
@@ -933,14 +914,13 @@ namespace GroupStep
          Stiffness(omega, std::fabs(rate) <= set.vSteady, why);
          return true;
       }
-      void SetSpring(const double t, const double gap, const double rate, const double a, const double d, const double omega, const int why, const SpringCols &cols)
+      void SetSpring(const double t, const double gap, const double rate, const double a, const double d, const double omega, const int why)
       {
          if (!(t < h))
             return;
          Lim(t, why);
          springSet = true;
          sGap = gap, sV = rate, sA = a, sD = d, sT = t, sOm = omega;
-         sCols = cols;
       }
       void Stiffness(const double omega, const bool steady, const int why)   // a stiffness in the motion: its natural frequency; steady: the motion it carries is at rest
       {
@@ -1053,8 +1033,12 @@ namespace GroupStep
       // touch_predict piece 3 (design 3.2a): its armed hard stops at the step's start, at most max, into out (StopNow, SI); acc: its coordinates' start accelerations (the group's
       // PartAccel; nullptr: each closing acceleration 0). None for a coordinate with no unknown (pinned) or a stop it is on or past (gap <= 0). Writes nothing of its own
       virtual int StopsNow(const double * /*acc*/, StopNow * /*out*/, int /*max*/) const { return 0; }
-      // touch_predict (K4): a spring approach it stated with SpringCols::PartGap, entry why: its exact gap and signed closing rate at the solved end, from each coordinate's move dq
-      // and end rate (its own units). False: not one of its own (not scored)
+      // touch_predict design 3.8f: its soft springs open by more than d at the step's start (d = StepFactList::SpringD(gap, rate, 0, omega)), left out of this step's solve
+      // (force and Jacobian zero; step work, decided from the start state), at most max into out. Called once per step after WipeStepWork. None: nothing left out
+      virtual int SpringsOut(SpringOut * /*out*/, int /*max*/) { return 0; }
+      // the left-out spring id back in this step's solve (engaged; -1: all of them)
+      virtual void SpringIn(int /*id*/) {}
+      // a left-out spring id's exact gap and signed closing rate at the solved end, from each coordinate's move dq and end rate (its own units). False: not one of its own
       virtual bool SpringGapEnd(int /*why*/, const double * /*dq*/, const double * /*rate*/, double & /*gap*/, double & /*closing*/) const { return false; }
       double stopNear = 0.0;   // touch_predict: > 0 only while the group accepts a step that ended within d of a predicted stop (Accept(h, true)): that d (its coordinate's units), the 'at the stop' nearness of this event (design 2.4); 0: the part's own
       virtual bool ArrivingAtStop() const { return true; }               // the move last tested by StopExcess is closing on what it came near
@@ -2258,73 +2242,125 @@ namespace GroupStep
          int nc = 0;              // a part's surface: its columns at the start, each as the group's coordinate (coordOff + coord) and its point speed per unit rate along n
          int cc[7] = {};          // (a term: one column, the union's column 0, with the term's own slope)
          double cn[7] = {};
-         bool past = false;       // (Step: touching at the end of the first solve)
+         bool past = false;       // (Step: went back this step, past or dipping (TouchEnd): its end traced on each later solve)
       };
       mutable std::vector<TouchPred> tpList;
       mutable long tpStamp = -1;
       mutable int tpSet = -1;     // the prediction that set the step (-1 none) and its h
       mutable double tpH = 0.0;
       bool tpCounted = false;     // (Step: the step's prediction is counted once)
-      // touch_predict piece 3 (design 3.2): each part's stop ChooseStep predicted (an event: d > 0, beyond d at the start), as the part stated it (StopNow), with its d at the
-      // start and its root t (inf: none). The next Step reads them while the positions are the same (tpStamp == stamp); P5: a part freed in the step adds its own again
+      // touch_predict design 3.8: each part's armed stops at the step's start, as the part stated them (StopNow, no acceleration: a = 0). No time limit:
+      // the Step checks each solve's end against them and goes back (StopEnd). The next Step reads them while the positions are the same (tpStamp == stamp); a part freed in
+      // the step states its own again (ListStops)
       struct StopPred
       {
          int p = -1;
          StopNow s;
-         double d = 0.0, t = 0.0;
-         bool past = false;   // (Step: past at the end of the first solve)
-         bool nearStart = false;   // within d at the start: not an event (no root), kept for 'on the stop' (design 2.4: the pin check before the search); passed by the step: pinned there (design 3.2d), never re-solved
+         double d = 0.0;            // (StopEnd, from each solve) d at the start: StopD at the start gap and closing rate with the solved step's closing acceleration (the resting term)
+         bool nearStart = false;   // (StopEnd) within that d at the start: on the stop, not an event (design 2.4: the pin check before the search, nearD = d); passed: pinned there (design 3.2d), never re-solved
       };
       mutable std::vector<StopPred> spList;
-      mutable int spSet = -1;     // the stop prediction that set the step (-1 none) and its h
-      mutable double spH = 0.0;
-      bool spCounted = false;
-      static constexpr int kRuleStop = 30;   // (StepDiag rule: a predicted stop set the step)
-      // G4: the spring approach whose prediction set the step (ChooseStep), scored once at the step's first solve of that h: taken (end gap within d at the end's closing
-      // speed, closing), short (more than d), past (engaged: its own law; no re-solve)
-      mutable bool sgSet = false;
-      mutable int sgP = -1, sgWhy = 0;
-      mutable double sgH = 0.0, sgGap = 0.0, sgV = 0.0, sgA = 0.0, sgD = 0.0, sgT = 0.0, sgOm = 0.0;
-      mutable SpringCols sgCols;
-      void SpringEnd(const double h)
+      // touch_predict design 3.8f: the soft springs each part left out of this step's solve (Part::SpringsOut, listed at Step's start from the start state; step work, never
+      // kept between steps). in: put back in this step (an engaged re-solve)
+      struct SpringPred
       {
-         sgSet = false;
-         double gEnd = sgGap, vEnd = 0.0;
-         if (sgCols.partGap)   // (K4: the part's own exact gap at the solved end state)
+         int p = -1;
+         SpringOut s;
+         bool in = false;
+      };
+      std::vector<SpringPred> sgList;
+      // the left-out springs back in when the step ends, whichever way Step returns (PartAccel, formed between steps, sees every spring in)
+      struct SpringsBackIn
+      {
+         Group &g;
+         ~SpringsBackIn()
          {
-            constexpr int kMaxQ = 4;   // the most coordinates a part has (a body's 4 axes, BodyAxes::kMaxAxes; the ring 4; the bat 3): no allocation per call (ModelStandards 4d)
-            const int nq = part[sgP]->NumCoords();
-            assert(nq <= kMaxQ);
-            double dq[kMaxQ], r[kMaxQ];
-            for (int c = 0; c < nq; c++)
+            for (const SpringPred &sp : g.sgList)
+               if (!sp.in)
+                  g.part[sp.p]->SpringIn(sp.s.id);
+            g.sgList.clear();
+         }
+      };
+      // part p's coordinates' move dq and end rate after a solve of length h (its own units; a coordinate with no unknown: its given move)
+      void PartEnd(const int p, const double h, double *dq, double *r) const
+      {
+         const int nq = part[p]->NumCoords();
+         for (int c = 0; c < nq; c++)
+         {
+            const int k = coordOff[p] + c;
+            dq[c] = cUnk[k] >= 0 ? x[cUnk[k]] : ci[k].given;
+            r[c] = EndRate(dq[c], ci[k].rate, h);
+         }
+      }
+      // design 3.8f, the step's end against each left-out spring, after a solve of length h: its end gap and signed closing rate (Part::SpringGapEnd), its closing
+      // acceleration (end rate - start rate) / h. Within d at the start with that acceleration (SpringD(gap, rate, aStep, omega)): back in, the same step solved again (engage
+      // counts them; no go-back). Else past at the end or the Hermite cubic dipping below 0 inside the step: go back as a stop (StopEnd): the cubic's first root aimed
+      // min(d, start gap) / 2 short, d at the cubic's 0-crossing speed with aStep, the spring still left out; several: the earliest. Past with no root short of the end:
+      // back in, the same step again (its force in the solve from the start, as when engaged). Else an ordinary end (within d short and closing: engaged next step).
+      // backs: the step's go-backs so far (the trace). dip: the go-back is a dip's. Returns the h to solve again (0: none; engage > 0: the same h)
+      double SpringEnd(const double h, const int backs, int &engage, bool &dip)
+      {
+         engage = 0;
+         dip = false;
+         FILE *const tf = TouchTraceFile();
+         double hBack = std::numeric_limits<double>::infinity();
+         bool dipBack = false;
+         constexpr int kMaxQ = 4;   // the most coordinates a part has (a body's 4 axes, BodyAxes::kMaxAxes; the ring 4; the bat 3): no allocation per call (ModelStandards 4d)
+         for (SpringPred &sp : sgList)
+         {
+            if (sp.in)
+               continue;
+            assert(part[sp.p]->NumCoords() <= kMaxQ);
+            double dq[kMaxQ], r[kMaxQ], gEnd = 0.0, vEnd = 0.0;
+            PartEnd(sp.p, h, dq, r);
+            if (!part[sp.p]->SpringGapEnd(sp.s.id, dq, r, gEnd, vEnd))
+               continue;
+            const double g0 = sp.s.gap, v0 = sp.s.v, om = sp.s.omega, aStep = (vEnd - v0) / h, d0 = StepFactList::SpringD(g0, v0, aStep, om);
+            double d = d0;
+            const char *out = nullptr;
+            bool in = false;
+            if (!(g0 > d0))
+               out = "engage", in = true;
+            else
             {
-               const int k = coordOff[sgP] + c;
-               dq[c] = cUnk[k] >= 0 ? x[cUnk[k]] : ci[k].given;
-               r[c] = EndRate(dq[c], ci[k].rate, h);
+               const bool past = gEnd < 0.0, dips = !past && HermiteDips(g0, -v0, gEnd, -vEnd, h);
+               if (past || dips)
+               {
+                  const double s0 = HermiteFirst(g0, -v0, gEnd, -vEnd, h, 0.0);   // (the crossing of 0, short side)
+                  const double vX = s0 > 0.0 ? -HermiteRate(g0, -v0, gEnd, -vEnd, h, s0) : std::max(v0, 0.0);
+                  d = StepFactList::SpringD(0.0, std::max(vX, 0.0), aStep, om);
+                  const double s = HermiteFirst(g0, -v0, gEnd, -vEnd, h, 0.5 * std::min(d, g0));
+                  if (s > 0.0)
+                  {
+                     if (s < hBack)
+                     {
+                        hBack = s;
+                        dipBack = dips;
+                     }
+                     out = past ? "past" : "dip";
+                  }
+                  else
+                  {
+                     out = "noroot", in = true;
+                     touchStats.springNoRoot++;
+                  }
+               }
+               else if (backs > 0)
+                  out = gEnd > d0 ? "short" : "open";
             }
-            if (!part[sgP]->SpringGapEnd(sgWhy, dq, r, gEnd, vEnd))
-               return;
+            if (in)
+            {
+               part[sp.p]->SpringIn(sp.s.id);
+               sp.in = true;
+               engage++;
+            }
+            if (tf != nullptr && out != nullptr)
+               fprintf(tf, "%u,part%d,%d,%.4f,%.5f,%.5g,%.4f,%d,%.4f,%.4f,%.5f,%s,spring\n", phaseMs, sp.p, sp.s.id, g0 * 1e6, v0, aStep, d * 1e6, backs, h * 1e6, gEnd * 1e6, vEnd, out);
          }
-         for (int j = 0; j < sgCols.nc; j++)
-         {
-            const int c = coordOff[sgP] + sgCols.coord[j];
-            const double dq = cUnk[c] >= 0 ? x[cUnk[c]] : ci[c].given;
-            gEnd -= sgCols.slope[j] * dq;
-            vEnd += sgCols.slope[j] * EndRate(dq, ci[c].rate, h);
-         }
-         if (sgCols.ball >= 0)
-         {
-            const V3 dc(x[6 * sgCols.ball], x[6 * sgCols.ball + 1], x[6 * sgCols.ball + 2]);
-            gEnd -= sgCols.dir.Dot(dc);
-            vEnd += sgCols.dir.Dot(EndRate(dc, ball[sgCols.ball].v, h));
-         }
-         const double dEnd = std::max(std::max(vEnd, 0.0) / sgOm, std::max(sgA, 0.0) / (sgOm * sgOm));
-         const char *const out = gEnd < 0.0 ? "past" : gEnd <= dEnd && vEnd > 0.0 ? "taken" : gEnd > dEnd ? "short" : "open";
-         touchStats.spring[TouchStats::kTaken] += out[0] == 't' ? 1 : 0;
-         touchStats.spring[TouchStats::kShort] += out[0] == 's' ? 1 : 0;
-         touchStats.spring[TouchStats::kPast] += out[0] == 'p' ? 1 : 0;
-         if (FILE *const tf = TouchTraceFile())
-            fprintf(tf, "%u,part%d,%d,%.4f,%.5f,%.5g,%.4f,%.4f,%.4f,%.4f,%.5f,%s,spring\n", phaseMs, sgP, sgWhy, sgGap * 1e6, sgV, sgA, sgD * 1e6, sgT * 1e6, h * 1e6, gEnd * 1e6, vEnd, out);
+         if (engage > 0)
+            return 0.0;
+         dip = dipBack;
+         return hBack < h ? hBack : 0.0;
       }
       // VPX_TOUCH_TRACE=<csv> (a diagnostic, read once; off: nothing changes): one row per predicted touch outcome; kind stop / spring: object part<p>, entry the stop's id
       // (a spring: its part's why)
@@ -2339,41 +2375,20 @@ namespace GroupStep
          }();
          return tf;
       }
-      // its stops as StopsNow states them now into spList (PartAccel formed for a part that states one): the earliest root below h sets it (rule kRuleStop). Returns the new h
-      double PredictStops(const int p, double h, StepDiag *dg) const
+      // design 3.8b: part p's armed stops as StopsNow states them at the step's start into spList (no acceleration, no root: nothing limits the step); any it had there
+      // before are replaced (a part freed by the step). 'Within d at the start' needs the acceleration: decided by StopEnd from each solve, not here
+      void ListStops(const int p) const
       {
+         spList.erase(std::remove_if(spList.begin(), spList.end(), [p](const StopPred &sp) { return sp.p == p; }), spList.end());
          StopNow sn[kMaxStopsNow];
-         Part &P = *part[p];
-         if (P.StopsNow(nullptr, sn, kMaxStopsNow) <= 0)
-            return h;
-         const long e0 = touchStats.partEvals;
-         const double *const acc = PartAccel(p);
-         touchStats.stop[TouchStats::kAcc] += touchStats.partEvals - e0;
-         const int n = P.StopsNow(acc, sn, kMaxStopsNow);
+         const int n = part[p]->StopsNow(nullptr, sn, kMaxStopsNow);
          for (int i = 0; i < n; i++)
          {
             StopPred sp;
             sp.p = p;
             sp.s = sn[i];
-            sp.d = StopD(sn[i].m, sn[i].k, sn[i].gap, sn[i].v, sn[i].a);
-            if (!(sp.d > 0.0))   // (not arriving: no event)
-               continue;
-            sp.nearStart = !(sn[i].gap > sp.d);   // (within d at the start: on the stop, no event)
-            sp.t = TouchRoot(sn[i].gap, sn[i].v, sn[i].a, sp.d);   // (inf when nearStart)
             spList.push_back(sp);
-            if (sp.t < h)
-            {
-               h = sp.t;
-               spSet = (int)spList.size() - 1;
-               spH = sp.t;
-               if (dg != nullptr)
-               {
-                  *dg = StepDiag();
-                  dg->rule = kRuleStop;
-               }
-            }
          }
-         return h;
       }
 
       // touch_predict piece 2 (design 2.2): a part's coordinates' accelerations at the state now, formed at most once per ChooseStep and only for a part whose surface an untouched
@@ -2518,7 +2533,6 @@ namespace GroupStep
          tpList.clear();
          tpSet = -1;
          spList.clear();
-         spSet = -1;
          for (int p = 0; tpOn && p < np; p++)   // (piece 2: no part's start acceleration formed yet)
             paDone[p] = 0;
          V3 *const fNet = fNetS;   // the net force on each ball now: gravity, each touching contact's spring and shear stretch; with touch_predict each part's own force (BallForceNow)
@@ -2698,7 +2712,7 @@ namespace GroupStep
                   const bool arrives = va2 >= 0.0 && (v > 0.0 || a > 0.0);
                   const double va = arrives ? std::sqrt(va2) : 0.0;
                   d = reachDepth(va);
-                  if (!((gap > d || v <= 0.0) && (!arrives || va >= set.vSteady)))
+                  if (!(gap > d && (!arrives || va >= set.vSteady)))   // (within d at the start, closing or receding: on it, today's rule (design 2.4, user 2026-11-23: a receding touch within d went back step after step, 750 chunk strp2 hung)
                      return false;
                   const double s = gap - 0.5 * d, disc = v * v + 2.0 * a * s;
                   t = std::numeric_limits<double>::infinity();
@@ -2821,28 +2835,21 @@ namespace GroupStep
             for (int e = 0; e < hp.ne; e++)   // (an item whose own answer is out of reach is still read for its entries)
                one(hp.en[e].d, hp.en[e].n, 0.0, e);
          }
-         // touch_predict piece 3 (design 3.2a-c): each part's armed stops, the root of gap - d/2 = v t + a t^2 / 2 a time limit (aimed d/2 short; no root, or within d: none).
-         // PartAccel is formed for every moving part that states a stop (no reach bound in this piece: counted, TouchStats::stop[kAcc])
+         // touch_predict design 3.8b: each part's armed stops listed for the Step's end check (no PartAccel, no time limit)
          for (int p = 0; tpOn && p < np; p++)
-            h = PredictStops(p, h, &dg);
-         int springPart = -1;   // (touch_predict: the part whose predicted spring approach set the step)
-         double spG = 0.0, spV = 0.0, spA = 0.0, spD = 0.0, spT = 0.0, spOm = 0.0;
+            ListStops(p);
+         int springPart = -1;   // (touch_predict: the part whose predicted spring approach set the step: the cord-ball, a ball touch)
+         double spG = 0.0, spV = 0.0, spA = 0.0, spD = 0.0, spT = 0.0;
          int spWhy = 0;
-         SpringCols spCols;
-         sgSet = false;
          for (int p = 0; p < np; p++)
          {
             StepFactList facts(set);
-            if (tpOn)   // piece 3 (design 3.4): its soft-spring approaches take the prediction (closing acceleration from PartAccel, or a ball's fNet)
+            if (tpOn)   // design 3.8f: the parts' own soft springs take no prediction (engaged within d, else no limit); the cord-ball's from the ball's fNet
             {
                facts.predictOn = true;
-               facts.grp = this;
-               facts.partIdx = p;
                facts.ballF = fNet;
             }
-            const long e0 = touchStats.partEvals;
             part[p]->StepFacts(ball, nb, set, facts);
-            touchStats.spring[TouchStats::kAcc] += touchStats.partEvals - e0;
             const double hp = std::max(facts.H(), 1e-7);
             if (hp < h)
             {
@@ -2852,7 +2859,7 @@ namespace GroupStep
                dg.partRule = facts.Rule();
                springPart = facts.springSet ? p : -1;
                if (facts.springSet)
-                  spG = facts.sGap, spV = facts.sV, spA = facts.sA, spD = facts.sD, spT = facts.sT, spOm = facts.sOm, spWhy = facts.Rule(), spCols = facts.sCols;
+                  spG = facts.sGap, spV = facts.sV, spA = facts.sA, spD = facts.sD, spT = facts.sT, spWhy = facts.Rule();
             }
          }
          if (h < 1e-7)
@@ -2861,13 +2868,9 @@ namespace GroupStep
             pieceStats.set++;
          if (dg.rule != 9 && dg.rule != 19)   // (touch_predict: a later limit took the step)
             tpSet = -1;
-         if (dg.rule != kRuleStop)
-            spSet = -1;
-         if (dg.rule == 8 && springPart >= 0)   // (touch_predict piece 3: a spring approach's prediction set the step; no end check in this piece)
+         if (dg.rule == 8 && springPart >= 0)   // (touch_predict: the cord-ball's predicted touch set the step)
          {
-            touchStats.spring[TouchStats::kPred]++;
-            sgSet = spCols.nc > 0 || spCols.ball >= 0 || spCols.partGap;   // (G4: its end is scored when the step solves at this h)
-            sgP = springPart, sgWhy = spWhy, sgH = std::max(h, 1e-7), sgGap = spG, sgV = spV, sgA = spA, sgD = spD, sgT = spT, sgOm = spOm, sgCols = spCols;
+            touchStats.cordPred++;
             if (FILE *const tf = TouchTraceFile())
                fprintf(tf, "%u,part%d,%d,%.4f,%.5f,%.5g,%.4f,%.4f,%.4f,,,set,spring\n", phaseMs, springPart, spWhy, spG * 1e6, spV, spA, spD * 1e6, spT * 1e6, h * 1e6);
          }
@@ -2879,6 +2882,40 @@ namespace GroupStep
 
       // touch_predict: the first s in (0, h) where the cubic Hermite of a gap's start and end values and rates (r = d gap / dt) reaches target (G(0) > target > G(h)):
       // its turning points split [0, h] into monotone pieces, the first piece that crosses is bisected to the last representable split. <= 0: none
+      // the cubic c0 + c1 u + c2 u^2 + c3 u^3's turning points (roots of c1 + 2 c2 u + 3 c3 u^2) to turn(u), by the stable form q = -(c2 + sign(c2) sqrt(D)), roots q / (3 c3)
+      // and c1 / q (design 3.8, paper fix 1: the plain form loses the inner point when c3 is rounding)
+      template <class F> static void HermiteTurns(const double c1, const double c2, const double c3, const F &turn)
+      {
+         if (c3 != 0.0)
+         {
+            const double D = c2 * c2 - 3.0 * c1 * c3;
+            if (D > 0.0)
+            {
+               const double q = -(c2 + std::copysign(std::sqrt(D), c2));   // (never 0: D > 0)
+               turn(q / (3.0 * c3));
+               turn(c1 / q);
+            }
+         }
+         else if (c2 != 0.0)
+            turn(-c1 / (2.0 * c2));
+      }
+      // design 3.8d: the Hermite cubic of a gap's start and end (values, rates r = d gap / dt) below 0 at a turning point inside (0, h): a crossing that comes back in the step
+      static bool HermiteDips(const double g0, const double r0, const double g1, const double r1, const double h)
+      {
+         const double c1 = h * r0, c2 = 3.0 * (g1 - g0) - h * (2.0 * r0 + r1), c3 = 2.0 * (g0 - g1) + h * (r0 + r1);
+         bool dips = false;
+         HermiteTurns(c1, c2, c3, [&](const double u) {
+            if (u > 0.0 && u < 1.0 && g0 + u * (c1 + u * (c2 + u * c3)) < 0.0)
+               dips = true;
+         });
+         return dips;
+      }
+      // the same cubic's rate d gap / dt at s
+      static double HermiteRate(const double g0, const double r0, const double g1, const double r1, const double h, const double s)
+      {
+         const double c1 = h * r0, c2 = 3.0 * (g1 - g0) - h * (2.0 * r0 + r1), c3 = 2.0 * (g0 - g1) + h * (r0 + r1), u = s / h;
+         return (c1 + u * (2.0 * c2 + u * 3.0 * c3)) / h;
+      }
       static double HermiteFirst(const double g0, const double r0, const double g1, const double r1, const double h, const double target)
       {
          const double c0 = g0 - target, c1 = h * r0, c2 = 3.0 * (g1 - g0) - h * (2.0 * r0 + r1), c3 = 2.0 * (g0 - g1) + h * (r0 + r1);   // on u = s / h
@@ -2889,17 +2926,7 @@ namespace GroupStep
             if (u > 0.0 && u < 1.0)
                br[nbr++] = u;
          };
-         if (c3 != 0.0)
-         {
-            const double D = c2 * c2 - 3.0 * c1 * c3;
-            if (D > 0.0)
-            {
-               turn((-c2 - std::sqrt(D)) / (3.0 * c3));
-               turn((-c2 + std::sqrt(D)) / (3.0 * c3));
-            }
-         }
-         else if (c2 != 0.0)
-            turn(-c1 / (2.0 * c2));
+         HermiteTurns(c1, c2, c3, turn);
          std::sort(br + 1, br + nbr);
          br[nbr++] = 1.0;
          for (int i = 0; i + 1 < nbr; i++)
@@ -2919,31 +2946,37 @@ namespace GroupStep
          return -1.0;
       }
 
-      // touch_predict, the step's end (design 2.3), after a solve of length h (the step was asked for hTry). stage 0: the first solve; 1: after the Hermite re-solve; 2: after the net.
-      // A prediction past at the end (touching): one re-solve at the earliest Hermite root of the past ones, aimed d/2 short; still past: the net, a re-solve at today's limit for
-      // that item (counted; WARN and notice: contactsystem.cpp). Not past, the prediction that set the step: taken (end gap in [0, d], d at the end's closing speed, and closing)
-      // or short (end gap > d). Returns the h to solve again, 0 = none. The end's closing speed along the start normal; an entry's end gap the larger of the object's (its
-      // nearest piece, from the solve) and its own face moved along its start normal. Piece 2 (design 2.3): a moving part's surface by its end probe at the part's solved end and
-      // the relative end speed (its point's through the start columns), a ball pair by the pair's end depth and the two balls' end speeds; the same bands, re-solve and net
-      double TouchEnd(const double h, const double hTry, int &stage)
+      // touch_predict, the step's end (design 2.3 AMENDED 2026-11-23: ball touches take 3.8c-d's go-back, one rule with stops), after a solve of length h (the step was asked
+      // for hTry). stage 0: checking; 1: the net taken (its solves only traced); 2: done. Per prediction: past at the end (touching), or not past and the Hermite cubic of the
+      // solved gap (start gap and rate, end gap and rate) below 0 inside the step (a crossing that came back): go back, a re-solve at the cubic's first root aimed
+      // min(d, start gap) / 2 short, d the law's squash (ReachDepth) at the cubic's closing speed where it crosses 0; several: the earliest (the caller takes the earliest of
+      // touches, stops and seats; still past on that shorter step: the same again, no stage limit). Past with no root short of the end: netH = today's limit for that item
+      // (the caller's counted net: WARN and notice, contactsystem.cpp). Not past, the prediction that set the step: taken (end gap in [0, d], d at the end's closing speed,
+      // and closing) or short (end gap > d). The end's closing speed along the start normal; an entry's end gap the larger of the object's (its nearest piece, from the solve)
+      // and its own face moved along its start normal. Piece 2 (design 2.3): a moving part's surface by its end probe at the part's solved end and the relative end speed (its
+      // point's through the start columns), a ball pair by the pair's end depth and the two balls' end speeds; the same bands and go-back. backs: the step's go-backs so far
+      // (the trace). dip: the go-back is a dip's (the end not past); kindBack, kindNet: the counters' kind of the touch that set the go-back's or the net's length. Returns
+      // the go-back's h (0: none); netH >= 0: past with no root short of the end (the net's h; not < h: the step as solved)
+      static int StatKind(const int kind) { return kind == tkTerm ? (int)tkPart : kind; }
+      double TouchEnd(const double h, const double hTry, const int backs, int &stage, bool &dip, int &kindBack, double &netH, int &kindNet)
       {
+         dip = false;
+         netH = -1.0;
          FILE *const tf = TouchTraceFile();
-         // (kind: fixed, part, term (entry = the term's index), pair (object: ball_pair))
-         const auto row = [&](const TouchPred &p, const double gEnd, const double vEnd, const char *const out) {
+         // (kind: fixed, part, term (entry = the term's index), pair (object: ball_pair)); d: the go-back's (past, dip) or at the end's closing speed; column 8 the step's go-backs
+         const auto row = [&](const TouchPred &p, const double d, const double gEnd, const double vEnd, const char *const out) {
             if (tf == nullptr)
                return;
             static const char *const kKind[4] = { "fixed", "part", "pair", "term" };
             const int s = item[p.k].s;
-            fprintf(tf, "%u,%s,%d,%.4f,%.5f,%.5g,%.4f,%.4f,%.4f,%.4f,%.5f,%s,%s\n", phaseMs, p.kind == tkPair || s < 0 ? "ball_pair" : shape[s]->Name().c_str(), p.e, p.gap * 1e6, p.v,
-                    p.a, p.d * 1e6, std::isfinite(p.t) ? p.t * 1e6 : -1.0, h * 1e6, gEnd * 1e6, vEnd, out, kKind[p.kind]);
+            fprintf(tf, "%u,%s,%d,%.4f,%.5f,%.5g,%.4f,%d,%.4f,%.4f,%.5f,%s,%s\n", phaseMs, p.kind == tkPair || s < 0 ? "ball_pair" : shape[s]->Name().c_str(), p.e, p.gap * 1e6, p.v,
+                    p.a, d * 1e6, backs, h * 1e6, gEnd * 1e6, vEnd, out, kKind[p.kind]);
          };
-         if (stage >= 3)
+         if (stage >= 2)
             return 0.0;
          const bool counting = stage == 0 && !tpCounted && tpSet >= 0 && hTry == tpH;
-         double hHerm = std::numeric_limits<double>::infinity(), hNet = hHerm, setG = 0.0, setV = 0.0, setD = 0.0;
-         int kindHerm = tkFixed, kindNet = tkFixed;   // (the counters' kind: the touch that set the re-solve's length)
-         const auto statKind = [](const int kind) { return kind == tkTerm ? (int)tkPart : kind; };
-         bool anyPast = false;
+         double hBack = std::numeric_limits<double>::infinity(), hNet = hBack, setG = 0.0, setV = 0.0, setD = 0.0;
+         bool anyPast = false, anyBack = false, dipBack = false;
          for (size_t j = 0; j < tpList.size(); j++)
          {
             TouchPred &p = tpList[j];
@@ -2969,34 +3002,37 @@ namespace GroupStep
             // the end gap: the object's (fixed or pair: the solve's end depth; a part's surface: its end probe at the part's solved end), an entry's or a term's the larger of that
             // and its own face moved along its start normal
             const double gEnd = p.e < 0 ? -d1 : std::max(-d1, p.gap + dc.Dot(p.n) - qMove);
-            if (gEnd < 0.0)   // touching at the end: past
+            const bool past = gEnd < 0.0, dips = stage == 0 && !past && HermiteDips(p.gap, -p.v, gEnd, -vEnd, h);   // (past: touching at the end)
+            if (past && p.hToday < hNet)
             {
-               anyPast = true;
-               if (p.hToday < hNet)
+               hNet = p.hToday;
+               kindNet = StatKind(p.kind);
+            }
+            if (stage == 0 && (past || dips))   // go back (design 3.8c-d, as StopEnd)
+            {
+               anyPast = anyPast || past;
+               anyBack = true;
+               p.past = true;
+               const double s0 = HermiteFirst(p.gap, -p.v, gEnd, -vEnd, h, 0.0);   // (the crossing of 0, short side)
+               const double vX = s0 > 0.0 ? -HermiteRate(p.gap, -p.v, gEnd, -vEnd, h, s0) : std::max(p.v, 0.0);
+               const double d = farNow[p.k] ? p.d : ReachDepth(law[p.k], std::max(vX, 0.0), p.mRed);
+               const double s = HermiteFirst(p.gap, -p.v, gEnd, -vEnd, h, 0.5 * std::min(d, p.gap));
+               if (s > 0.0 && s < hBack)
                {
-                  hNet = p.hToday;
-                  kindNet = p.kind;
+                  hBack = s;
+                  dipBack = dips;
+                  kindBack = StatKind(p.kind);
                }
-               if (stage == 0)
-               {
-                  p.past = true;
-                  const double s = HermiteFirst(p.gap, -p.v, gEnd, -vEnd, h, 0.5 * p.d);
-                  if (s > 0.0 && s < hHerm)
-                  {
-                     hHerm = s;
-                     kindHerm = p.kind;
-                  }
-               }
-               row(p, gEnd, vEnd, stage == 0 ? "past" : stage == 1 ? "hermite_past" : "net_past");
+               row(p, d, gEnd, vEnd, past ? "past" : "dip");
                continue;
             }
             const double dEnd = farNow[p.k] ? p.d : ReachDepth(law[p.k], std::max(vEnd, 0.0), p.mRed);
-            const char *const band = gEnd <= dEnd && vEnd > 0.0 ? "taken" : gEnd > dEnd ? "short" : "open";
-            if (stage > 0 && p.past)
+            const char *const band = past ? "past" : gEnd <= dEnd && vEnd > 0.0 ? "taken" : gEnd > dEnd ? "short" : "open";
+            if ((p.past || past) && (stage == 1 || backs > 0))   // (a touch that went back this step: its end on each later solve; after the net: net_*)
             {
                char out[24];
-               snprintf(out, sizeof out, "%s_%s", stage == 1 ? "hermite" : "net", band);
-               row(p, gEnd, vEnd, out);
+               snprintf(out, sizeof out, "%s%s", stage == 1 ? "net_" : "", band);
+               row(p, dEnd, gEnd, vEnd, out);
             }
             if ((int)j == tpSet)
             {
@@ -3008,106 +3044,94 @@ namespace GroupStep
          if (counting)
          {
             tpCounted = true;
-            const int ks = statKind(tpList[(size_t)tpSet].kind);
+            const int ks = StatKind(tpList[(size_t)tpSet].kind);
             touchStats.predicted[ks]++;
-            if (!anyPast)
+            if (!anyBack)
             {
                const bool taken = setG <= setD && setV > 0.0, shortL = setG > setD;
                touchStats.taken[ks] += taken ? 1 : 0;
                touchStats.shortL[ks] += shortL ? 1 : 0;
-               row(tpList[(size_t)tpSet], setG, setV, taken ? "taken" : shortL ? "short" : "open");
+               row(tpList[(size_t)tpSet], setD, setG, setV, taken ? "taken" : shortL ? "short" : "open");
             }
          }
-         if (stage == 2 || (!anyPast && stage == 1))
+         if (stage == 1)   // (the net's solve traced: done)
          {
-            stage = 3;
+            stage = 2;
             return 0.0;
          }
-         if (!anyPast)
-            return 0.0;
-         if (stage == 0 && hHerm < h)
+         if (hBack < h)
          {
-            stage = 1;
-            touchStats.hermite[statKind(kindHerm)]++;
-            return hHerm;
+            dip = dipBack;
+            return hBack;
          }
-         stage = 2;   // (still past after the Hermite re-solve, or no root short of the end: the net)
-         touchStats.net[statKind(kindNet)]++;
-         return hNet < h ? hNet : 0.0;
+         if (anyPast)   // (past with no root short of the end: the net)
+            netH = hNet;
+         return 0.0;
       }
 
-      // touch_predict piece 3, the step's end for the predicted stops (design 3.2d), after a solve of length h (asked for hTry). stage 0: the first solve; 1: after the Hermite
-      // re-solve; 2: the net (today's stop search, Step). Each stop's end gap gap - side dq + vs h and end closing rate side (2 dq / h - rate) - vs (its coordinate's move dq,
-      // as TouchEnd). Past: one re-solve at the earliest HermiteFirst of the solved gap (start, end, rates) aimed min(d, start gap) / 2 short, d at the end's closing speed;
-      // still past, or no root: stage 2 (the caller's search is the net). Not past: within d (at the end's speed) and arriving: take = its index (the caller accepts on the
-      // stop); more than d short: an ordinary end. Returns the h to solve again, 0 = none
-      double StopEnd(const double h, const double hTry, int &stage, int &take)
+      // touch_predict design 3.8c-d, the step's end against each part's armed stops (listed at the start, ListStops), after a solve of length h. Each stop's end gap
+      // gap - side dq + vs h and end closing rate side (2 dq / h - rate) - vs (its coordinate's move dq, as TouchEnd); its closing acceleration from the solved step,
+      // (end rate - start rate) / h. Past at the end, or the Hermite cubic of the solved gap (start, end, rates) below 0 inside the step (a crossing that came back): go back,
+      // a re-solve at the cubic's first root aimed min(d, start gap) / 2 short, d (3.3) at the cubic's closing speed where it crosses 0; several: the earliest. Not past:
+      // within d (at the end's speed) and arriving: take = its index (the caller accepts on the stop); more than d short: an ordinary end. A stop within d at the start is
+      // not checked here (on the stop: the pin check). backs: the go-backs this step so far (the trace). dip: the go-back is a dip's (the end not past). Returns the h to
+      // solve again, 0 = none
+      double StopEnd(const double h, const int backs, int &take, double &takeD, bool &dip)
       {
          take = -1;
-         if (stage >= 2)
-            return 0.0;
+         takeD = 0.0;
+         dip = false;
          FILE *const tf = TouchTraceFile();
-         const auto row = [&](const StopPred &sp, const double gEnd, const double vEnd, const char *const out) {
+         const auto row = [&](const StopPred &sp, const double aStep, const double d, const double gEnd, const double vEnd, const char *const out) {
             if (tf != nullptr)
-               fprintf(tf, "%u,part%d,%u,%.4f,%.5f,%.5g,%.4f,%.4f,%.4f,%.4f,%.5f,%s,stop\n", phaseMs, sp.p, sp.s.id, sp.s.gap * 1e6, sp.s.v, sp.s.a, sp.d * 1e6,
-                       std::isfinite(sp.t) ? sp.t * 1e6 : -1.0, h * 1e6, gEnd * 1e6, vEnd, out);
+               fprintf(tf, "%u,part%d,%u,%.4f,%.5f,%.5g,%.4f,%d,%.4f,%.4f,%.5f,%s,stop\n", phaseMs, sp.p, sp.s.id, sp.s.gap * 1e6, sp.s.v, aStep, d * 1e6, backs, h * 1e6, gEnd * 1e6,
+                       vEnd, out);
          };
-         const bool counting = stage == 0 && !spCounted && spSet >= 0 && hTry == spH;
-         double hHerm = std::numeric_limits<double>::infinity(), takeG = INFINITY;
-         bool anyPast = false;
+         double hBack = std::numeric_limits<double>::infinity(), takeG = INFINITY;
+         bool anyPast = false, dipBack = false;
          for (size_t j = 0; j < spList.size(); j++)
          {
             StopPred &sp = spList[j];
-            if (sp.nearStart)   // (within d at the start: on the stop, not an event; passed, the search's pin check pins it with its d, design 3.2d: never re-solved)
-               continue;
             const int c = coordOff[sp.p] + sp.s.coord;
             const double dq = cUnk[c] >= 0 ? x[cUnk[c]] : ci[c].given;
-            const double gEnd = sp.s.gap - sp.s.side * dq + sp.s.vs * h, vEnd = sp.s.side * EndRate(dq, ci[c].rate, h) - sp.s.vs;
-            const double dEnd = StopD(sp.s.m, sp.s.k, std::max(gEnd, 0.0), std::max(vEnd, 0.0), sp.s.a);
-            if (gEnd < 0.0)
+            const double gEnd = sp.s.gap - sp.s.side * dq + sp.s.vs * h, vEnd = sp.s.side * EndRate(dq, ci[c].rate, h) - sp.s.vs, aStep = (vEnd - sp.s.v) / h;
+            // d at the start with the solved step's closing acceleration (3.3: the resting term of a part pressed on at v ~ 0); within it: on the stop (pin check, nearD)
+            sp.d = StopD(sp.s.m, sp.s.k, sp.s.gap, std::max(sp.s.v, 0.0), aStep);
+            sp.nearStart = sp.d > 0.0 && !(sp.s.gap > sp.d);
+            if (sp.nearStart)   // (within d at the start: on the stop, not an event; passed, the search's pin check pins it with its d, design 3.2d: never re-solved)
+               continue;
+            const bool past = gEnd < 0.0, dips = !past && HermiteDips(sp.s.gap, -sp.s.v, gEnd, -vEnd, h);
+            if (past || dips)
             {
                anyPast = true;
-               if (stage == 0)
+               const double s0 = HermiteFirst(sp.s.gap, -sp.s.v, gEnd, -vEnd, h, 0.0);   // (the crossing of 0, short side)
+               const double vX = s0 > 0.0 ? -HermiteRate(sp.s.gap, -sp.s.v, gEnd, -vEnd, h, s0) : std::max(sp.s.v, 0.0);
+               const double d = StopD(sp.s.m, sp.s.k, 0.0, std::max(vX, 0.0), aStep);
+               const double s = HermiteFirst(sp.s.gap, -sp.s.v, gEnd, -vEnd, h, 0.5 * std::min(d, sp.s.gap));
+               if (s > 0.0 && s < hBack)
                {
-                  sp.past = true;
-                  const double s = HermiteFirst(sp.s.gap, -sp.s.v, gEnd, -vEnd, h, 0.5 * std::min(dEnd, sp.s.gap));
-                  if (s > 0.0 && s < hHerm)
-                     hHerm = s;
+                  hBack = s;
+                  dipBack = dips;
                }
-               row(sp, gEnd, vEnd, stage == 0 ? "past" : "hermite_past");
+               row(sp, aStep, d, gEnd, vEnd, past ? "past" : "dip");
                continue;
             }
+            const double dEnd = StopD(sp.s.m, sp.s.k, gEnd, std::max(vEnd, 0.0), aStep);
             const bool taken = gEnd <= dEnd && vEnd > 0.0;
             if (taken && gEnd < takeG)
             {
                takeG = gEnd;
                take = (int)j;
+               takeD = dEnd;
             }
-            if (counting && (int)j == spSet)
-            {
-               touchStats.stop[taken ? TouchStats::kTaken : TouchStats::kShort] += taken || gEnd > dEnd ? 1 : 0;
-               row(sp, gEnd, vEnd, taken ? "taken" : gEnd > dEnd ? "short" : "open");
-            }
-            else if (stage > 0 && sp.past)
-               row(sp, gEnd, vEnd, taken ? "hermite_taken" : gEnd > dEnd ? "hermite_short" : "hermite_open");
+            if (taken || backs > 0)
+               row(sp, aStep, dEnd, gEnd, vEnd, taken ? "taken" : gEnd > dEnd ? "short" : "open");
          }
-         if (counting)
-         {
-            spCounted = true;
-            touchStats.stop[TouchStats::kPred]++;
-         }
-         if (anyPast)
-            take = -1;
          if (!anyPast)
             return 0.0;
-         if (stage == 0 && hHerm < h)
-         {
-            stage = 1;
-            touchStats.stop[TouchStats::kHerm]++;
-            return hHerm;
-         }
-         stage = 2;   // (still past after the Hermite re-solve, or no root short of the end: the net)
-         return 0.0;
+         take = -1;
+         dip = dipBack;
+         return hBack < h ? hBack : 0.0;   // (0: no root short of the end; the caller's pin check and net see the excess)
       }
 
       static constexpr double kOnStop = 1e-10;   // (rad) a part this close to its hard stop is on it
@@ -3121,11 +3145,27 @@ namespace GroupStep
             part[p]->WipeStepWork();
          double h = hTry;
          int tpStage = 0;   // (touch_predict: TouchEnd's stage)
+         int tcBacks = 0;   // (touch_predict design 2.3 AMENDED: this step's go-backs for a predicted touch, TouchEnd)
          tpCounted = false;
          const bool tpOn = set.touchPredict && tpStamp == stamp && !tpList.empty() && GroupFixedStepS() <= 0.0;
-         int spStage = 0;   // (touch_predict piece 3: StopEnd's stage)
-         spCounted = false;
+         int spBacks = 0;   // (touch_predict design 3.8: this step's go-backs, StopEnd)
          const bool spPath = set.touchPredict && tpStamp == stamp && GroupFixedStepS() <= 0.0;   // (piece 3: this step's stops are on the prediction; any stop search is the net)
+         int sgBacks = 0;   // (touch_predict design 3.8f: this step's go-backs for a left-out spring, SpringEnd)
+         sgList.clear();
+         for (int p = 0; spPath && p < np; p++)   // design 3.8f: the soft springs open by more than d at the start, left out of this step's solve
+         {
+            SpringOut so[kMaxSpringsOut];
+            const int n = part[p]->SpringsOut(so, kMaxSpringsOut);
+            for (int i = 0; i < n; i++)
+            {
+               SpringPred sp;
+               sp.p = p;
+               sp.s = so[i];
+               sgList.push_back(sp);
+            }
+            touchStats.springOut += n;
+         }
+         const SpringsBackIn backIn{ *this };   // (every left-out spring back in when the step returns)
          nHalveDiag = 0;
          joinRounds = 0;
          lwCuts = 0;
@@ -3141,13 +3181,8 @@ namespace GroupStep
                      if (part[p]->FreedByStep())
                      {
                         freed = true;
-                        if (spPath)   // touch_predict piece 3 (design 3.5, P5): its stops predicted again from the freed state (PartAccel again); a sooner stop shortens the step
-                        {
-                           paDone[p] = 0;
-                           const double hS = PredictStops(p, h, nullptr);
-                           if (hS < h)
-                              h = hS;
-                        }
+                        if (spPath)   // touch_predict design 3.8g: its stops at the start as it states them now it has an unknown, checked at the end as any other
+                           ListStops(p);
                      }
                   if (freed)
                      continue;
@@ -3156,38 +3191,88 @@ namespace GroupStep
                   continue;
                if (LinkOrderCut(h))   // the link windows: the links' time order feeds an end patch less than the union: the step is too long
                   continue;
-               if (tpOn && tpStage < 3)   // touch_predict: the step's end against its predicted touches (design 2.3)
+               const int backsAll = tcBacks + spBacks + sgBacks;   // (the step's go-backs so far: the traces' column 8)
+               double hSg = 0.0;   // (design 3.8f: a left-out spring's go-back, 0 none)
+               bool sgDip = false;
+               if (spPath && !sgList.empty())   // touch_predict design 3.8f: the step's end against the left-out springs
                {
-                  const double hRe = TouchEnd(h, hTry, tpStage);
-                  if (hRe > 0.0)
+                  int engage = 0;
+                  hSg = SpringEnd(h, backsAll, engage, sgDip);
+                  if (engage > 0)   // within d at the start with the solved step's acceleration (or past with no root): the same step again with it in
                   {
-                     h = hRe;
+                     touchStats.springReSolve += engage;
                      continue;
                   }
                }
-               if (sgSet && spPath && h == sgH)   // G4: the predicted spring approach's end, scored only
-                  SpringEnd(h);
+               double hTc = 0.0, hTcNet = -1.0;   // touch_predict design 2.3 AMENDED: a predicted touch's go-back (0 none); past with no root short of the end: the net's h (>= 0)
+               bool tcDip = false;
+               int tcKind = tkFixed, tcNetKind = tkFixed;
+               if (tpOn && tpStage < 2)   // touch_predict: the step's end against its predicted touches
+                  hTc = TouchEnd(h, hTry, backsAll, tpStage, tcDip, tcKind, hTcNet, tcNetKind);
                int spTake = -1;
-               if (spPath && !spList.empty())   // touch_predict piece 3: the step's end against its predicted stops (design 3.2d)
+               double spTakeD = 0.0, hSp = 0.0;
+               bool spDip = false;
+               if (spPath && !spList.empty())   // touch_predict design 3.8c-d: the step's end against the armed stops; past or dipping: go back (the stop search on this path)
+                  hSp = StopEnd(h, backsAll, spTake, spTakeD, spDip);
+               // one rule (design 2.3 AMENDED, 3.8c): the earliest go-back of the touches, stops and left-out springs; on the shorter step each is checked again
+               if (hTc > 0.0 && !(hSp > 0.0 && hSp <= hTc) && !(hSg > 0.0 && hSg < hTc))
                {
-                  const double hRe = StopEnd(h, hTry, spStage, spTake);
-                  if (hRe > 0.0)
+                  tcBacks++;
+                  touchStats.hermite[tcKind]++;
+                  touchStats.dip[tcKind] += tcDip ? 1 : 0;
+                  h = hTc;
+                  continue;
+               }
+               if (hSg > 0.0 && !(hSp > 0.0 && hSp <= hSg))   // (a spring's go-back the earliest)
+               {
+                  sgBacks++;
+                  touchStats.springDip += sgDip ? 1 : 0;
+                  h = hSg;
+                  continue;
+               }
+               if (hSp > 0.0)
+               {
+                  spBacks++;
+                  touchStats.stopDip += spDip ? 1 : 0;
+                  h = hSp;
+                  continue;
+               }
+               if (hTcNet >= 0.0)   // past a predicted touch with no root short of the end and no other go-back: the net, today's limit for that item (counted; WARN and notice)
+               {
+                  tpStage = 1;
+                  touchStats.net[tcNetKind]++;
+                  if (hTcNet < h)
                   {
-                     h = hRe;
+                     h = hTcNet;
                      continue;
                   }
                }
                if (StopExcess() <= 0.0)
                {
-                  if (spTake >= 0)   // within d of a predicted stop and arriving: on it, the search's own Accept (its d the part's nearness for this event, design 2.4)
+                  if (tcBacks > 0)   // (design 2.3 AMENDED: a touch's go-backs per step, as the stops'; more than 4 a finding, WARN: contactsystem.cpp)
                   {
+                     touchStats.touchBack[std::min(tcBacks, 4) - 1]++;
+                     touchStats.touchBackMany += tcBacks > 4 ? 1 : 0;
+                  }
+                  if (spBacks > 0)   // (design 3.8e: go-backs per step; more than 4 a finding, WARN: contactsystem.cpp)
+                  {
+                     touchStats.stopBack[std::min(spBacks, 4) - 1]++;
+                     touchStats.stopBackMany += spBacks > 4 ? 1 : 0;
+                  }
+                  if (sgBacks > 0)   // (design 3.8f: a spring's go-backs per step, as the stops')
+                     touchStats.springBack[std::min(sgBacks, 4) - 1]++;
+                  if (spTake >= 0)   // within d of a stop and arriving: on it, the search's own Accept (its d at the end the part's nearness for this event, design 2.4)
+                  {
+                     touchStats.stop[TouchStats::kTaken]++;
                      Part &P = *part[spList[(size_t)spTake].p];
-                     P.stopNear = spList[(size_t)spTake].d;
+                     P.stopNear = spTakeD;
                      Accept(h, true);
                      P.stopNear = 0.0;
                      books.stopSteps++;
                      return h;
                   }
+                  if (spPath && !spList.empty())
+                     touchStats.stop[TouchStats::kShort]++;   // (an ordinary end with armed stops)
                   Accept(h, false);
                   return h;
                }
@@ -3206,7 +3291,7 @@ namespace GroupStep
                      if (crossS[p] == 0u)
                         continue;
                      bool onIt = part[p]->StopExcess(zero, partOff[p], crossS[p]) > -kOnStop;   // on a stop the move would carry it past
-                     double nearD = 0.0;   // touch_predict (design 2.4): on it = a crossed stop's start gap within its d (kept by PredictStops); that d its PinOnStop's nearness
+                     double nearD = 0.0;   // touch_predict (design 2.4): on it = a crossed stop's start gap within its d (set by StopEnd from the solved step); that d its PinOnStop's nearness
                      for (size_t j = 0; spPath && j < spList.size(); j++)
                      {
                         const StopPred &sp = spList[j];
@@ -9347,7 +9432,4 @@ namespace GroupStep
       energySteps += bk.energySteps;
       return (int)bk.steps;
    }
-
-   // touch_predict piece 3 (design 3.4): the part's start accelerations, formed once per ChooseStep (Group::PartAccel); nullptr with the prediction off
-   inline const double *StepFactList::Accel() const { return predictOn && grp != nullptr ? grp->PartAccel(partIdx) : nullptr; }
 }

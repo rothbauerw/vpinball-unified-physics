@@ -71,6 +71,7 @@ namespace BumperGroup
    struct BumperStepWork
    {
       bool gTriedFree = false;   // FreedByStep freed the ring in this step: once a step
+      bool gSeatOut[2] = { false, false };   // touch_predict design 3.8f: the seat (0 lip, 1 rim) left out of this step's solve (SpringsOut, from the start state; SpringIn puts it back)
    };
    struct BumperAttemptWork
    {
@@ -310,18 +311,11 @@ namespace BumperGroup
             const double rate = std::fabs(vz) + r * tw;
             if (a > -r * b)
                f.Stiffness(om, rate <= gs.vSteady, whyIn);
-            else if (f.predictOn)   // (touch_predict K2/K3: the seat's signed gap, closing rate and acceleration, and its touch on the exact gap's free path)
+            else if (f.predictOn)   // (touch_predict design 3.8f: within d at the start engaged; else left out of the step's solve, SpringsOut: no limit)
             {
-               const double *const acc = f.Accel();   // (PartAccel; none: the free path at constant rates)
-               const double v3[3] = { vz, wx, wy }, a3[3] = { acc != nullptr ? acc[kZ] : 0.0, acc != nullptr ? acc[kThx] : 0.0, acc != nullptr ? acc[kThy] : 0.0 };
-               double vc, ac;
-               SeatClosing(q, lip, v3, a3, vc, ac);
-               f.ApproachPath(SeatGap(q, lip), vc, ac, om, whyGap, [&](const double t) {   // the exact gap at q0 + qdot t + qddot t^2 / 2
-                  double dq[4] = {};
-                  for (int k = 0; k < 3; k++)
-                     dq[k] = v3[k] * t + 0.5 * a3[k] * t * t;
-                  return SeatGap(PoseAt(dq), lip);
-               }, GroupStep::SpringCols::PartGap());
+               double vc, gap;
+               SeatNow(q, lip, gap, vc);
+               f.Spring(gap, vc, om, whyGap);
             }
             else if (rate > 1e-9)
                f.Approach(-a - r * b, rate, om, whyGap);   // (touch_predict 0: today's bound)
@@ -805,7 +799,46 @@ namespace BumperGroup
          vc = sz * v[0] - gk[0] * v[1] - gk[1] * v[2];                                       // -(grad g . qdot), dg/dz = -sz
          ac = sz * a[0] - gk[0] * a[1] - gk[1] * a[2] - vHv;                                 // -(grad g . qddot + qdot' H qdot)
       }
-      // K4: the seat's exact gap and signed closing rate at the solved end (why 2 lip, 4 rim: StepFacts' whyGap)
+      // a seat's gap and signed closing rate at the step's start (the state now)
+      void SeatNow(const Pose &q, const bool lip, double &gap, double &vc) const
+      {
+         const double v3[3] = { vz, wx, wy }, a3[3] = {};
+         double ac;
+         gap = SeatGap(q, lip);
+         SeatClosing(q, lip, v3, a3, vc, ac);
+      }
+      // touch_predict design 3.8f: a seat (why 2 lip, 4 rim: StepFacts' whyGap) open by more than d at the step's start (d = SpringD(gap, rate, 0, omega), as StepFacts'
+      // Spring) is left out of this step's solve (gSeatOut: its force and Jacobian zero; step work)
+      int SpringsOut(GroupStep::SpringOut *out, const int max) override
+      {
+         if (NumDof() == 0)
+            return 0;
+         const Pose q = PoseAt(nullptr);
+         int n = 0;
+         for (int s = 0; s < 2 && n < max; s++)
+         {
+            const bool lip = s == 0;
+            const double om = lip ? omLip : omRim;
+            double gap, vc;
+            SeatNow(q, lip, gap, vc);
+            if (!(om > 0.0) || !(gap > GroupStep::StepFactList::SpringD(gap, vc, 0.0, om)))
+               continue;
+            gSeatOut[s] = true;
+            out[n].id = lip ? 2 : 4;
+            out[n].gap = gap;
+            out[n].v = vc;
+            out[n].omega = om;
+            n++;
+         }
+         return n;
+      }
+      void SpringIn(const int id) override
+      {
+         for (int s = 0; s < 2; s++)
+            if (id < 0 || id == (s == 0 ? 2 : 4))
+               gSeatOut[s] = false;
+      }
+      // the seat's exact gap and signed closing rate at the solved end (why 2 lip, 4 rim: StepFacts' whyGap)
       bool SpringGapEnd(const int why, const double *const dq, const double *const rate, double &gap, double &closing) const override
       {
          if (why != 2 && why != 4)
@@ -1070,8 +1103,8 @@ namespace BumperGroup
             TiltChord(dCz, tm.dCz, 0.0, dq, cz);
             TiltChord(dA2, tm.dA2, 0.0, dq, ca);
             const double daLip = dq[kZ] + tIn * tm.dCz;
-            l.lip = SeatForceAt(gALip0, gALip0 + daLip, daLip, 1.0, tIn, rLip, gLip0, A21, tm.dA2, cz, ca, h, Q, tr ? rt.st : nullptr, tr ? rt.sd[0] : nullptr);
-            l.rim = SeatForceAt(-z, -z - dq[kZ], -dq[kZ], -1.0, 0.0, rRim, gRim0, A21, tm.dA2, cz, ca, h, Q, tr ? rt.st + 4 : nullptr, tr ? rt.sd[1] : nullptr);
+            l.lip = gSeatOut[0] ? 0.0 : SeatForceAt(gALip0, gALip0 + daLip, daLip, 1.0, tIn, rLip, gLip0, A21, tm.dA2, cz, ca, h, Q, tr ? rt.st : nullptr, tr ? rt.sd[0] : nullptr);   // (touch_predict design 3.8f: a left-out seat: no force)
+            l.rim = gSeatOut[1] ? 0.0 : SeatForceAt(-z, -z - dq[kZ], -dq[kZ], -1.0, 0.0, rRim, gRim0, A21, tm.dA2, cz, ca, h, Q, tr ? rt.st + 4 : nullptr, tr ? rt.sd[1] : nullptr);
             if (tr)
             {
                chord(1, dCz, 1, tm.dCz);

@@ -264,10 +264,7 @@ namespace BatGroup
             if (phi <= 0.0)
                f.Stiffness(omR, still, 1);
             else if (omega < 0.0)
-               f.Approach(phi, -omega, omR, 2, [&] {   // (touch_predict: closing acceleration -alpha, PartAccel)
-                  const double *const acc = f.Accel();
-                  return acc != nullptr ? -acc[kPhi] : 0.0;
-               }, GroupStep::SpringCols(kPhi, -1.0));
+               f.Spring(phi, -omega, omR, 2);   // (touch_predict design 3.8f: engaged within d, else no limit)
             if (std::fabs(omega) > 1e-9)
                f.Turn(1.0, std::fabs(omega), 5);
          }
@@ -278,11 +275,7 @@ namespace BatGroup
             if (m < 0.0 || m > slop)
                f.Stiffness(omL, still, 3);
             else if (std::fabs(rate) > 1e-9)
-               f.Approach(rate > 0.0 ? slop - m : m, std::fabs(rate), omL, 4, [&] {   // (touch_predict: the slack's closing acceleration, d/dt of rate = vp + lever omega: ap + lever alpha + dLever omega^2)
-                  const double *const acc = f.Accel();
-                  const double mdd = acc != nullptr ? acc[kX] + lever * acc[kPhi] + k.dLever * 1e-3 * omega * omega : 0.0;
-                  return rate > 0.0 ? mdd : -mdd;
-               }, GroupStep::SpringCols(kX, rate > 0.0 ? 1.0 : -1.0, kPhi, rate > 0.0 ? lever : -lever));
+               f.Spring(rate > 0.0 ? slop - m : m, std::fabs(rate), omL, 4);   // (touch_predict design 3.8f: engaged within d, else no limit)
          }
          if (solenoid && phi < p.eosDeg * FM::DEG && omega > 1e-3)
             f.Arrival(p.eosDeg * FM::DEG - phi, omega, 0.0, 6);
