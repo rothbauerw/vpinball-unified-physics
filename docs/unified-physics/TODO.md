@@ -8,12 +8,12 @@ A hook refuses an edit that breaks these limits (.claude/hooks/check_todo.py).
 ## Goals (shared engine; what must be finished, in order; changes only with the user)
 G1. One shared path: the old-law switches deleted (10.13).
 G2. Energy by construction: energy enters only through drives; EnergyStep removed once no state needs it.
-G3. No stock in converted objects: the 13 stock routes closed (stock_routes.md); stock detection off for them. Table outline (stock edge LineSeg): no surface beyond the playfield in the unified engine (gate3-energy).
+G3. No stock in converted objects (stock_routes.md).
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-Per-patch contacts (1.33): 750-hit bench passed. Still to run: snapshot self-test, stress set, cost per object (rule 5).
-Open (lead 14): cord_held_reff accept or drop (cord-island normal energy unmeasured); 7 cut-B two-peak calls; BodyAxis held energy vs step (stops lead).
+Touch prediction (1.52): pieces 1-3 pushed (6244dbce1); no speed gain yet (design 3.7). Design 3.8 (stops and springs: solve, detect, go back) built and benched, not committed (3.9 STATUS); cost runs not yet. Then trace every net trip (Gorgar Ramp2, sw28; stress v2 load 17:20).
+Open (lead 14): BodyAxis held energy vs step (stops lead).
 Drop targets: branch drop-axis (wt-drop-axis, not merged). PAUSED (user 11-22): hits 15-30x over 30 us. To be rewritten on the shared path to ModelStandards; drop-axis code not reused (user 11-22). DropTargetDesign 6 STATUS.
 N7. Stress v2 bench: ball travel energy +2 % at 57 ms; spin not counted. Check total energy in the saved run (no new run).
 N8. Test driver must refuse a ball placed inside any object, unless the file declares the overlap (rule 10b: then judged on recovery, no energy gained).
@@ -27,7 +27,6 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 13. Moving script/animated primitives: details from the user.
 27. Shared stop piece (runs/2026-11-22-stops/design.md): (a) done d408b70ac; (b) on branch stops-wip (ad9578d64), not merged: fix the released-row search first (s4_results 5-6). Then the skirt (1.40), then (c) = 1.52 (user 11-22).
 32. Env switches that change behaviour (rule: diagnostics only): VPX_PREVENT, VPX_VISCOELASTIC, VPX_OVERLAP_REPLAY. Remove each or make it an ini key.
-33. Several contacts on one object: runs/2026-11-22-per-peak/plan.md, built to 2b-1; open: 2b-2..2b-4, P3b targets, P3 gates and switches, P4 deletions. Also: sling post cos (cordfixed.h:949).
 31. After G1: check every converted part (flipper, gates, spinners, bumper, disc, rubbers, cord) against the ModelStandards definition of done (top of the file).
 30. part_guess_accel (default off): design evaluation for all moving parts, then a test plan if kept. After the shared-engine items, unless one of them needs it.
 40. Jet bumpers PARKED (user 11-23). Skirt seat round 4 on branch stops-wip (0ee3cd69d). Struck cycles: ring kick ~45 % of steps, seat ~20 % (runs/2026-11-23-struck-skirt).
@@ -40,6 +39,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 52. Stop search -> event prediction: one predictor for part stops and every ball touch on the shared path (runs/2026-11-22-touch-predict). Design of 11-21 reused, drop-axis code not.
 54. Playfield and turntable damp the bounce by their own alpha law (contacthost.cpp LoadPlayfieldSettings, TurntableSettings); every other hard surface uses the viscoelastic law: use the shared one (user 2026-11-21). Needs a playfield restitution (see 9.7).
 53. One 'on the stop' rule for the engine (design 1.52 Q7): 35 checks and 5+ nearness constants decide it today (runs/2026-11-21-onstop-read/onstop.md). Paper first.
+56. Jet ring stops (user 11-23): pinned dead or bounce? Today elasticity 0.4 rest / 0.3 coil stop, code defaults, not measured (contactbumper.h:58). Kept on the bounce rule (piece 3, design 3.2d rule 1) until investigated.
 55. Cost of a ball: 21 us/cycle on the bench (stock 2.5), ~90 in play; worst-cycle steps: bounces 49 %, seats 21 % (1.40), approach 17 % (1.52), steady 11 % (step-inventory). Bounce: one impulse at touch. Evaluations per object per cycle up to 598 (Hgo2_19, time3).
 
 ## 2. Flippers
