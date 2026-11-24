@@ -2629,6 +2629,8 @@ struct ContactSystemImpl
          b.R = w.bs.R;
          b.c = w.c;
          b.adds = ContactSurfaceHost::FinderAddsBind(w.pb, &b.adds);   // the inside check's rounding room: the additions to the ball's position since its query (0 unless stepped before in the cycle)
+         b.finderQ = ContactSurfaceHost::FinderQOf(w.pb);   // each accepted position checked against the ball's energy bound (FinderAccepted: the fault test)
+         g.acceptedAt = &ContactSurfaceHost::FinderAccepted;
          b.v = w.v;
          b.w = w.w;   // (c, v, w: the ball's owned state, as loaded: one state, nothing to pick)
          b.fExt = w.dragged ? (w.extBaseVS * (1.0 / PHYSICS_STEPTIME_S)) * (-b.m) : V3();   // (a dragged ball: the hand holds it against gravity and the nudge, every ball's g.set.g)

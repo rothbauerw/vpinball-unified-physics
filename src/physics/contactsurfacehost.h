@@ -213,6 +213,10 @@ public:
    // the inside check's rounding room: the group step's count of additions to the ball's kept position (live: GroupStep::Ball::adds while it steps the ball; nullptr at its end,
    // the count kept for the rest of the cycle); returns the count so far since the query's centre (0 for a ball with no query)
    static int FinderAddsBind(const HitBall *ball, const int *live);
+   // the energy reach's fault test at an accepted ball position (the group step's kept centre after a step: GroupStep::Group::acceptedAt): q the ball's query (FinderQOf; nullptr: none), c the
+   // kept centre. Outside the energy bound (q->reach, with the rounding room): a fault, logged (rule 8). Nothing is re-queried: the trial checks (FinderInsideQ) did that
+   static void FinderAccepted(void *q, const RubberContact::V3 &c);
+   static void *FinderQOf(const HitBall *ball);   // the ball's cycle query (a FinderBallQ) for FinderAccepted, nullptr when the finder is off or the ball has none
    static void FinderHosts(const HitBall *ball, std::vector<ContactHost *> &out);
    // shared_finder re-engage (runs/2026-11-13-finder-reengage/design.md): an object the inside check's re-query found that is not among the ball's surfaces is recorded for engagement;
    // the group step takes it (FinderTakeReachable: the recorded hosts the step's path can reach) and joins it mid-step. FinderPendAny: some ball has one recorded. One not taken by the ball's next query is
@@ -311,7 +315,9 @@ private:
    // with radius R + 2 x the stray (counted; nothing reads the result in P2a)
    // (move: a point given as start c plus a move, as FinderInsideBall; zero for a point)
    void FinderInside(const SurfaceContact &it, const RubberContact::V3 &c, const RubberContact::V3 &move = RubberContact::V3()) const;
-   static void FinderInsideQ(void *q, const RubberContact::V3 &c, const RubberContact::V3 &move);   // the inside check itself (q: a FinderBallQ), one rule for FinderInside and FinderInsideBall
+   // the inside check itself (q: a FinderBallQ), one rule for FinderInside and FinderInsideBall: every point they check is a solver trial (a probe, a path test, an attempt's end), not a
+   // ball state: outside the query it is re-queried and, for an energy query, counted (trial re-queries); a fault is only an accepted position outside the bound (FinderAccepted)
+   static void FinderInsideQ(void *q, const RubberContact::V3 &c, const RubberContact::V3 &move);
    static void FinderRun(void *q, double r);   // the query itself (q: a FinderBallQ), radius r around its centre
    std::shared_ptr<RubberSurface> m_surface;   // a wall / primitive host: its faces (m_pts is then empty)
    int m_linkOver = 0;                         // edges on more than two faces, counted when the faces' shared edges are built at load (Link)

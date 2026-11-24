@@ -205,6 +205,7 @@ namespace
       std::unordered_map<const HitBall *, FinderBallQ> balls;   // node-based: an item's pointer to its ball's query stays valid as balls are added
       uint64_t cycle = 0, queries = 0, noPrev = 0, objsFound = 0, facesFound = 0, qCycles = 0, reqCycles = 0, reqTotal = 0;
       uint64_t queriesAt = 0, reqNewObj = 0;   // P2b: queries with no cycle bookkeeping (FinderQueryAt); objects a re-query found that were not among the ball's surfaces
+      uint64_t trialReq = 0, acceptedOut = 0;   // energy queries: re-queries at a solver trial point (FinderInsideQ, not a fault); accepted positions outside the bound (FinderAccepted, faults)
       int reqWorst = 0;
       FinderHist qNs, qObjNs;          // query time per ball-cycle; per ball-cycle and object found
       uint32_t nextTotalsMs = 0;
@@ -224,6 +225,7 @@ namespace
          balls.clear();
          cycle = queries = noPrev = objsFound = facesFound = qCycles = reqCycles = reqTotal = 0;
          queriesAt = reqNewObj = 0;
+         trialReq = acceptedOut = 0;
          reqWorst = 0;
          qNs = FinderHist();
          qObjNs = FinderHist();
@@ -3265,6 +3267,44 @@ int ContactSurfaceHost::FinderAddsBind(const HitBall *const ball, const int *con
    return q.adds;
 }
 
+// the inside check's rounding room after k additions to the ball's position since c0 (FinderInsideQ's derivation): sqrt(3) k ulp(P) / 2, P = max |c0_i| + ext
+static double FinderRoom(const FinderBallQ &q, const int k)
+{
+   int e = 0;
+   (void)std::frexp(std::max({ std::fabs(q.c0.x), std::fabs(q.c0.y), std::fabs(q.c0.z) }) + q.ext, &e);
+   return 0.8660254037844388 * (double)k * std::ldexp(1.0, e - 53);   // (sqrt(3) / 2 rounded up)
+}
+
+void *ContactSurfaceHost::FinderQOf(const HitBall *const ball)
+{
+   if (!g_finder.on)
+      return nullptr;
+   const auto f = g_finder.balls.find(ball);   // (a lookup: no allocation)
+   return f != g_finder.balls.end() && f->second.queried ? &f->second : nullptr;
+}
+
+void ContactSurfaceHost::FinderAccepted(void *const qv, const RubberContact::V3 &c)
+{
+   FinderBallQ *const q = static_cast<FinderBallQ *>(qv);
+   if (q == nullptr || !g_finder.on || !q->energy)
+      return;
+   // the ball's kept centre against its energy bound (q->reach, not the query's extent: a trial's re-query widens that), with the rounding room of the additions that made it
+   // (k = the adds count, the accepted step's own included: no trial addition on top)
+   const double stray = (c - q->c0).Length();
+   const int k = q->addsLive != nullptr ? *q->addsLive : q->adds;
+   const double room = FinderRoom(*q, k);
+   if (stray - q->reach <= room)
+      return;
+   g_finder.acceptedOut++;   // a fault (rule 8): the ball itself went beyond the travel its energy allows; logged with its numbers
+   static int warned = 0;
+   if (RelookTraceOn() || warned++ < 30)
+      PLOGW << "Energy reach re-look: ball query at (" << q->c0.x * 1e3 << ", " << q->c0.y * 1e3 << ", " << q->c0.z * 1e3 << ") mm, t " << (g_pplayer != nullptr ? g_pplayer->m_time_msec : 0u)
+            << " ms, stage " << ContactProf::StageCur() << ": the ball (an accepted position) is " << stray * 1e3 << " mm from where it started, its travel bound " << q->reach * 1e3
+            << " mm (query " << q->ext * 1e3 << " mm), rounding room " << room * 1e3 << " mm (k " << k << ")";
+   if (RelookTraceOn())
+      q->relooked = true;   // (its actual move at the cycle's end: the next query's trace line)
+}
+
 void ContactSurfaceHost::FinderInsideQ(void *const qv, const RubberContact::V3 &c, const RubberContact::V3 &move)
 {
    FinderBallQ *const q = static_cast<FinderBallQ *>(qv);
@@ -3279,19 +3319,17 @@ void ContactSurfaceHost::FinderInsideQ(void *const qv, const RubberContact::V3 &
    // (GroupStep::Ball::adds, put back with the position when a step is taken again; 0 at a query) + 1 for the checked point's own (a trial c + dc). ulp(P) = 2^(e - 53), P = m 2^e,
    // m in [0.5, 1): an ulp of every |x| <= P or larger. Derived, not tuned: about 4e-15 m at k = 20, 1 m, against bounds of 10-500 um. stray - ext is exact here (Sterbenz)
    const int k = (q->addsLive != nullptr ? *q->addsLive : q->adds) + 1;
-   int e = 0;
-   (void)std::frexp(std::max({ std::fabs(q->c0.x), std::fabs(q->c0.y), std::fabs(q->c0.z) }) + q->ext, &e);
-   const double room = 0.8660254037844388 * (double)k * std::ldexp(1.0, e - 53);   // (sqrt(3) / 2 rounded up)
+   const double room = FinderRoom(*q, k);
    if (stray - q->ext <= room)
       return;
-   if (q->energy)   // the energy reach: the query reached the ball's energy travel, a true bound: a ball outside it is a bound too small (a fault, logged with its numbers)
+   if (q->energy)   // the energy reach: the checked point is a solver trial (a Newton round's end or mid, a path test), not the ball: re-queried and counted, not a fault (FinderAccepted)
    {
-      static int warned = 0;
+      g_finder.trialReq++;
       if (RelookTraceOn())   // VPX_RELOOK_TRACE: every term, the stray's split (the checked point c + move: c the step's or attempt's start, move its path), the ball's surfaces; no line limit
       {
          const RubberContact::V3 d = c - q->c0;
          std::ostringstream o;
-         o << "Energy reach re-look (trace): t " << (g_pplayer != nullptr ? g_pplayer->m_time_msec : 0u) << " ms, stage " << ContactProf::StageCur() << ", checked by "
+         o << "Energy reach re-look (trace, trial point): t " << (g_pplayer != nullptr ? g_pplayer->m_time_msec : 0u) << " ms, stage " << ContactProf::StageCur() << ", checked by "
            << (g_relookHost != nullptr ? "the path test of " + g_relookHost->Name() : std::string("the group step's attempt end (c + MoveOf)")) << "; stray " << stray * 1e3 << " mm = |(c - c0) + move|, c - c0 ("
            << d.x * 1e3 << ", " << d.y * 1e3 << ", " << d.z * 1e3 << ") mm |" << d.Length() * 1e3 << "|, move (" << move.x * 1e3 << ", " << move.y * 1e3 << ", " << move.z * 1e3 << ") mm |" << move.Length() * 1e3
            << "|; bound " << q->reach * 1e3 << " mm, query " << q->ext * 1e3 << " mm, over by " << (stray - q->ext) * 1e3 << " mm, rounding room " << room * 1e3 << " mm (k " << k << ")"
@@ -3303,9 +3341,6 @@ void ContactSurfaceHost::FinderInsideQ(void *const qv, const RubberContact::V3 &
          PLOGW << o.str();
          q->relooked = true;
       }
-      if (RelookTraceOn() || warned++ < 30)
-         PLOGW << "Energy reach re-look: ball query at (" << q->c0.x * 1e3 << ", " << q->c0.y * 1e3 << ", " << q->c0.z * 1e3 << ") mm, t " << (g_pplayer != nullptr ? g_pplayer->m_time_msec : 0u)
-               << " ms: the ball is " << stray * 1e3 << " mm from where it started, its travel bound " << q->reach * 1e3 << " mm (query " << q->ext * 1e3 << " mm)";
    }
    const auto t0 = std::chrono::steady_clock::now();
    q->ext = 2.0 * stray;   // the factor 2 bounds the repeats; completeness comes from this check (design.md section 4)
@@ -3417,7 +3452,8 @@ void ContactSurfaceHost::FinderTotals(const bool force)
          << (double)g.facesFound / (double)g.queries << " per query; time per query mean " << g.qNs.sum / (double)g.qNs.n << " ns, p99 " << g.qNs.P(0.99) << ", worst " << g.qNs.worst
          << "; per query and object found mean " << (g.qObjNs.n > 0 ? g.qObjNs.sum / (double)g.qObjNs.n : 0.0) << " ns, p99 " << g.qObjNs.P(0.99) << ", worst " << g.qObjNs.worst << "; re-queries "
          << g.reqTotal << " in " << g.reqCycles << " of " << g.qCycles << " ball-cycles (" << (g.qCycles > 0 ? 100.0 * (double)g.reqCycles / (double)g.qCycles : 0.0) << " %), worst " << g.reqWorst
-         << " in one ball-cycle, time " << reqNs << " ns in all; P2b: queries at engagement " << g.queriesAt << ", objects a re-query found that were not among the ball's surfaces " << g.reqNewObj
+         << " in one ball-cycle, time " << reqNs << " ns in all; energy reach: trial re-queries " << g.trialReq << " (a solver trial point outside the bound, re-queried), accepted positions outside it "
+         << g.acceptedOut << " (faults); P2b: queries at engagement " << g.queriesAt << ", objects a re-query found that were not among the ball's surfaces " << g.reqNewObj
          << [&]() {   // re-engage: the mid-step joins
                std::ostringstream o;
                o << "; re-engage: mid-step joins " << g_join.joins << " (";

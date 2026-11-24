@@ -480,6 +480,7 @@ namespace GroupStep
    {
       V3 c, v, w;            // centre, velocity, spin (m, m/s, rad/s)
       int adds = 0;          // the additions to c since the finder's query centre c0 (each stored c = fl(c + dc) rounds: the inside check allows it, FinderInsideQ); saved and put back with c
+      void *finderQ = nullptr;   // the owner's handle for the check of each accepted c (Group::acceptedAt); nullptr: none
       double m = 0.080, R = 25.0 * 0.53975e-3;
       V3 fExt;               // a held outside force (a magnet not on a field, the magnets' ball-pair force, a part not yet moved over): a drive, its work counted
       double fieldScale = 0.0;   // how much of the group's fields it feels (Group::field); 0 = none
@@ -1802,6 +1803,8 @@ namespace GroupStep
       // the owner's mid-step join, after each attempt: the number of shapes it added (> 0: the attempt runs again); allow false (past kJoinRounds): add none, -1 if one is waiting.
       // Unset: none (every use but the contact system's islands)
       std::function<int(bool)> midJoin;
+      // the owner's check of each accepted ball position (a step's kept centre: the energy reach's fault test), with the ball's Ball::finderQ; called only when both are set
+      void (*acceptedAt)(void *q, const V3 &c) = nullptr;
       // the move of ball i in the current attempt (its centre's displacement over the step), m
       V3 MoveOf(const int i) const { return V3(x[6 * i], x[6 * i + 1], x[6 * i + 2]); }
       bool timeJoins = false;    // the owner's VPX_CHECK_PROFILE: time the attempts run again after a join (Solve)
@@ -8176,6 +8179,8 @@ namespace GroupStep
             else
                ball[i].c = ball[i].c + ball[i].v * hTry;
             ball[i].adds++;
+            if (ball[i].finderQ != nullptr && acceptedAt != nullptr)
+               acceptedAt(ball[i].finderQ, ball[i].c);
          }
          for (int p = 0; p < np; p++)
             part[p]->BallsMoved(ball, nb);
@@ -8997,6 +9002,8 @@ namespace GroupStep
             }
             b.c = b.c + dc;
             b.adds++;
+            if (b.finderQ != nullptr && acceptedAt != nullptr)
+               acceptedAt(b.finderQ, b.c);
             b.v = EndRate(dc, b.v, h);
             b.w = b.w + dw;
             aLast[i] = evF[i] * b.InvM();            // the next step's first guess: the force and torque of the move taken (Eval's at it), not (v1 - v0) / h, which is
