@@ -161,13 +161,13 @@ Lifted from JetBumperDesign.txt (user, 2026-10-26 unless dated). Part sizes: Par
 6. Hit fires first, when the switch closes, with no speed threshold.
 7. Coil drive: on while the switch is closed, a timed pulse (15 ms to start), or an external signal (ROM-based games); supply voltage set per table.
 8. The script can read the skirt's tilt about x and y (to animate a skirt primitive) and the ring's drop.
-Skirt seat (user 2026-11-22, to-do 1.40; draft runs/2026-11-22-jet-seat/requirements.md):
-9. The seat is rigid: no seat spring or seat squash is stepped.
-10. The skirt is seated, rocking on one lip point, or lifted clear, chosen by the statics of a rigid wafer on its lip circle (net load and its centre of pressure); no tuned threshold.
+Skirt motion (user 2026-11-23, replaces the lip-seat items of 2026-11-22; geometry and statics: runs/2026-11-23-lead19/skirt):
+9. The skirt turns about its top centre. The centre cannot move up (an up-stop) and can be pushed down against the centre spring. The centre body is not a stop.
+10. A push on one side never moves the opposite side down. One ball, the ring's kick included, never drops the centre; two balls on opposite sides drop both sides and the centre.
 11. A change of state happens between steps as an event, never inside a solve.
-12. Landing on the seat, and the rim on the playfield, take the stop impact law and the rest rule; a settling skirt never chatters without end.
+12. The centre returning to its up-stop, and the rim on the playfield, take the stop impact law and the rest rule; a settling skirt never chatters without end.
 13. Two balls on one skirt at any directions, and a ball rolling round the skirt, are covered (replaces the stated limit 'two balls never work one bumper').
-14. A seated skirt adds no unknowns and no step limit to its group; energy enters only through the spring preload, the coil and gravity.
+14. A skirt at rest on its up-stop adds no unknowns and no step limit to its group; energy enters only through the spring preload, the coil and gravity.
 
 E. GATES AND SPINNERS
 ---------------------

@@ -14,6 +14,7 @@ G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 ## Now
 Touch prediction (1.52): design 3.8 + ball touches on the go-back pushed (6988fb3e1; a9ee0bd50 comment pushed with bca6c9925); Gorgar load clean. Worst Gorgar cycle = BottomJet ring kick on its contact clock, on and off (1.40, parked by the user).
 Open (lead 14): BodyAxis held energy vs step (stops lead).
+Jet skirt (1.40): rebuild simpler (user 11-23): pivot at the top centre, centre up-stop, playfield stop (runs/2026-11-23-lead19/skirt). Waits on the user's bumper test: centre spring force, two balls, ring on a ball at the body.
 Step halvings (1.42, 1.50): averaged push (push_average, bca6c9925) cleared stress v2 76690 and 249784 (tested on 2df841ee4, not on 6988fb3e1). Snapshot test and cost not run. Rest: 1.50 below. runs/2026-11-23-lead19/log.md.
 Drop targets: branch drop-axis (wt-drop-axis, not merged). PAUSED (user 11-22): hits 15-30x over 30 us. To be rewritten on the shared path to ModelStandards; drop-axis code not reused (user 11-22). DropTargetDesign 6 STATUS.
 N7. Stress v2 bench: ball travel energy +2 % at 57 ms; spin not counted. Check total energy in the saved run (no new run).

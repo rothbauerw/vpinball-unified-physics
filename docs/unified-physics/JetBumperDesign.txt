@@ -45,9 +45,12 @@ Bodies and surfaces (all owned by the engine, none from stock):
 -------------------------------------------------------
 2.1 Ball on the skirt. The ball touches the sloped top or the rim. Law: the existing Hertz + Hunt-Crossley + Mindlin friction contact (plastic on steel, material values
     [guess]). The surface velocity at the contact comes from the skirt's motion (v + omega x r), the reaction goes to the skirt as force and torque.
-2.2 Skirt. Rigid body, mass m_s [guess ~7 g from the volume: wafer + stem], inertia from the same geometry. Forces: gravity; the conical spring under the centre (rate
-    k_s, preload so the lip sits snug against the base rim [user]); contact with the centre-body rim (upper stop); contact with the playfield (lower stop); the stem tip
-    on the spoon (2.3). The stem has enough clearance in the playfield hole to tilt freely [user]: no hole-wall contact is modelled (the hole is a stated assumption,
+2.2 Skirt. Rigid body, mass m_s [guess ~7 g from the volume: wafer + stem], inertia from the same geometry. CORRECTED 2026-11-23 (user; geometry and statics:
+    runs/2026-11-23-lead19/skirt): the skirt turns about its TOP CENTRE; the centre has an up-stop (cannot move up) and a coil spring under it (about 1/2 in across,
+    rate and preload to be measured) that it can be pushed down against. The centre body sits a little above the skirt and is NOT a stop. Forces: gravity; the centre
+    spring; the centre up-stop; contact with the playfield (lower stop); the stem tip on the spoon (2.3). Tilt is resisted by the spoon through the stem, not by the
+    centre spring, so the centre spring can be firm while the trigger stays light (statics.md: switch at ~2 deg, 12-29 % of the ball's weight at the rim).
+    Old text (rocking about the far lip, superseded): The stem has enough clearance in the playfield hole to tilt freely [user]: no hole-wall contact is modelled (the hole is a stated assumption,
     section 8 item 19). The skirt is "pressed down on one side" simply because the ball's contact force acts off
     axis: torque tilts it, the centre moves down. No scripted animation.
 2.2a How the tilt is modelled (rev 3, answering the user's question). Nothing is animated or scripted; the tilt is the motion of a rigid body under contact forces.
@@ -56,13 +59,16 @@ Bodies and surfaces (all owned by the engine, none from stock):
     not a small-angle formula); at most about 5 deg is reached (4 mm of edge travel at the 50 mm lever below).
     Forces and torques on the skirt:
       a) Ball contact at a point on the top slope or the rim: force along the contact normal, torque = lever x force. A ball on one side pushes that side down.
-      b) Lip contact with the centre-body's bottom rim (circle of radius r_lip = 19 mm): a one-sided contact (it can push the skirt down, never pull). The lip on the side
-         AWAY from the ball stays pressed against the base rim and acts as the pivot (fulcrum); the lip on the ball's side lifts away. So the skirt rocks about the far lip.
+      b) SUPERSEDED 2026-11-23 (user): no lip contact; the pivot is the skirt's top centre with an up-stop on the centre height, the body is not a stop, and a push on
+         one side never moves the opposite side down (one ball never drops the centre; two balls on opposite sides do). Old: lip contact with the centre-body's bottom
+         rim (circle of radius r_lip = 19 mm), the far lip as the pivot, the skirt rocking about it.
       c) Conical spring: modelled as n = 8 equal springs on a circle of radius a_s [guess 8 mm] under the skirt, total rate k_s with preload. That gives the axial rate k_s
          and a tilt stiffness k_s a_s^2 / 2 from one set of numbers; no separate tilt spring is invented. Tuned by feel [user].
       d) Playfield (lower stop): the flat bottom meets the playfield, one-sided contact, same law. Gravity on the skirt mass.
       e) Stem tip on the spoon (2.3): a force through the tip point; this is how the tilt reaches the switch.
-    Result (derived, not measured): ball pushing down on +x; the pivot is the far lip at -x. The centre drops by about r_lip * theta, and the stem tip, a length L below the
+    Corrected result (derived, runs/2026-11-23-lead19/skirt/statics.md): about the top centre the near edge meets the playfield at 5.8 deg and the far edge rises 6.4 mm;
+    the stem tip moves sideways ~4.5 mm and barely vertically, so the spoon is pushed down by the tip riding the 45 deg cone wall.
+    Old result (far-lip pivot, superseded): ball pushing down on +x; the pivot is the far lip at -x. The centre drops by about r_lip * theta, and the stem tip, a length L below the
     centre, moves down by about r_lip * theta AND sideways toward -x by about L * theta. So the stem "tilts, moves down and slides in the spoon", as the user described, from
     the geometry alone. The tilt readout is theta_x, theta_y of this body.
 2.3 Stem on spoon. Sphere (tip) in a CONE carried by the spoon [user, rev 3: about 1/2 in across the opening, about 1/4 in deep, "more a cone than concave"]: opening radius
