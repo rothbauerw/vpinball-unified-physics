@@ -26,18 +26,12 @@ No dates, no "learned", no superseded text. What a test is for, its cap and hand
 - **Patch not in the branch**: a reusable worktree per lead, `C:\Pinball\VPX-Physics\wt-bench` or `wt-bench-2` (own `build-bgfx`, incremental). Claim it first: read
   `IN_USE.txt` in its root; if absent, write session, task, time; delete it when done. Only the claimant resets or builds there. Check out the commit, patch, build,
   exe to `Release\VPXBench_<tag>.exe` for `-Exe`. Never compile in a run folder.
-- **Accuracy bench**: `runs\2026-11-01-roll-smooth`. 750 real hits (stress p1-p3, Gorgar), each replayed alone: `run_replay.py <tag> <exe> <mode>`; the reference is the same with `-env VPX_GROUP_HFIX=1` (1 us steps);
-  runs with `-env VPX_TEST_IMPULSES=1`; `judge_hit.py <ref> <ref 0.5 us> <build> <build k 0.5> <build k 0.25>` (VPX_STEP_SCALE) judges each hit by the impulse its surface gave
-  (bounce, slide, spin; runs\2026-11-10-hit-judge\design.md): noise floor from the 0.5 us twin, step error or fault by convergence, and pass = the exit
-  direction error moves the ball under 1 mm by its next contact. `check_imp.py <run out folder>` checks the log adds up to each ball's momentum change.
+- **Accuracy bench**: `runs\2026-11-01-roll-smooth`, 750 real hits each replayed alone against a 1 us reference, judged by impulse; how to run and judge: BenchTools.md.
 - **Not covered by the bench** (use a VPX run): cost against the frame limit, drawing, real input, table restart and teardown, scripts that act on the game, script and frame timers,
   drop targets (they fall per frame), ROM tables. A pile with address-order splits (Gorgar pile) does not repeat on the bench, nor in VPX.
 
 ## 4. VPX driver run
-- `powershell -ExecutionPolicy Bypass -File runs\2026-10-09-slow-contact\run.ps1 -Name N -Drive <full path> -Table <full> -Ini <full>`, every path full, no helper function wrapping it.
-  run.ps1 defaults to the BGFX exe. It refuses a run without `-Drive`; a run that cannot use the driver (load check, restart, real input, the table script acting on the game)
-  gives `-NoDriver "<reason>"`, kept in `run_N\nodriver.txt` and `runs\nodriver_runs.txt`. `-Vbs` takes a FILE NAME inside `runs\2026-10-09-slow-contact` (a full path breaks it); with `-Drive` the script only logs events.
-  Other options: `-NoTrace` (trace is on by default, a huge log), `-Mass`, `-TimeoutS`, `-Seed`, `-Focused`, `-Timing`.
+- `runs\2026-10-09-slow-contact\run.ps1` with `-Drive`, every path full (a run with no driver says why with `-NoDriver "<reason>"`); command and options: BenchTools.md.
 - Behaviour runs are unfocused (run.ps1 sets VPX_PLAY_UNFOCUSED=1, which also turns off the anti-hung time skip). Cost runs: `-Focused -Timing` (prefs\stress-timing: vsync off, 144 fps cap); tell the user first so the machine is idle.
 - run.ps1 writes `[Features] unified = <VPX_UNIFIED, default 1>` into the run's ini and points VPX_PHYSICS_INI at it. Check every run: the ini has one `[Features]`, the log says `loaded from` (not `wrote default settings`) and `unified engine on`.
 - Never copy a table: run.ps1 plays `runs\_tables\<hash>.vpx` itself; a -Vbs or bench run links it as t.vpx (a full link limit adds `<hash>-2.vpx`). Never save these in the editor.
