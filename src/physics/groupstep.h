@@ -311,7 +311,8 @@ namespace GroupStep
       HitTerms t;
       int np = 0;              // peak_slope: > 0 a static surface's level form with 2 or more peaks, its peaks and passes (pk), for the elastic push's Newton slope per peak
       HitPeaks pk;
-      int npat = 0;            // patch_friction: > 0 a static surface's pressed patches (pat), their pieces (pc, npc ids)
+      RubberContact::PeakTerm one { 0.0, 0.0, 0.0, V3(), V3() };   // push_average: a static surface's single pressed peak (s 1; s 0 none): its r and t for the depth's Hessian
+      int npat = 0;           // patch_friction: > 0 a static surface's pressed patches (pat), their pieces (pc, npc ids)
       InList<HitPatch, 4> pat;
       int npc = 0;
       InList<int, 16> pc;
@@ -342,6 +343,7 @@ namespace GroupStep
          pk.Fit(np);
          for (int j = 0; j < np; j++)
             pk[j] = o.pk[j];
+         one = o.one;
          delta = o.delta;
          n = o.n;
          reff = o.reff;
@@ -569,6 +571,10 @@ namespace GroupStep
       // Taken in the terms' slope, G's turning (dampDirSlope) and N's slope kv (friction, lever-roll and twist limits). J is then not symmetric (it is the true derivative;
       // SolveLinear pivots on any matrix). The force is unchanged. true (default) = on; false = the mid gradient on both sides (today's slope).
       bool endGradSlope = true;
+      // pushAverage ([Contact] push_average; runs/2026-11-23-lead19/avgcode/brief_code.md, paper endslope/avg.py): one ball on a static surface (!pr, nq 0, no terms) pushes along the
+      // elastic force's path average over the move, g_bar = gm + (F0 (g0 - gm) + F1 (g1 - gm)) / S, S = F0 + 4 Fm + F1 (F the law's elastic force at the start, mid and end probes;
+      // S = 0: gm), Gonzalez-corrected as today; Newton's slope is that direction's exact derivative. The friction plane stays the mid normal. true (default) = on; false = gm (today)
+      bool pushAverage = true;
       // termForceRows ([Contact] term_force_rows; runs/2026-11-08-lead/term_rows_design.md): a terms contact's pressing term t pushes along gdT_t, its mid gradient tg_t
       // Gonzalez-corrected so that gdT_t . dq = a1_t - a0_t (the force sum_t s fT_t gdT_t, G = Fel / |Fel| and dd = G . dq are built on it). Newton's slope takes that same
       // direction as the row side of each term's slope: h tk_t gdT_t tgE_t^T in the terms' slope, in G's turning K (so gK and gW: dd's change through G is
@@ -1215,6 +1221,9 @@ namespace GroupStep
          double Fel[4] = { 0.0, 0.0, 0.0, 0.0 };   // a terms contact's summed force s fe_t gd_t on the centre and the column
          bool cf0U = false;        // (VPX_GROUP_CLAMP_TRACE: the union's correction was left out)
          uint64_t tCf0 = 0;        // (VPX_GROUP_CLAMP_TRACE: the terms whose correction was left out)
+         bool avg = false;         // push_average: in scope (one ball, a static surface, no terms): gd is Gonzalez on gb, Newton's slope the averaged form
+         double gb[3] = { 0.0, 0.0, 0.0 };   // push_average: the path-average push direction g_bar on the ball's centre (gm when S = 0)
+         double S = 0.0, Fm = 0.0, F1 = 0.0;  // push_average: Simpson's sum F0 + 4 Fm + F1 and the mid and end elastic forces, N
       };
       // the elastic force of one contact over the move h0 -> hm -> h1 (depths d0, dm, d1): its mid gradient Gm, its discrete gradient gd over the move (Gonzalez on dq, iM),
       // the force fe along gd and, asked for, its slope kc. Defined after Group (it takes Group's Gonzalez). Scratch: the hinge terms' rows (Group's tgS ...).
@@ -4989,6 +4998,7 @@ namespace GroupStep
          hp.ktb = 0.0;
          hp.nc = 0;   // (hits are kept and reused: a fixed surface writes no columns, and must not inherit a carried one's)
          hp.npat = 0;   // (patch_friction: a static surface writes its patches)
+         hp.one.s = 0.0;   // (push_average: a static surface writes its single peak)
          if (it.b < 0)
          {
             const Shape *const sh = shape[it.s];
@@ -7291,7 +7301,7 @@ namespace GroupStep
                bool slideCols = true;
                for (int j = 0; j < nq; j++)
                   slideCols = slideCols && hm.c[j].w[0] == 0.0 && hm.c[j].w[1] == 0.0 && hm.c[j].w[2] == 0.0;
-               const bool pkOn = hm.np > 0 && !terms && slideCols && !pr && fe > 0.0 && fe + fd > 0.0 && PeakHessian(hm.pk, hm.np, gm, pkH);
+               const bool pkOn = !el.avg && hm.np > 0 && !terms && slideCols && !pr && fe > 0.0 && fe + fd > 0.0 && PeakHessian(hm.pk, hm.np, gm, pkH);
                if (terms)   // each term's own chord slope on its own gradient, the damping's on G
                {
                   if (fe + fd > 0.0)
@@ -7310,6 +7320,72 @@ namespace GroupStep
                                     a += gK[p][q];
                                  J[ix[p]][ix[q]] += a;
                               }
+                  }
+               }
+               else if (el.avg)   // push_average: P = N gd, gd Gonzalez on g_bar; h dP/du = kn gd g1^T + h N (dgb + lam W + (W u) dlam^T) (paper endslope/avg.py push())
+               {
+                  if (fe + fd > 0.0)
+                  {
+                     // dgb = (dA - g_bar dS^T) / S, dA = 2 (F'm gm gm^T + Fm Hm) + F'1 g1 g1^T + F1 H1, dS = 2 F'm gm + F'1 g1 (hm moves half the move); S = 0: Hm / 2.
+                     // Hk the probe's depth Hessian on the centre: 2+ peaks the level form's (PeakHessian), one peak from its r and axis t, 0 a face's inside or unpressed
+                     const auto depthHess = [](const Hit &hk, const double dk, const double *gk, double H[3][3]) {
+                        for (int p = 0; p < 3; p++)
+                           for (int q = 0; q < 3; q++)
+                              H[p][q] = 0.0;
+                        if (dk <= 0.0)
+                           return;
+                        if (hk.np > 0)
+                        {
+                           if (!PeakHessian(hk.pk, hk.np, gk, H))
+                              for (int p = 0; p < 3; p++)
+                                 for (int q = 0; q < 3; q++)
+                                    H[p][q] = 0.0;
+                        }
+                        else if (hk.one.s != 0.0 && hk.one.r > 0.0)
+                        {
+                           const double n[3] = { hk.one.n.x, hk.one.n.y, hk.one.n.z }, t[3] = { hk.one.t.x, hk.one.t.y, hk.one.t.z };
+                           for (int p = 0; p < 3; p++)
+                              for (int q = 0; q < 3; q++)
+                                 H[p][q] = -((p == q ? 1.0 : 0.0) - n[p] * n[q] - t[p] * t[q]) / hk.one.r;
+                        }
+                     };
+                     const double N = fe + fd;
+                     const double g1[3] = { -h1.n.x * h1.grad, -h1.n.y * h1.grad, -h1.n.z * h1.grad };
+                     double Hm[3][3], H1[3][3], dgb[3][3];
+                     depthHess(hm, dm, gm, Hm);
+                     if (el.S > 0.0)
+                     {
+                        depthHess(h1, d1, g1, H1);
+                        const double kM = L.K(dm), k1 = L.K(d1);
+                        for (int p = 0; p < 3; p++)
+                           for (int q = 0; q < 3; q++)
+                           {
+                              const double dA = 2.0 * (kM * gm[p] * gm[q] + el.Fm * Hm[p][q]) + k1 * g1[p] * g1[q] + el.F1 * H1[p][q];
+                              dgb[p][q] = (dA - el.gb[p] * (2.0 * kM * gm[q] + k1 * g1[q])) / el.S;
+                           }
+                     }
+                     else
+                        for (int p = 0; p < 3; p++)
+                           for (int q = 0; q < 3; q++)
+                              dgb[p][q] = 0.5 * Hm[p][q];
+                     double W[3], Wu[3], uWu = 0.0, gu = 0.0;
+                     for (int a = 0; a < 3; a++)
+                     {
+                        W[a] = !set.gonzalezMass ? iM[a] : iM[a] > 0.0 ? iM[0] / iM[a] : 0.0;   // (Gonzalez's weights)
+                        Wu[a] = W[a] * dq[a];
+                        gu += el.gb[a] * dq[a];
+                        uWu += dq[a] * W[a] * dq[a];
+                     }
+                     const double lam = uWu > 1e-300 && std::fabs(d1 - d0 - gu) > noiseD ? (d1 - d0 - gu) / uWu : 0.0;   // (Gonzalez's cf, its noise test)
+                     double dlam[3] = {};
+                     if (lam != 0.0)
+                        for (int q = 0; q < 3; q++)
+                           dlam[q] = (g1[q] - el.gb[q] - (dgb[0][q] * dq[0] + dgb[1][q] * dq[1] + dgb[2][q] * dq[2]) - 2.0 * lam * Wu[q]) / uWu;
+                     for (int p = 0; p < 3; p++)
+                        if (ix[p] >= 0)
+                           for (int q = 0; q < 3; q++)
+                              if (ix[q] >= 0)
+                                 J[ix[p]][ix[q]] += kn * gd[p] * g1[q] + h * N * (dgb[p][q] + (p == q ? lam * W[p] : 0.0) + Wu[p] * dlam[q]);
                   }
                }
                else if (!pkOn)
@@ -8342,6 +8418,8 @@ namespace GroupStep
             {
                h0s[k].nt = 0;
                Hit &hs = h0s[k];   // patch_friction: the start's patches and their pieces (the friction groups' start side and memory; without them every group's d0 is a plane's)
+               hs.n = h0.n;         // push_average: the start's depth gradient (g0 of the averaged push direction)
+               hs.grad = h0.grad;
                hs.ne = h0.ne;   // (step pieces: the entries, as every copy of a Hit)
                hs.en.Fit(hs.ne);
                for (int j = 0; j < hs.ne; j++)
@@ -9242,7 +9320,27 @@ namespace GroupStep
          gm[j] = 0.0;
       for (int j = 0; j < nq; j++)
          gm[3 + j] = hm.c[j].slope * hm.grad;
-      Group::Gonzalez(gm, d1 - d0, noiseD, dq, iM, na + nq, set.gonzalezMass, gd, trace ? &o.cf0U : nullptr);
+      // push_average: one ball on a static surface pushes along the elastic force's path average (Simpson on the three probes), in this exact form (gm byte-equal on a flat face)
+      o.avg = set.pushAverage && na == 3 && nq == 0;
+      if (o.avg)
+      {
+         const double F0 = F(d0);
+         o.Fm = F(dm);
+         o.F1 = F(d1);
+         o.S = F0 + 4.0 * o.Fm + o.F1;
+         const double g0[3] = { -h0.n.x * h0.grad, -h0.n.y * h0.grad, -h0.n.z * h0.grad }, g1[3] = { -h1.n.x * h1.grad, -h1.n.y * h1.grad, -h1.n.z * h1.grad };
+         double gbA[Group::kGradMax];
+         for (int j = 0; j < Group::kGradMax; j++)
+            gbA[j] = gm[j];
+         if (o.S > 0.0)
+            for (int j = 0; j < 3; j++)
+               gbA[j] = gm[j] + (F0 * (g0[j] - gm[j]) + o.F1 * (g1[j] - gm[j])) / o.S;
+         for (int j = 0; j < 3; j++)
+            o.gb[j] = gbA[j];
+         Group::Gonzalez(gbA, d1 - d0, noiseD, dq, iM, na + nq, set.gonzalezMass, gd, trace ? &o.cf0U : nullptr);
+      }
+      else
+         Group::Gonzalez(gm, d1 - d0, noiseD, dq, iM, na + nq, set.gonzalezMass, gd, trace ? &o.cf0U : nullptr);
       // the elastic force sum_t s_t fe_t gd_t does sum_t s_t dU_t = dU exactly. The contact's normal force N_el and its direction G (the ball's part a unit normal) are that
       // sum's; the damping acts along G on the rate G . dq / h: its loss cD (G . dq)^2 / h is exact for any G, so no misfit reaches the part through it. (A massless part's
       // spring is in its U*: not here.)

@@ -1363,6 +1363,13 @@ namespace RubberContact
       thread_local std::vector<PeakTerm> v;
       return v;
    }
+   // push_average: the single peak when MergeBars finds exactly one (s = 1; s = 0 none): its turning distance r and line axis t give the depth's Hessian on the ball's centre
+   // (0 a face's inside, -(I - n n^T - t t^T) / r an edge or a vertex) for the averaged push's Newton slope. Thread-local, written beside PeakTerms
+   inline PeakTerm &OnePeak()
+   {
+      thread_local PeakTerm v { 0.0, 0.0, 0.0, V3(), V3() };
+      return v;
+   }
 
    // patch_friction (plan 2.1, piece 2b-1): each patch's pressed pieces (permanent ids: a mesh face t, a shared edge -(1 + 3 t + e) of its lower face t; a tube segment i, a joint
    // -(j + 1)), patch p's ids id[off[p]] .. id[off[p + 1] - 1]. Written by BarsTriangles / BarsTube beside their patch list; thread-local, capacity reused.
@@ -1647,6 +1654,7 @@ namespace RubberContact
          for (int x = 0; x < m; x++)
             np[x] = slot[find(x)];
       }
+      OnePeak() = peaks == 1 && terms.size() == 1 ? terms[0] : PeakTerm { 0.0, 0.0, 0.0, V3(), V3() };   // (push_average: the one peak's geometry)
       if (peaks <= 1)
          terms.clear();   // one peak: today's slope, no list
       return peaks;
@@ -1742,7 +1750,10 @@ namespace RubberContact
             sa.emplace_back(shOf[e.first], shOf[e.second]);
       int peaks = 0;
       if (sn.empty())
+      {
          PeakTerms().clear();
+         OnePeak().s = 0.0;
+      }
       else
       {
          peaks = MergeBars(sn, sa, sum, &shP);
@@ -2577,6 +2588,7 @@ namespace RubberContact
                         ca.emplace_back((int)x, (int)y);
                }
                keepTerms = PeakTerms();   // (MergeBars writes the thread's peak list: the probe's own stays as it was)
+               const PeakTerm keepOne = OnePeak();
                FoldSum cs;
                if (MergeBars(cn, ca, cs) > 1)
                {
@@ -2584,6 +2596,7 @@ namespace RubberContact
                   cbSkip = false;
                }
                PeakTerms() = keepTerms;
+               OnePeak() = keepOne;
             }
             if (cbSkip && patchesOut != nullptr && PatchCheckEnv())   // VPX_PATCH_CHECK=1: against each near face probed alone (the set, any order)
             {

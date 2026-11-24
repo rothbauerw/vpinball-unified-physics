@@ -2232,6 +2232,7 @@ struct ContactSystemImpl
          if (mp != nullptr)
          {
             h.np = 0;   // (the per-peak slope: static surfaces only)
+            h.one.s = 0.0;
             mp->GroupProbe(surface, c, R, trial, h);
             if (heldReff > 0.0)
             {
@@ -2242,6 +2243,7 @@ struct ContactSystemImpl
             return;
          }
          RubberContact::PeakTerms().clear();   // the level form's peaks and passes (the per-peak slope; the ridge arrival's passes), written by MergeBars at 2 or more peaks
+         RubberContact::OnePeak().s = 0.0;     // (push_average: the single peak, written by MergeBars at exactly 1)
          thread_local std::vector<TubeProbe> plist;   // the patch list and each patch's pieces beside the merged answer (ProbePatches)
          const TubeProbe pr = r->ProbePatches(bs, *it, c, plist);
          seg = pr.seg;
@@ -2249,6 +2251,7 @@ struct ContactSystemImpl
          h.n = pr.normal;
          h.grad = pr.grad;
          h.np = 0;
+         h.one.s = 0.0;
          h.npat = 0;
          h.npc = 0;
          if (pr.overlap)
@@ -2260,6 +2263,8 @@ struct ContactSystemImpl
             h.pk.Fit(h.np);
             for (int j = 0; j < h.np; j++)
                h.pk[j] = pt[j];
+            if (h.np == 0)
+               h.one = RubberContact::OnePeak();
          }
          h.reff = heldReff > 0.0 ? heldReff : pr.reff > 0.0 ? pr.reff : R;
          h.curvDist = pr.reff > 0.0 && pr.reff < 0.999 * R ? pr.dist : 0.0;
