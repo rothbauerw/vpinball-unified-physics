@@ -12,9 +12,9 @@ G3. No stock in converted objects (stock_routes.md).
 G4. Contact system runs once per 1 ms cycle, not per stock sub-interval.
 
 ## Now
-Touch prediction (1.52): pieces 1-3 pushed (6244dbce1); no speed gain yet (design 3.7). Design 3.8 (stops and springs: solve, detect, go back) built and benched, not committed (3.9 STATUS); cost runs not yet. Then trace every net trip (Gorgar Ramp2, sw28; stress v2 load 17:20).
+Touch prediction (1.52): design 3.8 + ball touches on the go-back pushed (6988fb3e1; a9ee0bd50 comment pushed with bca6c9925); Gorgar load clean. Worst Gorgar cycle = BottomJet ring kick on its contact clock, on and off (1.40, parked by the user).
 Open (lead 14): BodyAxis held energy vs step (stops lead).
-Step halvings (1.42 = 1.50): stress v2 76690, CenterRamp corner: depth slope from the mid probe's floor normal while the end is on the wall; z row 0.6 of rowmax off FD (halv/results.md). Next: paper check of an end-hit slope, then code. runs/2026-11-23-lead17/log.md.
+Step halvings (1.42, 1.50): averaged push (push_average, bca6c9925) cleared stress v2 76690 and 249784 (tested on 2df841ee4, not on 6988fb3e1). Snapshot test and cost not run. Rest: 1.50 below. runs/2026-11-23-lead19/log.md.
 Drop targets: branch drop-axis (wt-drop-axis, not merged). PAUSED (user 11-22): hits 15-30x over 30 us. To be rewritten on the shared path to ModelStandards; drop-axis code not reused (user 11-22). DropTargetDesign 6 STATUS.
 N7. Stress v2 bench: ball travel energy +2 % at 57 ms; spin not counted. Check total energy in the saved run (no new run).
 N8. Test driver must refuse a ball placed inside any object, unless the file declares the overlap (rule 10b: then judged on recovery, no energy gained).
@@ -30,13 +30,13 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 32. Env switches that change behaviour (rule: diagnostics only): VPX_PREVENT, VPX_VISCOELASTIC, VPX_OVERLAP_REPLAY. Remove each or make it an ini key.
 31. After G1: check every converted part (flipper, gates, spinners, bumper, disc, rubbers, cord) against the ModelStandards definition of done (top of the file).
 30. part_guess_accel (default off): design evaluation for all moving parts, then a test plan if kept. After the shared-engine items, unless one of them needs it.
-40. Jet bumpers PARKED (user 11-23). Skirt seat round 4 on branch stops-wip (0ee3cd69d). Struck cycles: ring kick ~45 % of steps, seat ~20 % (runs/2026-11-23-struck-skirt).
-42. Step halvings: stress v2 1 to 70.7 s since per-patch (564 before). Recheck the 11-15 repro: slow ball rocking on a slope below the flippers, 1,269 halvings (runs/2026-11-15-finder-P6b3/drive_burst.txt).
+40. Jet bumpers PARKED (user 11-23). Skirt seat round 4 on branch stops-wip (0ee3cd69d). Struck cycles: ring kick ~45 % of steps, seat ~20 % (runs/2026-11-23-struck-skirt). Halving at the lip seat's cone point, skirt rocking at rest (stress gb4, Bumper2, t 20120).
+42. Step halvings: stress v2 0 to 260 s and Gorgar 0 with push_average (bca6c9925). Recheck the 11-15 repro: slow ball rocking on a slope below the flippers, 1,269 halvings (runs/2026-11-15-finder-P6b3/drive_burst.txt).
 43. After the finder work (1.34): tables/turn table/turn table test 4 (user's worst-case table) runs slower on today's build than on the 11-09 build (user's play). Measure both on one machine and find the cause.
 48. Joint zero floor (built f1397fb66): paper check that a joint of 3+ wires never adds energy at the raise between cycles; shared-line negative terms get no floor.
 41. Magnet pull in the energy reach is taken at the ball's place, not the largest over its travel: a true bound needs current, saturation, in-winding and per-type terms. Re-looks while a magnet is on (stress C1).
 49. Jacobian: rolling resistance's torque has no slope with depth (Kr ~ a^3, its damper, its turn at the limit); every contact. Measured 1e-4 of the row (runs/2026-11-19-standup-p2/fix2).
-50. Jacobian: a mesh contact's depth slopes come from the mid-step probe; when the end lies on another facet they are wrong (0.36 of the row at a stand-up face crossing, fix2).
+50. Mid-probe slopes left after push_average (static surfaces fixed, bca6c9925): moving parts (0.36 of the row at a stand-up face crossing, fix2), ball pairs, terms path; friction plane still the mid normal, flips at a corner tie (runs/2026-11-23-lead19/endslope).
 52. Stop search -> event prediction: one predictor for part stops and every ball touch on the shared path (runs/2026-11-22-touch-predict). Design of 11-21 reused, drop-axis code not.
 54. Playfield and turntable damp the bounce by their own alpha law (contacthost.cpp LoadPlayfieldSettings, TurntableSettings); every other hard surface uses the viscoelastic law: use the shared one (user 2026-11-21). Needs a playfield restitution (see 9.7).
 53. One 'on the stop' rule for the engine (design 1.52 Q7): 35 checks and 5+ nearness constants decide it today (runs/2026-11-21-onstop-read/onstop.md). Paper first.
@@ -83,6 +83,7 @@ N10. Performance tests: not built; review TestMatrixDesign with the user when bu
 10. A state carries between replays in one chunk: Hgo5_77 differs only after earlier balls change, identical when run alone; find what carries over (runs/2026-11-10-old-loop/results_piece1.txt).
 12. Snapshot self-test fails on Gorgar: 30 of 8001 steps differ (19 with free_flight), "contacts (3 engaged balls)", before free flight too. Find what the snapshot misses. Lead: a retake dropped JewelRamp from a ball's list (aircore-ff/snap_trace).
 11. Accuracy bench for moving parts: real hits on flipper bats, jet bumpers, gates, spinners, wire switches and sling plates, judged by impulse against the 1 us reference as the static bench is (today's 750 hits are static surfaces only).
+13. 750 replays: ~390 halvings (408 on 11-19, 389 at 6244dbce1), mostly wire switches sw33 / sw32 with a ball; 0 in full Gorgar play on the same hits: find what the replay start misses.
 
 ## 9. Still stock (ask before converting)
 1. Drop targets (stand-up targets converted: StandupTargetDesign).
