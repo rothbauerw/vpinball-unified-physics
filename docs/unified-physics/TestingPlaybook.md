@@ -1,32 +1,32 @@
 # Testing playbook
 
-How to build, run, measure and diagnose, as it is done today. Current practice only: when a practice changes, edit its line in place and put the reason in the commit message.
+How to build, run, measure and diagnose today. When a practice changes, edit its line in place; the reason goes in the commit message.
 No dates, no "learned", no superseded text. What a test is for, its cap and hand-over: DevelopmentRules 4, 10, 11.
 
 ## 1. Which tool
 - **Real bench** (section 3): VPX itself with no frames. Every behaviour and accuracy question goes here first. Deterministic: same exe, table, ini and driver file give the same bytes.
 - **VPX driver run** (section 4): only what the bench does not cover (list in section 3), kept to one named question.
-- **The user's play** (section 6): only when the user asks. A lead that cannot say what a test should measure asks the user for a pointer instead of guessing.
-- One renderer: physics is identical on GL and BGFX. Build and test BGFX only, the build the user plays; GL only for a renderer question.
+- **The user's play** (section 6): only when the user asks.
+- Build and test BGFX only (physics is identical on GL); GL only for a renderer question.
 
 ## 2. Build
-- Worktree `C:\Pinball\VPX-Physics\unified-physics-branch` (branch unified-physics); `runs\` and `tables\` are in the parent folder, outside git. Build folder `build-bgfx` -> `build-bgfx\Release\VPinballX_BGFX64.exe` (`build` is the GL one).
+- Worktree `C:\Pinball\VPX-Physics\unified-physics-branch`; `runs\` and `tables\` are in the parent folder, outside git. Build folder `build-bgfx` -> `build-bgfx\Release\VPinballX_BGFX64.exe` (`build` is the GL one).
 - From the build folder: `"C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" --build . --config Release --target vpinball -- -m 2>&1 | grep -E "error C|error LNK"`
   (`-- -m`, not /m, in Git Bash; grep "error" alone matches the /errorReport flag.) LNK1104 = a VPX is running on that exe. Check the exe's time with `ls -la` after every build.
 - Temporary instrumentation is marked `/* TEMP */` and grepped for before finishing; a `//` comment after code can swallow a closing brace.
 - Python source edits: keep CRLF; exact-string replace only.
 
 ## 3. Real bench
-- Folder `runs\2026-10-31-real-bench` (README.md, RESULTS.md). Run from the PowerShell tool or a script file, never through Bash with `C:\...` paths (Bash strips the backslashes):
+- Folder `runs\2026-10-31-real-bench` (README.md, RESULTS.md). Run from PowerShell or a script file, never Bash with `C:\...` paths (it strips the backslashes):
   `powershell -ExecutionPolicy Bypass -File runs\2026-10-31-real-bench\bench.ps1 -Name x -Table <full> -Ini <full> -Drive <full> -Dir <run folder>` (default `-Exe` is `main_exe\VPXBench_BGFX64.exe`;
   bench.ps1 refuses it when it is older than the branch's BGFX build: run `python bench_snapshot.py`).
-  Options: `-Trace 1`, `-Vbs file`, `-StopMs N`, `-PreRollMs N` (default 3000). Output: `run_x\out\balls.csv, report.txt, cycles.csv, done.txt`, `run_x\vpinball.log`.
+  Options: `-Trace 1`, `-Vbs file`, `-StopMs N` (engine time = drive t + 3003), `-PreRollMs N` (default 3000). Output: `run_x\out\balls.csv, report.txt, cycles.csv, done.txt`, `run_x\vpinball.log`.
 - The `VPXBench_*` name keeps run.ps1 and wait loops from taking it for a VPX. Many runs at once is fine, except on a table new to `runs\_tables`: run one first (the first runs race on INDEX.csv).
 - Confirm a run started: the log says `Test driver: N actions` with N above 0. Cost on vs off: compare work counts (VPX_GROUP_STATS, finder totals), not wall time.
 - **Patch not in the branch**: a reusable worktree per lead, `C:\Pinball\VPX-Physics\wt-bench` or `wt-bench-2` (own `build-bgfx`, incremental). Claim it first: read
   `IN_USE.txt` in its root; if absent, write session, task, time; delete it when done. Only the claimant resets or builds there. Check out the commit, patch, build,
   exe to `Release\VPXBench_<tag>.exe` for `-Exe`. Never compile in a run folder.
-- **Accuracy bench**: `runs\2026-11-01-roll-smooth` (report.md run 1). 750 real hits (stress p1-p3, Gorgar), each replayed alone: `run_replay.py <tag> <exe> <mode>`; the reference is the same with `-env VPX_GROUP_HFIX=1` (1 us steps);
+- **Accuracy bench**: `runs\2026-11-01-roll-smooth`. 750 real hits (stress p1-p3, Gorgar), each replayed alone: `run_replay.py <tag> <exe> <mode>`; the reference is the same with `-env VPX_GROUP_HFIX=1` (1 us steps);
   runs with `-env VPX_TEST_IMPULSES=1`; `judge_hit.py <ref> <ref 0.5 us> <build> <build k 0.5> <build k 0.25>` (VPX_STEP_SCALE) judges each hit by the impulse its surface gave
   (bounce, slide, spin; runs\2026-11-10-hit-judge\design.md): noise floor from the 0.5 us twin, step error or fault by convergence, and pass = the exit
   direction error moves the ball under 1 mm by its next contact. `check_imp.py <run out folder>` checks the log adds up to each ball's momentum change.
@@ -63,7 +63,6 @@ No dates, no "learned", no superseded text. What a test is for, its cap and hand
 - Anti-hung time skip: a frame over 200 ms makes VPX skip simulated time. Off under VPX_PLAY_UNFOCUSED and on the bench; a focused run with a slow script still skips. The driver's report counts skipped cycles: must be 0.
 - Unfocused frames are slow, so a table script's 1 ms timer fires once per frame: never take rebounds or timings from a script's own log; use the driver's balls.csv.
 - The trace log rotates at ~1.7 MB (~the last 1 s at VPX_CONTACT_TRACE=2): end the drive ~1 s after the contact; check balls.csv matches the full run.
-- VPX_CONTACT_LOG names the stock playfield plane after the table with object type 0.
 - VBScript is case-insensitive: a variable and a Sub with the same name fail to compile with no log error and no output.
 - PowerShell: a function named `R` is shadowed by the alias `r`; an array of arrays is built with `@(,@(...))` and `+= ,@(...)`; pass table and ini to run.ps1 by hashtable splat, not array.
 - Offline C++ benches from Bash: `timeout 250 cmd //c '<full path>\b3.bat <name>'`; PowerShell Start-Process -Wait can hang on the compiler's child processes. Hinge benches need `/FIcassert`.
@@ -88,7 +87,7 @@ VPX_BENCH_PREROLL=<ms>     bench physics time before the driver's time 0 (defaul
 ```
 VPX_SPEED_WATCH=<m/s>      fast-ball warning with the ball's last 8 cycles and every other ball (default 8, 0 = off; at most once a second per ball).
 VPX_CONTACT_TRACE=1|2      contact engage / release / hit lines (1); also per-cycle lines (2, huge).
-VPX_CONTACT_LOG=<csv>      every stock collision and resting contact of the first ball: object type and name (stock engine, unified = 0, only).
+VPX_CONTACT_LOG=<csv>      every stock collision and resting contact of the first ball: object type and name (stock engine, unified = 0, only; the playfield plane is named after the table, type 0).
 VPX_CONTACT_NEAR=x,y,r     rubber faces within r of (x, y), U, when the surface is built.
 VPX_CONTACT_TIMING=<csv>   per-cycle cost of the contact system by stage. One file per process.
 VPX_CONTACT_PROFILE=<n>    scoped timers, a log table every n step calls (default 5000).     VPX_CHECK_PROFILE=1   one check's time split ("Check profile"), cut, tube counters ("Finder P4b/P5 totals").
@@ -113,9 +112,9 @@ VPX_GROUP_SEARCH_TRACE=1   the failing stop-search solve, per round, to stderr. 
 VPX_GROUP_JAC_MODE=1       also a central-difference Jacobian, logged; changes last digits.  VPX_GROUP_JAC_WINDOW=t0-t1  mode 1 or 2 only in that ms (engine) window; else as mode 0.
 VPX_SKIRT_ROW_TRACE=1      with ROUND_TRACE: bumper skirt rows by term per round (m/s), tilt move, each chord's change and mismatch.
 VPX_FINDER_CHECK=1         finder vs the full scan: missed pieces within reach, face-table mismatches, playfield cut lists, static tube readers (log, screen).
-VPX_RELOOK_TRACE=1         energy-reach re-look: each bound term, the move; no cap.
-VPX_PATCH_CHECK=1          patch lists vs the merged (s25, g); one peak = today's slope; cut B faces vs each probed alone; friction held vs book (HELDCHK, KINDC); B-lin lev1 vs probe (LEV1CHK).
-VPX_PATCH_TRACE=t0-t1      patch_friction, engine ms: per Eval each friction group (PTEV), start patches not in memory (PTMISS); 400 lines.
+VPX_RELOOK_TRACE=1         energy-reach re-look: each bound term, the move, solver trial point or accepted position; no cap.
+VPX_PATCH_CHECK=1          per-patch checks: patch lists vs merged, cut B faces vs each alone, held friction vs book (HELDCHK, KINDC), B-lin vs probe (LEV1CHK).
+VPX_PATCH_TRACE=t0-t1      engine ms: per Eval each friction group (PTEV), start patches not in memory (PTMISS); 400 lines.
 VPX_PAIR_CHECK=1           ball pairs: the every-pair test beside the sorted list; counts any pair the list missed (log).
 VPX_HINGE_NEAR_ALL=1       every near-piece list takes all pieces (A/B of the short list, same result expected).
 VPX_SNAPSHOT_TEST=1        after each contact step: restore the snapshot, step again, log any difference (=2, =3: see below).
