@@ -987,7 +987,7 @@ public:
          const double ex = D > 0.0 ? dx / D : 1.0, ey = D > 0.0 ? dy / D : 0.0, na = dist > 0.0 ? aa / dist : 1.0, nz = dist > 0.0 ? zz / dist : 0.0;
          h.delta = R + pt->rc - dist;
          h.n = V3(ex * na, ey * na, nz);
-         const double R1 = 1.0 / (1.0 / R + 1.0 / pt->rc), kLong = RubberContact::TubeAlongCurvature(1.0 / q.r, pt->rc, 1.0);   // the effective radius as ProbeTube
+         const double R1 = 1.0 / (1.0 / R + 1.0 / pt->rc), kLong = RubberContact::TubeAlongCurvature(1.0 / q.r, pt->rc, na);   // the effective radius as ProbeTube (na: the normal's outward in-plane cosine, ProbeTube's -(n . dn))
          h.reff = std::sqrt(R1 / std::max(1.0 / R + kLong, 0.05 / R));
          h.curvDist = D;
       }
